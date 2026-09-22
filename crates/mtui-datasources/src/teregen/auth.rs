@@ -412,15 +412,45 @@ impl<A: AgentKeys> TeregenAuth<A> {
         method: reqwest::Method,
         url: &str,
     ) -> Result<reqwest::Response, TeregenAuthError> {
+        self.authenticated_request_with(method, url, |b| b).await
+    }
+
+    /// Like [`authenticated_request`](Self::authenticated_request), but
+    /// `customize` runs on the request builder before it is sent — e.g. to
+    /// attach a body and extra headers for a `PUT` (Phase 5's write path).
+    ///
+    /// `customize` is `Fn`, not `FnOnce`: it is applied identically on the
+    /// first attempt and again on the re-mint resend, so a `PUT`'s body and
+    /// headers are not silently dropped from the retry.
+    ///
+    /// Retrying a write this way is safe *only* because a `401` is refused by
+    /// the server before any write happens (`require_auth` is the first check
+    /// in teregen's `upload`) — a re-sent `PUT` on the retry path can only
+    /// ever be the *first* write to actually land, never a second one.
+    ///
+    /// # Errors
+    ///
+    /// See [`authenticated_request`](Self::authenticated_request).
+    pub async fn authenticated_request_with<F>(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        customize: F,
+    ) -> Result<reqwest::Response, TeregenAuthError>
+    where
+        F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
         let token = self.token().await?;
-        let response = self.bearer_request(method.clone(), url, &token).await?;
+        let response = self
+            .bearer_request(method.clone(), url, &token, &customize)
+            .await?;
         if response.status().as_u16() != 401 {
             return Ok(response);
         }
 
         self.invalidate()?;
         let token = self.token().await?;
-        let response = self.bearer_request(method, url, &token).await?;
+        let response = self.bearer_request(method, url, &token, &customize).await?;
         if response.status().as_u16() == 401 {
             return Err(TeregenAuthError::Unauthorized {
                 hint: UNAUTHORIZED_HINT.to_owned(),
@@ -430,21 +460,19 @@ impl<A: AgentKeys> TeregenAuth<A> {
     }
 
     /// Send one bearer-authenticated request, with no retry logic of its own.
-    async fn bearer_request(
+    async fn bearer_request<F>(
         &self,
         method: reqwest::Method,
         url: &str,
         token: &str,
-    ) -> Result<reqwest::Response, TeregenAuthError> {
+        customize: &F,
+    ) -> Result<reqwest::Response, TeregenAuthError>
+    where
+        F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
         tracing::debug!("teregen: {method} {}", sanitize_url(url));
-        Ok(self
-            .http
-            .inner()
-            .request(method, url)
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(HttpError::from)?)
+        let builder = self.http.inner().request(method, url).bearer_auth(token);
+        Ok(customize(builder).send().await.map_err(HttpError::from)?)
     }
 }
 
@@ -465,6 +493,77 @@ mod tests {
         assert!(!is_valid_nonce(&"a".repeat(65)));
         assert!(!is_valid_nonce(&"A".repeat(64)), "uppercase is rejected");
         assert!(!is_valid_nonce(&"g".repeat(64)), "non-hex is rejected");
+    }
+
+    /// `authenticated_request_with`'s `customize` closure must be applied on
+    /// **both** the first attempt and the re-mint resend: dropping it on
+    /// either turns this red (the retried request would carry a different
+    /// header value, or none).
+    #[tokio::test]
+    async fn authenticated_request_with_applies_customize_on_both_attempts() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store_file = dir.path().join("teregen-token.json");
+        let key =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
+        Mock::given(method("POST"))
+            .and(path("/auth/ssh/challenge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ssh/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "a".repeat(64),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/thing"))
+            .and(header("x-custom", "marker"))
+            .respond_with(ResponseTemplate::new(401))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/thing"))
+            .and(header("x-custom", "marker"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let auth = TeregenAuth::new(
+            server.uri(),
+            "alice".to_owned(),
+            Some(key),
+            None,
+            HttpClient::new(crate::http::VerifyPolicy::Default(true)).unwrap(),
+        )
+        .with_store(Some(TokenStore::at(store_file)));
+        let url = format!("{}/thing", server.uri());
+        let response = auth
+            .authenticated_request_with(reqwest::Method::PUT, &url, |b| {
+                b.header("x-custom", "marker").body("payload")
+            })
+            .await
+            .expect("succeeds after one re-mint, header intact on the retry");
+        assert_eq!(response.status(), 200);
+
+        let requests = server.received_requests().await.unwrap();
+        let put_requests: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path() == "/thing")
+            .collect();
+        assert_eq!(put_requests.len(), 2, "one 401 + one retry");
+        for r in &put_requests {
+            assert_eq!(r.headers.get("x-custom").unwrap(), "marker");
+            assert_eq!(r.body, b"payload");
+        }
     }
 
     #[test]
