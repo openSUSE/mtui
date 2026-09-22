@@ -1,5 +1,4 @@
-//! `cargo xtask teregen-put` — Phase 5 of the JSON-template migration
-//! (`plans/phase5-write-path.md`): a dev-only probe for
+//! `cargo xtask teregen-put` — a dev-only probe for
 //! `TeregenV2::upload_document`. Nothing in either shipped binary calls the
 //! write client yet (P5-D1/P5-D9); this is its only caller besides the test
 //! suite.
