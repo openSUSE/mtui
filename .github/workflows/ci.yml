@@ -135,7 +135,7 @@ jobs:
         # SHA-pinned like every other action (Scorecard Pinned-Dependencies);
         # the tool is selected via the input, not the mutable `@cargo-llvm-cov`
         # tag alias.
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: cargo-llvm-cov
       # This is CI's only run of the test suite: `cargo llvm-cov` builds and
@@ -156,7 +156,7 @@ jobs:
           cargo llvm-cov --no-report -p mtui-testreport --features api-ingest --locked
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload coverage to CodeCov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
