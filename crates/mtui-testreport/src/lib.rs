@@ -6,6 +6,8 @@
 //! metadata parsers, product-normalization tables, checkout backends, and
 //! update workflow.
 
+#[cfg(feature = "api-ingest")]
+pub mod authoring;
 pub mod checkout;
 pub mod export;
 #[cfg(feature = "api-ingest")]
@@ -18,6 +20,14 @@ pub mod support;
 pub mod testreport;
 pub mod update_workflow;
 
+#[cfg(feature = "api-ingest")]
+pub use authoring::auto::openqa_install_from_auto;
+#[cfg(feature = "api-ingest")]
+pub use authoring::kernel::regression_from_kernel;
+#[cfg(feature = "api-ingest")]
+pub use authoring::manual::install_from_hosts;
+#[cfg(feature = "api-ingest")]
+pub use authoring::overview::openqa_extra_from_overview;
 pub use checkout::{
     CheckoutError, CheckoutRunError, ReadOutcome, SvnOutcome, SvnRunner, TemplateIoError,
     TestReportNotLoaded, TokioSvnRunner, checkout_and_read, svn_commit_testreport,

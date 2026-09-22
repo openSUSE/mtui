@@ -264,6 +264,7 @@ fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
         .map(|t| ManualHost {
             hostname: t.hostname().to_owned(),
             system: t.system().to_string(),
+            product: t.system().get_base().clone(),
             packages: t.packages().to_vec(),
             hostlog: t.out().clone(),
         })

@@ -8,6 +8,7 @@
 use mtui_config::options::Config;
 use mtui_testreport::{AutoExport, ExportContext, KernelExport, ManualExport, ManualHost};
 use mtui_types::hostlog::HostLog;
+use mtui_types::system::SystemProduct;
 
 const FOOTER: &str = "## export MTUI:12.0, paramiko 3.5 on SLES-15 (kernel: 6.4) by tester\n";
 const RRID: &str = "SUSE:Maintenance:12358:199773";
@@ -162,6 +163,7 @@ fn session_host(hostname: &str, system: &str) -> ManualHost {
     ManualHost {
         hostname: hostname.to_string(),
         system: system.to_string(),
+        product: SystemProduct::new(system, "", ""),
         packages: Vec::new(),
         hostlog: HostLog::new(),
     }
