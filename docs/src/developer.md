@@ -34,6 +34,7 @@ Repo automation lives in the `xtask` crate, invoked through the alias in
 | Probe the teregen v1↔v2 corpus | `cargo xtask corpus-survey` | Read-only 200/404/503/other split by RRID kind |
 | Check for teregen schema drift | `cargo xtask schema-check` | Diffs the live `/api/v2/schema` against the committed copy |
 | Mint/reuse a teregen v2 auth token | `cargo xtask teregen-login [--base <URL>] [--user <NAME>] [--namespace <NS>] [--no-store] [--no-probe]` | Signs teregen's SSH challenge with your oscrc key, caches the bearer token, and probes `GET /schema`; never prints the token |
+| Probe the teregen v2 write client | `cargo xtask teregen-put --id <RRID> [--base <URL>] [--user <NAME>] [--file <PATH>] [--if-match <ETAG>\|--create] [--dry-run]` | GETs a document and re-PUTs it with the just-received `ETag` by default; `--file`/`--if-match`/`--create` drive a backfill or a deliberate negative case; `--dry-run` prints the request instead of sending it |
 
 The `.deb`/`.rpm` on the release page have no xtask equivalent — they are built
 only by the `package` job in `.github/workflows/release.yml`.

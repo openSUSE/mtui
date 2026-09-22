@@ -1,6 +1,5 @@
-//! `cargo xtask teregen-login` — Phase 2 of the JSON-template migration
-//! (`plans/phase2-auth.md`): mint (or reuse a cached) teregen v2 bearer token
-//! from the operator's own oscrc SSH key, and probe it against a live
+//! `cargo xtask teregen-login` — mint (or reuse a cached) teregen v2 bearer
+//! token from the operator's own oscrc SSH key, and probe it against a live
 //! authenticated endpoint.
 //!
 //! Never prints the token: only the resolved principal, the key locator, the
