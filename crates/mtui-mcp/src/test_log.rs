@@ -7,6 +7,12 @@
 //! Scoping moves to the thread-local sink instead, and only events emitted on
 //! the capturing thread are collected — a `spawn_blocking` hop lands elsewhere.
 //!
+//! Only `mtui*` targets are collected. The assertions here are about what mtui
+//! logs; `hyper_util`'s pool chatter (suppressed in production by
+//! `runner::default_directives`) carries the socket address that a
+//! "never log the endpoint" check forbids, and a background export landing
+//! inside a capture window would fail that check with a foreign crate's line.
+//!
 //! It lives in its own module rather than in one test module because
 //! `set_global_default` succeeds once: a second module installing its own layer
 //! would lose the race and capture nothing, by test order.
@@ -81,6 +87,9 @@ fn install_capture_subscriber() {
 
     impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
         fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            if !event.metadata().target().starts_with("mtui") {
+                return;
+            }
             CAPTURE_SINK.with(|s| {
                 if let Some(buf) = s.borrow_mut().as_mut() {
                     let mut visitor = MessageVisitor::default();
@@ -95,4 +104,21 @@ fn install_capture_subscriber() {
     ONCE.get_or_init(|| {
         let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn foreign_targets_never_reach_the_capture() {
+        // The transport line is the leak shape from hyper-util's pool, the one
+        // that made `no endpoint leaks` fail on a background export.
+        let (_, logs) = super::capture_logs_blocking(|| {
+            tracing::debug!(
+                target: "hyper_util::client::legacy::pool",
+                "pooling idle connection for (\"http\", 127.0.0.1:44731)"
+            );
+            tracing::warn!(target: "mtui_mcp::probe", "mtui warn reaches the capture");
+        });
+        assert_eq!(logs, "mtui warn reaches the capture");
+    }
 }
