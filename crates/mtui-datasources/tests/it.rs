@@ -46,3 +46,5 @@ mod teregen_document;
 mod teregen_sshsig_golden;
 #[path = "teregen_tokens.rs"]
 mod teregen_tokens;
+#[path = "teregen_write.rs"]
+mod teregen_write;
