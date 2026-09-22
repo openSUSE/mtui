@@ -23,6 +23,7 @@ fn main() -> Result<()> {
         Some("corpus-survey") => run_corpus_survey(),
         Some("schema-check") => run_schema_check(),
         Some("teregen-login") => run_teregen_login(),
+        Some("teregen-put") => run_teregen_put(),
         Some(other) => {
             eprintln!("unknown task: {other}\n");
             print_usage();
@@ -45,7 +46,8 @@ fn print_usage() {
          package         Build a release tarball for a target\n    \
          corpus-survey   Probe the teregen v2 document status of every in-flight update\n    \
          schema-check    Compare the live /api/v2/schema against the committed copy\n    \
-         teregen-login   Mint/reuse a teregen v2 bearer token from your oscrc SSH key\n\n\
+         teregen-login   Mint/reuse a teregen v2 bearer token from your oscrc SSH key\n    \
+         teregen-put     Dev-only probe: PUT a report document via TeregenV2::upload_document\n\n\
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
          Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
@@ -71,7 +73,17 @@ fn print_usage() {
          probes it with an authenticated GET /schema. Never prints the token.\n    \
          --base defaults to https://qam.suse.de/api/v2, --user to the oscrc\n    \
          user, --namespace to teregen-auth. --no-store skips the on-disk\n    \
-         cache; --no-probe skips the GET /schema check after minting."
+         cache; --no-probe skips the GET /schema check after minting.\n\n\
+         TEREGEN-PUT:\n    \
+         cargo xtask teregen-put --id <RRID> [--base <URL>] [--user <NAME>]\n    \
+         \x20   [--file <document.json>] [--if-match <etag>|--create] [--dry-run]\n    \
+         Default behaviour is the honest round trip: GETs the document, then\n    \
+         re-PUTs the same bytes with the ETag just received. --file uploads a\n    \
+         different body (e.g. to backfill a log-only id with --create, or to\n    \
+         drive a deliberate 422); --if-match/--create override the derived\n    \
+         precondition. --dry-run prints the request (bearer masked) without\n    \
+         sending it. A real mutation against a live report — enqueues an SVN\n    \
+         commit."
     );
 }
 
@@ -199,6 +211,22 @@ fn run_teregen_login() -> Result<()> {
         .build()
         .context("building the tokio runtime")?
         .block_on(xtask::teregen_login::run(
+            &args,
+            mtui_datasources::VerifyPolicy::Default(true),
+        ))
+}
+
+/// Run the teregen v2 write probe: `cargo xtask teregen-put --id <RRID> [...]`
+/// (see the usage text). A real mutation against a live report unless
+/// `--dry-run`; see [`xtask::teregen_put::run`].
+fn run_teregen_put() -> Result<()> {
+    let args = xtask::teregen_put::PutArgs::parse(std::env::args().skip(2))?;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building the tokio runtime")?
+        .block_on(xtask::teregen_put::run(
             &args,
             mtui_datasources::VerifyPolicy::Default(true),
         ))
