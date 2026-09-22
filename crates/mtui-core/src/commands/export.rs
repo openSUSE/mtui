@@ -201,6 +201,7 @@ impl Command for Export {
                 let http = build_http(session)?;
                 let auto = session.metadata().openqa().auto.clone();
                 let overview = session.metadata().openqa().overview.clone();
+                author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
                 AutoExport::new(ctx, auto, overview)
                     .run(&http, &DenyOverwrite)
                     .await
@@ -209,11 +210,19 @@ impl Command for Export {
                 let http = build_http(session)?;
                 let kernel = session.metadata().openqa().kernel.clone();
                 let overview = session.metadata().openqa().overview.clone();
+                author_onto_document(session, None, &kernel, overview.as_ref(), None);
                 KernelExport::new(ctx, kernel, overview).run(&http).await
             }
             Workflow::Manual => {
                 let (hosts, results) = manual_results.expect("computed for Manual workflow");
                 let auto = session.metadata().openqa().auto.clone();
+                author_onto_document(
+                    session,
+                    auto.as_ref(),
+                    &[],
+                    manual_overview.as_ref(),
+                    Some(&results),
+                );
                 ManualExport::new(ctx, results, auto, manual_overview).run(&hosts, &DenyOverwrite)
             }
         };
@@ -252,6 +261,61 @@ fn is_unverified(host: &ManualHost) -> bool {
     host.packages.iter().all(|p| {
         *p.before_check() == VersionCheck::NotChecked
             && *p.after_check() == VersionCheck::NotChecked
+    })
+}
+
+/// Delegates to [`mtui_testreport::author_export`] (the pure authoring
+/// functions, composed), in addition to the text export above, never instead
+/// of it: in-memory only, nothing uploads here.
+///
+/// A cheap no-op when no document is loaded (every non-`api-ingest` build,
+/// and any `api-ingest` load that fell back to SVN): the guard below skips
+/// the oscrc read entirely in that common case, and `author_export` itself
+/// is unconditionally callable without `mtui-core` declaring the feature
+/// (see `export_authoring.rs`'s module doc for why that matters).
+fn author_onto_document(
+    session: &mut Session,
+    auto: Option<&mtui_datasources::qem_dashboard::DashboardAutoOpenQA>,
+    kernel: &[mtui_datasources::openqa::kernel::KernelOpenQA],
+    overview: Option<&mtui_datasources::OpenQAOverviewResult>,
+    hosts: Option<&[ManualHost]>,
+) {
+    if session.metadata().base().document.is_none() {
+        return;
+    }
+    let tester = build_tester_entry(session);
+    mtui_testreport::author_export(
+        &mut session.metadata_mut().base_mut().document,
+        hosts,
+        auto,
+        kernel,
+        overview,
+        tester,
+    );
+}
+
+/// The `people.testers` entry for this export: identity comes from the same
+/// principal the teregen auth layer uses (the oscrc user), never a
+/// second config key. `None` (and a warning) when oscrc has no usable
+/// credentials — a missing identity must not block the text export.
+fn build_tester_entry(session: &Session) -> Option<mtui_types::report_document::TesterEntry> {
+    let creds = match mtui_datasources::obs::oscrc::read_credentials(&session.config.obs_api_url) {
+        Ok(creds) => creds,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not resolve oscrc identity; skipping people.testers append"
+            );
+            return None;
+        }
+    };
+    let (distro, verid, kernel) = mtui_testreport::detect_system();
+    Some(mtui_types::report_document::TesterEntry {
+        name: creds.user,
+        mtui: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        os: Some(format!("{distro}-{verid}")),
+        kernel: Some(kernel),
+        at: None,
     })
 }
 
@@ -887,5 +951,114 @@ mod tests {
         let args = matches(&Export, &["-f", path.to_str().unwrap(), "-t", "bogus"]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    /// A minimal, schema-valid `ReportDocument` (mirrors `mtui-types`'
+    /// `schema_conformance.rs` minimal golden) with no `testing.*` content
+    /// yet — the starting state authoring works from. `mtui_types` is not
+    /// feature-gated, so this needs no `api-ingest` on this crate.
+    fn minimal_document() -> mtui_types::report_document::ReportDocument {
+        let raw = r#"{
+            "schema_version": "1.0", "id": "SUSE:Maintenance:1:1",
+            "kind": "maintenance", "workflow": "obs",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "verdict": null, "comment": null,
+            "people": {"testers": [], "reviewer": {"name": null}},
+            "update": {"packager": "p", "source_packages": ["a"], "origin": {},
+                       "products": [{"name": "SLES", "version": "15.5", "archs": ["x86_64"]}]},
+            "install": {"repository": "https://example/repo", "targets": [], "test_platforms": []},
+            "issues": {}, "testing": {}
+        }"#;
+        raw.parse().expect("minimal document parses")
+    }
+
+    /// A document present on the report survives an export
+    /// (`author_onto_document` reaches `mtui_testreport::author_export`
+    /// without panicking) and the text export still writes — neither path
+    /// replaces the other. The *content* `author_export` composes is
+    /// exhaustively covered in `mtui-testreport`'s own suite under
+    /// `--features api-ingest`
+    /// (`export_authoring.rs`/`authoring::tests`/`tests/authoring.rs`): this
+    /// crate never turns that feature on for `mtui-testreport` (doing so
+    /// would flip `make_testreport`'s SVN/document branch for every other
+    /// test in this binary), so it cannot assert on authored content itself.
+    #[tokio::test]
+    async fn manual_export_does_not_panic_when_a_document_is_loaded() {
+        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        record_versions(&mut session, "h1");
+        session.metadata_mut().base_mut().document = Some(minimal_document());
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(session.metadata().base().document.is_some());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("## export MTUI:")
+        );
+    }
+
+    /// A session that never loaded a document (every default build) must
+    /// export exactly as before: no panic, and `document` stays `None`
+    /// rather than being conjured from nothing.
+    #[tokio::test]
+    async fn author_onto_document_is_a_noop_without_a_loaded_document() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(session.metadata().base().document.is_none());
+
+        author_onto_document(&mut session, None, &[], None, None);
+
+        assert!(session.metadata().base().document.is_none());
+    }
+
+    /// `people.testers`' identity is the oscrc principal, not a second
+    /// config key.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
+    // the mutation of the process-global `$OSC_CONFIG` exclusive.
+    #[allow(unsafe_code)]
+    async fn build_tester_entry_uses_the_oscrc_principal() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let dir = tempfile::TempDir::new().unwrap();
+        let key = dir.path().join("id_unused");
+        std::fs::write(&key, "never read\n").unwrap();
+        let oscrc = dir.path().join("oscrc");
+        std::fs::write(
+            &oscrc,
+            format!(
+                "[{}]\nuser = qamuser\nsshkey = {}\n",
+                session.config.obs_api_url,
+                key.display()
+            ),
+        )
+        .unwrap();
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+        let tester = build_tester_entry(&session);
+        // SAFETY: still inside that critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
+
+        let tester = tester.expect("oscrc credentials resolved");
+        assert_eq!(tester.name, "qamuser");
+        assert_eq!(tester.mtui.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert!(tester.at.is_none(), "server-stamped, never set by mtui");
+    }
+
+    /// A missing/unusable oscrc must not block the text export: `None`, not
+    /// an error.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    #[allow(unsafe_code)]
+    async fn build_tester_entry_is_none_without_usable_credentials() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+        let tester = build_tester_entry(&session);
+        // SAFETY: still inside that critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
+
+        assert!(tester.is_none());
     }
 }

@@ -5,6 +5,11 @@
 //! crate + its heavy deps are linked once, not once per file. Add new
 //! integration tests as a module here, not as a new top-level `tests/*.rs`.
 
+// Assembling authored subtrees onto a document and validating them against
+// the schema only exist under the `api-ingest` feature.
+#[cfg(feature = "api-ingest")]
+#[path = "authoring.rs"]
+mod authoring;
 #[path = "export_idempotency.rs"]
 mod export_idempotency;
 #[path = "fs_responsiveness.rs"]

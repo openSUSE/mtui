@@ -10,6 +10,7 @@
 pub mod authoring;
 pub mod checkout;
 pub mod export;
+pub mod export_authoring;
 #[cfg(feature = "api-ingest")]
 pub mod ingest;
 pub mod lifecycle;
@@ -20,6 +21,8 @@ pub mod support;
 pub mod testreport;
 pub mod update_workflow;
 
+#[cfg(feature = "api-ingest")]
+pub use authoring::author_document;
 #[cfg(feature = "api-ingest")]
 pub use authoring::auto::openqa_install_from_auto;
 #[cfg(feature = "api-ingest")]
@@ -37,6 +40,7 @@ pub use export::{
     AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,
     ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
 };
+pub use export_authoring::author_export;
 #[cfg(feature = "api-ingest")]
 pub use ingest::apply_document;
 pub use lifecycle::{UpdateKind, make_testreport};
