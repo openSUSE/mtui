@@ -39,7 +39,9 @@ pub mod document;
 pub mod tokens;
 
 pub use auth::{DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
-pub use document::{DocumentFetch, TeregenV2, TeregenV2Error};
+pub use document::{
+    DocumentFetch, Precondition, TeregenV2, TeregenV2Error, TeregenV2WriteError, UploadOutcome,
+};
 pub use tokens::{CachedToken, TokenStore};
 
 /// The result of a regenerate-and-wait attempt (see
