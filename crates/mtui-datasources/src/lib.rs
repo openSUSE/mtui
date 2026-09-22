@@ -36,6 +36,7 @@ pub use slack::{
     Message, PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction,
 };
 pub use teregen::{
-    CheckerResult, CheckerRun, DocumentFetch, RegenOutcome, TeReGen, TeregenV2, TeregenV2Error,
-    UpdatesQuery,
+    CheckerResult, CheckerRun, DocumentFetch, Precondition, RegenOutcome, TeReGen, TeregenAuth,
+    TeregenAuthError, TeregenV2, TeregenV2Error, TeregenV2WriteError, TokenStore, UpdatesQuery,
+    UploadOutcome,
 };
