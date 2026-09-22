@@ -15,6 +15,7 @@ use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_types::hostlog::HostLog;
 use mtui_types::package::{Package, VersionCheck};
+use mtui_types::system::SystemProduct;
 use regex::Regex;
 
 use super::base::{ExportContext, OverwritePrompt};
@@ -27,6 +28,11 @@ pub struct ManualHost {
     pub hostname: String,
     /// The system/product type string (e.g. `sles12sp5-x86_64`).
     pub system: String,
+    /// The host's base product, version and architecture — structured,
+    /// unlike [`system`](Self::system): the `(product, version, arch)` triple
+    /// `testing.install.checks[].target` joins against `install.targets[]`
+    /// on (Phase 4 authoring, `authoring::manual`).
+    pub product: SystemProduct,
     /// The host's packages with before/after versions.
     pub packages: Vec<Package>,
     /// The host's command log.
@@ -376,6 +382,7 @@ mod tests {
         ManualHost {
             hostname: "h1".into(),
             system: "system1".into(),
+            product: SystemProduct::new("system1", "1", "x86_64"),
             packages,
             hostlog: HostLog::new(),
         }

@@ -3,12 +3,17 @@
 //! The typed rows the command layer renders; the search functions never print.
 
 use mtui_types::OverviewResult;
+use serde::Serialize;
 
 /// One row in a Single Incidents / Aggregated Updates section.
 ///
 /// `status` is one of: `"passed"`, `"failed"`, `"running"`, `"missing"` (no
 /// openQA build found in the date window for aggregated updates).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// `Serialize` (only) lets Phase 4's `authoring::overview` park these rows
+/// verbatim under a `testing.openqa.extra` key (P4-D6) — nothing here reads
+/// JSON back into this type.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct VersionResult {
     /// The SLE version label (e.g. `15-SP5`).
     pub version: String,
@@ -25,7 +30,7 @@ pub struct VersionResult {
 }
 
 /// Aggregated Updates results for one job group (e.g. `core`).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct GroupResult {
     /// The short group name (e.g. `core`, `sap`, `cloud`).
     pub group: String,
@@ -34,7 +39,7 @@ pub struct GroupResult {
 }
 
 /// One build-check log entry parsed from qam.suse.de.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct BuildCheckResult {
     /// The full URL of the `.log` file.
     pub url: String,
