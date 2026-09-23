@@ -10,6 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `export` now reports which report document sections it updated (e.g.
+  `document: testing.install, people.testers updated`), printed after the
+  "template exported to" line so both the REPL and MCP result surface it.
+  Silent (no line) when no document is loaded, matching prior behaviour.
 - New config key `[teregen] api_v2` (default `https://qam.suse.de/api/v2`):
   the TeReGen v2 report/queue API base URL, read by `config show`/`config set`
   and by `xtask corpus-survey`/`xtask schema-check`.
