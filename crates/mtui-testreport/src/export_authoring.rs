@@ -23,6 +23,9 @@ use crate::export::ManualHost;
 /// addition to the text export the caller already performs, never instead of
 /// it. `hosts` is only meaningful for the manual workflow; pass `None` for
 /// `Auto`/`Kernel`.
+///
+/// Returns the top-level pointers touched — empty without `api-ingest` or
+/// when `document` is `None`, since neither case authors anything.
 #[cfg_attr(
     not(feature = "api-ingest"),
     allow(
@@ -37,11 +40,11 @@ pub fn author_export(
     kernel: &[KernelOpenQA],
     overview: Option<&OpenQAOverviewResult>,
     tester: Option<TesterEntry>,
-) {
+) -> Vec<&'static str> {
     #[cfg(feature = "api-ingest")]
     {
         let Some(document) = document.as_mut() else {
-            return;
+            return Vec::new();
         };
         let install = hosts
             .map(|hosts| crate::authoring::manual::install_from_hosts(hosts, &document.install));
@@ -57,8 +60,10 @@ pub fn author_export(
             regression,
             openqa_extra,
             tester,
-        );
+        )
     }
+    #[cfg(not(feature = "api-ingest"))]
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -68,8 +73,9 @@ mod tests {
     #[test]
     fn is_a_no_op_when_no_document_is_loaded() {
         let mut document: Option<ReportDocument> = None;
-        author_export(&mut document, None, None, &[], None, None);
+        let touched = author_export(&mut document, None, None, &[], None, None);
         assert!(document.is_none());
+        assert!(touched.is_empty());
     }
 
     /// The composition itself (join, verdicts, tester dedup) is unit-tested
@@ -132,7 +138,8 @@ mod tests {
             hostlog: HostLog::new(),
         };
 
-        author_export(&mut document, Some(&[host]), None, &[], None, None);
+        let touched = author_export(&mut document, Some(&[host]), None, &[], None, None);
+        assert_eq!(touched, ["testing.install"]);
 
         let install = document
             .unwrap()

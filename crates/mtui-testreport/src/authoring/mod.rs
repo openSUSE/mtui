@@ -31,6 +31,10 @@ use serde_json::Value;
 /// in the legacy log) with no exporter-computed source, the same reasoning
 /// that already leaves `TestingInstall`/`Regression`'s own `verdict`/
 /// `comment` unset.
+///
+/// Returns the top-level pointers actually touched, so a caller can report
+/// what changed — `people.testers` is only included when a tester was
+/// actually pushed, not on a duplicate.
 pub fn author_document(
     document: &mut ReportDocument,
     install: Option<TestingInstall>,
@@ -38,9 +42,11 @@ pub fn author_document(
     regression: Option<Regression>,
     openqa_extra: BTreeMap<String, Value>,
     tester: Option<TesterEntry>,
-) {
+) -> Vec<&'static str> {
+    let mut touched = Vec::new();
     if let Some(install) = install {
         document.testing.install = Some(install);
+        touched.push("testing.install");
     }
     if openqa_install.is_some() || !openqa_extra.is_empty() {
         let openqa = document.testing.openqa.get_or_insert_with(Openqa::default);
@@ -48,15 +54,19 @@ pub fn author_document(
             openqa.install = Some(openqa_install);
         }
         openqa.extra.extend(openqa_extra);
+        touched.push("testing.openqa");
     }
     if let Some(regression) = regression {
         document.testing.regression = Some(regression);
+        touched.push("testing.regression");
     }
     if let Some(tester) = tester
         && !document.people.testers.contains(&tester)
     {
         document.people.testers.push(tester);
+        touched.push("people.testers");
     }
+    touched
 }
 
 #[cfg(test)]
@@ -144,14 +154,15 @@ mod tests {
     fn none_of_everything_leaves_testing_and_people_untouched() {
         let mut doc = empty_document();
         let before = doc.clone();
-        author_document(&mut doc, None, None, None, BTreeMap::new(), None);
+        let touched = author_document(&mut doc, None, None, None, BTreeMap::new(), None);
         assert_eq!(doc, before);
+        assert!(touched.is_empty());
     }
 
     #[test]
     fn install_is_stored_when_present() {
         let mut doc = empty_document();
-        author_document(
+        let touched = author_document(
             &mut doc,
             Some(install_checks()),
             None,
@@ -160,6 +171,7 @@ mod tests {
             None,
         );
         assert!(doc.testing.install.is_some());
+        assert_eq!(touched, ["testing.install"]);
     }
 
     #[test]
@@ -167,10 +179,11 @@ mod tests {
         let mut doc = empty_document();
         let mut extra = BTreeMap::new();
         extra.insert("single_incidents".to_owned(), serde_json::json!([1]));
-        author_document(&mut doc, None, Some(openqa_install()), None, extra, None);
+        let touched = author_document(&mut doc, None, Some(openqa_install()), None, extra, None);
         let openqa = doc.testing.openqa.expect("openqa object created");
         assert!(openqa.install.is_some());
         assert!(openqa.extra.contains_key("single_incidents"));
+        assert_eq!(touched, ["testing.openqa"]);
     }
 
     #[test]
@@ -195,7 +208,7 @@ mod tests {
     #[test]
     fn regression_is_stored_when_present() {
         let mut doc = empty_document();
-        author_document(
+        let touched = author_document(
             &mut doc,
             None,
             None,
@@ -207,15 +220,17 @@ mod tests {
             doc.testing.regression.unwrap().comment.into_inner(),
             Some("regression notes".to_owned())
         );
+        assert_eq!(touched, ["testing.regression"]);
     }
 
     #[test]
     fn tester_is_appended() {
         let mut doc = empty_document();
         let tester = testers(&["alice"]).remove(0);
-        author_document(&mut doc, None, None, None, BTreeMap::new(), Some(tester));
+        let touched = author_document(&mut doc, None, None, None, BTreeMap::new(), Some(tester));
         assert_eq!(doc.people.testers.len(), 1);
         assert_eq!(doc.people.testers[0].name, "alice");
+        assert_eq!(touched, ["people.testers"]);
     }
 
     /// Append-only, but never a duplicate of an entry already present.
@@ -224,8 +239,9 @@ mod tests {
         let mut doc = empty_document();
         let tester = || testers(&["alice"]).remove(0);
         author_document(&mut doc, None, None, None, BTreeMap::new(), Some(tester()));
-        author_document(&mut doc, None, None, None, BTreeMap::new(), Some(tester()));
+        let touched = author_document(&mut doc, None, None, None, BTreeMap::new(), Some(tester()));
         assert_eq!(doc.people.testers.len(), 1);
+        assert!(touched.is_empty(), "a duplicate tester touches nothing");
     }
 
     /// A different tester still gets its own entry (append-only is not

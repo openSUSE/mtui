@@ -196,34 +196,39 @@ impl Command for Export {
         })?;
         let ctx = ExportContext::new(session.config.clone(), text.lines(), force, rrid);
 
-        let template: Vec<String> = match workflow {
+        let (template, touched): (Vec<String>, Vec<&'static str>) = match workflow {
             Workflow::Auto => {
                 let http = build_http(session)?;
                 let auto = session.metadata().openqa().auto.clone();
                 let overview = session.metadata().openqa().overview.clone();
-                author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
-                AutoExport::new(ctx, auto, overview)
+                let touched =
+                    author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
+                let template = AutoExport::new(ctx, auto, overview)
                     .run(&http, &DenyOverwrite)
-                    .await
+                    .await;
+                (template, touched)
             }
             Workflow::Kernel => {
                 let http = build_http(session)?;
                 let kernel = session.metadata().openqa().kernel.clone();
                 let overview = session.metadata().openqa().overview.clone();
-                author_onto_document(session, None, &kernel, overview.as_ref(), None);
-                KernelExport::new(ctx, kernel, overview).run(&http).await
+                let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
+                let template = KernelExport::new(ctx, kernel, overview).run(&http).await;
+                (template, touched)
             }
             Workflow::Manual => {
                 let (hosts, results) = manual_results.expect("computed for Manual workflow");
                 let auto = session.metadata().openqa().auto.clone();
-                author_onto_document(
+                let touched = author_onto_document(
                     session,
                     auto.as_ref(),
                     &[],
                     manual_overview.as_ref(),
                     Some(&results),
                 );
-                ManualExport::new(ctx, results, auto, manual_overview).run(&hosts, &DenyOverwrite)
+                let template = ManualExport::new(ctx, results, auto, manual_overview)
+                    .run(&hosts, &DenyOverwrite);
+                (template, touched)
             }
         };
 
@@ -234,6 +239,9 @@ impl Command for Export {
         session
             .display
             .println(&format!("template exported to {}", filename.display()));
+        if let Some(line) = document_line(&touched) {
+            session.display.println(&line);
+        }
         Ok(())
     }
 
@@ -273,15 +281,18 @@ fn is_unverified(host: &ManualHost) -> bool {
 /// the oscrc read entirely in that common case, and `author_export` itself
 /// is unconditionally callable without `mtui-core` declaring the feature
 /// (see `export_authoring.rs`'s module doc for why that matters).
+///
+/// Returns the top-level document pointers touched, so the caller can report
+/// what changed.
 fn author_onto_document(
     session: &mut Session,
     auto: Option<&mtui_datasources::qem_dashboard::DashboardAutoOpenQA>,
     kernel: &[mtui_datasources::openqa::kernel::KernelOpenQA],
     overview: Option<&mtui_datasources::OpenQAOverviewResult>,
     hosts: Option<&[ManualHost]>,
-) {
+) -> Vec<&'static str> {
     if session.metadata().base().document.is_none() {
-        return;
+        return Vec::new();
     }
     let tester = build_tester_entry(session);
     mtui_testreport::author_export(
@@ -291,7 +302,17 @@ fn author_onto_document(
         kernel,
         overview,
         tester,
-    );
+    )
+}
+
+/// Formats `author_onto_document`'s touched pointers as the "document: ..."
+/// line, or `None` when nothing was touched (no document loaded, or a
+/// non-`api-ingest` build).
+fn document_line(touched: &[&str]) -> Option<String> {
+    if touched.is_empty() {
+        return None;
+    }
+    Some(format!("document: {} updated", touched.join(", ")))
 }
 
 /// The `people.testers` entry for this export: identity comes from the same
@@ -1007,9 +1028,23 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         assert!(session.metadata().base().document.is_none());
 
-        author_onto_document(&mut session, None, &[], None, None);
+        let touched = author_onto_document(&mut session, None, &[], None, None);
 
         assert!(session.metadata().base().document.is_none());
+        assert!(touched.is_empty());
+    }
+
+    #[test]
+    fn document_line_is_none_when_nothing_was_touched() {
+        assert_eq!(document_line(&[]), None);
+    }
+
+    #[test]
+    fn document_line_joins_touched_pointers() {
+        assert_eq!(
+            document_line(&["testing.install", "people.testers"]),
+            Some("document: testing.install, people.testers updated".to_owned())
+        );
     }
 
     /// `people.testers`' identity is the oscrc principal, not a second
