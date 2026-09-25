@@ -99,6 +99,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `commit` uploads the report document (conditional on its stored `ETag`) and
+  its logs (`install_logs/`, `results/`, `checkers.log`) to teregen's v2 API
+  instead of running `svn ci`, when the loaded report came from a v2 document;
+  SVN-loaded reports are unchanged. `-m/--msg` is accepted but ignored on this
+  path (teregen writes its own commit message) and noted as such. A stale
+  document (reloaded elsewhere since) refuses with no upload attempted; a
+  failed artifact upload does not block the others, and the command reports
+  how many of them failed so `commit` can simply be re-run to retry.
 - Parallel fan-out outputs fold identical success spam: consecutive identical
   lines collapse to `…[N identical lines folded]` and identical per-host blocks
   share one `h1, h2:-> …` body with `…[output identical on N hosts folded]`;
