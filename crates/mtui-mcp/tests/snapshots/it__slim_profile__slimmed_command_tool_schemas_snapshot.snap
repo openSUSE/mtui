@@ -1009,6 +1009,11 @@ expression: pretty
           "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
+        "discard_authored": {
+          "default": false,
+          "description": "override mtui's own guard against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results); teregen itself still refuses on a verdict or testers",
+          "type": "boolean"
+        },
         "force": {
           "default": false,
           "description": "overwrite an existing (but unedited) template",

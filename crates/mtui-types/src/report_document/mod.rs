@@ -164,6 +164,30 @@ pub struct ReportDocument {
     pub review: Option<Review>,
 }
 
+impl ReportDocument {
+    /// `true` when this document already carries tester-authored content:
+    /// a non-null `verdict`/`comment`, any entry in `people.testers`, a
+    /// `testing.install` block, or a `testing.regression` with a non-null
+    /// `verdict`/`comment`.
+    ///
+    /// `testing.openqa` is deliberately excluded: the pipeline pre-fills it in
+    /// every freshly generated document, so its presence is not evidence of
+    /// tester content — `regenerate`'s discard-guard consults this, and
+    /// gating on `openqa` there would refuse every regenerate.
+    #[must_use]
+    pub fn has_tester_content(&self) -> bool {
+        self.verdict.is_some()
+            || self.comment.is_some()
+            || !self.people.testers.is_empty()
+            || self.testing.install.is_some()
+            || self
+                .testing
+                .regression
+                .as_ref()
+                .is_some_and(|r| r.verdict.is_some() || r.comment.is_some())
+    }
+}
+
 impl FromStr for ReportDocument {
     type Err = DocumentError;
 
@@ -539,5 +563,124 @@ mod tests {
         }"#;
         let err = raw.parse::<ReportDocument>().unwrap_err();
         assert_eq!(err.pointer, "/install/targets/0");
+    }
+
+    // --- has_tester_content ---
+
+    const MAINTENANCE_OBS: &str =
+        include_str!("../../tests/fixtures/document/maintenance_obs.json");
+    const MAINTENANCE_ADDON: &str =
+        include_str!("../../tests/fixtures/document/maintenance_addon.json");
+    const SLFO_GITEA: &str = include_str!("../../tests/fixtures/document/slfo_gitea.json");
+    const MAINTENANCE_OPENQA_L3: &str =
+        include_str!("../../tests/fixtures/document/maintenance_openqa_l3.json");
+    const PI: &str = include_str!("../../tests/fixtures/document/pi.json");
+
+    /// Every freshly generated (server-produced) fixture: none of them carry
+    /// tester content yet. `maximal.json` is deliberately excluded — it *is*
+    /// tester-authored, by construction.
+    #[test]
+    fn has_tester_content_is_false_for_every_freshly_generated_fixture() {
+        for (name, raw) in [
+            ("maintenance_obs", MAINTENANCE_OBS),
+            ("maintenance_addon", MAINTENANCE_ADDON),
+            ("slfo_gitea", SLFO_GITEA),
+            ("maintenance_openqa_l3", MAINTENANCE_OPENQA_L3),
+            ("pi", PI),
+        ] {
+            let doc: ReportDocument = raw.parse().unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                !doc.has_tester_content(),
+                "{name} should carry no tester content"
+            );
+        }
+    }
+
+    /// A minimal, schema-valid document with no tester content anywhere.
+    fn bare_document(id: &str) -> String {
+        format!(
+            r#"{{
+                "schema_version": "1.0", "id": "{id}", "kind": "pi",
+                "workflow": "obs", "generated_at": "2026-01-01T00:00:00Z",
+                "verdict": null, "comment": null,
+                "people": {{"testers": [], "reviewer": {{"name": null}}}},
+                "update": {{"packager": "p", "source_packages": ["a"], "origin": {{}},
+                           "products": [{{"name": "n", "version": "v", "archs": ["x86_64"]}}],
+                           "patches": [{{"id": "1", "title": "t"}}]}},
+                "install": {{"repository": "http://x/", "targets": [{{
+                    "product": "n", "version": "v", "arch": "x86_64",
+                    "repository": "http://x/r", "binaries": {{"a": "1-1.x86_64"}}
+                }}], "test_platforms": []}},
+                "issues": {{}}, "testing": {{}}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn has_tester_content_false_for_bare_document() {
+        let doc: ReportDocument = bare_document("x").parse().unwrap();
+        assert!(!doc.has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_verdict() {
+        let raw = bare_document("x").replace("\"verdict\": null", "\"verdict\": \"PASSED\"");
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_comment() {
+        let raw = bare_document("x").replace("\"comment\": null", "\"comment\": \"note\"");
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_a_tester_entry() {
+        let raw = bare_document("x").replace(
+            "\"people\": {\"testers\": [], \"reviewer\": {\"name\": null}}",
+            "\"people\": {\"testers\": [{\"name\": \"tester1\"}], \"reviewer\": {\"name\": null}}",
+        );
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_testing_install() {
+        let raw = bare_document("x").replace(
+            "\"issues\": {}, \"testing\": {}",
+            "\"issues\": {}, \"testing\": {\"install\": {\"verdict\": null, \"checks\": [], \
+             \"comment\": null}}",
+        );
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_regression_verdict() {
+        let raw = bare_document("x").replace(
+            "\"issues\": {}, \"testing\": {}",
+            "\"issues\": {}, \"testing\": {\"regression\": {\"verdict\": \"PASSED\", \
+             \"comment\": null}}",
+        );
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_regression_comment() {
+        let raw = bare_document("x").replace(
+            "\"issues\": {}, \"testing\": {}",
+            "\"issues\": {}, \"testing\": {\"regression\": {\"verdict\": null, \
+             \"comment\": \"note\"}}",
+        );
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    /// `testing.openqa` alone is never evidence of tester content — the
+    /// pipeline pre-fills it in every freshly generated document.
+    #[test]
+    fn has_tester_content_false_for_openqa_only() {
+        let raw = bare_document("x").replace(
+            "\"issues\": {}, \"testing\": {}",
+            "\"issues\": {}, \"testing\": {\"openqa\": {}}",
+        );
+        assert!(!raw.parse::<ReportDocument>().unwrap().has_tester_content());
     }
 }

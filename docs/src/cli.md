@@ -991,6 +991,9 @@ Options:
   -k, --kernel
           load the standalone RRID as a kernel update (default: auto)
 
+      --discard-authored
+          override mtui's own guard against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results); teregen itself still refuses on a verdict or testers
+
   -h, --help
           Print help
 ```

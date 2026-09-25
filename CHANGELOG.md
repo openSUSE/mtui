@@ -97,6 +97,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exporter reports as an `audit_gap` once the collector returns — the call itself
   still runs and still answers. No new TOML keys (#411).
 
+- `regenerate --discard-authored`: overrides mtui's own guard against
+  regenerating the *loaded* template once its document already carries
+  tester-authored content (a verdict, any tester, or install/regression
+  results — `testing.openqa` alone does not count, since the pipeline
+  pre-fills it). Without the flag, mtui refuses before any HTTP call and
+  suggests `commit` first; teregen itself still separately refuses on a
+  verdict or testers regardless of this flag. An explicit RRID that is not
+  the loaded template is never affected. **MCP schema note:** additive only —
+  a new optional `discard_authored` boolean on `regenerate`.
+
 ### Changed
 
 - `commit` uploads the report document (conditional on its stored `ETag`) and
