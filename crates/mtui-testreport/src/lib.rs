@@ -9,6 +9,7 @@
 #[cfg(feature = "api-ingest")]
 pub mod authoring;
 pub mod checkout;
+pub mod commit_upload;
 pub mod export;
 pub mod export_authoring;
 #[cfg(feature = "api-ingest")]
@@ -35,6 +36,9 @@ pub use checkout::{
     CheckoutError, CheckoutRunError, ReadOutcome, SvnOutcome, SvnRunner, TemplateIoError,
     TestReportNotLoaded, TokioSvnRunner, checkout_and_read, svn_commit_testreport,
     testreport_svn_checkout,
+};
+pub use commit_upload::{
+    CollectError, Collected, CommitReport, CommitUploadError, collect_artifacts, upload_current,
 };
 pub use export::{
     AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,

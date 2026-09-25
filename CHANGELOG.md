@@ -97,8 +97,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exporter reports as an `audit_gap` once the collector returns — the call itself
   still runs and still answers. No new TOML keys (#411).
 
+- `regenerate --discard-authored`: overrides mtui's own guard against
+  regenerating the *loaded* template once its document already carries
+  tester-authored content (a verdict, any tester, or install/regression
+  results — `testing.openqa` alone does not count, since the pipeline
+  pre-fills it). Without the flag, mtui refuses before any HTTP call and
+  suggests `commit` first; teregen itself still separately refuses on a
+  verdict or testers regardless of this flag. An explicit RRID that is not
+  the loaded template is never affected. **MCP schema note:** additive only —
+  a new optional `discard_authored` boolean on `regenerate`.
+
 ### Changed
 
+- `commit` uploads the report document (conditional on its stored `ETag`) and
+  its logs (`install_logs/`, `results/`, `checkers.log`) to teregen's v2 API
+  instead of running `svn ci`, when the loaded report came from a v2 document;
+  SVN-loaded reports are unchanged. `-m/--msg` is accepted but ignored on this
+  path (teregen writes its own commit message) and noted as such. A stale
+  document (reloaded elsewhere since) refuses with no upload attempted; a
+  failed artifact upload does not block the others, and the command reports
+  how many of them failed so `commit` can simply be re-run to retry.
 - Parallel fan-out outputs fold identical success spam: consecutive identical
   lines collapse to `…[N identical lines folded]` and identical per-host blocks
   share one `h1, h2:-> …` body with `…[output identical on N hosts folded]`;

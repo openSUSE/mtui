@@ -11,6 +11,8 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::obs::oscrc;
+use mtui_datasources::teregen::{TeregenAuth, TeregenV2};
 use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
 use mtui_types::{RequestReviewID, UpdateSource};
 
@@ -93,6 +95,32 @@ pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError>
         .http_client()
         .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
     Ok(TeReGen::with_client(http, &session.config.teregen_api))
+}
+
+/// Builds an authenticated teregen v2 write client for `commit`'s document
+/// path, reusing the session-scoped [`HttpClient`](mtui_datasources::HttpClient)
+/// like [`teregen_client`]. The signing identity is the oscrc SSH-signature
+/// credentials for `config.obs_api_url` — teregen reuses the OBS identity, no
+/// separate config key.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the oscrc credentials cannot be read, or the
+/// shared HTTP client cannot be built.
+pub(crate) fn teregen_v2_writer(session: &Session) -> Result<TeregenV2, CommandError> {
+    let creds = oscrc::read_credentials(&session.config.obs_api_url)
+        .map_err(|e| CommandError::Other(format!("could not read oscrc credentials: {e}")))?;
+    let http = session
+        .http_client()
+        .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+    let auth = TeregenAuth::new(
+        session.config.teregen_api_v2.clone(),
+        creds.user,
+        creds.sshkey_path,
+        creds.sshkey_fingerprint,
+        http.clone(),
+    );
+    Ok(TeregenV2::with_client(http, &session.config.teregen_api_v2).with_auth(auth))
 }
 
 /// Prints best-effort TeReGen context for the loaded update: live
