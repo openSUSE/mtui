@@ -3,13 +3,14 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_testreport::UpdateKind;
+use mtui_types::report_document::ReportDocument;
 use mtui_types::{UpdateID, Workflow};
 use tracing::info;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
 use crate::commands::support::{require_update, template_completion};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Regenerates a test-report template via the TeReGen API.
@@ -90,6 +91,16 @@ impl Command for Regenerate {
                 .help("load the standalone RRID as a kernel update (default: auto)"),
         )
         .arg(
+            Arg::new("discard_authored")
+                .long("discard-authored")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "override mtui's own guard against regenerating a loaded document that \
+                     already carries tester content (verdict, testers, install/regression \
+                     results); teregen itself still refuses on a verdict or testers",
+                ),
+        )
+        .arg(
             Arg::new("rrid")
                 .value_name("RRID")
                 .help("template to regenerate even if not loaded (default: the loaded template)"),
@@ -97,11 +108,17 @@ impl Command for Regenerate {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        let mut out: Vec<String> = ["--force", "--ignore-inconsistent", "--no-wait", "-k"]
-            .iter()
-            .filter(|f| f.starts_with(text))
-            .map(|s| (*s).to_owned())
-            .collect();
+        let mut out: Vec<String> = [
+            "--force",
+            "--ignore-inconsistent",
+            "--no-wait",
+            "-k",
+            "--discard-authored",
+        ]
+        .iter()
+        .filter(|f| f.starts_with(text))
+        .map(|s| (*s).to_owned())
+        .collect();
         out.extend(template_completion(session, text));
         out
     }
@@ -111,6 +128,7 @@ impl Command for Regenerate {
         let ignore_inconsistent = args.get_flag("ignore_inconsistent");
         let no_wait = args.get_flag("no_wait");
         let kernel = args.get_flag("kernel");
+        let discard_authored = args.get_flag("discard_authored");
 
         // Only the fallback goes through the "load first" guard; an explicit
         // RRID breaks the load/regenerate catch-22.
@@ -118,6 +136,31 @@ impl Command for Regenerate {
             Some(rrid) => rrid.clone(),
             None => require_update(session)?.to_string(),
         };
+
+        // mtui's own guard: refuse, before any HTTP call, to regenerate the
+        // *loaded* document over tester-authored content. A standalone RRID
+        // (not the loaded template) is never refused here — there is no
+        // local document to have lost anything from.
+        let targets_loaded = session
+            .metadata()
+            .rrid()
+            .is_some_and(|r| r.to_string() == rrid_str);
+        if !discard_authored
+            && targets_loaded
+            && session
+                .metadata()
+                .base()
+                .document
+                .as_ref()
+                .is_some_and(ReportDocument::has_tester_content)
+        {
+            return Err(CommandError::Other(format!(
+                "{rrid_str}'s loaded document already carries tester-authored content \
+                 (a verdict, testers, or install/regression results); run `commit` first, or \
+                 pass --discard-authored to regenerate anyway — teregen itself still refuses on \
+                 a verdict or testers"
+            )));
+        }
 
         let teregen = teregen_client(session)?;
 
@@ -711,5 +754,129 @@ mod tests {
             cmd.try_get_matches_from(["-k", "SUSE:Maintenance:1:1"])
                 .is_ok()
         );
+    }
+
+    // --- --discard-authored guard ---
+
+    /// A schema-valid document for `id`, with `testing` set to `extra_testing`
+    /// verbatim (a JSON object literal).
+    fn document_json(id: &str, extra_testing: &str) -> String {
+        format!(
+            r#"{{
+                "schema_version": "1.0", "id": "{id}", "kind": "pi",
+                "workflow": "obs", "generated_at": "2026-01-01T00:00:00Z",
+                "verdict": null, "comment": null,
+                "people": {{"testers": [], "reviewer": {{"name": null}}}},
+                "update": {{"packager": "p", "source_packages": ["a"], "origin": {{}},
+                           "products": [{{"name": "n", "version": "v", "archs": ["x86_64"]}}],
+                           "patches": [{{"id": "1", "title": "t"}}]}},
+                "install": {{"repository": "http://x/", "targets": [{{
+                    "product": "n", "version": "v", "arch": "x86_64",
+                    "repository": "http://x/r", "binaries": {{"a": "1-1.x86_64"}}
+                }}], "test_platforms": []}},
+                "issues": {{}}, "testing": {extra_testing}
+            }}"#
+        )
+    }
+
+    fn doc_with_verdict(id: &str) -> ReportDocument {
+        document_json(id, "{}")
+            .replace("\"verdict\": null", "\"verdict\": \"PASSED\"")
+            .parse()
+            .unwrap()
+    }
+
+    fn doc_with_openqa_only(id: &str) -> ReportDocument {
+        document_json(id, r#"{"openqa": {}}"#).parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn discard_authored_refuses_regenerating_loaded_tester_content_without_the_flag() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        // Deliberately no mocks mounted: any request is a hard failure.
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document = Some(doc_with_verdict(rrid));
+
+        let args = matches(&Regenerate, &[]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.is_empty(),
+            "the guard must send nothing: {requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_authored_flag_proceeds_past_the_guard() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document = Some(doc_with_verdict(rrid));
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &["--discard-authored"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("regenerated — reloading"), "{out}");
+    }
+
+    /// The guard only ever consults the *loaded* report's document for the
+    /// RRID it is actually loaded under — an explicit RRID naming a different,
+    /// standalone update is never refused, even while the loaded report
+    /// itself carries tester content.
+    #[tokio::test]
+    async fn explicit_rrid_different_from_the_loaded_one_is_never_refused() {
+        let loaded_rrid = "SUSE:Maintenance:1:1";
+        let other_rrid = "SUSE:SLFO:1.2:6311";
+        let server = MockServer::start().await;
+        mount_success(&server, other_rrid).await;
+
+        let (mut session, buf) = session_with_hosts(loaded_rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document = Some(doc_with_verdict(loaded_rrid));
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &[other_rrid]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("regenerated — reloading"), "{out}");
+    }
+
+    /// `testing.openqa` alone is never evidence of tester content
+    /// (`ReportDocument::has_tester_content`), so the guard must not fire.
+    #[tokio::test]
+    async fn openqa_only_document_is_not_refused() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document = Some(doc_with_openqa_only(rrid));
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &[]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("regenerated — reloading"), "{out}");
     }
 }
