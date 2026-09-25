@@ -468,6 +468,169 @@ impl TeregenV2 {
             ))),
         }
     }
+
+    /// `PUT /reports/{rrid}/artifacts/{name}`: upload one artifact file
+    /// (`application/octet-stream`), replacing any existing artifact of the
+    /// same name.
+    ///
+    /// Pre-flight, before any request: `name` must match the server's
+    /// `^[A-Za-z0-9_.-]+$` pattern and must not start with `.`, and
+    /// `bytes.len()` must be at most [`MAX_API_BODY`] — both fail locally
+    /// instead of costing a round trip.
+    ///
+    /// # Errors
+    ///
+    /// See [`ArtifactUploadError`]. Returns
+    /// [`ArtifactUploadError::NotConfigured`], with no request sent, if
+    /// [`with_auth`](Self::with_auth) was never called.
+    pub async fn upload_artifact(
+        &self,
+        rrid: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<ArtifactStored, ArtifactUploadError> {
+        let Some(auth) = &self.auth else {
+            return Err(ArtifactUploadError::NotConfigured);
+        };
+        if !is_valid_artifact_name(name) {
+            return Err(ArtifactUploadError::InvalidName {
+                name: name.to_owned(),
+            });
+        }
+        if bytes.len() > MAX_API_BODY {
+            return Err(ArtifactUploadError::TooLarge {
+                name: name.to_owned(),
+            });
+        }
+
+        let url = format!(
+            "{}/reports/{rrid}/artifacts/{}",
+            self.base,
+            urlencoding::encode(name)
+        );
+        let response = auth
+            .authenticated_request_with(reqwest::Method::PUT, &url, move |b| {
+                b.header(CONTENT_TYPE, "application/octet-stream")
+                    .body(bytes.clone())
+            })
+            .await?;
+
+        match response.status().as_u16() {
+            201 => Ok(ArtifactStored::Created),
+            200 => Ok(ArtifactStored::Replaced),
+            400 => {
+                let detail = read_body_capped(response, MAX_API_BODY)
+                    .await
+                    .ok()
+                    .map(|bytes| error_detail(&bytes))
+                    .unwrap_or_default();
+                Err(ArtifactUploadError::RejectedId { detail })
+            }
+            413 => Err(ArtifactUploadError::TooLarge {
+                name: name.to_owned(),
+            }),
+            422 => Err(ArtifactUploadError::InvalidName {
+                name: name.to_owned(),
+            }),
+            503 => {
+                let bytes = read_body_capped(response, MAX_API_BODY)
+                    .await
+                    .unwrap_or_default();
+                let error_field = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str().map(str::to_owned)));
+                match error_field.as_deref() {
+                    Some("busy") => Err(ArtifactUploadError::Busy),
+                    // Conservative fallback, same taxonomy as
+                    // `upload_document`: an unrecognised body reads as
+                    // still-generating, never as safe-to-retry.
+                    _ => Err(ArtifactUploadError::Generating),
+                }
+            }
+            other => Err(ArtifactUploadError::Transport(format!(
+                "unexpected status {other}"
+            ))),
+        }
+    }
+}
+
+/// The outcome of a successful [`TeregenV2::upload_artifact`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactStored {
+    /// `201`: no artifact existed under this name yet.
+    Created,
+    /// `200`: an existing artifact was replaced.
+    Replaced,
+}
+
+/// Errors from [`TeregenV2::upload_artifact`] — a separate enum from
+/// [`TeregenV2WriteError`], whose `413`/`422` wording is document-specific;
+/// stretching it to cover a per-file artifact refusal would blur the two.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ArtifactUploadError {
+    /// [`TeregenV2::upload_artifact`] was called before [`TeregenV2::with_auth`]
+    /// attached a [`TeregenAuth`]. No request is sent.
+    #[error("upload_artifact requires an attached TeregenAuth (see TeregenV2::with_auth)")]
+    NotConfigured,
+
+    /// Any failure from the auth layer itself (see
+    /// [`TeregenV2WriteError::Auth`]).
+    #[error(transparent)]
+    Auth(#[from] TeregenAuthError),
+
+    /// `400 {"error":"invalid id"}` — the server rejects the report id itself.
+    #[error("the server rejects this id: {detail}")]
+    RejectedId {
+        /// The server's own error message, verbatim.
+        detail: String,
+    },
+
+    /// The artifact name does not match the server's `^[A-Za-z0-9_.-]+$`
+    /// pattern, or starts with `.` (`Api/V2/Report.pm`). Checked locally
+    /// before any request when mtui names the artifact itself; also the
+    /// server's own `422 invalid artifact name` refusal.
+    #[error("invalid artifact name: {name}")]
+    InvalidName {
+        /// The offending name, verbatim.
+        name: String,
+    },
+
+    /// The artifact body exceeds [`MAX_API_BODY`] (pre-flight, or the
+    /// server's own `413`).
+    #[error("artifact {name} exceeds the {MAX_API_BODY}-byte limit")]
+    TooLarge {
+        /// The artifact's name.
+        name: String,
+    },
+
+    /// `503`, body `{"error":"generating"}` — the document is being generated
+    /// right now.
+    #[error("the server is generating this document right now")]
+    Generating,
+
+    /// `503`, body `{"error":"busy"}` — a previous upload's SVN commit holds
+    /// the per-id guard (every write takes `minion->guard($id, 60)`).
+    #[error("the server is busy committing a previous upload")]
+    Busy,
+
+    /// A transport failure or an unmodelled non-2xx status.
+    #[error("teregen v2 artifact upload failed: {0}")]
+    Transport(String),
+}
+
+/// `true` when `name` matches the server's `^[A-Za-z0-9_.-]+$` pattern and
+/// does not start with `.` (`Api/V2/Report.pm`'s artifact-name rule). Public
+/// so a caller assembling artifacts locally (`mtui-testreport`'s
+/// `collect_artifacts`) can refuse a bad name before ever building a request,
+/// using the exact same predicate [`TeregenV2::upload_artifact`] checks.
+#[must_use]
+pub fn is_valid_artifact_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 /// Extract a `{"error": "..."}` body's message, falling back to the raw body

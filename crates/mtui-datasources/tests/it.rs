@@ -38,6 +38,8 @@ mod qem_dashboard;
 mod refhost;
 #[path = "slack.rs"]
 mod slack;
+#[path = "teregen_artifacts.rs"]
+mod teregen_artifacts;
 #[path = "teregen_auth.rs"]
 mod teregen_auth;
 #[path = "teregen_document.rs"]
