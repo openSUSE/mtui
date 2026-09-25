@@ -10,6 +10,8 @@
 #[cfg(feature = "api-ingest")]
 #[path = "authoring.rs"]
 mod authoring;
+#[path = "commit_upload.rs"]
+mod commit_upload;
 #[path = "export_idempotency.rs"]
 mod export_idempotency;
 #[path = "fs_responsiveness.rs"]
