@@ -182,13 +182,13 @@ clap_complete = "4"
 # Man-page generation for both binaries. Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
 clap_mangen = { version = "0.3", features = ["env"] }
-reedline = "0.51"
+reedline = "0.52"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
-# TTY bridge (mtui-rs-jww). Pinned to reedline 0.51's `crossterm` major so
+# TTY bridge (mtui-rs-jww). Pinned to reedline 0.52's `crossterm` major so
 # the two share one copy; `event-stream` enables the async `EventStream` the
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
-# terminal styling for the REPL input highlighter; pinned to reedline 0.51's
+# terminal styling for the REPL input highlighter; pinned to reedline 0.52's
 # `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
 nu-ansi-term = "0.50"
 # POSIX shell-splitting of a REPL input line into argv (engine line-dispatch),
@@ -221,7 +221,7 @@ directories = "6"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.
-sandogasa-rpmvercmp = "0.24"
+sandogasa-rpmvercmp = "0.25"
 # http
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 # The openQA REST API client: signed-request auth (HMAC-SHA1 X-API-Hash),
@@ -256,7 +256,7 @@ scraper = "0.27"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 # ssh
 russh = "0.63"
-russh-sftp = "2"
+russh-sftp = "3"
 async-trait = "0.1"
 # mcp. `server` for the ServerHandler surface + model types;
 # `transport-io` for the stdio runner; `transport-async-rw` for the
