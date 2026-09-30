@@ -195,6 +195,15 @@ impl Activation {
     }
 }
 
+/// Why [`Session::with_report`] could not reach a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportAccess {
+    /// No registry entry under that rrid.
+    NotLoaded,
+    /// The entry is locked by another holder.
+    Busy,
+}
+
 /// The log levels `set_log_level` accepts (`info`/`warning`/`error`/
 /// `debug`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -661,6 +670,44 @@ impl Session {
         } else {
             self.templates.document_dirty(rrid)
         }
+    }
+
+    /// Runs `f` on the report loaded under `rrid`.
+    ///
+    /// Guard-aware: this session's active entry is read through its held
+    /// guard, any other entry through a `try_lock`.
+    ///
+    /// # Errors
+    ///
+    /// [`ReportAccess::NotLoaded`] when `rrid` is not loaded,
+    /// [`ReportAccess::Busy`] when another holder has the entry.
+    pub fn with_report<R>(
+        &self,
+        rrid: &str,
+        f: impl FnOnce(&(dyn TestReport + Send + Sync)) -> R,
+    ) -> Result<R, ReportAccess> {
+        if self.active_report_is_guarded(rrid) {
+            return Ok(f(self.metadata()));
+        }
+        let handle = self.templates.handle(rrid).ok_or(ReportAccess::NotLoaded)?;
+        let report = handle.try_lock().map_err(|_| ReportAccess::Busy)?;
+        Ok(f(&**report))
+    }
+
+    /// The mutable counterpart of [`with_report`](Self::with_report), with the
+    /// same guard handling and errors. A contended entry is
+    /// [`ReportAccess::Busy`], never the null sentinel.
+    pub fn with_report_mut<R>(
+        &mut self,
+        rrid: &str,
+        f: impl FnOnce(&mut (dyn TestReport + Send + Sync)) -> R,
+    ) -> Result<R, ReportAccess> {
+        if self.active_report_is_guarded(rrid) {
+            return Ok(f(self.metadata_mut()));
+        }
+        let handle = self.templates.handle(rrid).ok_or(ReportAccess::NotLoaded)?;
+        let mut report = handle.try_lock().map_err(|_| ReportAccess::Busy)?;
+        Ok(f(&mut **report))
     }
 
     /// Whether none of `named` belong to `rrid`'s host group, or `None` when
@@ -1791,6 +1838,84 @@ mod tests {
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
         report.base_mut().targets = HostsGroup::new(vec![mock_target(host)], false);
         session.templates.add(Box::new(report));
+    }
+
+    #[tokio::test]
+    async fn with_report_of_an_unloaded_rrid_is_not_loaded() {
+        let mut s = Session::new(config(), false);
+        assert_eq!(
+            s.with_report("SUSE:Maintenance:9:9", |_| ()),
+            Err(ReportAccess::NotLoaded)
+        );
+        assert_eq!(
+            s.with_report_mut("SUSE:Maintenance:9:9", |_| ()),
+            Err(ReportAccess::NotLoaded)
+        );
+    }
+
+    #[tokio::test]
+    async fn with_report_on_a_foreign_held_entry_is_busy_not_the_null_report() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
+        assert!(s.activate("SUSE:Maintenance:1:1").is_active());
+        let _foreign = s
+            .templates
+            .handle("SUSE:Maintenance:2:2")
+            .expect("seeded")
+            .try_lock_owned()
+            .expect("uncontended until now");
+
+        assert_eq!(
+            s.with_report("SUSE:Maintenance:2:2", |_| ()),
+            Err(ReportAccess::Busy)
+        );
+        assert_eq!(
+            s.with_report_mut("SUSE:Maintenance:2:2", |r| {
+                r.base_mut().document_dirty = true;
+            }),
+            Err(ReportAccess::Busy)
+        );
+        assert!(
+            !s.metadata().base().document_dirty,
+            "a refused write must not land on the active report or the sentinel"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_report_mut_reaches_the_guarded_active_report() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        assert!(s.activate("SUSE:Maintenance:1:1").is_active());
+
+        s.with_report_mut("SUSE:Maintenance:1:1", |r| {
+            r.base_mut().document_dirty = true;
+        })
+        .expect("the active entry is held by this session's own guard");
+        assert_eq!(
+            s.with_report("SUSE:Maintenance:1:1", |r| r.base().document_dirty),
+            Ok(true)
+        );
+
+        s.release_active_guard();
+        assert_eq!(
+            s.with_report("SUSE:Maintenance:1:1", |r| r.base().document_dirty),
+            Ok(true),
+            "the write landed on the registry entry, not a copy"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_report_reads_an_unheld_inactive_entry() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
+        assert!(s.activate("SUSE:Maintenance:1:1").is_active());
+
+        assert_eq!(
+            s.with_report("SUSE:Maintenance:2:2", |r| r.base().targets.names()),
+            Ok(vec!["t2".to_owned()])
+        );
     }
 
     /// Every registry entry **and** the sentinel's stranded group, each exactly
