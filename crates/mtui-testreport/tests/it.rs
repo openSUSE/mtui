@@ -12,6 +12,8 @@
 mod authoring;
 #[path = "commit_upload.rs"]
 mod commit_upload;
+#[path = "document_refresh.rs"]
+mod document_refresh;
 #[path = "export_idempotency.rs"]
 mod export_idempotency;
 #[path = "fs_responsiveness.rs"]

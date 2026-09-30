@@ -10,9 +10,9 @@
 pub mod authoring;
 pub mod checkout;
 pub mod commit_upload;
+pub mod document_refresh;
 pub mod export;
 pub mod export_authoring;
-#[cfg(feature = "api-ingest")]
 pub mod ingest;
 pub mod lifecycle;
 pub mod metadata_parsers;
@@ -40,12 +40,12 @@ pub use checkout::{
 pub use commit_upload::{
     CollectError, Collected, CommitReport, CommitUploadError, collect_artifacts, upload_current,
 };
+pub use document_refresh::{RefreshError, Refreshed, refresh_document};
 pub use export::{
     AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,
     ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
 };
 pub use export_authoring::author_export;
-#[cfg(feature = "api-ingest")]
 pub use ingest::apply_document;
 pub use lifecycle::{UpdateKind, make_testreport};
 pub use metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
