@@ -107,8 +107,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the loaded template is never affected. **MCP schema note:** additive only —
   a new optional `discard_authored` boolean on `regenerate`.
 
+- `load_template`, `unload` and `checkout` take `--discard-authored`. On the
+  report-document path, re-loading an RRID, unloading it, or refreshing it with
+  `checkout` would drop document edits that `export` authored but no `commit`
+  has uploaded; each now refuses, before any I/O, until those edits are
+  committed or the flag is passed. A report that cannot be read at that moment
+  (held by another call) refuses too, asking to retry. **MCP schema note:**
+  additive only — a new optional `discard_authored` boolean on each.
+- `checkout` on a report loaded from a v2 document also re-fetches that
+  document (conditional on its stored `ETag`) after `svn up`, printing
+  `document unchanged (etag …)` or `document refreshed (etag …)`; a newer
+  document is adopted and re-applied, and a refusal from the server (missing,
+  stale, still generating) is reported with the local document left as it was.
+  With `--discard-authored` the fetch is unconditional, so the server's copy
+  replaces the local edits even when it is unchanged.
+
 ### Changed
 
+- `regenerate`'s guard (`--discard-authored`) also refuses over document edits
+  that were never committed, including `testing.openqa`-only authoring and a
+  loaded-but-inactive RRID; one flag lifts both checks.
+- `quit`/`exit`/`EOF` print `warning: uncommitted document edits for <rrid>
+  discarded` for each report holding such edits. Quitting is never refused.
 - `commit` uploads the report document (conditional on its stored `ETag`) and
   its logs (`install_logs/`, `results/`, `checkers.log`) to teregen's v2 API
   instead of running `svn ci`, when the loaded report came from a v2 document;

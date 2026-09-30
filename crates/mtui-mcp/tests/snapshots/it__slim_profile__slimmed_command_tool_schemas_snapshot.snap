@@ -159,6 +159,11 @@ expression: pretty
           "description": "Act on every loaded template (the default for this command); =false narrows to the active or sole one",
           "type": "boolean"
         },
+        "discard_authored": {
+          "default": false,
+          "description": "refresh the report document even though it holds edits that were never committed",
+          "type": "boolean"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"
@@ -765,6 +770,11 @@ expression: pretty
           "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
+        "discard_authored": {
+          "default": false,
+          "description": "re-load an already-loaded template even though its report document holds edits that were never committed",
+          "type": "boolean"
+        },
         "force_continue": {
           "default": false,
           "description": "Load a stale checked-out template as-is, instead of aborting, once TeReGen has refused to regenerate it non-interactively.",
@@ -1011,7 +1021,7 @@ expression: pretty
         },
         "discard_authored": {
           "default": false,
-          "description": "override mtui's own guard against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results); teregen itself still refuses on a verdict or testers",
+          "description": "override mtui's own guards against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results) or holds edits that were never committed; teregen itself still refuses on a verdict or testers",
           "type": "boolean"
         },
         "force": {
@@ -1561,6 +1571,11 @@ expression: pretty
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "discard_authored": {
+          "default": false,
+          "description": "unload even though the report document holds edits that were never committed",
+          "type": "boolean"
+        },
         "rrid": {
           "description": "RRID of the loaded template to unload",
           "type": "string"

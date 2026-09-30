@@ -283,13 +283,16 @@ Options:
 Unloads one loaded template, closing only its host connections.
 
 ```text
-Usage: unload <RRID>
+Usage: unload [OPTIONS] <RRID>
 
 Arguments:
   <RRID>
           RRID of the loaded template to unload
 
 Options:
+      --discard-authored
+          unload even though the report document holds edits that were never committed
+
   -h, --help
           Print help
 ```
@@ -405,9 +408,12 @@ Options:
 Updates the loaded template's files from SVN (`svn up`).
 
 ```text
-Usage: checkout
+Usage: checkout [OPTIONS]
 
 Options:
+      --discard-authored
+          refresh the report document even though it holds edits that were never committed
+
   -h, --help
           Print help
 ```
@@ -992,7 +998,7 @@ Options:
           load the standalone RRID as a kernel update (default: auto)
 
       --discard-authored
-          override mtui's own guard against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results); teregen itself still refuses on a verdict or testers
+          override mtui's own guards against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results) or holds edits that were never committed; teregen itself still refuses on a verdict or testers
 
   -h, --help
           Print help
@@ -1115,6 +1121,9 @@ Options:
 
       --force-continue
           Load a stale checked-out template as-is, instead of aborting, once TeReGen has refused to regenerate it non-interactively.
+
+      --discard-authored
+          re-load an already-loaded template even though its report document holds edits that were never committed
 
   -h, --help
           Print help
