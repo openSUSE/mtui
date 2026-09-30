@@ -295,14 +295,11 @@ fn author_onto_document(
         return Vec::new();
     }
     let tester = build_tester_entry(session);
-    mtui_testreport::author_export(
-        &mut session.metadata_mut().base_mut().document,
-        hosts,
-        auto,
-        kernel,
-        overview,
-        tester,
-    )
+    let base = session.metadata_mut().base_mut();
+    let touched =
+        mtui_testreport::author_export(&mut base.document, hosts, auto, kernel, overview, tester);
+    base.mark_document_authored(&touched);
+    touched
 }
 
 /// Formats `author_onto_document`'s touched pointers as the "document: ..."
@@ -1032,6 +1029,7 @@ mod tests {
 
         assert!(session.metadata().base().document.is_none());
         assert!(touched.is_empty());
+        assert!(!session.metadata().base().document_dirty);
     }
 
     #[test]

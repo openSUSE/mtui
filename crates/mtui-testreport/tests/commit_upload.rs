@@ -116,6 +116,7 @@ async fn happy_path_sends_if_match_and_adopts_the_new_document_and_etag() {
         .await;
 
     let mut base = base_with_document("\"stale-etag\"");
+    base.document_dirty = true;
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("h1.log");
     std::fs::write(&log, b"log body").unwrap();
@@ -136,6 +137,7 @@ async fn happy_path_sends_if_match_and_adopts_the_new_document_and_etag() {
         base.document.as_ref().unwrap().comment.0,
         Some("server re-read".to_owned())
     );
+    assert!(!base.document_dirty, "a stored document is no longer dirty");
 }
 
 /// The document PUT must precede any artifact PUT.
@@ -212,6 +214,7 @@ async fn precondition_failed_sends_no_artifacts_and_leaves_state_unchanged() {
         .await;
 
     let mut base = base_with_document("\"stale\"");
+    base.document_dirty = true;
     let before_doc = base.document.clone();
     let before_etag = base.document_etag.clone();
     let tmp = tempfile::tempdir().unwrap();
@@ -229,6 +232,10 @@ async fn precondition_failed_sends_no_artifacts_and_leaves_state_unchanged() {
 
     assert_eq!(base.document, before_doc, "document must be unchanged");
     assert_eq!(base.document_etag, before_etag, "etag must be unchanged");
+    assert!(
+        base.document_dirty,
+        "a refused upload keeps the edits dirty"
+    );
 
     let requests = server.received_requests().await.unwrap();
     let artifact_puts = requests

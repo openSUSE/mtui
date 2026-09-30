@@ -242,6 +242,7 @@ pub async fn upload_current(
     let new_etag = outcome.etag;
     base.document = Some(*outcome.document);
     base.document_etag = new_etag.clone();
+    base.document_dirty = false;
 
     let mut results = Vec::with_capacity(artifacts.len());
     for (name, path) in artifacts {
