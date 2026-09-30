@@ -14,8 +14,8 @@ use std::collections::BTreeSet;
 
 use mtui_core::register_all;
 use mtui_mcp::{
-    CORE, build_tools, job_tool_descriptors, resolve_keep_set, slim_input_schema,
-    testreport_tool_descriptors,
+    CORE, build_tools, document_tool_descriptors, job_tool_descriptors, resolve_keep_set,
+    slim_input_schema, testreport_tool_descriptors,
 };
 use serde_json::{Value, json};
 
@@ -93,6 +93,7 @@ fn core_keep_set_snapshot() {
         .collect();
     registered.extend(job_tool_descriptors().iter().map(|d| d.name.clone()));
     registered.extend(testreport_tool_descriptors().iter().map(|d| d.name.clone()));
+    registered.extend(document_tool_descriptors().iter().map(|d| d.name.clone()));
 
     let keep = resolve_keep_set(&registered, "core", &[], &[]);
     let rendered = keep.into_iter().collect::<Vec<_>>().join("\n");
@@ -109,6 +110,7 @@ fn core_names_all_exist_in_registry() {
         .collect();
     registered.extend(job_tool_descriptors().iter().map(|d| d.name.clone()));
     registered.extend(testreport_tool_descriptors().iter().map(|d| d.name.clone()));
+    registered.extend(document_tool_descriptors().iter().map(|d| d.name.clone()));
 
     let missing: Vec<&str> = CORE
         .iter()
