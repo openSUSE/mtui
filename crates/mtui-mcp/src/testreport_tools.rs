@@ -60,6 +60,11 @@ const READ_FIRST_WARNING: &str = "Always call `testreport_read` immediately befo
 const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded template; required when more \
      than one is loaded.";
 
+/// Leads every description: these tools edit the report as text, and a
+/// document-loaded report has typed `report_*` tools instead.
+const DEPRECATION_NOTICE: &str = "DEPRECATED — use report_section_* / report_issue_* on a document-loaded report; \
+     kept while SVN-path reports exist.";
+
 /// Valid single-value codes for the per-bug `STATUS:` field.
 const STATUS_CODES: &[&str] = &[
     "FIXED",
@@ -970,6 +975,9 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
     };
 
     let mut tools = vec![read, logs, patch, write, fill];
+    for tool in &mut tools {
+        tool.description = format!("{DEPRECATION_NOTICE} {}", tool.description);
+    }
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
 }
@@ -1116,6 +1124,52 @@ mod tests {
     use mtui_config::Config;
     use mtui_testreport::{ObsReport, TestReport};
     use mtui_types::RequestReviewID;
+
+    fn declares_feature(manifest: &str, feature: &str) -> bool {
+        manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with(&format!("{feature} =")))
+    }
+
+    #[test]
+    fn declares_feature_reads_a_feature_table_entry() {
+        assert!(declares_feature(
+            "[features]\napi-ingest = []\n",
+            "api-ingest"
+        ));
+        assert!(!declares_feature("[features]\nother = []\n", "api-ingest"));
+        assert!(!declares_feature("# api-ingest = gone\n", "api-ingest"));
+    }
+
+    #[test]
+    fn every_testreport_tool_leads_with_the_deprecation_notice() {
+        for tool in testreport_tool_descriptors() {
+            assert!(
+                tool.description.starts_with(DEPRECATION_NOTICE),
+                "{}: {}",
+                tool.name,
+                tool.description
+            );
+        }
+    }
+
+    /// The text tools exist for reports that have no document, which is every
+    /// report until `api-ingest` becomes the only path and stops being a
+    /// feature. Failing here means that happened: remove the tools with it.
+    #[test]
+    fn testreport_tools_outlive_only_api_ingest() {
+        let manifest = include_str!("../../mtui-testreport/Cargo.toml");
+        assert!(
+            declares_feature(manifest, "api-ingest"),
+            "mtui-testreport no longer declares `api-ingest`, so the SVN path these \
+             tools serve is gone. Delete: src/testreport_tools.rs and its `mod`/`pub use` \
+             in lib.rs; the testreport_tools branch and set in server.rs; the five \
+             `testreport_*` entries in profiles.rs CORE; the `testreport_write`/\
+             `testreport_patch` rows in audit.rs payload_keys_for; \
+             tests/testreport_tools.rs, its snapshot and its line in tests/it.rs; the \
+             `testreport_*` docs in docs/src/mcp.md; and add a CHANGELOG Removed entry."
+        );
+    }
 
     /// Build an `McpSession` whose `template_dir` is a fresh temp dir; returns
     /// the session plus the tempdir handle (kept alive for the test).

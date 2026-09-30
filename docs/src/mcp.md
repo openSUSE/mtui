@@ -307,6 +307,10 @@ call with the host named.
 
 ## Testreport editing tools
 
+> **Deprecated.** On a report loaded from a document, use the
+> [`report_*` tools](#report-document-tools) instead. These five tools stay for
+> reports that have no document, and go away with that path.
+
 Five hand-written tools operate on the loaded test report's checkout, replacing
 the REPL's `$EDITOR`-based `edit` flow (which is deny-listed). Each accepts an
 optional **`template="<RRID>"`** selecting which loaded template's checkout to act
@@ -317,6 +321,8 @@ resolve it — and with zero or one loaded it may be omitted. All refuse cleanly
 when no test report is loaded.
 
 ### `testreport_read` (read-only)
+
+*Deprecated: see [`report_*` tools](#report-document-tools).*
 
 Reads a file from the checkout as UTF-8 (lossy).
 
@@ -340,6 +346,8 @@ Reads a file from the checkout as UTF-8 (lossy).
 
 ### `testreport_logs` (read-only)
 
+*Deprecated: see [`report_*` tools](#report-document-tools).*
+
 Lists the auxiliary log files the `log` file doesn't cover.
 
 - Parameters: `template` (optional).
@@ -347,6 +355,8 @@ Lists the auxiliary log files the `log` file doesn't cover.
   [{"name","size"}] }`. Fetch one with `testreport_read(relpath=…)`.
 
 ### `testreport_patch`
+
+*Deprecated: see [`report_*` tools](#report-document-tools).*
 
 Splices an **inclusive, 1-indexed** line range. Atomic write (temp file +
 `fsync` + rename).
@@ -363,6 +373,8 @@ Splices an **inclusive, 1-indexed** line range. Atomic write (temp file +
 
 ### `testreport_write`
 
+*Deprecated: see [`report_*` tools](#report-document-tools).*
+
 Full-file overwrite (same atomic write). Use when line drift makes patching
 unreliable.
 
@@ -375,6 +387,8 @@ unreliable.
 - Returns `{ "path", "bytes_written", "line_count" }`.
 
 ### `testreport_fill`
+
+*Deprecated: see [`report_*` tools](#report-document-tools).*
 
 Bulk-fills the unfilled placeholder tokens the report ships with, idempotently
 (never clobbers a hand-filled value). At least one field is required.
@@ -408,6 +422,72 @@ confirm:
 { "path": ".../log", "line_count": 6,
   "content": "header\nX\nY\nZ\nfooter\ntrailer\n" }
 ```
+
+## Report document tools
+
+Five hand-written tools read and edit the loaded report as a **document** —
+named sections and issues rather than lines of text. Only a report loaded from
+a document has one; on any other (SVN-path) report every call refuses, naming
+`testreport_*` as the alternative. Each accepts an optional
+**`template="<RRID>"`** under the same "one template, or refuse" rule as the
+testreport tools.
+
+The sections are `verdict`, `comment`, `people`, `update`, `install`, `issues`,
+`testing` and `review`; `review` is absent from a PI report. Reads never change
+the report.
+
+### `report_sections` (read-only)
+
+- Parameters: `template` (optional).
+- Returns `{ "id", "dirty", "sections": [{"name","size","has_unanswered"}],
+  "complete", "unfilled": [...] }`. `size` is the byte length of the section's
+  compact JSON (advisory). `unfilled` holds the RFC 6901 pointer of every
+  `null` leaf in the whole document, in sorted key order; `complete` is true
+  when there is none. `dirty` is true while edits await `commit`.
+
+### `report_section_read` (read-only)
+
+- Parameters (required): `section`. Plus optional `template`.
+- Returns `{ "id", "section", "data" }`. A section the report lacks refuses.
+
+### `report_section_write`
+
+Replaces one tester section with `value`.
+
+- Parameters (required): `section` (`verdict`, `comment`, `people`, `issues`,
+  `testing` or `review`), `value` (any JSON — `null` is a legitimate value
+  for an unanswered `verdict` or `comment`). Plus optional `template`.
+- `update` and `install` are pipeline-owned and refused. A section the report
+  lacks refuses. An `issues` write must keep exactly the same issue keys; use
+  `report_issue_write` for one entry.
+- The whole candidate document is re-parsed against the typed schema, and a
+  value carrying a key the schema would drop (an unknown key in a closed
+  object, or `null` on an optional field) is refused. A refusal lists the
+  offending pointers and leaves the report untouched. String patterns and
+  array minimums are **not** checked locally, so the server can still refuse
+  at `commit`.
+- A write changes local state only and marks the report dirty; `commit`
+  uploads it. A later `export` overwrites `testing.install`, `testing.openqa`
+  and `people.testers`.
+- Returns `{ "id", "section", "dirty": true, "size" }`.
+
+### `report_issue_read` (read-only)
+
+- Parameters (all optional): `issue_id` (such as `bsc#1234567`), `template`.
+- Without `issue_id`, returns `{ "id", "issues": [{"id","title","status",
+  "severity"}] }`; with it, `{ "id", "issue_id", "issue" }`.
+
+### `report_issue_write`
+
+Replaces one **existing** issue with `value`; the set of issues cannot grow or
+shrink. Validated and applied exactly like `report_section_write`.
+
+- Parameters (required): `issue_id`, `value`. Plus optional `template`.
+- Returns `{ "id", "issue_id", "dirty": true }`.
+
+A result larger than `[mcp] max_output_bytes` comes back as `{ "truncated":
+true, "size", "content" }`, where `content` is the capped JSON text, rather than
+as clipped (invalid) JSON.
 
 ## Background jobs
 
@@ -583,7 +663,8 @@ was told in band (and which the OTLP stream may still hold).
 `config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute
 is a known secret. File-body payloads (`put` `content`/`content_b64`,
-`testreport_write` `content`, `testreport_patch` `replacement`) never land
+`testreport_write` `content`, `testreport_patch` `replacement`,
+`report_section_write`/`report_issue_write` `value`) never land
 verbatim either: each records `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
 persisted. Always fingerprinted, never inline, regardless of size — the same
