@@ -243,6 +243,24 @@ impl TemplateRegistry {
         }
     }
 
+    /// Whether the report loaded under `rrid` holds document edits no `commit`
+    /// has uploaded, or `None` when the entry is held elsewhere so the flag
+    /// cannot be read.
+    ///
+    /// `Some(false)` when `rrid` is absent: there is nothing to lose. A
+    /// contended entry must not read as clean, or a guard built on this would
+    /// let a reload race past unsaved work.
+    #[must_use]
+    pub(crate) fn document_dirty(&self, rrid: &str) -> Option<bool> {
+        match self.entries.get(rrid) {
+            Some(entry) => entry
+                .try_lock()
+                .ok()
+                .map(|report| report.base().document_dirty),
+            None => Some(false),
+        }
+    }
+
     /// Whether none of `named` belong to `rrid`'s host group, or `None` when
     /// the entry is held elsewhere so its host set cannot be read.
     ///
@@ -542,6 +560,41 @@ mod tests {
         assert!(removed.failed.is_empty());
         assert!(removed.stragglers.is_empty());
         assert!(reg.contains("SUSE:Maintenance:1:1"));
+    }
+
+    fn dirty_report(rrid: &str) -> Box<dyn mtui_testreport::TestReport + Send + Sync> {
+        let mut base = mtui_testreport::TestReportBase::new(Config::default());
+        base.rrid = rrid.parse().ok();
+        base.document_dirty = true;
+        fake_report_from_base(base)
+    }
+
+    #[test]
+    fn document_dirty_is_false_for_an_absent_entry() {
+        assert_eq!(
+            registry().document_dirty("SUSE:Maintenance:1:1"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn document_dirty_reads_the_flag() {
+        let mut reg = registry();
+        reg.add(fake_report("SUSE:Maintenance:1:1", &["h1"], "ok"));
+        reg.add(dirty_report("SUSE:Maintenance:2:2"));
+
+        assert_eq!(reg.document_dirty("SUSE:Maintenance:1:1"), Some(false));
+        assert_eq!(reg.document_dirty("SUSE:Maintenance:2:2"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn document_dirty_is_none_while_the_entry_is_held() {
+        let mut reg = registry();
+        reg.add(dirty_report("SUSE:Maintenance:2:2"));
+        let handle = reg.handle("SUSE:Maintenance:2:2").expect("entry");
+        let _held = handle.lock().await;
+
+        assert_eq!(reg.document_dirty("SUSE:Maintenance:2:2"), None);
     }
 
     #[tokio::test]

@@ -140,6 +140,31 @@ pub(crate) fn stale_hash_gate(session: &Session, allow_stale: bool) -> Result<()
     }
 }
 
+/// Refuses, before any I/O, to drop `rrid`'s document edits that no `commit`
+/// has uploaded, unless `discard_authored` is set.
+///
+/// A report that cannot be read (held by another dispatch) refuses too: a
+/// contended read must never pass as clean.
+pub(crate) fn document_edits_guard(
+    session: &Session,
+    rrid: &str,
+    discard_authored: bool,
+) -> Result<(), CommandError> {
+    if discard_authored {
+        return Ok(());
+    }
+    match session.document_dirty(rrid) {
+        Some(false) => Ok(()),
+        Some(true) => Err(CommandError::Other(format!(
+            "{rrid} has document edits not yet committed; run `commit` first, \
+             or pass --discard-authored"
+        ))),
+        None => Err(CommandError::Other(format!(
+            "cannot check {rrid} for uncommitted document edits; retry"
+        ))),
+    }
+}
+
 /// Loaded template RRIDs starting with `text`, for the caller to merge with its
 /// flag candidates so `-T/--template` completes.
 #[must_use]
@@ -728,6 +753,38 @@ mod tests {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let rrid = require_update(&session).unwrap();
         assert_eq!(rrid.to_string(), "SUSE:Maintenance:1:1");
+    }
+
+    #[test]
+    fn document_edits_guard_refuses_a_dirty_active_report_unless_discarded() {
+        use crate::commands::testkit::session_with_hosts;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(document_edits_guard(&session, "SUSE:Maintenance:1:1", false).is_ok());
+
+        session.metadata_mut().base_mut().document_dirty = true;
+        let err = document_edits_guard(&session, "SUSE:Maintenance:1:1", false).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert!(document_edits_guard(&session, "SUSE:Maintenance:1:1", true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn document_edits_guard_refuses_a_report_it_cannot_read() {
+        use crate::commands::testkit::{fake_report, session_with_hosts};
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        let handle = session.templates.handle("SUSE:Maintenance:2:2").unwrap();
+        let _held = handle.lock().await;
+
+        let err = document_edits_guard(&session, "SUSE:Maintenance:2:2", false).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("retry")),
+            "{err:?}"
+        );
     }
 
     #[test]

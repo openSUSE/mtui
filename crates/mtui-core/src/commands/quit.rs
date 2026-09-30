@@ -37,6 +37,9 @@ fn close_timeout() -> Duration {
 /// [`Session::request_exit`](crate::Session::request_exit), which the REPL reads
 /// via [`should_exit`](crate::Session::should_exit) to break its loop.
 ///
+/// A report whose document holds edits no `commit` has uploaded is named in a
+/// warning, never refused: the teardown must always be able to release locks.
+///
 /// [`Scope::Single`] and REPL-only — on the MCP deny-list, a headless client
 /// having no session loop to quit. The aliases `exit`/`EOF` dispatch here, so
 /// `exit reboot` and `Ctrl-D` inherit the bootarg + close behaviour.
@@ -90,6 +93,14 @@ impl Command for Quit {
         for entry in session.take_teardown_units() {
             // Uncontended: the outer session mutex still serialises dispatch.
             let mut report = entry.lock().await;
+            // Never blocks: refusing to quit would strand the locks below.
+            if report.base().document_dirty {
+                let rrid = report.base().rrid.as_ref().map(ToString::to_string);
+                session.display.println(&format!(
+                    "warning: uncommitted document edits for {} discarded",
+                    rrid.as_deref().unwrap_or("the loaded report")
+                ));
+            }
             // Best-effort, and a no-op without pooling.
             report.release_pool_claims().await;
 
@@ -187,6 +198,37 @@ mod tests {
         let args = matches(&Quit, &[]);
         Quit.call(&mut session, &args).await.unwrap();
         assert!(session.should_exit());
+    }
+
+    #[tokio::test]
+    async fn quit_warns_about_uncommitted_document_edits_and_still_exits() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().document_dirty = true;
+
+        let args = matches(&Quit, &[]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            buf.contents()
+                .contains("warning: uncommitted document edits for SUSE:Maintenance:1:1 discarded"),
+            "{:?}",
+            buf.contents()
+        );
+        assert!(session.should_exit());
+    }
+
+    #[tokio::test]
+    async fn quit_is_silent_when_no_document_edits_are_pending() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+
+        let args = matches(&Quit, &[]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            !buf.contents().contains("uncommitted"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

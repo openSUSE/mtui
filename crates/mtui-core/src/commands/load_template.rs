@@ -6,6 +6,7 @@ use mtui_testreport::UpdateKind;
 use mtui_types::UpdateID;
 
 use crate::command::{Command, Scope};
+use crate::commands::support::document_edits_guard;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -35,6 +36,10 @@ use crate::session::Session;
 /// the earlier "Regenerate via TeReGen?" question, which stays
 /// interactive-only (`regenerate` is the dedicated non-interactive tool for
 /// that).
+///
+/// Re-loading an RRID whose document holds edits no `commit` has uploaded
+/// would silently replace them, so it is refused before any I/O unless
+/// `--discard-authored` is passed.
 pub struct LoadTemplate;
 
 #[async_trait]
@@ -99,6 +104,15 @@ impl Command for LoadTemplate {
                      TeReGen has refused to regenerate it non-interactively.",
                 ),
         )
+        .arg(
+            Arg::new("discard_authored")
+                .long("discard-authored")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "re-load an already-loaded template even though its report document \
+                     holds edits that were never committed",
+                ),
+        )
     }
 
     fn complete(&self, _session: &Session, text: &str, _line: &str) -> Vec<String> {
@@ -110,6 +124,7 @@ impl Command for LoadTemplate {
             "-k",
             "--kernel-review-id",
             "--force-continue",
+            "--discard-authored",
         ]
         .into_iter()
         .filter(|c| c.starts_with(text))
@@ -136,6 +151,11 @@ impl Command for LoadTemplate {
             .map_err(|e| CommandError::Other(format!("invalid RRID {rrid:?}: {e}")))?;
 
         let force_continue = args.get_flag("force_continue");
+        document_edits_guard(
+            session,
+            &update.to_string(),
+            args.get_flag("discard_authored"),
+        )?;
 
         // Autoconnect is always *requested*; the update kind decides whether a
         // connect actually happens.
@@ -290,6 +310,76 @@ mod tests {
         assert_eq!(
             session.templates.active_rrid(),
             Some("SUSE:Maintenance:1:1")
+        );
+    }
+
+    /// A session with `rrid` loaded, its document marked dirty, and a
+    /// `template_dir` whose `svn_path` cannot be checked out: any load attempt
+    /// fails with an `svn checkout` error, so a refusal is distinguishable from
+    /// a load that ran.
+    fn dirty_session_with_unreachable_svn(rrid: &str) -> (Session, tempfile::TempDir) {
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.metadata_mut().base_mut().document_dirty = true;
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+        (session, tmp)
+    }
+
+    #[tokio::test]
+    async fn reload_of_a_dirty_template_is_refused_before_any_load() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+
+        let args = matches(&LoadTemplate, &["-k", rrid]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert!(session.metadata().base().document_dirty);
+    }
+
+    #[tokio::test]
+    async fn discard_authored_lets_a_dirty_template_reload() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+
+        let args = matches(&LoadTemplate, &["-k", rrid, "--discard-authored"]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            "the load must have been attempted: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_of_a_clean_template_is_not_refused() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+        session.metadata_mut().base_mut().document_dirty = false;
+
+        let args = matches(&LoadTemplate, &["-k", rrid]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dirty_sibling_does_not_block_loading_another_template() {
+        let (mut session, _tmp) = dirty_session_with_unreachable_svn("SUSE:Maintenance:1:1");
+
+        let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:2:2"]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            "{err:?}"
         );
     }
 

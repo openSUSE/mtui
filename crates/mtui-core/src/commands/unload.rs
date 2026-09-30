@@ -1,9 +1,10 @@
 //! The `unload` command.
 
 use async_trait::async_trait;
-use clap::{Arg, ArgMatches};
+use clap::{Arg, ArgAction, ArgMatches};
 
 use crate::command::{Command, Scope};
+use crate::commands::support::document_edits_guard;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -13,6 +14,9 @@ use crate::session::Session;
 /// remaining. It names its own target RRID, so it runs once ([`Scope::Single`])
 /// — otherwise it would fan out under MCP and fail the second pass with a
 /// not-loaded error.
+///
+/// A template whose report document holds edits no `commit` has uploaded is
+/// refused before anything is torn down, unless `--discard-authored` is passed.
 pub struct Unload;
 
 #[async_trait]
@@ -45,15 +49,30 @@ impl Command for Unload {
                 .value_name("RRID")
                 .help("RRID of the loaded template to unload"),
         )
+        .arg(
+            Arg::new("discard_authored")
+                .long("discard-authored")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "unload even though the report document holds edits that were never committed",
+                ),
+        )
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        session
-            .templates
-            .rrids()
-            .into_iter()
-            .filter(|r| r.starts_with(text))
-            .collect()
+        let mut out: Vec<String> = ["--discard-authored"]
+            .iter()
+            .filter(|f| f.starts_with(text))
+            .map(|s| (*s).to_owned())
+            .collect();
+        out.extend(
+            session
+                .templates
+                .rrids()
+                .into_iter()
+                .filter(|r| r.starts_with(text)),
+        );
+        out
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
@@ -64,6 +83,7 @@ impl Command for Unload {
         if !session.templates.contains(&rrid) {
             return Err(CommandError::TemplateNotLoaded(rrid));
         }
+        document_edits_guard(session, &rrid, args.get_flag("discard_authored"))?;
         // `remove` locks the target entry to tear it down, self-deadlocking when
         // that is the entry this session's guard holds. The registry pointer is
         // left alone, so `remove` still promotes the survivor.
@@ -168,10 +188,44 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn unload_of_a_dirty_template_is_refused_and_keeps_it_loaded() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().document_dirty = true;
+
+        let args = matches(&Unload, &["SUSE:Maintenance:1:1"]);
+        let err = Unload.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert!(session.templates.contains("SUSE:Maintenance:1:1"));
+        assert!(!buf.contents().contains("unloaded"));
+    }
+
+    #[tokio::test]
+    async fn discard_authored_unloads_a_dirty_template() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().document_dirty = true;
+
+        let args = matches(&Unload, &["SUSE:Maintenance:1:1", "--discard-authored"]);
+        Unload.call(&mut session, &args).await.unwrap();
+
+        assert!(!session.templates.contains("SUSE:Maintenance:1:1"));
+    }
+
     #[test]
     fn complete_offers_loaded_rrids() {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let candidates = Unload.complete(&session, "SUSE", "unload SUSE");
         assert_eq!(candidates, vec!["SUSE:Maintenance:1:1".to_owned()]);
+    }
+
+    #[test]
+    fn complete_offers_the_discard_flag() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let candidates = Unload.complete(&session, "--d", "unload --d");
+        assert_eq!(candidates, vec!["--discard-authored".to_owned()]);
     }
 }
