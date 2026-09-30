@@ -19,8 +19,8 @@ use crate::tools::ToolDescriptor;
 
 /// The curated everyday tool set exposed under `profile = core`: load → inspect
 /// → run/install → fill report → approve/reject, without the long tail of
-/// host-bookkeeping and server-tuning verbs. The `testreport_*` and `job_*` tools
-/// are always core, since report editing and the background-command flow depend
+/// host-bookkeeping and server-tuning verbs. The `testreport_*`, `report_*` and
+/// `job_*` tools are always core, since report editing and the background-command flow depend
 /// on them; the `get`/`put` transfer tools (#434) are deliberately full-profile
 /// only, like the synthesised commands they replaced, and `tools_allow` restores
 /// them under `core`.
@@ -62,6 +62,11 @@ pub const CORE: &[&str] = &[
     "testreport_patch",
     "testreport_write",
     "testreport_fill",
+    "report_sections",
+    "report_section_read",
+    "report_section_write",
+    "report_issue_read",
+    "report_issue_write",
     "job_list",
     "job_status",
     "job_result",

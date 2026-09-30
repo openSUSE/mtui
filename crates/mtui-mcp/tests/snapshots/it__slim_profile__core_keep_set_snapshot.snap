@@ -25,6 +25,11 @@ openqa_jobs
 openqa_overview
 prepare
 reject
+report_issue_read
+report_issue_write
+report_section_read
+report_section_write
+report_sections
 run
 set_repo
 show_diff

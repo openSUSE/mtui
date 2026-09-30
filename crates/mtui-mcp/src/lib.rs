@@ -21,6 +21,8 @@ pub mod concurrency;
 #[cfg(feature = "mcp")]
 pub mod deny;
 #[cfg(feature = "mcp")]
+pub mod document_tools;
+#[cfg(feature = "mcp")]
 pub(crate) mod otel;
 #[cfg(feature = "mcp")]
 pub mod profiles;
@@ -46,6 +48,8 @@ pub mod tools;
 pub mod transfer_tools;
 
 pub use args::{McpArgs, Transport};
+#[cfg(feature = "mcp")]
+pub use document_tools::{dispatch_document_tool, document_tool_descriptors};
 #[cfg(feature = "mcp")]
 pub use profiles::{CORE, resolve_keep_set};
 #[cfg(feature = "mcp")]

@@ -1,0 +1,132 @@
+---
+source: crates/mtui-mcp/tests/document_tools.rs
+expression: pretty
+---
+[
+  {
+    "description": "List the report document's sections (`name`, byte `size` — advisory, `has_unanswered`) and its completeness: `complete`, and `unfilled`, the RFC 6901 pointer of every null leaf. `dirty` is true while edits are not yet uploaded by `commit`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "report_sections",
+    "read_only": true
+  },
+  {
+    "description": "Read one section of the report document as JSON (`data`). Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "section": {
+          "description": "Section to read.",
+          "enum": [
+            "verdict",
+            "comment",
+            "people",
+            "update",
+            "install",
+            "issues",
+            "testing",
+            "review"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section"
+      ],
+      "type": "object"
+    },
+    "name": "report_section_read",
+    "read_only": true
+  },
+  {
+    "description": "Replace one tester section of the report document with `value`. `update` and `install` are pipeline-owned and refused; a section the report lacks (`review` on a PI report) is refused; an `issues` write must keep exactly the same issue keys (use report_issue_write for one entry). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. A later `export` overwrites testing.install, testing.openqa and people.testers. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "section": {
+          "description": "Tester section to replace.",
+          "enum": [
+            "verdict",
+            "comment",
+            "people",
+            "issues",
+            "testing",
+            "review"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        },
+        "value": {
+          "description": "The section's new JSON value, shaped as report_section_read returns it."
+        }
+      },
+      "required": [
+        "section",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "report_section_write",
+    "read_only": false
+  },
+  {
+    "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`); with it, read that issue in full. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {
+          "description": "Issue key such as `bsc#1234567`; omit to list all.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "report_issue_read",
+    "read_only": true
+  },
+  {
+    "description": "Replace one existing issue of the report document with `value`; the issue set cannot grow or shrink. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {
+          "description": "Key of an existing issue, such as `bsc#1234567`.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        },
+        "value": {
+          "description": "The issue's new JSON value, shaped as report_issue_read returns it."
+        }
+      },
+      "required": [
+        "issue_id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "report_issue_write",
+    "read_only": false
+  }
+]

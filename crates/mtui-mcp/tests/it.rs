@@ -8,6 +8,8 @@
 
 #[path = "ambiguous_template.rs"]
 mod ambiguous_template;
+#[path = "document_tools.rs"]
+mod document_tools;
 #[path = "http_body_limit.rs"]
 mod http_body_limit;
 #[path = "http_isolation.rs"]

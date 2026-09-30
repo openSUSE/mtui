@@ -231,7 +231,7 @@ fn opt_str<'a>(
 /// The ambiguous case shares its wording with every other surface via
 /// [`mtui_core::ambiguous_template_message`]; the other two refusals are this
 /// tool family's own, pre-existing and grepped.
-fn resolve_rrid(
+pub(crate) fn resolve_rrid(
     session: &mtui_core::Session,
     template: Option<&str>,
 ) -> Result<String, McpCommandError> {

@@ -68,6 +68,8 @@ pub struct McpServer {
     job_tools: Arc<HashSet<String>>,
     /// The set of hand-written testreport tool names (`testreport_read`/…).
     testreport_tools: Arc<HashSet<String>>,
+    /// The set of hand-written report-document tool names (`report_sections`/…).
+    document_tools: Arc<HashSet<String>>,
     /// The set of hand-written in-band transfer tool names (`get`/`put`, #434).
     transfer_tools: Arc<HashSet<String>>,
     /// Names advertised with `readOnlyHint: true`, taken from the same
@@ -151,6 +153,7 @@ impl McpServer {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
         let testreport_descriptors = testreport_tool_descriptors();
+        let document_descriptors = crate::document_tools::document_tool_descriptors();
         let transfer_descriptors = crate::transfer_tools::transfer_tool_descriptors();
         let mut routes = tool_routes(&registry);
 
@@ -161,6 +164,7 @@ impl McpServer {
             .into_iter()
             .chain(job_descriptors)
             .chain(testreport_descriptors)
+            .chain(document_descriptors)
             .chain(transfer_descriptors)
             .collect();
 
@@ -191,6 +195,11 @@ impl McpServer {
             .map(|d| d.name.clone())
             .filter(|n| kept.contains(n))
             .collect();
+        let document_tools: HashSet<String> = crate::document_tools::document_tool_descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
+            .collect();
         let transfer_tools: HashSet<String> = crate::transfer_tools::transfer_tool_descriptors()
             .iter()
             .map(|d| d.name.clone())
@@ -215,6 +224,7 @@ impl McpServer {
             routes: Arc::new(routes),
             job_tools: Arc::new(job_tools),
             testreport_tools: Arc::new(testreport_tools),
+            document_tools: Arc::new(document_tools),
             transfer_tools: Arc::new(transfer_tools),
             read_only_tools: Arc::new(read_only_tools),
             last_touch,
@@ -527,6 +537,34 @@ impl McpServer {
                         AuditOutcome::Error
                     };
                     // One text block, matching the command tools' wire shape.
+                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
+                }
+            }
+        }
+        // A hand-written report-document tool: edits the loaded document in
+        // memory, never the engine or a host, so a plain drop on cancel strands
+        // nothing.
+        else if self.document_tools.contains(name) {
+            if auditing {
+                let template = kwargs.get("template").and_then(Value::as_str);
+                rrids = self.session.audit_template_scope(template).await;
+            }
+            let dispatched = cancellable(
+                crate::document_tools::dispatch_document_tool(&self.session, name, kwargs, sink),
+                client_ct,
+            )
+            .await;
+            match dispatched {
+                None => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(None));
+                }
+                Some(dispatched) => {
+                    outcome = if dispatched.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
                     result = Ok(render(dispatched.map(|v| v.to_string())).into());
                 }
             }
@@ -870,11 +908,13 @@ mod tests {
         assert!(names.iter().any(|n| n == "set_log_level"));
         assert!(names.iter().any(|n| n == "job_list"));
         assert!(names.iter().any(|n| n == "testreport_read"));
+        assert!(names.iter().any(|n| n == "report_sections"));
         assert!(!names.iter().any(|n| n == "shell"));
         assert!(server.routes.contains_key("run"));
         assert!(!server.routes.contains_key("shell"));
         assert!(server.job_tools.contains("job_list"));
         assert!(server.testreport_tools.contains("testreport_read"));
+        assert!(server.document_tools.contains("report_sections"));
     }
 
     #[test]
@@ -895,9 +935,10 @@ mod tests {
             !server.routes.contains_key("set_log_level"),
             "non-core route pruned"
         );
-        // Job + testreport tools are always core.
+        // Job, testreport and document tools are always core.
         assert!(server.job_tools.contains("job_list"));
         assert!(server.testreport_tools.contains("testreport_read"));
+        assert!(server.document_tools.contains("report_section_write"));
     }
 
     #[test]
@@ -967,13 +1008,37 @@ mod tests {
         for (profile, read_only, mutating) in [
             (
                 "full",
-                ["list_hosts", "job_status", "whoami", "get"],
-                ["run", "job_cancel", "put", "config_set"],
+                [
+                    "list_hosts",
+                    "job_status",
+                    "whoami",
+                    "get",
+                    "report_issue_read",
+                ],
+                [
+                    "run",
+                    "job_cancel",
+                    "put",
+                    "config_set",
+                    "report_issue_write",
+                ],
             ),
             (
                 "core",
-                ["list_hosts", "job_status", "show_log", "testreport_read"],
-                ["run", "job_cancel", "update", "testreport_write"],
+                [
+                    "list_hosts",
+                    "job_status",
+                    "show_log",
+                    "testreport_read",
+                    "report_sections",
+                ],
+                [
+                    "run",
+                    "job_cancel",
+                    "update",
+                    "testreport_write",
+                    "report_section_write",
+                ],
             ),
         ] {
             let mut config = Config::default();
@@ -2496,6 +2561,26 @@ mod tests {
                 64
             );
             assert_eq!(record["args"]["filename"], json!("id_rsa"));
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_report_write_value_is_fingerprinted_not_stored() {
+        let (server, _session, _dir, path) = audited_server();
+        let secret = "REPORT-FREE-TEXT-7f3a";
+        let _ = audited_call(
+            &server,
+            "report_section_write",
+            json!({"section": "comment", "value": secret}),
+        )
+        .await;
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(!raw.contains(secret), "value never verbatim: {raw}");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "a write tool records intent then outcome");
+        for record in &records {
+            assert_eq!(record["args"]["value"]["bytes"], json!(secret.len()));
+            assert_eq!(record["args"]["section"], json!("comment"));
         }
     }
 
