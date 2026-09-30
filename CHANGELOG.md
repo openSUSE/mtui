@@ -122,6 +122,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   With `--discard-authored` the fetch is unconditional, so the server's copy
   replaces the local edits even when it is unchanged.
 
+- Five MCP tools edit a report loaded from a document as data:
+  `report_sections` (sections, sizes, which still hold a `null`, completeness
+  with the pointer of every unfilled leaf, and whether edits await `commit`),
+  `report_section_read`, `report_section_write`, `report_issue_read` and
+  `report_issue_write`. A write is validated against the typed schema before
+  it lands and refused with the offending pointers, `update`/`install` are
+  read-only, and an `issues` write cannot add or drop an issue; `commit`
+  uploads what was written. A report without a document refuses and points at
+  `testreport_*`. **MCP schema note:** additive only — five new tools, all in
+  the `core` profile.
+
 ### Changed
 
 - `regenerate`'s guard (`--discard-authored`) also refuses over document edits
@@ -232,6 +243,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The window hash is FNV-1a (specified, no new deps).
 
 ### Deprecated
+
+- MCP: the five `testreport_*` tools (`testreport_read`, `testreport_logs`,
+  `testreport_patch`, `testreport_write`, `testreport_fill`). Their
+  descriptions now say so and point at `report_section_*` / `report_issue_*`.
+  Behaviour is unchanged, and they are removed together with the SVN report
+  path, not on a release date.
 
 - MCP: the `template` and `all_templates` keys on the `unload`, `list_templates`,
   `list_refhosts`, `updates`, `whoami` and `set_log_level` tools, and
