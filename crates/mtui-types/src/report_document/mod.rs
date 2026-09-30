@@ -39,6 +39,7 @@
 pub mod install;
 pub mod issues;
 pub mod review;
+pub mod sections;
 pub mod testing;
 pub mod update;
 
@@ -56,6 +57,9 @@ pub use issues::{Issue, IssueKey, IssueKeyParseError, IssueStatus, Issues, L3, S
 pub use review::{
     BuildLog, BuildLogResult, BuildResult, People, Review, ReviewSource, Reviewer, SlackRef,
     TesterEntry, Tristate,
+};
+pub use sections::{
+    Completeness, Section, SectionSummary, SectionWriteError, UnknownSectionError, null_pointers,
 };
 pub use testing::{
     InstallCheck, Openqa, OpenqaFailure, OpenqaIncident, OpenqaInstall, OpenqaJob,
