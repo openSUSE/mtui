@@ -155,6 +155,9 @@ pub struct TestReportBase {
     /// sent one — the conditional-GET/`If-Match` key a later write path would
     /// need. `None` alongside `document`.
     pub document_etag: Option<String>,
+    /// `true` while [`document`](Self::document) holds authored edits that no
+    /// `commit` has uploaded yet.
+    pub document_dirty: bool,
 }
 
 impl TestReportBase {
@@ -205,6 +208,15 @@ impl TestReportBase {
             openqa: ReportOpenQA::new(),
             document: None,
             document_etag: None,
+            document_dirty: false,
+        }
+    }
+
+    /// Records that `export` authored the pointers in `touched` onto the
+    /// document; an empty slice leaves the flag as it was.
+    pub fn mark_document_authored(&mut self, touched: &[&str]) {
+        if !touched.is_empty() {
+            self.document_dirty = true;
         }
     }
 
@@ -1032,6 +1044,21 @@ mod tests {
         // Unset on every default (SVN) load.
         assert!(base.document.is_none());
         assert!(base.document_etag.is_none());
+        assert!(!base.document_dirty);
+    }
+
+    #[test]
+    fn mark_document_authored_ignores_an_empty_touch_list() {
+        let mut base = TestReportBase::new(config());
+        base.mark_document_authored(&[]);
+        assert!(!base.document_dirty);
+    }
+
+    #[test]
+    fn mark_document_authored_sets_the_flag_when_something_was_touched() {
+        let mut base = TestReportBase::new(config());
+        base.mark_document_authored(&["/testing/openqa"]);
+        assert!(base.document_dirty);
     }
 
     #[test]
