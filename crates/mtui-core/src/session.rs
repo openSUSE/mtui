@@ -649,6 +649,20 @@ impl Session {
         }
     }
 
+    /// Whether the report loaded under `rrid` holds uncommitted document
+    /// edits, or `None` when the entry is held elsewhere. The guard-aware
+    /// counterpart of
+    /// [`TemplateRegistry::document_dirty`](crate::TemplateRegistry::document_dirty),
+    /// exactly like [`is_hostless`](Self::is_hostless) above.
+    #[must_use]
+    pub(crate) fn document_dirty(&self, rrid: &str) -> Option<bool> {
+        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
+            Some(self.metadata().base().document_dirty)
+        } else {
+            self.templates.document_dirty(rrid)
+        }
+    }
+
     /// Whether none of `named` belong to `rrid`'s host group, or `None` when
     /// the entry is held elsewhere. The guard-aware counterpart of
     /// [`TemplateRegistry::owns_none_of`](crate::TemplateRegistry::owns_none_of),

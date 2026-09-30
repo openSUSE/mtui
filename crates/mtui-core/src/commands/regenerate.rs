@@ -9,7 +9,7 @@ use tracing::info;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{document_edits_guard, require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -95,9 +95,10 @@ impl Command for Regenerate {
                 .long("discard-authored")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "override mtui's own guard against regenerating a loaded document that \
+                    "override mtui's own guards against regenerating a loaded document that \
                      already carries tester content (verdict, testers, install/regression \
-                     results); teregen itself still refuses on a verdict or testers",
+                     results) or holds edits that were never committed; teregen itself \
+                     still refuses on a verdict or testers",
                 ),
         )
         .arg(
@@ -161,6 +162,10 @@ impl Command for Regenerate {
                  a verdict or testers"
             )));
         }
+
+        // Registry-wide: also covers a loaded-but-inactive RRID, and the edits
+        // `has_tester_content` misses (`testing.openqa`-only authoring).
+        document_edits_guard(session, &rrid_str, discard_authored)?;
 
         let teregen = teregen_client(session)?;
 
@@ -831,6 +836,72 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("regenerated — reloading"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn dirty_openqa_only_document_is_refused_without_any_request() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(doc_with_openqa_only(rrid));
+        base.document_dirty = true;
+
+        let args = matches(&Regenerate, &[]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.is_empty(), "{requests:?}");
+    }
+
+    #[tokio::test]
+    async fn discard_authored_lifts_the_dirty_guard() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(doc_with_openqa_only(rrid));
+        base.document_dirty = true;
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &["--discard-authored"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert!(buf.contents().contains("regenerated — reloading"));
+    }
+
+    /// The dirty guard is registry-wide: a loaded RRID that is not the active
+    /// one is covered too.
+    #[tokio::test]
+    async fn a_dirty_inactive_template_is_refused_when_named() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config = config_for(&server);
+        let mut other = mtui_testreport::TestReportBase::new(Config::default());
+        other.rrid = "SUSE:Maintenance:2:2".parse().ok();
+        other.document_dirty = true;
+        session
+            .templates
+            .add(crate::commands::testkit::fake_report_from_base(other));
+
+        let args = matches(&Regenerate, &["SUSE:Maintenance:2:2"]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.is_empty(), "{requests:?}");
     }
 
     /// The guard only ever consults the *loaded* report's document for the
