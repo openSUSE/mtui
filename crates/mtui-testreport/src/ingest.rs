@@ -4,8 +4,8 @@
 //! helper per non-trivial mapping rule — every rule here transcribes the
 //! document schema's fields rather than inventing new derivations.
 //!
-//! Gated behind the `api-ingest` Cargo feature: off in every default build,
-//! compiled by CI's `--all-features` job.
+//! Always compiled: it performs no I/O and nothing calls it on a default load,
+//! so compiling it everywhere changes no runtime behaviour.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 

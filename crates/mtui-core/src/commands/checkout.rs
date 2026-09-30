@@ -1,10 +1,11 @@
 //! The `checkout` command (SVN update of the template working copy).
 
 use async_trait::async_trait;
-use clap::ArgMatches;
-use mtui_testreport::{SvnRunner, TokioSvnRunner};
+use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::teregen::TeregenV2;
+use mtui_testreport::{Refreshed, SvnRunner, TokioSvnRunner, refresh_document};
 
-use super::support::complete_with_templates;
+use super::support::{complete_with_templates, document_edits_guard};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -12,6 +13,11 @@ use crate::session::Session;
 /// Updates the loaded template's files from SVN (`svn up`) in the report working
 /// directory. With nothing loaded there is no path, so it errors clearly rather
 /// than shelling out.
+///
+/// A report loaded from a v2 document also re-fetches that document
+/// (conditional on its `ETag`) and adopts it when it changed. That replaces
+/// the local document, so it is refused before any I/O while it holds edits no
+/// `commit` has uploaded, unless `--discard-authored` is passed.
 pub struct Checkout;
 
 #[async_trait]
@@ -28,11 +34,29 @@ impl Command for Checkout {
         Scope::Fanout
     }
 
-    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        complete_with_templates(session, &[], Vec::new(), line, text)
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        cmd.arg(
+            Arg::new("discard_authored")
+                .long("discard-authored")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "refresh the report document even though it holds edits that were \
+                     never committed",
+                ),
+        )
     }
 
-    async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(session, &[&["--discard-authored"]], Vec::new(), line, text)
+    }
+
+    async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        let discard_authored = args.get_flag("discard_authored");
+        let loaded = session.metadata().rrid().map(|r| r.to_string());
+        if let Some(rrid) = &loaded {
+            document_edits_guard(session, rrid, discard_authored)?;
+        }
+
         let wd = session
             .metadata()
             .base()
@@ -53,14 +77,53 @@ impl Command for Checkout {
         session
             .display
             .println(&format!("template updated from SVN ({})", wd.display()));
+
+        if session.metadata().base().document.is_some() {
+            let http = session
+                .http_client()
+                .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+            let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
+            refresh_step(session, &client, discard_authored).await?;
+        }
         Ok(())
     }
+}
+
+/// Re-fetches the active report's document through `client` and reports the
+/// outcome. `force` ignores the stored `ETag`: local edits are being discarded,
+/// so the server's copy must replace them even when it has not changed.
+async fn refresh_step(
+    session: &mut Session,
+    client: &TeregenV2,
+    force: bool,
+) -> Result<(), CommandError> {
+    let outcome = refresh_document(session.metadata_mut(), client, force)
+        .await
+        .map_err(|e| CommandError::Other(e.to_string()))?;
+    let line = match outcome {
+        Refreshed::Unchanged => format!(
+            "document unchanged (etag {})",
+            etag_text(session.metadata().base().document_etag.as_deref())
+        ),
+        Refreshed::Updated { etag } => {
+            format!("document refreshed (etag {})", etag_text(etag.as_deref()))
+        }
+    };
+    session.display.println(&line);
+    Ok(())
+}
+
+fn etag_text(etag: Option<&str>) -> &str {
+    etag.unwrap_or("none")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
+    use mtui_types::report_document::ReportDocument;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn name_and_fanout_scope() {
@@ -87,16 +150,14 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// A successful `svn up` must print a confirmation, so the MCP result is
-    /// never empty. Driven against a real local SVN repo.
-    #[tokio::test]
-    async fn success_prints_confirmation_to_display() {
+    /// A local SVN working copy, or `None` where `svn` is not installed.
+    fn svn_working_copy() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
         if std::process::Command::new("svn")
             .arg("--version")
             .output()
             .is_err()
         {
-            return; // svn not installed in this environment
+            return None;
         }
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
@@ -116,6 +177,16 @@ mod tests {
                 .unwrap()
                 .success()
         );
+        Some((tmp, wc))
+    }
+
+    /// A successful `svn up` must print a confirmation, so the MCP result is
+    /// never empty. Driven against a real local SVN repo.
+    #[tokio::test]
+    async fn success_prints_confirmation_to_display() {
+        let Some((_tmp, wc)) = svn_working_copy() else {
+            return; // svn not installed in this environment
+        };
 
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
@@ -125,5 +196,180 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("template updated from SVN"), "{out:?}");
+    }
+
+    const DOC_ID: &str = "SUSE:PI:16.0:1";
+    const OLD_ETAG: &str = "\"etag-old\"";
+    const NEW_ETAG: &str = "\"etag-new\"";
+
+    fn document(comment: Option<&str>) -> ReportDocument {
+        let mut doc: ReportDocument =
+            include_str!("../../../mtui-types/tests/fixtures/document/pi.json")
+                .parse()
+                .expect("fixture parses");
+        doc.comment = mtui_types::report_document::Req(comment.map(str::to_owned));
+        doc
+    }
+
+    /// A session whose active report carries `document` (stored under
+    /// [`OLD_ETAG`]) and talks to `server`, as on the document path.
+    fn document_session(server: &MockServer, dirty: bool) -> (Session, Buffer) {
+        let (mut session, buf) = session_with_hosts(DOC_ID, &["h1"], "ok");
+        session.config.teregen_api_v2 = server.uri();
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(document(Some("local")));
+        base.document_etag = Some(OLD_ETAG.to_owned());
+        base.document_dirty = dirty;
+        (session, buf)
+    }
+
+    fn client(server: &MockServer) -> TeregenV2 {
+        let http =
+            mtui_datasources::HttpClient::new(mtui_datasources::VerifyPolicy::Default(false))
+                .unwrap();
+        TeregenV2::with_client(http, &server.uri())
+    }
+
+    async fn mount_document(server: &MockServer, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{DOC_ID}")))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn refresh_step_reports_an_unchanged_document() {
+        let server = MockServer::start().await;
+        mount_document(&server, ResponseTemplate::new(304)).await;
+        let (mut session, buf) = document_session(&server, false);
+
+        refresh_step(&mut session, &client(&server), false)
+            .await
+            .unwrap();
+
+        assert!(
+            buf.contents()
+                .contains(&format!("document unchanged (etag {OLD_ETAG})")),
+            "{:?}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_step_adopts_a_newer_document() {
+        let server = MockServer::start().await;
+        let body = serde_json::to_string(&document(Some("server"))).unwrap();
+        mount_document(
+            &server,
+            ResponseTemplate::new(200)
+                .set_body_string(body)
+                .insert_header("etag", NEW_ETAG),
+        )
+        .await;
+        let (mut session, buf) = document_session(&server, false);
+
+        refresh_step(&mut session, &client(&server), false)
+            .await
+            .unwrap();
+
+        assert!(
+            buf.contents()
+                .contains(&format!("document refreshed (etag {NEW_ETAG})")),
+            "{:?}",
+            buf.contents()
+        );
+        let base = session.metadata().base();
+        assert_eq!(base.document, Some(document(Some("server"))));
+        assert_eq!(base.document_etag.as_deref(), Some(NEW_ETAG));
+    }
+
+    #[tokio::test]
+    async fn refresh_step_surfaces_a_refusal_as_an_error() {
+        let server = MockServer::start().await;
+        mount_document(&server, ResponseTemplate::new(409)).await;
+        let (mut session, _buf) = document_session(&server, false);
+
+        let err = refresh_step(&mut session, &client(&server), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("stale")),
+            "{err:?}"
+        );
+        assert_eq!(
+            session.metadata().base().document,
+            Some(document(Some("local")))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dirty_document_is_refused_before_any_request() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = document_session(&server, true);
+
+        let args = matches(&Checkout, &[]);
+        let err = Checkout.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(session.metadata().base().document_dirty);
+    }
+
+    /// `--discard-authored` through the whole command: the guard is lifted,
+    /// `svn up` runs, and the document is re-fetched unconditionally so the
+    /// server's copy replaces the local edits even if its `ETag` is unchanged.
+    #[tokio::test]
+    async fn discard_authored_refreshes_a_dirty_document() {
+        let Some((_tmp, wc)) = svn_working_copy() else {
+            return; // svn not installed in this environment
+        };
+        let server = MockServer::start().await;
+        let body = serde_json::to_string(&document(Some("server"))).unwrap();
+        mount_document(
+            &server,
+            ResponseTemplate::new(200)
+                .set_body_string(body)
+                .insert_header("etag", NEW_ETAG),
+        )
+        .await;
+        let (mut session, buf) = document_session(&server, true);
+        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
+
+        let args = matches(&Checkout, &["--discard-authored"]);
+        Checkout.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            buf.contents().contains("document refreshed"),
+            "{:?}",
+            buf.contents()
+        );
+        let base = session.metadata().base();
+        assert!(!base.document_dirty);
+        assert_eq!(base.document, Some(document(Some("server"))));
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests[0].headers.get("if-none-match").is_none());
+    }
+
+    /// The SVN path (no document) never contacts the document API.
+    #[tokio::test]
+    async fn a_report_without_a_document_sends_no_document_request() {
+        let Some((_tmp, wc)) = svn_working_copy() else {
+            return; // svn not installed in this environment
+        };
+        let server = MockServer::start().await;
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config.teregen_api_v2 = server.uri();
+        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
+
+        let args = matches(&Checkout, &[]);
+        Checkout.call(&mut session, &args).await.unwrap();
+
+        assert!(!buf.contents().contains("document"), "{:?}", buf.contents());
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 }
