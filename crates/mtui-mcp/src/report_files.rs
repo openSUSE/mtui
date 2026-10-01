@@ -175,6 +175,116 @@ pub(crate) fn stream_read(
     ))
 }
 
+/// The loose file readable and listed beside the directory roots.
+pub(crate) const CHECKERS_LOG: &str = "checkers.log";
+const BUILD_CHECKS: &str = "build_checks";
+const RESULTS: &str = "results";
+
+/// The report-dir subdirectories the file tools cover, in listing order.
+fn dir_roots(install_logs: &Path) -> [String; 3] {
+    [
+        BUILD_CHECKS.to_owned(),
+        install_logs.to_string_lossy().into_owned(),
+        RESULTS.to_owned(),
+    ]
+}
+
+/// A regular file in the report directory, as the file tools list it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LocalFile {
+    /// Report-dir-relative, `/`-separated (`install_logs/h1.log`).
+    pub(crate) path: String,
+    pub(crate) name: String,
+    pub(crate) size: u64,
+}
+
+/// Lists the report directory's regular files under the directory roots, plus
+/// `checkers.log`, sorted by path. Flat and symlink-free, so a file shows up
+/// here exactly when the server's flat listing could hold it. Blocking.
+pub(crate) fn list_local(dir: &Path, install_logs: &Path) -> Vec<LocalFile> {
+    let mut files = Vec::new();
+    for root in dir_roots(install_logs) {
+        let Ok(entries) = std::fs::read_dir(dir.join(&root)) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if meta.is_file() {
+                files.push(LocalFile {
+                    path: format!("{root}/{name}"),
+                    name,
+                    size: meta.len(),
+                });
+            }
+        }
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(dir.join(CHECKERS_LOG))
+        && meta.is_file()
+    {
+        files.push(LocalFile {
+            path: CHECKERS_LOG.to_owned(),
+            name: CHECKERS_LOG.to_owned(),
+            size: meta.len(),
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+/// What [`resolve_local`] found at an allowed path.
+#[derive(Debug)]
+pub(crate) enum LocalLookup {
+    Found(PathBuf),
+    Missing,
+}
+
+/// Resolves `rel` to a file the tools may read, returning it with its
+/// normalised report-dir-relative spelling.
+///
+/// Refuses a path that escapes `base` ([`safe_template_file`]) and one that is
+/// not `checkers.log` or a direct child of a directory root. Anything but a
+/// regular file at the target reads as [`LocalLookup::Missing`], matching what
+/// [`list_local`] shows. Blocking.
+pub(crate) fn resolve_local(
+    base: &Path,
+    install_logs: &Path,
+    rel: &str,
+) -> Result<(LocalLookup, String), McpCommandError> {
+    let target = safe_template_file(base, rel)?;
+    let base_canon = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let relative = target
+        .strip_prefix(&base_canon)
+        .map_err(|_| refuse(format!("path {rel:?} escapes the testreport directory")))?;
+    let parts: Vec<&str> = relative
+        .components()
+        .map(|c| c.as_os_str().to_str().unwrap_or_default())
+        .collect();
+    let allowed = match parts.as_slice() {
+        [file] => *file == CHECKERS_LOG,
+        [root, _] => dir_roots(install_logs).iter().any(|r| r == root),
+        _ => false,
+    };
+    if !allowed {
+        return Err(refuse(format!(
+            "{rel:?} is not a report file; readable: {}, {CHECKERS_LOG}",
+            dir_roots(install_logs).map(|r| format!("{r}/")).join(", ")
+        )));
+    }
+    let normalised = parts.join("/");
+    let found = std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file());
+    let lookup = if found {
+        LocalLookup::Found(target)
+    } else {
+        LocalLookup::Missing
+    };
+    Ok((lookup, normalised))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
