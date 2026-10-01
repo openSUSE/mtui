@@ -128,5 +128,53 @@ expression: pretty
     },
     "name": "report_issue_write",
     "read_only": false
+  },
+  {
+    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: they cannot be read yet. A failed server listing leaves the local list and sets `server_error`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "report_files",
+    "read_only": true
+  },
+  {
+    "description": "Read one report file as text: `content` and `total_lines`. `path` is relative to the report directory and must be `checkers.log` or sit directly in `build_checks/`, the install-log directory or `results/` (see report_files). `offset`/`limit` page a 1-indexed line window; a window also returns `offset` and `returned_lines`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "Max lines to return (default: to end of file).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 1,
+          "description": "1-based first line to return.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Report-directory-relative file, e.g. `install_logs/<host>.log` or `checkers.log`.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "report_file_read",
+    "read_only": true
   }
 ]

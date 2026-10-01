@@ -14,6 +14,8 @@ use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
 use mtui_types::report_document::ReportDocument;
 use serde_json::{Map, Value, json};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:1:1";
 const OTHER: &str = "SUSE:Maintenance:2:2";
@@ -221,6 +223,8 @@ async fn a_report_without_a_document_refuses_every_tool() {
             "report_issue_write",
             json!({"issue_id": "bsc#1", "value": {}}),
         ),
+        ("report_files", json!({})),
+        ("report_file_read", json!({"path": "checkers.log"})),
     ] {
         let msg = refusal(&session, name, kwargs).await;
         assert!(msg.contains("SVN-path"), "{name}: {msg}");
@@ -431,7 +435,7 @@ async fn an_over_budget_result_is_flagged_not_clipped_into_invalid_json() {
     assert!(out["content"].as_str().unwrap().contains("truncated"));
 }
 
-/// Full-schema golden: pins the five tool names, descriptions, input schemas
+/// Full-schema golden: pins the tool names, descriptions, input schemas
 /// and read-only hints.
 #[test]
 fn document_tool_schemas_snapshot() {
@@ -448,4 +452,333 @@ fn document_tool_schemas_snapshot() {
         .collect();
     let pretty = serde_json::to_string_pretty(&Value::Array(rendered)).unwrap();
     insta::assert_snapshot!(pretty);
+}
+
+// ---- report_files / report_file_read ------------------------------------ //
+
+/// A document-loaded report whose working directory is a temp dir and whose
+/// teregen API is `server`.
+struct Files {
+    session: Arc<McpSession>,
+    dir: std::path::PathBuf,
+    id: String,
+    _tmp: tempfile::TempDir,
+}
+
+impl Files {
+    async fn new(server: &MockServer) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("report");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = Config::default();
+        config.teregen_api_v2 = server.uri();
+        let session = McpSession::new(config);
+        {
+            let mut guard = session.session().lock().await;
+            let mut report = report(&guard, RRID, Some(MAINTENANCE_OBS));
+            report.base_mut().path = Some(dir.join("log"));
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active(RRID);
+        }
+        let id = serde_json::from_str::<Value>(MAINTENANCE_OBS).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        Self {
+            session,
+            dir,
+            id,
+            _tmp: tmp,
+        }
+    }
+
+    fn write(&self, rel: &str, body: &str) {
+        let path = self.dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    async fn serve_artifacts(&self, server: &MockServer, status: u16, body: Value) {
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{}/artifacts", self.id)))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+}
+
+fn artifact(name: &str, size: u64, origin: &str) -> Value {
+    json!({"name": name, "size": size, "at": 1_700_000_000, "origin": origin})
+}
+
+fn paths(out: &Value) -> Vec<&str> {
+    out["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn files_merge_local_and_server_entries_by_name() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("install_logs/a.log", "12345");
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact("a.log", 9, "pipeline"),
+            artifact("b.log", 3, "uploaded"),
+        ]}),
+    )
+    .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert_eq!(out["id"], json!(f.id));
+    assert_eq!(
+        out["files"],
+        json!([{
+            "path": "install_logs/a.log", "name": "a.log", "size": 5,
+            "server": {"origin": "pipeline", "size": 9, "at": 1_700_000_000},
+        }])
+    );
+    assert_eq!(
+        out["server_only"],
+        json!([{"name": "b.log", "origin": "uploaded", "size": 3, "at": 1_700_000_000}])
+    );
+    assert!(out.get("server_error").is_none());
+}
+
+#[tokio::test]
+async fn files_covers_the_four_roots_and_only_regular_files() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(&server, 200, json!({"id": f.id, "artifacts": []}))
+        .await;
+    for rel in [
+        "build_checks/c.log",
+        "install_logs/a.log",
+        "results/r.txt",
+        "checkers.log",
+        "log",
+        "metadata.json",
+        "install_logs/nested/deep.log",
+    ] {
+        f.write(rel, "x");
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(f.dir.join("log"), f.dir.join("install_logs/link.log")).unwrap();
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert_eq!(
+        paths(&out),
+        [
+            "build_checks/c.log",
+            "checkers.log",
+            "install_logs/a.log",
+            "results/r.txt"
+        ]
+    );
+    assert!(
+        out["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["server"].is_null())
+    );
+}
+
+#[tokio::test]
+async fn a_failed_server_listing_keeps_the_local_list() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("install_logs/a.log", "x");
+    f.serve_artifacts(&server, 503, json!({"error": "busy"}))
+        .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert_eq!(paths(&out), ["install_logs/a.log"]);
+    assert_eq!(out["files"][0]["server"], Value::Null);
+    assert_eq!(out["server_only"], json!([]));
+    assert!(
+        out["server_error"].as_str().unwrap().contains("generating"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn a_file_read_pages_by_line_window() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("install_logs/a.log", "l1\nl2\nl3\nl4\nl5\n");
+    // A local hit never asks the server.
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let whole = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "install_logs/a.log"}),
+    )
+    .await;
+    assert_eq!(whole["path"], "install_logs/a.log");
+    assert_eq!(whole["total_lines"], 5);
+    assert_eq!(whole["content"], "l1\nl2\nl3\nl4\nl5\n");
+    assert!(whole.get("offset").is_none());
+
+    let window = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "install_logs/a.log", "offset": 2, "limit": 2}),
+    )
+    .await;
+    assert_eq!(window["content"], "l2\nl3\n");
+    assert_eq!(window["total_lines"], 5);
+    assert_eq!(window["offset"], 2);
+    assert_eq!(window["returned_lines"], 2);
+
+    let root_file = {
+        f.write("checkers.log", "ok\n");
+        call(
+            &f.session,
+            "report_file_read",
+            json!({"path": "checkers.log"}),
+        )
+        .await
+    };
+    assert_eq!(root_file["content"], "ok\n");
+}
+
+#[tokio::test]
+async fn a_file_read_outside_the_report_files_is_refused() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("log", "secret\n");
+    f.write("metadata.json", "{}");
+    f.write("install_logs/nested/deep.log", "x");
+    f.write("elsewhere/x.log", "x");
+
+    for (rel, needle) in [
+        ("../x", "escapes"),
+        ("/etc/passwd", "escapes"),
+        ("log", "not a report file"),
+        ("metadata.json", "not a report file"),
+        ("elsewhere/x.log", "not a report file"),
+        ("install_logs/nested/deep.log", "not a report file"),
+        ("build_checks/../log", "not a report file"),
+        ("install_logs", "not a report file"),
+    ] {
+        let msg = refusal(&f.session, "report_file_read", json!({"path": rel})).await;
+        assert!(msg.contains(needle), "{rel}: {msg}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_out_of_the_report_is_refused() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    let outside = f.dir.parent().unwrap().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret"), "top secret\n").unwrap();
+    std::fs::create_dir_all(f.dir.join("install_logs")).unwrap();
+    std::os::unix::fs::symlink(&outside, f.dir.join("escape")).unwrap();
+    std::os::unix::fs::symlink(outside.join("secret"), f.dir.join("install_logs/s.log")).unwrap();
+
+    for rel in ["escape/secret", "install_logs/s.log"] {
+        let msg = refusal(&f.session, "report_file_read", json!({"path": rel})).await;
+        assert!(msg.contains("escapes"), "{rel}: {msg}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_file_is_told_apart_from_a_server_only_one() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact("b.log", 3, "uploaded")]}),
+    )
+    .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/b.log"}),
+    )
+    .await;
+    assert!(
+        msg.contains("b.log exists only on the server") && msg.contains("T15"),
+        "{msg}"
+    );
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/c.log"}),
+    )
+    .await;
+    assert!(
+        msg.contains("no such file") && !msg.contains("T15"),
+        "{msg}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_file_stays_not_found_when_the_server_cannot_answer() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(&server, 503, json!({"error": "busy"}))
+        .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/b.log"}),
+    )
+    .await;
+    assert!(msg.contains("no such file"), "{msg}");
+}
+
+#[tokio::test]
+async fn file_tool_arguments_are_checked() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+
+    for (name, kwargs, needle) in [
+        ("report_files", json!({"bogus": 1}), "bogus"),
+        ("report_file_read", json!({}), "`path` is required"),
+        (
+            "report_file_read",
+            json!({"path": "checkers.log", "bogus": 1}),
+            "bogus",
+        ),
+        (
+            "report_file_read",
+            json!({"path": "checkers.log", "offset": 0}),
+            "offset must be >= 1",
+        ),
+        (
+            "report_file_read",
+            json!({"path": "checkers.log", "limit": -1}),
+            "limit must be >= 0",
+        ),
+        (
+            "report_file_read",
+            json!({"path": "checkers.log", "limit": "2"}),
+            "limit must be an integer",
+        ),
+    ] {
+        let msg = refusal(&f.session, name, kwargs).await;
+        assert!(msg.contains(needle), "{name}: {msg}");
+    }
 }

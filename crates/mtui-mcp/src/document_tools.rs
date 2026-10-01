@@ -9,11 +9,17 @@
 //! Only a report loaded from a document has one; any other report refuses with
 //! a pointer at `testreport_*`.
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use mtui_config::Config;
 use mtui_core::ReportAccess;
+use mtui_datasources::teregen::{ArtifactEntry, TeregenV2};
 use mtui_testreport::TestReportBase;
 use mtui_types::report_document::{Section, SectionWriteError};
 use serde_json::{Map, Value, json};
 
+use crate::report_files::{LocalLookup, list_local, resolve_local, stream_read};
 use crate::session::{
     DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
 };
@@ -67,7 +73,7 @@ fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Map<String, Value> {
     s
 }
 
-/// The five document tool descriptors (transport-free).
+/// The document tool descriptors (transport-free).
 #[must_use]
 pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
     let template_prop = || {
@@ -193,12 +199,58 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         read_only: false,
     };
 
+    let files = ToolDescriptor {
+        name: "report_files".to_owned(),
+        description: format!(
+            "List the report directory's files — `build_checks/`, the install-log directory, \
+             `results/` and `checkers.log` — each with its report-relative `path`, `name` and \
+             `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or \
+             null when the server has none; sizes differ until `commit` uploads. `server_only` \
+             lists server files with no local copy: they cannot be read yet. A failed server \
+             listing leaves the local list and sets `server_error`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(vec![("template", template_prop())], &[]),
+        read_only: true,
+    };
+
+    let file_read = ToolDescriptor {
+        name: "report_file_read".to_owned(),
+        description: format!(
+            "Read one report file as text: `content` and `total_lines`. `path` is relative to \
+             the report directory and must be `checkers.log` or sit directly in `build_checks/`, \
+             the install-log directory or `results/` (see report_files). `offset`/`limit` page a \
+             1-indexed line window; a window also returns `offset` and `returned_lines`. \
+             {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "path",
+                    json!({ "type": "string", "description": "Report-directory-relative file, e.g. `install_logs/<host>.log` or `checkers.log`." }),
+                ),
+                (
+                    "offset",
+                    json!({ "type": "integer", "minimum": 1, "default": 1, "description": "1-based first line to return." }),
+                ),
+                (
+                    "limit",
+                    json!({ "type": "integer", "minimum": 0, "description": "Max lines to return (default: to end of file)." }),
+                ),
+                ("template", template_prop()),
+            ],
+            &["path"],
+        ),
+        read_only: true,
+    };
+
     vec![
         sections,
         section_read,
         section_write,
         issue_read,
         issue_write,
+        files,
+        file_read,
     ]
 }
 
@@ -259,6 +311,16 @@ async fn dispatch_document_tool_inner(
             let value = value_arg(kwargs)?;
             report_issue_write(session, issue_id, value, template).await?
         }
+        "report_files" => report_files(session, template).await?,
+        "report_file_read" => {
+            let path = opt_str(kwargs, "path")?.ok_or_else(|| refuse("`path` is required"))?;
+            let offset = uint_arg(kwargs, "offset")?.unwrap_or(1);
+            if offset < 1 {
+                return Err(refuse(format!("offset must be >= 1 (got {offset})")));
+            }
+            let limit = uint_arg(kwargs, "limit")?;
+            report_file_read(session, path, offset, limit, template).await?
+        }
         other => return Err(refuse(format!("unknown document tool: {other}"))),
     };
     Ok(capped(session, out))
@@ -272,6 +334,19 @@ fn opt_str<'a>(
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.as_str())),
         Some(other) => Err(refuse(format!("{key} must be a string, got {other}"))),
+    }
+}
+
+/// A non-negative integer argument; absent or `null` is `None`.
+fn uint_arg(kwargs: &Map<String, Value>, key: &str) -> Result<Option<usize>, McpCommandError> {
+    match kwargs.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => match n.as_i64() {
+            Some(v) if v >= 0 => Ok(Some(v as usize)),
+            Some(v) => Err(refuse(format!("{key} must be >= 0 (got {v})"))),
+            None => Err(refuse(format!("{key} must be an integer"))),
+        },
+        Some(other) => Err(refuse(format!("{key} must be an integer, got {other}"))),
     }
 }
 
@@ -329,6 +404,151 @@ async fn write_base<R>(
     guard
         .with_report_mut(&rrid, |report| f(report.base_mut()))
         .map_err(|access| access_refusal(access, &rrid))?
+}
+
+/// What the file tools need from a report, copied out so the session mutex is
+/// released before any file or network I/O.
+struct FileScope {
+    id: String,
+    dir: PathBuf,
+    install_logs: PathBuf,
+    config: Config,
+}
+
+/// Snapshots the target report's [`FileScope`]. The caller holds the
+/// template's scoped lock for the whole call.
+async fn file_scope(
+    session: &McpSession,
+    template: Option<&str>,
+) -> Result<FileScope, McpCommandError> {
+    let guard = session.session().lock().await;
+    let rrid = resolve_rrid(&guard, template)?;
+    let (id, dir) = guard
+        .with_report(&rrid, |report| {
+            let base = report.base();
+            let doc = base.document.as_ref().ok_or_else(no_document)?;
+            let dir = base
+                .path
+                .as_deref()
+                .and_then(Path::parent)
+                .ok_or_else(|| refuse("the report has no working directory"))?;
+            Ok::<_, McpCommandError>((doc.id.clone(), dir.to_path_buf()))
+        })
+        .map_err(|access| access_refusal(access, &rrid))??;
+    Ok(FileScope {
+        id,
+        dir,
+        install_logs: guard.config.install_logs.clone(),
+        config: guard.config.clone(),
+    })
+}
+
+async fn server_listing(config: &Config, id: &str) -> Result<Vec<ArtifactEntry>, String> {
+    let client = TeregenV2::new(config, &config.teregen_api_v2).map_err(|e| e.to_string())?;
+    client.list_artifacts(id).await.map_err(|e| e.to_string())
+}
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, McpCommandError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| refuse(format!("file task failed: {e}")))
+}
+
+async fn report_files(
+    session: &McpSession,
+    template: Option<&str>,
+) -> Result<Value, McpCommandError> {
+    let _scope = session.scoped_lock(template).await;
+    let FileScope {
+        id,
+        dir,
+        install_logs,
+        config,
+    } = file_scope(session, template).await?;
+
+    let local = blocking(move || list_local(&dir, &install_logs)).await?;
+    let (server, server_error) = match server_listing(&config, &id).await {
+        Ok(entries) => (entries, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let by_name: BTreeMap<&str, &ArtifactEntry> =
+        server.iter().map(|e| (e.name.as_str(), e)).collect();
+    let artifact =
+        |e: &ArtifactEntry| json!({ "origin": e.origin.as_str(), "size": e.size, "at": e.at });
+
+    let files: Vec<Value> = local
+        .iter()
+        .map(|f| {
+            json!({
+                "path": f.path,
+                "name": f.name,
+                "size": f.size,
+                "server": by_name.get(f.name.as_str()).map(|e| artifact(e)),
+            })
+        })
+        .collect();
+    let server_only: Vec<Value> = by_name
+        .iter()
+        .filter(|(name, _)| !local.iter().any(|f| f.name == **name))
+        .map(|(name, e)| {
+            json!({ "name": name, "origin": e.origin.as_str(), "size": e.size, "at": e.at })
+        })
+        .collect();
+
+    let mut out = json!({ "id": id, "files": files, "server_only": server_only });
+    if let Some(err) = server_error {
+        out["server_error"] = Value::String(err);
+    }
+    Ok(out)
+}
+
+async fn report_file_read(
+    session: &McpSession,
+    path: &str,
+    offset: usize,
+    limit: Option<usize>,
+    template: Option<&str>,
+) -> Result<Value, McpCommandError> {
+    let _scope = session.scoped_lock(template).await;
+    let FileScope {
+        id,
+        dir,
+        install_logs,
+        config,
+    } = file_scope(session, template).await?;
+
+    let rel = path.to_owned();
+    let (lookup, rel) = blocking(move || resolve_local(&dir, &install_logs, &rel)).await??;
+    let LocalLookup::Found(file) = lookup else {
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        let on_server = server_listing(&config, &id)
+            .await
+            .is_ok_and(|entries| entries.iter().any(|e| e.name == name));
+        return Err(refuse(if on_server {
+            format!("{name} exists only on the server; reading server artifacts needs teregen T15")
+        } else {
+            format!("no such file in the report directory: {rel}")
+        }));
+    };
+
+    let window = (offset != 1 || limit.is_some()).then_some((offset, limit));
+    let max_input = session.max_input_bytes();
+    let (read, _) = blocking(move || stream_read(&file, max_input, window)).await??;
+    let content = cap_output(read.content, session.max_output_bytes());
+
+    let mut out = json!({
+        "id": id,
+        "path": rel,
+        "total_lines": read.line_count,
+        "content": content,
+    });
+    if let Some(returned) = read.returned_lines {
+        out["offset"] = json!(offset);
+        out["returned_lines"] = json!(returned);
+    }
+    Ok(out)
 }
 
 async fn report_sections(

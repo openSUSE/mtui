@@ -25,6 +25,8 @@ openqa_jobs
 openqa_overview
 prepare
 reject
+report_file_read
+report_files
 report_issue_read
 report_issue_write
 report_section_read
