@@ -8,7 +8,7 @@
 //! `tracing` event).
 
 use mtui_config::Config;
-use mtui_datasources::teregen::{DocumentFetch, TeregenV2, TeregenV2Error};
+use mtui_datasources::teregen::{ArtifactOrigin, DocumentFetch, TeregenV2, TeregenV2Error};
 use mtui_datasources::{HttpClient, MAX_API_BODY, VerifyPolicy};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -339,4 +339,131 @@ async fn bad_request_detail_is_truncated_at_the_cap() {
         panic!("expected RejectedId, got {err:?}");
     };
     assert_eq!(detail.len(), 2048);
+}
+
+fn artifacts_path(id: &str) -> String {
+    format!("/reports/{id}/artifacts")
+}
+
+#[tokio::test]
+async fn list_artifacts_parses_entries_and_tolerates_an_unknown_origin() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path(RRID)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": RRID,
+            "artifacts": [
+                {"name": "a.log", "size": 12, "at": 1_700_000_000, "origin": "pipeline"},
+                {"name": "b.log", "size": 3, "at": 1_700_000_001, "origin": "uploaded"},
+                {"name": "c.log", "size": 0, "at": 1, "origin": "somewhere-new"},
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let entries = client(&server).list_artifacts(RRID).await.unwrap();
+    let got: Vec<_> = entries
+        .iter()
+        .map(|e| (e.name.as_str(), e.size, e.at, e.origin))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("a.log", 12, 1_700_000_000, ArtifactOrigin::Pipeline),
+            ("b.log", 3, 1_700_000_001, ArtifactOrigin::Uploaded),
+            ("c.log", 0, 1, ArtifactOrigin::Unknown),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn list_artifacts_keeps_a_dotted_slfo_id_intact() {
+    let slfo_id = "SUSE:SLFO:1.2:7787";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path(slfo_id)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id": slfo_id, "artifacts": []})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert!(
+        client(&server)
+            .list_artifacts(slfo_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn list_artifacts_maps_each_refusal_to_its_own_variant() {
+    for (status, expect) in [(404, "not-found"), (503, "generating"), (400, "rejected")] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(artifacts_path(RRID)))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(serde_json::json!({"error": "nope"})),
+            )
+            .mount(&server)
+            .await;
+
+        let err = client(&server).list_artifacts(RRID).await.unwrap_err();
+        let got = match &err {
+            TeregenV2Error::NotFound => "not-found",
+            TeregenV2Error::Generating => "generating",
+            TeregenV2Error::RejectedId { detail } if detail == "nope" => "rejected",
+            other => panic!("status {status} mapped to {other:?}"),
+        };
+        assert_eq!(got, expect);
+    }
+}
+
+#[tokio::test]
+async fn list_artifacts_unmodelled_status_and_malformed_body_are_transport_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path("SUSE:Maintenance:1:500")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path(RRID)))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let c = client(&server);
+    assert!(matches!(
+        c.list_artifacts("SUSE:Maintenance:1:500")
+            .await
+            .unwrap_err(),
+        TeregenV2Error::Transport(_)
+    ));
+    assert!(matches!(
+        c.list_artifacts(RRID).await.unwrap_err(),
+        TeregenV2Error::Transport(m) if m.contains("malformed artifact list")
+    ));
+}
+
+#[tokio::test]
+async fn list_artifacts_body_over_the_cap_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path(RRID)))
+        .respond_with(ResponseTemplate::new(200).set_body_string("x".repeat(MAX_API_BODY + 1)))
+        .mount(&server)
+        .await;
+
+    let err = client(&server).list_artifacts(RRID).await.unwrap_err();
+    assert!(matches!(err, TeregenV2Error::BodyTooLarge));
+}
+
+#[tokio::test]
+async fn list_artifacts_unreachable_base_is_a_transport_error() {
+    let err = unreachable_client().list_artifacts(RRID).await.unwrap_err();
+    assert!(matches!(err, TeregenV2Error::Transport(_)));
 }

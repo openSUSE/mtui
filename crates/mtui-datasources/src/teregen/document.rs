@@ -20,6 +20,7 @@ use mtui_config::Config;
 use mtui_types::report_document::{DocumentError, ReportDocument, parse_and_warn_on_dropped_keys};
 use reqwest::StatusCode;
 use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH};
+use serde::Deserialize;
 use thiserror::Error;
 
 use crate::error::HttpError;
@@ -338,6 +339,60 @@ impl TeregenV2 {
         })
     }
 
+    /// `GET /reports/{rrid}/artifacts`: the files the server holds for this
+    /// report, pipeline-written and tester-uploaded alike. Anonymous, like
+    /// [`fetch_document`](Self::fetch_document).
+    ///
+    /// # Errors
+    ///
+    /// [`TeregenV2Error::RejectedId`] (`400`), [`TeregenV2Error::NotFound`]
+    /// (`404`), [`TeregenV2Error::Generating`] (`503`); a transport failure,
+    /// any other status or an unparseable body is [`TeregenV2Error::Transport`].
+    pub async fn list_artifacts(&self, rrid: &str) -> Result<Vec<ArtifactEntry>, TeregenV2Error> {
+        let url = format!("{}/reports/{rrid}/artifacts", self.base);
+        let response = self
+            .http
+            .inner()
+            .get(&url)
+            .timeout(HTTP_TIMEOUT.1)
+            .send()
+            .await
+            .map_err(|e| {
+                let e = HttpError::from(e);
+                tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts failed: {e}");
+                TeregenV2Error::Transport(e.to_string())
+            })?;
+
+        match response.status() {
+            StatusCode::NOT_FOUND => return Err(TeregenV2Error::NotFound),
+            StatusCode::SERVICE_UNAVAILABLE => return Err(TeregenV2Error::Generating),
+            StatusCode::BAD_REQUEST => {
+                let detail = read_body_capped(response, MAX_API_BODY)
+                    .await
+                    .ok()
+                    .map(|bytes| error_detail(&bytes))
+                    .unwrap_or_default();
+                return Err(TeregenV2Error::RejectedId { detail });
+            }
+            _ => {}
+        }
+
+        let response = response.error_for_status().map_err(|e| {
+            let e = HttpError::from(e);
+            tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts failed: {e}");
+            TeregenV2Error::Transport(e.to_string())
+        })?;
+        let bytes = read_body_capped(response, MAX_API_BODY)
+            .await
+            .map_err(|e| match e {
+                HttpError::BodyTooLarge { .. } => TeregenV2Error::BodyTooLarge,
+                other => TeregenV2Error::Transport(other.to_string()),
+            })?;
+        serde_json::from_slice::<ArtifactList>(&bytes)
+            .map(|list| list.artifacts)
+            .map_err(|e| TeregenV2Error::Transport(format!("malformed artifact list: {e}")))
+    }
+
     /// `PUT /reports/{rrid}`: upload `document`, adopting the server's `202`
     /// response as the new authoritative document and `ETag` (P5-D4).
     ///
@@ -552,6 +607,50 @@ impl TeregenV2 {
             ))),
         }
     }
+}
+
+/// One file in a [`TeregenV2::list_artifacts`] listing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ArtifactEntry {
+    /// The file's basename; the server's key for it.
+    pub name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Modification time, seconds since the Unix epoch.
+    pub at: i64,
+    /// Which server directory the file lives in.
+    pub origin: ArtifactOrigin,
+}
+
+/// Where the server holds an [`ArtifactEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtifactOrigin {
+    /// Written by the generation pipeline (`install_logs/`, `build_checks/`).
+    Pipeline,
+    /// Uploaded by a tester (`uploads/`).
+    Uploaded,
+    /// An origin this mtui does not know; kept lenient so a new server-side
+    /// directory cannot break listing.
+    #[serde(other)]
+    Unknown,
+}
+
+impl ArtifactOrigin {
+    /// The wire spelling, `unknown` for an unrecognised origin.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pipeline => "pipeline",
+            Self::Uploaded => "uploaded",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ArtifactList {
+    artifacts: Vec<ArtifactEntry>,
 }
 
 /// The outcome of a successful [`TeregenV2::upload_artifact`] call.
