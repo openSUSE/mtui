@@ -40,8 +40,9 @@ pub mod tokens;
 
 pub use auth::{DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
-    ArtifactStored, ArtifactUploadError, DocumentFetch, Precondition, TeregenV2, TeregenV2Error,
-    TeregenV2WriteError, UploadOutcome, is_valid_artifact_name,
+    ArtifactEntry, ArtifactOrigin, ArtifactStored, ArtifactUploadError, DocumentFetch,
+    Precondition, TeregenV2, TeregenV2Error, TeregenV2WriteError, UploadOutcome,
+    is_valid_artifact_name,
 };
 pub use tokens::{CachedToken, TokenStore};
 
