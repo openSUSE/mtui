@@ -29,6 +29,8 @@ pub mod profiles;
 #[cfg(feature = "mcp")]
 pub mod provider;
 #[cfg(feature = "mcp")]
+pub(crate) mod report_files;
+#[cfg(feature = "mcp")]
 pub(crate) mod schema;
 #[cfg(feature = "mcp")]
 pub mod server;
