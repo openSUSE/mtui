@@ -425,8 +425,9 @@ confirm:
 
 ## Report document tools
 
-Five hand-written tools read and edit the loaded report as a **document** —
-named sections and issues rather than lines of text. Only a report loaded from
+Seven hand-written tools work on the loaded report as a **document**: five read
+and edit it as named sections and issues rather than lines of text, and two list
+and read its files. Only a report loaded from
 a document has one; on any other (SVN-path) report every call refuses, naming
 `testreport_*` as the alternative. Each accepts an optional
 **`template="<RRID>"`** under the same "one template, or refuse" rule as the
@@ -484,6 +485,40 @@ shrink. Validated and applied exactly like `report_section_write`.
 
 - Parameters (required): `issue_id`, `value`. Plus optional `template`.
 - Returns `{ "id", "issue_id", "dirty": true }`.
+
+### `report_files` (read-only)
+
+Lists the report directory's files — `build_checks/`, the `install_logs`
+directory, `results/` and `checkers.log` — merged by file name with the files
+teregen holds for the report.
+
+- Parameters: `template` (optional).
+- Returns `{ "id", "files": [{"path","name","size","server"}], "server_only":
+  [{"name","origin","size","at"}] }`, plus `"server_error"` when the server
+  listing failed. `files` are the local regular files, sorted by `path`
+  (report-directory-relative; subdirectories and symlinks are skipped).
+  `server` is `{ "origin", "size", "at" }` for the server's file of that name
+  (`origin` is `pipeline` or `uploaded`), or `null` when it has none; sizes
+  differ until `commit` uploads. `server_only` lists server files with no local
+  copy.
+- A failed server listing (not found, still generating, unreachable) never
+  fails the call: the local list is returned with `server_error` set.
+
+### `report_file_read` (read-only)
+
+Reads one of those files as text.
+
+- Parameters (required): `path`, relative to the report directory — either
+  `checkers.log` or a file directly inside `build_checks/`, the `install_logs`
+  directory or `results/`. Optional: `offset` (1-based first line, default 1),
+  `limit` (maximum lines), `template`.
+- Returns `{ "id", "path", "total_lines", "content" }`; a windowed read also
+  carries `offset` and `returned_lines`. `content` is bounded by
+  `[mcp] max_output_bytes`, and the read stops at `[mcp] max_input_bytes`.
+- Refuses a path that escapes the report directory (`..`, an absolute path, a
+  symlink out), one outside the readable set, and a missing file. A file the
+  server lists but the report directory lacks is refused with a distinct
+  message: server-side files cannot be fetched yet (needs teregen T15).
 
 A result larger than `[mcp] max_output_bytes` comes back as `{ "truncated":
 true, "size", "content" }`, where `content` is the capped JSON text, rather than

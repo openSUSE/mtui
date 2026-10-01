@@ -133,6 +133,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `testreport_*`. **MCP schema note:** additive only — five new tools, all in
   the `core` profile.
 
+- Two read-only MCP tools expose a document-loaded report's files:
+  `report_files` lists `build_checks/`, the install-log directory, `results/`
+  and `checkers.log`, merged by name with teregen's artifact listing (each file
+  shows the server's copy, and `server_only` names what only the server holds;
+  a failed server listing leaves the local list with `server_error`), and
+  `report_file_read` pages one of them by line window. Files that exist only on
+  the server cannot be read until teregen can serve them. **MCP schema note:**
+  additive only — two new tools, both in the `core` profile.
+
 ### Changed
 
 - `regenerate`'s guard (`--discard-authored`) also refuses over document edits
