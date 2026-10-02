@@ -5,6 +5,9 @@
 //! Nothing here touches the terminal directly; the caller owns raw mode and the
 //! event loop.
 
+pub mod form;
+pub mod policy;
 pub mod schema;
 
+pub use form::{Field, FieldError, Form, Saved, Tab, Widget};
 pub use schema::{Schema, SchemaError};
