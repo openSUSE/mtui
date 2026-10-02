@@ -188,6 +188,12 @@ reedline = "0.52"
 # the two share one copy; `event-stream` enables the async `EventStream` the
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
+# Full-screen report-document editor (mtui-tui). Only the crossterm backend, on
+# the same `crossterm` major as reedline and the `shell` bridge, so the tree
+# keeps a single copy of it.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+# Multi-line input widget for the editor's free-text fields.
+ratatui-textarea = { version = "0.9", default-features = false, features = ["crossterm"] }
 # terminal styling for the REPL input highlighter; pinned to reedline 0.52's
 # `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
 nu-ansi-term = "0.50"
@@ -326,6 +332,7 @@ mtui-config = { path = "crates/mtui-config" }
 mtui-hosts = { path = "crates/mtui-hosts" }
 mtui-datasources = { path = "crates/mtui-datasources" }
 mtui-testreport = { path = "crates/mtui-testreport" }
+mtui-tui = { path = "crates/mtui-tui" }
 mtui-core = { path = "crates/mtui-core" }
 mtui-cli = { path = "crates/mtui-cli" }
 mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
