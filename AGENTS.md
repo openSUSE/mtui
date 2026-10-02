@@ -89,6 +89,7 @@ crates/
   mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
   mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
   mtui-core/         Command trait + registry + Session + engine + dispatch
+  mtui-tui/          report-document editor: schema walker, form model, ratatui screen (no I/O)
   mtui-cli/          reedline REPL library
   mtui-mcp/          rmcp server library
 fuzz/                cargo-fuzz harness over the untrusted-input parsers.

@@ -60,7 +60,31 @@ flattened, and de-duplicated at load.
 ## How do I change the editor used by the `edit` command?
 
 `edit` spawns your `$EDITOR` (or `$VISUAL`) on the controlling terminal, as usual.
-Set it in your shell environment.
+Set it in your shell environment. When the loaded report is a JSON document, a bare
+`edit` opens the document editor instead (see the next question); `edit FILE` always
+uses `$EDITOR`.
+
+## How do I fill in a report document by hand?
+
+With a document loaded, `edit` opens a full-screen form over it, one tab per
+section: `summary` (verdict and comment), `people`, `issues`, `testing` and
+`review`, then `update` and `install`, which are read-only. `Tab`/`Shift-Tab`
+switch sections, `Up`/`Down` move, `Enter` edits a field or opens a group,
+`Left`/`Right` step an enum or yes/no field, `n` sets a field to null, `Ctrl-S`
+saves and `q`/`Ctrl-C` quits (asking first when there are unsaved changes); `?`
+lists the keys.
+
+Only the tester's answers are editable: verdicts, comments, issue
+reproducer/status/comment, the reviewer name and the review questions. Fields the
+pipeline or `export` fills in are shown greyed. Every field is checked against the
+report schema as you edit it, and `Ctrl-S` re-checks the whole document; a refusal
+leaves the editor open on the offending field.
+
+A save marks the document as edited but not uploaded — `commit` uploads it, and
+`unload`/`regenerate` refuse to drop it without `--discard-authored`. Run `export`
+before editing: it rewrites the `testing.install` and `testing.regression` blocks and
+would replace what the editor wrote there. The editor needs a terminal on both stdin
+and stdout.
 
 ## How do I export results into the testreport?
 

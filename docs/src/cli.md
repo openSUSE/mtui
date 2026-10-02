@@ -1147,14 +1147,14 @@ Options:
 
 ## `edit`
 
-Edit the active testing template or a local file in $EDITOR.
+Edit the loaded report document, or the active template or a local file in $EDITOR.
 
 ```text
 Usage: edit [FILENAME]
 
 Arguments:
   [FILENAME]
-          File to edit (defaults to the active template)
+          File to edit (defaults to the report document, or the active template)
 
 Options:
   -h, --help

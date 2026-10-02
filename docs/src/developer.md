@@ -253,7 +253,7 @@ these crates: `it__<module>__<name>.snap`.
 > integration tests are per-file and its snapshots are named `<module>__<name>.snap`
 > (no `it__` prefix). Add a `mtui-core` integration test as a normal top-level
 > `tests/*.rs` there; use the `it.rs` `mod` convention in root `mtui`, `mtui-hosts`,
-> `mtui-datasources`, `mtui-testreport`, and `mtui-mcp`.
+> `mtui-datasources`, `mtui-testreport`, `mtui-tui`, and `mtui-mcp`.
 
 ## Debugging the MCP server
 
