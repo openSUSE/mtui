@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::teregen::{DocumentFetch, TeregenV2, TeregenV2Error};
 use mtui_testreport::UpdateKind;
 use mtui_types::report_document::ReportDocument;
 use mtui_types::{UpdateID, Workflow};
@@ -95,10 +96,11 @@ impl Command for Regenerate {
                 .long("discard-authored")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "override mtui's own guards against regenerating a loaded document that \
-                     already carries tester content (verdict, testers, install/regression \
-                     results) or holds edits that were never committed; teregen itself \
-                     still refuses on a verdict or testers",
+                    "override mtui's own guards against regenerating a document that already \
+                     carries tester content (verdict, testers, issue answers, install/regression \
+                     results), loaded or on the server, or holds edits that were never \
+                     committed; without it the REPL asks before discarding such content and \
+                     MCP refuses; teregen itself still refuses on a verdict or testers",
                 ),
         )
         .arg(
@@ -138,34 +140,12 @@ impl Command for Regenerate {
             None => require_update(session)?.to_string(),
         };
 
-        // mtui's own guard: refuse, before any HTTP call, to regenerate the
-        // *loaded* document over tester-authored content. A standalone RRID
-        // (not the loaded template) is never refused here — there is no
-        // local document to have lost anything from.
-        let targets_loaded = session
-            .metadata()
-            .rrid()
-            .is_some_and(|r| r.to_string() == rrid_str);
-        if !discard_authored
-            && targets_loaded
-            && session
-                .metadata()
-                .base()
-                .document
-                .as_ref()
-                .is_some_and(ReportDocument::has_tester_content)
-        {
-            return Err(CommandError::Other(format!(
-                "{rrid_str}'s loaded document already carries tester-authored content \
-                 (a verdict, testers, or install/regression results); run `commit` first, or \
-                 pass --discard-authored to regenerate anyway — teregen itself still refuses on \
-                 a verdict or testers"
-            )));
-        }
-
         // Registry-wide: also covers a loaded-but-inactive RRID, and the edits
-        // `has_tester_content` misses (`testing.openqa`-only authoring).
+        // `has_tester_content` misses (`testing.openqa`-only authoring). Local
+        // only, so it runs before the gate's server read.
         document_edits_guard(session, &rrid_str, discard_authored)?;
+
+        tester_content_gate(session, &rrid_str, discard_authored).await?;
 
         let teregen = teregen_client(session)?;
 
@@ -242,6 +222,88 @@ impl Command for Regenerate {
                 .println(&format!("{rrid_str} is now the active template"));
         }
         Ok(())
+    }
+}
+
+/// Stops `regenerate` from wiping tester-authored content unless the operator
+/// accepts the loss: the loaded document is checked first, then the server's
+/// copy (an anonymous `GET`, so a report that is not loaded is covered too).
+/// Content found is a `[y/N]` question in the REPL with a prompter and a
+/// refusal anywhere else, as in `approve`'s hash gate.
+///
+/// `404`/`409` mean there is nothing to lose. Any other failure to read the
+/// server's copy refuses: an unchecked document must not pass as clean.
+/// `discard_authored` skips the check, and the `GET` with it.
+async fn tester_content_gate(
+    session: &mut Session,
+    rrid: &str,
+    discard_authored: bool,
+) -> Result<(), CommandError> {
+    if discard_authored {
+        return Ok(());
+    }
+    let local = session
+        .metadata()
+        .rrid()
+        .is_some_and(|r| r.to_string() == rrid)
+        && session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .is_some_and(ReportDocument::has_tester_content);
+    if !local {
+        let http = session
+            .http_client()
+            .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+        let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
+        if !server_has_tester_content(&client, rrid).await? {
+            return Ok(());
+        }
+    }
+
+    let (place, advice) = if local {
+        ("loaded document", "run `commit` first, or pass")
+    } else {
+        ("document on the server", "pass")
+    };
+    if session.is_repl
+        && let Some(prompter) = session.prompter()
+    {
+        let confirmed = prompter
+            .confirm(
+                &format!(
+                    "{rrid}'s {place} carries tester-authored content; regenerate and discard \
+                     it? [y/N]: "
+                ),
+                false,
+            )
+            .await;
+        return if confirmed {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "not regenerating {rrid}: its {place} carries tester-authored content"
+            )))
+        };
+    }
+    Err(CommandError::Other(format!(
+        "{rrid}'s {place} already carries tester-authored content (a verdict, testers, issue \
+         answers, or install/regression results); {advice} --discard-authored to regenerate \
+         anyway — teregen itself still refuses on a verdict or testers"
+    )))
+}
+
+async fn server_has_tester_content(client: &TeregenV2, rrid: &str) -> Result<bool, CommandError> {
+    match client.fetch_document(rrid, None).await {
+        Ok(DocumentFetch::Fresh { document, .. }) => Ok(document.has_tester_content()),
+        Ok(DocumentFetch::NotModified) | Err(TeregenV2Error::NotFound | TeregenV2Error::Stale) => {
+            Ok(false)
+        }
+        Err(e) => Err(CommandError::Other(format!(
+            "cannot check {rrid}'s document on the server for tester-authored content: {e}; \
+             pass --discard-authored to regenerate anyway"
+        ))),
     }
 }
 
@@ -377,6 +439,7 @@ mod tests {
     fn config_for(server: &MockServer) -> Config {
         let mut c = Config::default();
         c.teregen_api = server.uri();
+        c.teregen_api_v2 = server.uri();
         c
     }
 
@@ -570,7 +633,7 @@ mod tests {
         let mut c = Config::default();
         c.teregen_api = "http://127.0.0.1:1/api".to_owned();
         session.config = c;
-        let args = matches(&Regenerate, &["--no-wait"]);
+        let args = matches(&Regenerate, &["--no-wait", "--discard-authored"]);
         Regenerate.call(&mut session, &args).await.unwrap();
         assert!(
             buf.contents().contains("TeReGen unreachable"),
@@ -949,5 +1012,234 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("regenerated — reloading"), "{out}");
+    }
+
+    // --- server-side tester-content gate ---
+
+    fn doc_with_issue_status(id: &str) -> String {
+        document_json(id, "{}").replace(
+            "\"issues\": {}",
+            "\"issues\": {\"bsc#1\": {\"title\": \"t\", \"reproducer\": null, \
+             \"status\": \"FIXED\", \"comment\": null}}",
+        )
+    }
+
+    async fn mount_document(server: &MockServer, rrid: &str, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{rrid}")))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_enqueue(server: &MockServer, rrid: &str) {
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{rrid}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 3})))
+            .mount(server)
+            .await;
+    }
+
+    async fn count(server: &MockServer, verb: &str) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == verb)
+            .count()
+    }
+
+    fn fixed_prompter(answer: &'static str) -> mtui_hosts::Prompter {
+        mtui_hosts::Prompter::new(std::sync::Arc::new(move |_t: String| {
+            Box::pin(async move { Ok(answer.to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    #[tokio::test]
+    async fn server_content_refuses_without_a_prompter_and_enqueues_nothing() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            rrid,
+            ResponseTemplate::new(200).set_body_string(doc_with_issue_status(rrid)),
+        )
+        .await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("on the server") && m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert_eq!(count(&server, "POST").await, 0);
+    }
+
+    #[tokio::test]
+    async fn repl_declined_prompt_refuses_and_enqueues_nothing() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            rrid,
+            ResponseTemplate::new(200).set_body_string(doc_with_issue_status(rrid)),
+        )
+        .await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.is_repl = true;
+        session.set_prompter(fixed_prompter("n"));
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("not regenerating")),
+            "{err:?}"
+        );
+        assert_eq!(count(&server, "POST").await, 0);
+    }
+
+    #[tokio::test]
+    async fn repl_confirmed_prompt_enqueues_once() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            rrid,
+            ResponseTemplate::new(200).set_body_string(doc_with_issue_status(rrid)),
+        )
+        .await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.is_repl = true;
+        session.set_prompter(fixed_prompter("y"));
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(count(&server, "POST").await, 1);
+        assert!(buf.contents().contains("enqueued"), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn a_missing_server_document_has_nothing_to_lose() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(&server, rrid, ResponseTemplate::new(404)).await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(count(&server, "POST").await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_stale_server_document_has_nothing_to_lose() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(&server, rrid, ResponseTemplate::new(409)).await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(count(&server, "POST").await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_clean_server_document_proceeds() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            rrid,
+            ResponseTemplate::new(200).set_body_string(document_json(rrid, "{}")),
+        )
+        .await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(count(&server, "POST").await, 1);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_server_document_fails_closed() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(&server, rrid, ResponseTemplate::new(500)).await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("cannot check") && m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        assert_eq!(count(&server, "POST").await, 0);
+    }
+
+    #[tokio::test]
+    async fn discard_authored_never_reads_the_server_document() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+
+        let args = matches(&Regenerate, &["--no-wait", "--discard-authored"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(count(&server, "GET").await, 0);
+        assert_eq!(count(&server, "POST").await, 1);
+    }
+
+    /// The loaded document is judged on its own: a clean server copy does not
+    /// excuse content the tester has only here.
+    #[tokio::test]
+    async fn local_content_is_gated_even_when_the_server_document_is_clean() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            rrid,
+            ResponseTemplate::new(200).set_body_string(document_json(rrid, "{}")),
+        )
+        .await;
+        mount_enqueue(&server, rrid).await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document = Some(doc_with_verdict(rrid));
+
+        let args = matches(&Regenerate, &["--no-wait"]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("loaded document")),
+            "{err:?}"
+        );
+        assert_eq!(count(&server, "POST").await, 0);
     }
 }

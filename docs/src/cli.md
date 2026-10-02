@@ -998,7 +998,7 @@ Options:
           load the standalone RRID as a kernel update (default: auto)
 
       --discard-authored
-          override mtui's own guards against regenerating a loaded document that already carries tester content (verdict, testers, install/regression results) or holds edits that were never committed; teregen itself still refuses on a verdict or testers
+          override mtui's own guards against regenerating a document that already carries tester content (verdict, testers, issue answers, install/regression results), loaded or on the server, or holds edits that were never committed; without it the REPL asks before discarding such content and MCP refuses; teregen itself still refuses on a verdict or testers
 
   -h, --help
           Print help
