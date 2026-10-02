@@ -81,10 +81,12 @@ report schema as you edit it, and `Ctrl-S` re-checks the whole document; a refus
 leaves the editor open on the offending field.
 
 A save marks the document as edited but not uploaded — `commit` uploads it, and
-`unload`/`regenerate` refuse to drop it without `--discard-authored`. Run `export`
-before editing: it rewrites the `testing.install` and `testing.regression` blocks and
-would replace what the editor wrote there. The editor needs a terminal on both stdin
-and stdout.
+`unload`/`regenerate` refuse to drop it without `--discard-authored`. `regenerate` also
+looks at the server's copy: in the REPL it asks before discarding tester content found
+there or in the loaded document, and over MCP it refuses. `export` keeps the verdicts
+and comments you entered under `testing.install` and `testing.regression`; it rewrites
+only the install checks and the kernel results block inside the regression comment. The
+editor needs a terminal on both stdin and stdout.
 
 ## How do I export results into the testreport?
 

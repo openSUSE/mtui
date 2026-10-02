@@ -157,6 +157,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   hosts, and the kernel openQA results sit in a marked block inside the
   regression comment that each export rewrites in place, after any text the
   tester wrote.
+- `regenerate` also reads the server's copy of the report document before
+  wiping it. If the loaded document or the server's holds tester-authored
+  content (a verdict, comment, tester, reviewer name, issue answer, review
+  comment, or install/regression result), the REPL asks `[y/N]` (default no)
+  and MCP refuses; `--discard-authored` skips the check and the read. A `404`
+  or `409` from the server means there is nothing to lose; any other failure to
+  read it refuses, naming `--discard-authored`. **MCP schema note:**
+  `--discard-authored`'s description changed; no property was added or removed.
 - `regenerate`'s guard (`--discard-authored`) also refuses over document edits
   that were never committed, including `testing.openqa`-only authoring and a
   loaded-but-inactive RRID; one flag lifts both checks.
