@@ -29,6 +29,9 @@ referenece = "referenece"
 # SUSE product name: SLE-HAE (High Availability Extension), e.g. "SLE-HAE",
 # "sle-hae" in product-normalisation code and its tests.
 hae = "hae"
+# The `ratatui` terminal-UI crate (the report-document editor's screen), which
+# the dictionary reads as "ratatouille".
+ratatui = "ratatui"
 # The Python `certifi` CA-bundle package, referenced by name in a doc comment
 # and in the retained Python-era CHANGELOG history.
 certifi = "certifi"
