@@ -92,8 +92,7 @@ fn authoring_onto_a_real_document_leaves_update_install_issues_byte_equal() {
     }
 }
 
-const SCHEMA_JSON: &str =
-    include_str!("../../mtui-types/tests/fixtures/document/report-template-v1.json");
+use mtui_types::report_document::SCHEMA_JSON;
 const SCHEMA_LOC: &str = "https://qam.suse.de/schema/report-template-v1.json";
 
 /// A local copy of `mtui-types/tests/schema_conformance.rs`'s compiled

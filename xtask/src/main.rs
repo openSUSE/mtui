@@ -62,7 +62,7 @@ fn print_usage() {
          SCHEMA-CHECK:\n    \
          cargo xtask schema-check [--url <URL>]\n    \
          Read-only: GETs the live schema and compares it BY VALUE (not bytes)\n    \
-         against the committed crates/mtui-types/.../report-template-v1.json,\n    \
+         against the committed crates/mtui-types/schema/report-template-v1.json,\n    \
          printing the differing pointers and exiting non-zero on drift.\n    \
          Defaults to https://qam.suse.de/api/v2/schema.\n\n\
          TEREGEN-LOGIN:\n    \

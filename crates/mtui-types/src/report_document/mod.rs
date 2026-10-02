@@ -36,6 +36,10 @@
 //!   schema-**closed**: plain serde already drops an unknown key there, and it
 //!   is never re-emitted (re-emitting it would guarantee a `422`).
 
+/// The report document's JSON Schema (draft 2019-09), as served by
+/// `GET /api/v2/schema`.
+pub const SCHEMA_JSON: &str = include_str!("../../schema/report-template-v1.json");
+
 pub mod install;
 pub mod issues;
 pub mod review;

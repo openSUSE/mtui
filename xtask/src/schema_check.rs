@@ -16,10 +16,9 @@ use serde_json::Value;
 /// The default live schema endpoint.
 pub const DEFAULT_SCHEMA_URL: &str = "https://qam.suse.de/api/v2/schema";
 
-/// The schema copy this repo commits, mirrored at
-/// `crates/mtui-types/tests/fixtures/document/report-template-v1.json`.
-const COMMITTED_SCHEMA: &str =
-    include_str!("../../crates/mtui-types/tests/fixtures/document/report-template-v1.json");
+/// The schema copy this repo commits, at
+/// `crates/mtui-types/schema/report-template-v1.json`.
+const COMMITTED_SCHEMA: &str = mtui_types::report_document::SCHEMA_JSON;
 
 /// Fetch `url` and compare it against the committed schema copy, printing the
 /// differing pointers and exiting non-zero on drift.

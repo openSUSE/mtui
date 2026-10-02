@@ -126,7 +126,7 @@ fn minimal_document() -> ReportDocument {
 
 /// The committed schema, parsed once for the key-set walk.
 fn schema() -> Value {
-    serde_json::from_str(include_str!("fixtures/document/report-template-v1.json")).unwrap()
+    serde_json::from_str(mtui_types::report_document::SCHEMA_JSON).unwrap()
 }
 
 /// Resolve a `$ref` (e.g. `#/$defs/people`) against `root`; returns `schema`
