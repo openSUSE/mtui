@@ -175,8 +175,15 @@ pub struct ReportDocument {
 impl ReportDocument {
     /// `true` when this document already carries tester-authored content:
     /// a non-null `verdict`/`comment`, any entry in `people.testers`, a
-    /// `testing.install` block, or a `testing.regression` with a non-null
-    /// `verdict`/`comment`.
+    /// non-null `people.reviewer.name`, an `issues.*` entry with a
+    /// non-null `reproducer`/`status`/`comment`, a `testing.install` block, a
+    /// `testing.regression` with a non-null `verdict`/`comment`, or a
+    /// non-null `review.source.comment`/`review.build_log.comment`.
+    ///
+    /// The leaf list follows the editable set in `mtui-tui` (which this crate
+    /// cannot depend on), minus what `export` writes and minus the `review`
+    /// yes/no answers: the pipeline pre-fills those in generated documents, so
+    /// a set one is not evidence of tester input.
     ///
     /// `testing.openqa` is deliberately excluded: the pipeline pre-fills it in
     /// every freshly generated document, so its presence is not evidence of
@@ -187,12 +194,21 @@ impl ReportDocument {
         self.verdict.is_some()
             || self.comment.is_some()
             || !self.people.testers.is_empty()
+            || self.people.reviewer.name.is_some()
+            || self
+                .issues
+                .values()
+                .any(|i| i.reproducer.is_some() || i.status.is_some() || i.comment.is_some())
             || self.testing.install.is_some()
             || self
                 .testing
                 .regression
                 .as_ref()
                 .is_some_and(|r| r.verdict.is_some() || r.comment.is_some())
+            || self
+                .review
+                .as_ref()
+                .is_some_and(|r| r.source.comment.is_some() || r.build_log.comment.is_some())
     }
 }
 
@@ -679,6 +695,94 @@ mod tests {
              \"comment\": \"note\"}}",
         );
         assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    fn with_issue_leaf(leaf: &str, value: &str) -> String {
+        let field = |k: &str| if k == leaf { value } else { "null" };
+        bare_document("x").replace(
+            "\"issues\": {}",
+            &format!(
+                "\"issues\": {{\"bsc#1\": {{\"title\": \"t\", \"reproducer\": {}, \
+                 \"status\": {}, \"comment\": {}}}}}",
+                field("reproducer"),
+                field("status"),
+                field("comment"),
+            ),
+        )
+    }
+
+    fn with_review_leaf(leaf: &str, value: &str) -> String {
+        let v = |k: &str| if k == leaf { value } else { "null" };
+        let review = format!(
+            "\"testing\": {{}}, \"review\": {{\"source\": {{\
+             \"new_version_or_package\": {}, \"all_tracked_issues_documented\": {}, \
+             \"untracked_changes\": {}, \"comment\": {}}}, \"build_log\": {{\
+             \"test_suite_present\": {}, \"test_suite_sufficient\": {}, \
+             \"test_suite_passed\": {}, \"comment\": {}}}}}",
+            v("new_version_or_package"),
+            v("all_tracked_issues_documented"),
+            v("untracked_changes"),
+            v("source_comment"),
+            v("test_suite_present"),
+            v("test_suite_sufficient"),
+            v("test_suite_passed"),
+            v("build_log_comment"),
+        );
+        bare_document("x").replace("\"testing\": {}", &review)
+    }
+
+    #[test]
+    fn has_tester_content_false_for_a_review_and_issue_with_every_leaf_null() {
+        let raw = with_review_leaf("", "null");
+        assert!(!raw.parse::<ReportDocument>().unwrap().has_tester_content());
+        let raw = with_issue_leaf("", "null");
+        assert!(!raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_a_reviewer_name() {
+        let raw = bare_document("x").replace(
+            "\"reviewer\": {\"name\": null}",
+            "\"reviewer\": {\"name\": \"alice\"}",
+        );
+        assert!(raw.parse::<ReportDocument>().unwrap().has_tester_content());
+    }
+
+    #[test]
+    fn has_tester_content_true_for_each_issue_leaf() {
+        for (leaf, value) in [
+            ("reproducer", "true"),
+            ("status", "\"FIXED\""),
+            ("comment", "\"note\""),
+        ] {
+            let doc: ReportDocument = with_issue_leaf(leaf, value).parse().unwrap();
+            assert!(doc.has_tester_content(), "issue {leaf}");
+        }
+    }
+
+    #[test]
+    fn has_tester_content_true_for_each_review_comment() {
+        for leaf in ["source_comment", "build_log_comment"] {
+            let doc: ReportDocument = with_review_leaf(leaf, "\"note\"").parse().unwrap();
+            assert!(doc.has_tester_content(), "review {leaf}");
+        }
+    }
+
+    /// The pipeline pre-fills these answers in generated documents, so a set
+    /// one must not read as tester input.
+    #[test]
+    fn has_tester_content_false_for_the_pipeline_filled_review_answers() {
+        for leaf in [
+            "new_version_or_package",
+            "all_tracked_issues_documented",
+            "untracked_changes",
+            "test_suite_present",
+            "test_suite_sufficient",
+            "test_suite_passed",
+        ] {
+            let doc: ReportDocument = with_review_leaf(leaf, "true").parse().unwrap();
+            assert!(!doc.has_tester_content(), "review {leaf}");
+        }
     }
 
     /// `testing.openqa` alone is never evidence of tester content — the
