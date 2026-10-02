@@ -18,7 +18,7 @@ pub mod overview;
 use std::collections::BTreeMap;
 
 use mtui_types::report_document::{
-    Openqa, OpenqaInstall, Regression, ReportDocument, TesterEntry, TestingInstall,
+    Openqa, OpenqaInstall, Regression, ReportDocument, Req, TesterEntry, TestingInstall,
 };
 use serde_json::Value;
 
@@ -31,6 +31,11 @@ use serde_json::Value;
 /// in the legacy log) with no exporter-computed source, the same reasoning
 /// that already leaves `TestingInstall`/`Regression`'s own `verdict`/
 /// `comment` unset.
+///
+/// `testing.install` and `testing.regression` merge into what the document
+/// already holds rather than replacing it: the tester's verdicts and
+/// comments survive, the install checks are replaced wholesale, and the
+/// kernel matrix is spliced into the regression comment as a marked block.
 ///
 /// Returns the top-level pointers actually touched, so a caller can report
 /// what changed — `people.testers` is only included when a tester was
@@ -45,7 +50,7 @@ pub fn author_document(
 ) -> Vec<&'static str> {
     let mut touched = Vec::new();
     if let Some(install) = install {
-        document.testing.install = Some(install);
+        document.testing.install = Some(merge_install(document.testing.install.take(), install));
         touched.push("testing.install");
     }
     if openqa_install.is_some() || !openqa_extra.is_empty() {
@@ -57,7 +62,10 @@ pub fn author_document(
         touched.push("testing.openqa");
     }
     if let Some(regression) = regression {
-        document.testing.regression = Some(regression);
+        document.testing.regression = Some(merge_regression(
+            document.testing.regression.take(),
+            regression,
+        ));
         touched.push("testing.regression");
     }
     if let Some(tester) = tester
@@ -69,12 +77,38 @@ pub fn author_document(
     touched
 }
 
+fn merge_install(existing: Option<TestingInstall>, new: TestingInstall) -> TestingInstall {
+    match existing {
+        Some(old) => TestingInstall {
+            verdict: old.verdict,
+            checks: new.checks,
+            comment: old.comment,
+        },
+        None => new,
+    }
+}
+
+fn merge_regression(existing: Option<Regression>, new: Regression) -> Regression {
+    let Some(old) = existing else {
+        return new;
+    };
+    let comment = match new.comment.into_inner() {
+        Some(block) => Req(Some(kernel::splice_block(old.comment.as_deref(), &block))),
+        None => old.comment,
+    };
+    Regression {
+        verdict: old.verdict,
+        comment,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use mtui_types::report_document::{
-        Install, Issues, OpenqaVerdict, People, Req, Reviewer, Testing, Update, Verdict,
+        Install, InstallCheck, Issues, OpenqaVerdict, People, Reviewer, TargetRef, Testing, Update,
+        Verdict,
     };
 
     use super::*;
@@ -146,8 +180,37 @@ mod tests {
     fn regression() -> Regression {
         Regression {
             verdict: Req(None),
-            comment: Req(Some("regression notes".to_owned())),
+            comment: Req(Some(kernel::wrap_block("regression notes"))),
         }
+    }
+
+    fn check(refhost: &str, verdict: Option<Verdict>) -> InstallCheck {
+        InstallCheck {
+            target: TargetRef {
+                product: "SLES".to_owned(),
+                version: "15.5".to_owned(),
+                arch: "x86_64".to_owned(),
+            },
+            refhost: refhost.to_owned(),
+            verdict: Req(verdict),
+            before: BTreeMap::new(),
+            after: BTreeMap::new(),
+        }
+    }
+
+    fn author_install_and_regression(
+        doc: &mut ReportDocument,
+        install: TestingInstall,
+        regression: Regression,
+    ) {
+        author_document(
+            doc,
+            Some(install),
+            None,
+            Some(regression),
+            BTreeMap::new(),
+            None,
+        );
     }
 
     #[test]
@@ -218,9 +281,109 @@ mod tests {
         );
         assert_eq!(
             doc.testing.regression.unwrap().comment.into_inner(),
-            Some("regression notes".to_owned())
+            Some(kernel::wrap_block("regression notes"))
         );
         assert_eq!(touched, ["testing.regression"]);
+    }
+
+    #[test]
+    fn the_testers_install_verdict_and_comment_survive_authoring() {
+        let mut doc = empty_document();
+        doc.testing.install = Some(TestingInstall {
+            verdict: Req(Some(Verdict::Failed)),
+            checks: Vec::new(),
+            comment: Req(Some("h1: broke on reboot".to_owned())),
+        });
+        author_install_and_regression(&mut doc, install_checks(), regression());
+        let install = doc.testing.install.unwrap();
+        assert_eq!(*install.verdict, Some(Verdict::Failed));
+        assert_eq!(
+            install.comment.into_inner(),
+            Some("h1: broke on reboot".to_owned())
+        );
+    }
+
+    #[test]
+    fn install_checks_are_replaced_wholesale() {
+        let mut doc = empty_document();
+        doc.testing.install = Some(TestingInstall {
+            verdict: Req(None),
+            checks: vec![
+                check("gone", Some(Verdict::Passed)),
+                check("kept", Some(Verdict::Passed)),
+            ],
+            comment: Req(None),
+        });
+        let new = TestingInstall {
+            verdict: Req(None),
+            checks: vec![check("kept", Some(Verdict::Failed))],
+            comment: Req(None),
+        };
+        author_install_and_regression(&mut doc, new, regression());
+        let checks = doc.testing.install.unwrap().checks;
+        assert_eq!(checks.len(), 1, "the disconnected host's check is dropped");
+        assert_eq!(checks[0].refhost, "kept");
+        assert_eq!(
+            *checks[0].verdict,
+            Some(Verdict::Failed),
+            "export wins over the tester's PASSED"
+        );
+    }
+
+    #[test]
+    fn the_testers_regression_verdict_and_text_survive_authoring() {
+        let mut doc = empty_document();
+        doc.testing.regression = Some(Regression {
+            verdict: Req(Some(Verdict::Passed)),
+            comment: Req(Some("looks fine".to_owned())),
+        });
+        author_install_and_regression(&mut doc, install_checks(), regression());
+        let regression = doc.testing.regression.unwrap();
+        assert_eq!(*regression.verdict, Some(Verdict::Passed));
+        assert_eq!(
+            regression.comment.into_inner(),
+            Some(format!(
+                "looks fine\n\n{}",
+                kernel::wrap_block("regression notes")
+            ))
+        );
+    }
+
+    #[test]
+    fn a_null_regression_comment_becomes_just_the_block() {
+        let mut doc = empty_document();
+        doc.testing.regression = Some(Regression {
+            verdict: Req(Some(Verdict::Failed)),
+            comment: Req(None),
+        });
+        author_install_and_regression(&mut doc, install_checks(), regression());
+        let regression = doc.testing.regression.unwrap();
+        assert_eq!(*regression.verdict, Some(Verdict::Failed));
+        assert_eq!(
+            regression.comment.into_inner(),
+            Some(kernel::wrap_block("regression notes"))
+        );
+    }
+
+    #[test]
+    fn re_export_keeps_exactly_one_kernel_block() {
+        let mut doc = empty_document();
+        doc.testing.regression = Some(Regression {
+            verdict: Req(None),
+            comment: Req(Some("looks fine".to_owned())),
+        });
+        for _ in 0..2 {
+            author_install_and_regression(&mut doc, install_checks(), regression());
+        }
+        let comment = doc
+            .testing
+            .regression
+            .unwrap()
+            .comment
+            .into_inner()
+            .unwrap();
+        assert_eq!(comment.matches("rewritten by every export").count(), 1);
+        assert!(comment.starts_with("looks fine"));
     }
 
     #[test]

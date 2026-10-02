@@ -151,6 +151,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Re-running `export` on a loaded report document keeps the tester's
+  `testing.install` and `testing.regression` verdicts and comments instead of
+  replacing them. The install checks are still rewritten from the connected
+  hosts, and the kernel openQA results sit in a marked block inside the
+  regression comment that each export rewrites in place, after any text the
+  tester wrote.
 - `regenerate`'s guard (`--discard-authored`) also refuses over document edits
   that were never committed, including `testing.openqa`-only authoring and a
   loaded-but-inactive RRID; one flag lifts both checks.
