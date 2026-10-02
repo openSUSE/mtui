@@ -30,8 +30,7 @@ fn pair_dir(rrid: &str) -> std::path::PathBuf {
         .join(rrid)
 }
 
-const SCHEMA_JSON: &str =
-    include_str!("../../mtui-types/tests/fixtures/document/report-template-v1.json");
+use mtui_types::report_document::SCHEMA_JSON;
 const SCHEMA_LOC: &str = "https://qam.suse.de/schema/report-template-v1.json";
 
 static COMPILED: LazyLock<(Schemas, SchemaIndex)> = LazyLock::new(|| {

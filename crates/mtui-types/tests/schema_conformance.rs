@@ -17,7 +17,7 @@ use serde_json::Value;
 /// (the live form is Mojo::JSON's compact, key-sorted canonical encoding;
 /// this copy is pretty-printed for readability) — see `cargo xtask
 /// schema-check`, which compares the two by value rather than by bytes.
-const SCHEMA_JSON: &str = include_str!("fixtures/document/report-template-v1.json");
+use mtui_types::report_document::SCHEMA_JSON;
 
 /// A fake `loc` URL for `add_resource`/`compile`: only used as a compiler-side
 /// key, never dereferenced over the network.
