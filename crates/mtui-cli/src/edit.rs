@@ -1,4 +1,5 @@
-//! The `edit` REPL command and its `$EDITOR` spawn.
+//! The `edit` REPL command: the report-document editor when a document is
+//! loaded, `$EDITOR` otherwise.
 //!
 //! Spawning `$EDITOR` (default `vim`) inherits the process stdio, so the child
 //! needs the controlling terminal only the `mtui` binary owns. `mtui-core`'s
@@ -26,6 +27,38 @@ pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
     (name == "edit").then(|| argv.to_vec())
 }
 
+/// What `edit` opens.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EditTarget {
+    /// The full-screen editor over the active report's document.
+    Form,
+    /// A file in `$EDITOR`.
+    File(PathBuf),
+}
+
+/// Routes `edit`: an explicit `filename` is a file, and with none the document
+/// editor when the active report holds a document, else the report's template
+/// path.
+///
+/// # Errors
+///
+/// As [`resolve_path`], when it falls through to the template path.
+pub(crate) fn edit_target(
+    session: &Session,
+    filename: Option<&String>,
+) -> anyhow::Result<EditTarget> {
+    let has_document = || {
+        let rrid = session.templates.active_rrid()?;
+        session
+            .with_report(rrid, |report| report.base().document.is_some())
+            .ok()
+    };
+    if filename.is_none() && has_document() == Some(true) {
+        return Ok(EditTarget::Form);
+    }
+    resolve_path(session, filename).map(EditTarget::File)
+}
+
 /// Resolves the edit target: the explicit `filename` argument, or — when none is
 /// given — the active report's template path.
 ///
@@ -45,8 +78,9 @@ fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("Metadata not loaded, please use load_template first"))
 }
 
-/// Runs the `edit` command: parse the optional `filename`, resolve the path,
-/// then spawn `$EDITOR` (default `vim`) on it with inherited stdio.
+/// Runs the `edit` command: parse the optional `filename`, then either open the
+/// document editor or resolve the path and spawn `$EDITOR` (default `vim`) on
+/// it with inherited stdio.
 ///
 /// `$EDITOR` reaches `Command::new` unsplit, so `$EDITOR="code -w"` is one
 /// program name — deliberate, not an oversight.
@@ -60,13 +94,16 @@ pub(crate) fn run_edit(session: &mut Session, argv: &[String]) -> anyhow::Result
         Arg::new("filename")
             .num_args(0..=1)
             .value_name("FILENAME")
-            .help("File to edit (defaults to the active template)"),
+            .help("File to edit (defaults to the report document, or the active template)"),
     );
     let matches = parser
         .try_get_matches_from(argv)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let path = resolve_path(session, matches.get_one::<String>("filename"))?;
+    let path = match edit_target(session, matches.get_one::<String>("filename"))? {
+        EditTarget::Form => return crate::tui_edit::edit_document(session),
+        EditTarget::File(path) => path,
+    };
 
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
     tracing::debug!(editor, path = %path.display(), "spawning editor");
@@ -122,6 +159,68 @@ mod tests {
         assert_eq!(is_edit_line("run uname -a"), None);
         assert_eq!(is_edit_line(""), None);
         assert_eq!(is_edit_line("edit \"unbalanced"), None);
+    }
+
+    /// A session whose active report holds `document` (or none) and, when
+    /// given, a template `path`.
+    fn session_with_report(document: bool, path: Option<&str>) -> Session {
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::report_document::ReportDocument;
+
+        const RRID: &str = "SUSE:Maintenance:1:1";
+        let mut session = empty_session();
+        let mut report = ObsReport::new(session.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(RRID).unwrap());
+        report.base_mut().path = path.map(PathBuf::from);
+        if document {
+            report.base_mut().document = Some(
+                include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json")
+                    .parse::<ReportDocument>()
+                    .unwrap(),
+            );
+        }
+        session.templates.add(Box::new(report));
+        session.templates.set_active(RRID);
+        let _ = session.activate(RRID);
+        session
+    }
+
+    #[test]
+    fn a_loaded_document_with_no_argument_opens_the_editor() {
+        let session = session_with_report(true, Some("/tmp/x/log"));
+
+        assert_eq!(edit_target(&session, None).unwrap(), EditTarget::Form);
+    }
+
+    #[test]
+    fn a_report_without_a_document_opens_its_log() {
+        let session = session_with_report(false, Some("/tmp/x/log"));
+
+        assert_eq!(
+            edit_target(&session, None).unwrap(),
+            EditTarget::File(PathBuf::from("/tmp/x/log"))
+        );
+    }
+
+    #[test]
+    fn an_explicit_file_wins_over_a_loaded_document() {
+        let session = session_with_report(true, Some("/tmp/x/log"));
+        let arg = "notes.txt".to_owned();
+
+        assert_eq!(
+            edit_target(&session, Some(&arg)).unwrap(),
+            EditTarget::File(PathBuf::from("notes.txt"))
+        );
+    }
+
+    #[test]
+    fn nothing_loaded_and_no_argument_is_still_an_error() {
+        let session = empty_session();
+
+        let err = edit_target(&session, None).unwrap_err();
+
+        assert!(err.to_string().contains("Metadata not loaded"));
     }
 
     #[test]

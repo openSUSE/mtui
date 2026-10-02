@@ -32,6 +32,10 @@ nu-ansi-term.workspace = true
 # Level-token coloring in the custom tracing format layer, matching
 # the escapes `mtui-core`'s display uses for the `error` token.
 owo-colors.workspace = true
+# The report-document editor's form model and screen; this crate owns only the
+# terminal handover around it.
+mtui-tui.workspace = true
+ratatui.workspace = true
 # `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
 mtui-types.workspace = true
 # `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the

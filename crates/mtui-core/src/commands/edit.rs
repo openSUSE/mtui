@@ -8,10 +8,10 @@ use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Edits the active testing template or a local file in `$EDITOR`.
+/// Opens the report-document editor when the active report holds a document, and
+/// otherwise edits the active testing template or a local file in `$EDITOR`.
 ///
-/// Spawning `$EDITOR` (default `vim`) needs the local TTY, which only the `mtui`
-/// binary owns. Only the surface (name, optional `filename`, file-path
+/// Both need the local TTY, which only the `mtui` binary owns. Only the surface (name, optional `filename`, file-path
 /// completion) is defined here, so the registry and MCP synthesiser see it; the
 /// spawn is intercepted in `crates/mtui-cli/src/edit.rs`, like `shell`'s, and
 /// headless it errors cleanly rather than hanging. REPL-only, on the MCP
@@ -25,7 +25,7 @@ impl Command for Edit {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Edit the active testing template or a local file in $EDITOR.")
+        Some("Edit the loaded report document, or the active template or a local file in $EDITOR.")
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -33,7 +33,7 @@ impl Command for Edit {
             Arg::new("filename")
                 .num_args(0..=1)
                 .value_name("FILENAME")
-                .help("File to edit (defaults to the active template)"),
+                .help("File to edit (defaults to the report document, or the active template)"),
         )
     }
 

@@ -15,6 +15,7 @@ pub mod prompt;
 pub mod repl;
 pub mod shell;
 pub mod startup;
+pub(crate) mod tui_edit;
 
 pub use notification::notify_user;
 pub use prompt::MtuiPrompt;

@@ -10,6 +10,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `edit` with no argument opens a full-screen editor over the loaded report
+  document (a form per section, checked against the report schema as you type;
+  `Ctrl-S` saves, `q`/`Ctrl-C` quits). Saving marks the document edited but not
+  uploaded, so `commit` uploads it and `unload`/`regenerate` guard it. The
+  `update` and `install` sections are read-only, as are the fields the pipeline
+  or `export` fills in. `edit FILE`, and `edit` on a report without a document,
+  still open `$EDITOR`. REPL only; MCP clients keep the `report_*` tools.
 - `export` now reports which report document sections it updated (e.g.
   `document: testing.install, people.testers updated`), printed after the
   "template exported to" line so both the REPL and MCP result surface it.

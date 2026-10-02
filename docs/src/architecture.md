@@ -20,7 +20,8 @@ higher ones; `mtui-core` is the composition root that wires everything together.
 | `mtui-testreport` | Testreport lifecycle, metadata parsers, SVN/Gitea checkout, and the update workflow (actions/checks/export). |
 | `mtui-core` | The `Command` trait + registry, `Session`, the dispatch engine, and the wiring that ties the crates together. |
 | `mtui` (root) | Facade package owning `src/bin/{mtui,mtui-mcp}.rs` behind the `cli`/`mcp` features; its integration tests are in `tests/it.rs`. |
-| `mtui-cli` | The reedline REPL library. |
+| `mtui-tui` | The report-document editor: a walker over the report JSON Schema, the form model built on it, and the ratatui screen. Pure and sync; depends only on `mtui-types`, so neither the MCP server nor a `--no-default-features` build compiles ratatui. |
+| `mtui-cli` | The reedline REPL library, including the terminal handover around the `mtui-tui` editor. |
 | `mtui-mcp` | The rmcp server library. |
 
 ## The command registry is the single source of truth
