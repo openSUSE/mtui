@@ -82,6 +82,15 @@ impl KindCounts {
         }
     }
 
+    fn add(&mut self, other: &Self) {
+        self.ok_200 += other.ok_200;
+        self.not_found_404 += other.not_found_404;
+        self.stale_409 += other.stale_409;
+        self.generating_503 += other.generating_503;
+        self.server_error_500 += other.server_error_500;
+        self.other += other.other;
+    }
+
     fn total(&self) -> u32 {
         self.ok_200
             + self.not_found_404
@@ -112,8 +121,12 @@ impl SurveyReport {
         self.by_kind.entry(kind).or_default().record(status);
     }
 
-    fn total(&self) -> u32 {
-        self.by_kind.values().map(KindCounts::total).sum()
+    fn sums(&self) -> KindCounts {
+        let mut sums = KindCounts::default();
+        for counts in self.by_kind.values() {
+            sums.add(counts);
+        }
+        sums
     }
 }
 
@@ -125,21 +138,26 @@ impl fmt::Display for SurveyReport {
             "kind", "200", "404", "409-stale", "503-gen", "500", "other", "total"
         )?;
         for (kind, counts) in &self.by_kind {
-            writeln!(
-                f,
-                "{:<12} {:>6} {:>6} {:>9} {:>10} {:>6} {:>6} {:>7}",
-                kind,
-                counts.ok_200,
-                counts.not_found_404,
-                counts.stale_409,
-                counts.generating_503,
-                counts.server_error_500,
-                counts.other,
-                counts.total()
-            )?;
+            write_row(f, kind, counts)?;
+            writeln!(f)?;
         }
-        write!(f, "{:<12} {:>48} {:>7}", "TOTAL", "", self.total())
+        write_row(f, "TOTAL", &self.sums())
     }
+}
+
+fn write_row(f: &mut fmt::Formatter<'_>, label: &str, counts: &KindCounts) -> fmt::Result {
+    write!(
+        f,
+        "{:<12} {:>6} {:>6} {:>9} {:>10} {:>6} {:>6} {:>7}",
+        label,
+        counts.ok_200,
+        counts.not_found_404,
+        counts.stale_409,
+        counts.generating_503,
+        counts.server_error_500,
+        counts.other,
+        counts.total()
+    )
 }
 
 /// Run the survey against `v1_base`/`v2_base` and print the report to stdout.
@@ -218,7 +236,7 @@ mod tests {
         report.record("SUSE:PI:16.0:4", &ok());
         report.record("not-an-rrid", &ok());
 
-        assert_eq!(report.total(), 4);
+        assert_eq!(report.sums().total(), 4);
         assert_eq!(report.by_kind["Maintenance"].total(), 1);
         assert_eq!(report.by_kind["SLFO"].total(), 1);
         assert_eq!(report.by_kind["PI"].total(), 1);
@@ -229,7 +247,7 @@ mod tests {
     fn unparseable_id_buckets_as_unknown_not_dropped() {
         let mut report = SurveyReport::default();
         report.record("garbage", &ok());
-        assert_eq!(report.total(), 1);
+        assert_eq!(report.sums().total(), 1);
         assert_eq!(report.by_kind["unknown"].ok_200, 1);
     }
 
@@ -241,6 +259,28 @@ mod tests {
         }
         let rendered = report.to_string();
         assert!(rendered.contains("Maintenance"));
-        assert!(rendered.contains(&report.total().to_string()));
+        assert!(rendered.contains(&report.sums().total().to_string()));
+    }
+
+    #[test]
+    fn total_row_sums_each_column() {
+        let mut report = SurveyReport::default();
+        report.record("SUSE:Maintenance:1:2", &ok());
+        report.record("SUSE:Maintenance:1:3", &ok());
+        report.record("SUSE:SLFO:1.2:3", &ok());
+        report
+            .by_kind
+            .entry("SLFO".to_owned())
+            .or_default()
+            .record(ReportStatus::NotFound404);
+
+        let rendered = report.to_string();
+        let total: Vec<&str> = rendered
+            .lines()
+            .last()
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        assert_eq!(total, ["TOTAL", "3", "1", "0", "0", "0", "0", "4"]);
     }
 }
