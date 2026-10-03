@@ -333,6 +333,12 @@ impl ManualExport {
         }
     }
 
+    /// Writes each host's install log without rendering or touching a
+    /// template, returning the filenames.
+    pub fn write_logs(&self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
+        self.get_logs(hosts, prompt)
+    }
+
     /// Runs the exporter.
     pub fn run(&mut self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
         self.install_results();
