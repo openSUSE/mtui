@@ -383,7 +383,8 @@ impl Command for OpenQAOverview {
     }
 }
 
-/// Injects the overview block into the loaded testreport `log`.
+/// Injects the overview block into the loaded testreport `log`, or, on the
+/// document path, authors it onto `testing.openqa.extra`.
 fn export_to_testreport(
     session: &mut Session,
     single_incidents: &[oqa::VersionResult],
@@ -391,6 +392,31 @@ fn export_to_testreport(
     build_checks: &[oqa::BuildCheckResult],
     no_aggregated: bool,
 ) -> CommandResult {
+    if session.metadata().base().document.is_some() {
+        let overview = oqa::OpenQAOverviewResult {
+            single_incidents: single_incidents.to_vec(),
+            aggregated_updates: aggregated.to_vec(),
+            build_checks: build_checks.to_vec(),
+            skip_aggregated: no_aggregated,
+        };
+        let base = session.metadata_mut().base_mut();
+        let touched = mtui_testreport::author_export(
+            &mut base.document,
+            None,
+            None,
+            &[],
+            Some(&overview),
+            None,
+        );
+        base.mark_document_authored(&touched);
+        let msg = if touched.is_empty() {
+            "nothing to export".to_owned()
+        } else {
+            "document: testing.openqa updated".to_owned()
+        };
+        session.display.println(&msg);
+        return Ok(());
+    }
     let Some(path) = session.metadata().base().path.clone() else {
         return Err(CommandError::Other(
             "No testreport path available; cannot export".to_owned(),
@@ -776,6 +802,36 @@ mod tests {
             "{}",
             buf.contents()
         );
+    }
+
+    /// On the document path the export never reads or creates the text `log`.
+    /// The authored `testing.openqa.extra` content is pinned in
+    /// `mtui-testreport`: `author_export` is a no-op here (this crate never
+    /// enables `api-ingest`), so the message is the only thing asserted on it.
+    #[tokio::test]
+    async fn export_on_the_document_path_never_touches_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let base = session.metadata_mut().base_mut();
+        base.path = Some(log.clone());
+        base.document = Some(
+            include_str!("../../../mtui-types/tests/fixtures/document/maintenance_obs.json")
+                .parse()
+                .unwrap(),
+        );
+        let rows = [oqa::VersionResult {
+            version: "15-SP6".to_owned(),
+            status: "passed".to_owned(),
+            ..Default::default()
+        }];
+
+        export_to_testreport(&mut session, &rows, &[], &[], false).unwrap();
+
+        assert!(!log.exists());
+        let out = buf.contents();
+        assert!(!out.contains("NOT exported"), "{out}");
+        assert!(!out.contains("written to"), "{out}");
     }
 
     // ------------------------------------------------------------ row budget
