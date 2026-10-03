@@ -341,6 +341,56 @@ async fn bad_request_detail_is_truncated_at_the_cap() {
     assert_eq!(detail.len(), 2048);
 }
 
+#[tokio::test]
+async fn fetch_schema_returns_the_served_json_and_sends_no_authorization() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"a": [1]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let schema = client(&server).fetch_schema().await.unwrap();
+
+    assert_eq!(schema, serde_json::json!({"a": [1]}));
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests[0].headers.get("authorization").is_none());
+}
+
+#[tokio::test]
+async fn fetch_schema_failures_are_transport_errors_or_too_large() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let err = client(&server).fetch_schema().await.unwrap_err();
+    assert!(matches!(err, TeregenV2Error::Transport(_)), "{err:?}");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+    let err = client(&server).fetch_schema().await.unwrap_err();
+    assert!(
+        matches!(&err, TeregenV2Error::Transport(m) if m.contains("malformed schema")),
+        "{err:?}"
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("x".repeat(MAX_API_BODY + 1)))
+        .mount(&server)
+        .await;
+    let err = client(&server).fetch_schema().await.unwrap_err();
+    assert!(matches!(err, TeregenV2Error::BodyTooLarge), "{err:?}");
+}
+
 fn artifacts_path(id: &str) -> String {
     format!("/reports/{id}/artifacts")
 }

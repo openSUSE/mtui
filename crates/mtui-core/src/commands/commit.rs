@@ -174,12 +174,18 @@ pub(crate) struct UploadSummary {
 
 /// Uploads the loaded document and every local artifact, printing the
 /// "document stored", per-artifact and "skipped" lines. A document failure is
-/// an `Err`; an artifact failure is only counted, so every artifact is still
-/// attempted.
+/// an `Err`, and so is a report schema that drifted from this build's, refused
+/// before anything is sent; an artifact failure is only counted, so every
+/// artifact is still attempted.
 pub(crate) async fn upload_and_report(
     session: &mut Session,
     client: &TeregenV2,
 ) -> Result<UploadSummary, CommandError> {
+    if let Some(drift) = &session.metadata().base().schema_drift {
+        return Err(CommandError::Other(format!(
+            "teregen's report schema differs from this mtui's ({drift}); upgrade mtui before writing"
+        )));
+    }
     let report_wd = session
         .metadata()
         .base()
@@ -489,6 +495,34 @@ mod tests {
             .filter(|r| r.url.path().contains("/artifacts/"))
             .count();
         assert_eq!(artifact_puts, 0, "a 412 must send no artifacts");
+    }
+
+    /// A schema that drifted from this build's refuses every write: no request
+    /// of any kind reaches teregen. Mutation caught: removing the guard sends
+    /// the document PUT.
+    #[tokio::test]
+    async fn document_path_schema_drift_sends_nothing() {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        let doc_id = "SUSE:Maintenance:1:1";
+        let (mut session, _buf) = session_with_hosts(doc_id, &["h1"], "ok");
+        let _tmp = set_bare_report_wd(&mut session);
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(minimal_document(doc_id));
+        base.document_etag = Some("\"x\"".to_owned());
+        base.schema_drift = Some("/properties/kind: \"a\" != \"b\"".to_owned());
+
+        let client = teregen_v2_client(&server, store_file);
+        let err = commit_document(&mut session, &client, false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("upgrade mtui") && m.contains("/properties/kind")),
+            "{err:?}"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

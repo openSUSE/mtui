@@ -43,6 +43,7 @@ pub const SCHEMA_JSON: &str = include_str!("../../schema/report-template-v1.json
 pub mod install;
 pub mod issues;
 pub mod review;
+pub mod schema_diff;
 pub mod sections;
 pub mod testing;
 pub mod update;
@@ -62,6 +63,7 @@ pub use review::{
     BuildLog, BuildLogResult, BuildResult, People, Review, ReviewSource, Reviewer, SlackRef,
     TesterEntry, Tristate,
 };
+pub use schema_diff::{schema_diffs, schema_drift};
 pub use sections::{
     Completeness, Section, SectionSummary, SectionWriteError, UnknownSectionError, null_pointers,
 };
