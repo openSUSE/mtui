@@ -7,12 +7,17 @@
 //! against application and surfaces review-relevant references.
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use clap::ArgMatches;
 use regex::Regex;
 use std::sync::LazyLock;
 
+use mtui_datasources::{Gitea, Osc};
+use mtui_types::enums::RequestKind;
+
+use super::apicall::{gitea_client, is_gitea_workflow, osc_client};
 use super::support::{complete_with_templates, page_output};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -147,16 +152,100 @@ fn archives(bodies: &[&[String]]) -> Vec<String> {
     names
 }
 
-/// Reads the loaded report's `source.diff`, or a clear error if unavailable.
-fn read_source_diff(session: &Session) -> Result<String, CommandError> {
+/// Fetches a request's source diff from its review backend.
+#[async_trait]
+trait SourceDiffFetcher: Send + Sync {
+    async fn fetch(&self) -> Result<String, CommandError>;
+}
+
+#[async_trait]
+impl SourceDiffFetcher for Osc {
+    async fn fetch(&self) -> Result<String, CommandError> {
+        self.request_diff()
+            .await
+            .map_err(|e| CommandError::Other(format!("could not fetch the source diff: {e}")))
+    }
+}
+
+#[async_trait]
+impl SourceDiffFetcher for Gitea {
+    async fn fetch(&self) -> Result<String, CommandError> {
+        self.pr_diff()
+            .await
+            .map_err(|e| CommandError::Other(format!("could not fetch the source diff: {e}")))
+    }
+}
+
+/// A fetcher that cannot fetch: the report has no diff source, or its client
+/// could not be built. Deferred to fetch time so a cached `source.diff` never
+/// needs a working client.
+struct Unavailable(String);
+
+#[async_trait]
+impl SourceDiffFetcher for Unavailable {
+    async fn fetch(&self) -> Result<String, CommandError> {
+        Err(CommandError::Other(self.0.clone()))
+    }
+}
+
+/// The fetcher for the loaded report's backend.
+fn live_fetcher(session: &Session) -> Box<dyn SourceDiffFetcher> {
+    let Some(rrid) = session.metadata().rrid().cloned() else {
+        return Box::new(Unavailable("no report loaded".to_owned()));
+    };
+    if rrid.kind == RequestKind::Pi {
+        return Box::new(Unavailable("no source diff for PI updates".to_owned()));
+    }
+    let fetcher: Result<Box<dyn SourceDiffFetcher>, CommandError> = if is_gitea_workflow(session) {
+        gitea_client(session).map(|c| Box::new(c) as _)
+    } else {
+        osc_client(session, &rrid).map(|c| Box::new(c) as _)
+    };
+    fetcher.unwrap_or_else(|e| Box::new(Unavailable(e.to_string())))
+}
+
+/// Resolves, up front so the async part holds no `&Session`: where the loaded
+/// report's `source.diff` lives, whether a missing file may be fetched (only a
+/// report loaded from a document has no checkout), and the fetcher to use.
+fn diff_source(
+    session: &Session,
+) -> Result<(PathBuf, bool, Box<dyn SourceDiffFetcher>), CommandError> {
     let wd = session
         .metadata()
         .base()
         .report_wd()
         .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
-    let path = wd.join("source.diff");
-    std::fs::read_to_string(&path)
-        .map_err(|e| CommandError::Other(format!("{}: {e}", path.display())))
+    Ok((
+        wd.join("source.diff"),
+        session.metadata().base().document.is_some(),
+        live_fetcher(session),
+    ))
+}
+
+/// The `source.diff` at `path`, or a clear error if unavailable.
+///
+/// A file there wins: it is the SVN checkout's copy, or an earlier fetch's
+/// cache. Only when `may_fetch` does a missing file fall back to `fetch`, whose
+/// result is then cached there.
+async fn source_diff(
+    path: &Path,
+    may_fetch: bool,
+    fetch: &dyn SourceDiffFetcher,
+) -> Result<String, CommandError> {
+    let read_err = match std::fs::read_to_string(path) {
+        Ok(text) => return Ok(text),
+        Err(e) => e,
+    };
+    if !may_fetch || read_err.kind() != std::io::ErrorKind::NotFound {
+        return Err(CommandError::Other(format!(
+            "{}: {read_err}",
+            path.display()
+        )));
+    }
+    let text = fetch.fetch().await?;
+    mtui_config::atomic::write(text.as_bytes(), path)
+        .map_err(|e| CommandError::Other(format!("{}: {e}", path.display())))?;
+    Ok(text)
 }
 
 /// Shows the raw OBS source diff.
@@ -181,7 +270,8 @@ impl Command for ShowDiff {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        let text = read_source_diff(session)?;
+        let (path, may_fetch, fetcher) = diff_source(session)?;
+        let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
         let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
         page_output(session, &lines).await;
         Ok(())
@@ -206,7 +296,8 @@ impl Command for AnalyzeDiff {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        let text = read_source_diff(session)?;
+        let (path, may_fetch, fetcher) = diff_source(session)?;
+        let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
         let sections = split_sections(&text);
 
         let spec_lines = flatten(&sections, "spec files");
@@ -592,5 +683,158 @@ spec files:
         assert!(out.contains("(not in changelog)"), "{out}");
         // Over-match guard: nothing here is a version bump.
         assert!(!out.contains("Version / macro changes:"), "{out}");
+    }
+
+    mod fetch {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use mtui_types::UpdateSource;
+
+        use super::*;
+
+        /// A fetcher that counts its calls, standing in for the review backend.
+        struct Counting {
+            calls: AtomicUsize,
+        }
+
+        impl Counting {
+            fn new() -> Self {
+                Self {
+                    calls: AtomicUsize::new(0),
+                }
+            }
+
+            fn calls(&self) -> usize {
+                self.calls.load(Ordering::SeqCst)
+            }
+        }
+
+        #[async_trait]
+        impl SourceDiffFetcher for Counting {
+            async fn fetch(&self) -> Result<String, CommandError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok("spec files:\n-----\n+Patch1: fix.patch\n".to_owned())
+            }
+        }
+
+        const DIFF: &str = "spec files:\n-----\n+Patch1: fix.patch\n";
+
+        #[tokio::test]
+        async fn a_missing_file_is_fetched_once_and_cached() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("source.diff");
+            let stub = Counting::new();
+
+            let first = source_diff(&path, true, &stub).await.unwrap();
+            let second = source_diff(&path, true, &stub).await.unwrap();
+
+            assert_eq!((first.as_str(), second.as_str()), (DIFF, DIFF));
+            assert_eq!(stub.calls(), 1);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), DIFF);
+        }
+
+        #[tokio::test]
+        async fn an_existing_file_is_read_without_fetching() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("source.diff");
+            std::fs::write(&path, "from the checkout\n").unwrap();
+            let stub = Counting::new();
+
+            assert_eq!(
+                source_diff(&path, true, &stub).await.unwrap(),
+                "from the checkout\n"
+            );
+            assert_eq!(
+                source_diff(&path, false, &stub).await.unwrap(),
+                "from the checkout\n"
+            );
+            assert_eq!(stub.calls(), 0);
+        }
+
+        /// Without a document there is no backend to ask: today's error stays.
+        #[tokio::test]
+        async fn a_missing_file_without_a_document_is_an_error_and_never_fetched() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("source.diff");
+            let stub = Counting::new();
+
+            let err = source_diff(&path, false, &stub).await.unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("source.diff")),
+                "{err:?}"
+            );
+            assert_eq!(stub.calls(), 0);
+            assert!(!path.exists());
+        }
+
+        fn document_session(id: &str) -> (Session, tempfile::TempDir) {
+            let (mut session, _buf) = session_with_hosts(id, &["h1"], "ok");
+            let dir = tempfile::tempdir().unwrap();
+            let base = session.metadata_mut().base_mut();
+            base.path = Some(dir.path().join("log"));
+            base.document = Some(
+                include_str!("../../../mtui-types/tests/fixtures/document/pi.json")
+                    .parse()
+                    .unwrap(),
+            );
+            (session, dir)
+        }
+
+        #[tokio::test]
+        async fn a_product_increment_has_no_source_diff() {
+            let (mut session, dir) = document_session("SUSE:PI:16.0:1");
+
+            let err = ShowDiff
+                .call(&mut session, &matches(&ShowDiff, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("no source diff for PI updates")),
+                "{err:?}"
+            );
+            assert!(!dir.path().join("source.diff").exists());
+        }
+
+        #[tokio::test]
+        async fn a_gitea_report_without_a_pr_url_names_the_missing_client() {
+            let (mut session, _dir) = document_session("SUSE:SLFO:1.2:7787");
+            session.metadata_mut().base_mut().update_source = UpdateSource::Git;
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("Gitea")),
+                "{err:?}"
+            );
+        }
+
+        /// A classic OBS document report goes to the OBS backend, which fails
+        /// here on the missing oscrc without touching the network.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
+        // the mutation of the process-global `$OSC_CONFIG` exclusive.
+        #[allow(unsafe_code)]
+        async fn an_obs_report_asks_the_obs_backend() {
+            let (mut session, dir) = document_session("SUSE:Maintenance:1:1");
+
+            // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+            unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+            let res = ShowDiff.call(&mut session, &matches(&ShowDiff, &[])).await;
+            // SAFETY: still inside that critical section.
+            unsafe { std::env::remove_var("OSC_CONFIG") };
+
+            let err = res.unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("could not fetch the source diff")),
+                "{err:?}"
+            );
+            assert!(!dir.path().join("source.diff").exists());
+        }
     }
 }
