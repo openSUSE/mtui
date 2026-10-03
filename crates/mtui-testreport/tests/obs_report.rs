@@ -60,6 +60,25 @@ fn update_repos_parser_parses_obs_project_xml() {
     assert_eq!(out[&product], "https://example.com/SLE-15-x86_64");
 }
 
+/// With a document loaded the update repos come from `install.targets[]`, not
+/// from a checkout: the report directory holds no `project.xml`.
+#[test]
+fn update_repos_parser_reads_the_document_when_there_is_no_project_xml() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc: mtui_types::report_document::ReportDocument =
+        include_str!("../../mtui-types/tests/fixtures/document/maintenance_addon.json")
+            .parse()
+            .unwrap();
+    let mut r = ObsReport::new(config());
+    r.base_mut().path = Some(dir.path().join("log"));
+    r.base_mut().document = Some(doc);
+
+    let out = r.update_repos_parser();
+    assert!(!dir.path().join("project.xml").exists());
+    assert_eq!(out.len(), 1);
+    assert!(out.values().all(|u| u.contains("SUSE_Updates_")));
+}
+
 /// When no report is loaded, `report_wd()` errors and `update_repos_parser`
 /// degrades to an empty map gracefully, like the sibling reports.
 #[test]

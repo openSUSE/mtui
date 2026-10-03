@@ -46,7 +46,7 @@ pub struct ProductParseError {
 ///
 /// A URL failing [`RepoUrl`] validation is dropped and logged at ERROR rather
 /// than trusted, keeping loading lenient.
-fn validated_url(url: String) -> Option<String> {
+pub(crate) fn validated_url(url: String) -> Option<String> {
     match RepoUrl::parse(&url) {
         Ok(_) => Some(url),
         Err(e) => {

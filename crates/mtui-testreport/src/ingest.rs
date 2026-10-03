@@ -15,6 +15,8 @@ use mtui_types::report_document::{
 use mtui_types::{RequestReviewID, SystemProduct};
 
 use crate::metadata_parsers::register;
+use crate::products::normalize;
+use crate::reports::repoparse::validated_url;
 use crate::testreport::{SlackReviewMarker, TestReportBase};
 
 /// Whether `composed`/`repositories` are populated for `doc`.
@@ -173,6 +175,24 @@ fn strip_arch_suffix(version_release_arch: &str) -> String {
 /// the call with [`should_compose`].
 fn repositories_set(targets: &[Target]) -> HashSet<String> {
     targets.iter().map(|t| t.repository.clone()).collect()
+}
+
+/// `install.targets[]` -> `SystemProduct -> update repository URL`: the
+/// document-side equivalent of `obsrepoparse`'s `project.xml` walk, for the
+/// classic OBS workflow. A target whose URL fails `RepoUrl` validation is dropped.
+///
+/// Deliberately independent of `should_compose`: this feeds `update_repos`
+/// only, never `repositories`/`composed`.
+#[must_use]
+pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> {
+    doc.install
+        .targets
+        .iter()
+        .filter_map(|t| {
+            let product = normalize(SystemProduct::new(&t.product, &t.version, &t.arch));
+            validated_url(t.repository.clone()).map(|url| (product, url))
+        })
+        .collect()
 }
 
 /// `install.targets[]` -> `SystemProduct -> the package names this update
@@ -406,6 +426,32 @@ mod tests {
         assert!(!should_compose(&doc(MAINTENANCE_OBS))); // obs, maintenance
         assert!(should_compose(&doc(SLFO_GITEA))); // gitea
         assert!(should_compose(&doc(PI))); // obs, but kind: pi
+    }
+
+    #[test]
+    fn obs_update_repos_normalizes_the_product_and_keeps_the_url() {
+        let d = doc(MAINTENANCE_ADDON);
+        let target = &d.install.targets[0];
+        let want = normalize(SystemProduct::new(
+            &target.product,
+            &target.version,
+            &target.arch,
+        ));
+        assert_ne!(want.name, target.product, "fixture must exercise normalize");
+        let repos = obs_update_repos(&d);
+        assert_eq!(repos[&want], target.repository);
+    }
+
+    #[test]
+    fn obs_update_repos_drops_only_a_target_with_an_invalid_url() {
+        let mut d = doc(MAINTENANCE_ADDON);
+        let mut bad = d.install.targets[0].clone();
+        bad.arch = "aarch64".to_owned();
+        bad.repository = "ftp://not allowed/$(x)".to_owned();
+        d.install.targets.push(bad);
+        let repos = obs_update_repos(&d);
+        assert_eq!(repos.len(), 1);
+        assert!(repos.keys().all(|p| p.arch == "x86_64"));
     }
 
     #[test]
