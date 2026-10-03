@@ -19,11 +19,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::teregen::TeregenV2;
 use mtui_datasources::{PostedMessage, Slack, SlackError, is_ack_reaction, is_nack_reaction};
 use mtui_testreport::{SlackReviewMarker, SvnRunner, TokioSvnRunner, svn_commit_testreport};
+use mtui_types::report_document::SlackRef;
 use tokio_util::sync::CancellationToken;
 
 use crate::command::{Command, Scope};
+use crate::commands::apicall::teregen_v2_writer;
+use crate::commands::commit::{RecordError, record_onto_document};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -223,7 +227,8 @@ async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline:
     }
 }
 
-/// Write the marker into the template and commit it to SVN — the commit matters
+/// Write the marker into the template and commit it to SVN (or, for a report
+/// loaded from a v2 document, upload it to teregen) — the commit matters
 /// because `approve` gates on the marker and the approver may be in a different
 /// checkout. Mirrors `approve`'s `record_reviewer` including its ordering: the
 /// in-memory field is set only once the write succeeded, so a caller treating
@@ -234,6 +239,11 @@ async fn record_marker(
     rrid: &str,
     runner: &dyn SvnRunner,
 ) -> Result<(), CommandError> {
+    if session.metadata().base().document.is_some() {
+        let client = teregen_v2_writer(session)?;
+        return record_marker_document(session, &client, marker).await;
+    }
+
     session
         .metadata_mut()
         .set_slack_review(marker)
@@ -252,6 +262,34 @@ async fn record_marker(
     svn_commit_testreport(runner, &checkout, &install_logs, &msg)
         .await
         .map_err(|e| CommandError::Other(format!("failed to commit the testreport: {e}")))
+}
+
+/// The document-path half of [`record_marker`]: set `people.reviewer.slack` on
+/// the document and upload it with the artifacts. The in-memory marker is set
+/// only once the upload succeeded.
+async fn record_marker_document(
+    session: &mut Session,
+    client: &TeregenV2,
+    marker: &SlackReviewMarker,
+) -> Result<(), CommandError> {
+    record_onto_document(session, client, &["people.reviewer"], |doc| {
+        doc.people.reviewer.slack = Some(SlackRef {
+            channel: marker.channel.clone(),
+            ts: marker.ts.clone(),
+        });
+    })
+    .await
+    .map_err(|e| match e {
+        RecordError::Upload(e) => {
+            CommandError::Other(format!("failed to record the marker on teregen: {e}"))
+        }
+        RecordError::ArtifactsFailed(n) => CommandError::Other(format!(
+            "{n} artifact upload(s) failed; the marker is stored on teregen, re-run \
+             request_review to retry the artifacts"
+        )),
+    })?;
+    session.metadata_mut().base_mut().slack_review = Some(marker.clone());
+    Ok(())
 }
 
 /// Requests review of the loaded update in Slack.
@@ -1004,5 +1042,111 @@ mod tests {
 
         let args = matches(&RequestReview, &[]);
         assert_eq!(resolve_channel(&session, &args).unwrap(), "#configured");
+    }
+
+    mod document_path {
+        use wiremock::matchers::{method, path as wpath};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use super::*;
+        use crate::commands::testkit::teregen::{
+            document_put_body, minimal_document, mount_auth_success, set_bare_report_wd,
+            store_path, teregen_v2_client,
+        };
+
+        const ID: &str = "SUSE:Maintenance:1:2";
+
+        fn marker() -> SlackReviewMarker {
+            SlackReviewMarker {
+                channel: CHANNEL.to_owned(),
+                ts: TS.to_owned(),
+            }
+        }
+
+        fn document_session() -> (Session, tempfile::TempDir) {
+            let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            let tmp = set_bare_report_wd(&mut session);
+            let base = session.metadata_mut().base_mut();
+            base.document = Some(minimal_document(ID));
+            base.document_etag = Some("\"stale\"".to_owned());
+            (session, tmp)
+        }
+
+        #[tokio::test]
+        async fn records_the_marker_on_the_document() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(serde_json::to_string(&minimal_document(ID)).unwrap()),
+                )
+                .mount(&server)
+                .await;
+            let (mut session, tmp) = document_session();
+            let client = teregen_v2_client(&server, store_file);
+
+            record_marker_document(&mut session, &client, &marker())
+                .await
+                .unwrap();
+
+            let body = document_put_body(&server, ID).await;
+            assert_eq!(
+                body.pointer("/people/reviewer/slack"),
+                Some(&json!({ "channel": CHANNEL, "ts": TS }))
+            );
+            assert_eq!(session.metadata().base().slack_review, Some(marker()));
+            assert!(!tmp.path().join("log").exists());
+        }
+
+        #[tokio::test]
+        async fn a_412_leaves_the_marker_unset() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(ResponseTemplate::new(412).set_body_json(json!({})))
+                .mount(&server)
+                .await;
+            let (mut session, _tmp) = document_session();
+            let before = session.metadata().base().document.clone();
+            let client = teregen_v2_client(&server, store_file);
+
+            record_marker_document(&mut session, &client, &marker())
+                .await
+                .unwrap_err();
+
+            let base = session.metadata().base();
+            assert_eq!(base.slack_review, None);
+            assert_eq!(base.document, before);
+        }
+
+        /// `record_marker` on a document report reaches the teregen writer (and so
+        /// fails on the missing oscrc) without running `svn`.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
+        // the mutation of the process-global `$OSC_CONFIG` exclusive.
+        #[allow(unsafe_code)]
+        async fn record_marker_routes_a_document_report_to_teregen_not_svn() {
+            let (mut session, _tmp) = document_session();
+            let svn = StubSvn::new(true);
+
+            // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+            unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+            let res = record_marker(&mut session, &marker(), ID, &svn).await;
+            // SAFETY: still inside that critical section.
+            unsafe { std::env::remove_var("OSC_CONFIG") };
+
+            let err = res.unwrap_err();
+            assert!(
+                err.to_string().contains("could not read oscrc credentials"),
+                "{err}"
+            );
+            assert!(svn.argv().is_empty(), "svn must not run");
+        }
     }
 }

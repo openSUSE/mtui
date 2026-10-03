@@ -2,11 +2,14 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::teregen::TeregenV2;
 use mtui_datasources::{Slack, is_ack_reaction};
 use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
+use mtui_types::report_document::Req;
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::{gitea_client, is_gitea_workflow, osc_client};
+use crate::commands::apicall::{gitea_client, is_gitea_workflow, osc_client, teregen_v2_writer};
+use crate::commands::commit::{RecordError, record_onto_document};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -15,7 +18,9 @@ use crate::session::Session;
 /// backend-API commands.
 ///
 /// With `-r/--reviewer` the reviewer is recorded and the template committed to
-/// SVN *before* the approval; either failing aborts it. On the Gitea path a
+/// SVN (for a report loaded from a v2 document: stored on the document and
+/// uploaded to teregen with the artifacts) *before* the approval; either
+/// failing aborts it. On the Gitea path a
 /// checkout-hash mismatch prompts for confirmation in the REPL (default no) and
 /// refuses non-interactively; a missing token or a failed call always refuses.
 /// Unlocks PI reference hosts afterwards.
@@ -230,14 +235,20 @@ async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
     }
 }
 
-/// Records the reviewer and commits the testreport to SVN. `Err` aborts the
-/// approval rather than swallowing the record/commit failure.
+/// Records the reviewer and commits the testreport to SVN (or, for a report
+/// loaded from a v2 document, uploads the document and artifacts to teregen).
+/// `Err` aborts the approval rather than swallowing the record/commit failure.
 async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(CommandError::Other(
             "reviewer must be a non-empty string; not approving".to_owned(),
         ));
+    }
+
+    if session.metadata().base().document.is_some() {
+        let client = teregen_v2_writer(session)?;
+        return record_reviewer_document(session, &client, name).await;
     }
 
     session.metadata_mut().set_reviewer(name).map_err(|e| {
@@ -259,6 +270,31 @@ async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), Comman
                 "failed to commit testreport to SVN, not approving: {e}"
             ))
         })?;
+    Ok(())
+}
+
+/// The document-path half of [`record_reviewer`]: set `people.reviewer.name` on
+/// the document and upload it with the artifacts, as `commit` does. The
+/// in-memory reviewer is set only once the upload succeeded.
+async fn record_reviewer_document(
+    session: &mut Session,
+    client: &TeregenV2,
+    name: &str,
+) -> Result<(), CommandError> {
+    record_onto_document(session, client, &["people.reviewer"], |doc| {
+        doc.people.reviewer.name = Req(Some(name.to_owned()));
+    })
+    .await
+    .map_err(|e| match e {
+        RecordError::Upload(e) => CommandError::Other(format!(
+            "failed to record reviewer on teregen, not approving: {e}"
+        )),
+        RecordError::ArtifactsFailed(n) => CommandError::Other(format!(
+            "{n} artifact upload(s) failed, not approving; the reviewer is already stored on \
+             teregen, re-run approve to retry the artifacts"
+        )),
+    })?;
+    session.metadata_mut().base_mut().reviewer = name.to_owned();
     Ok(())
 }
 
@@ -767,5 +803,161 @@ mod tests {
         let err = Approve.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("boom")));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    mod document_path {
+        use wiremock::matchers::{method, path as wpath};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use super::*;
+        use crate::commands::testkit::teregen::{
+            document_put_body, minimal_document, mount_auth_success, set_bare_report_wd,
+            store_path, teregen_v2_client,
+        };
+
+        const ID: &str = "SUSE:Maintenance:1:1";
+
+        fn stored_document(reviewer: &str) -> String {
+            let mut doc = minimal_document(ID);
+            doc.people.reviewer.name = Req(Some(reviewer.to_owned()));
+            serde_json::to_string(&doc).unwrap()
+        }
+
+        /// A document-loaded session whose report dir holds `install_logs/h1.log`.
+        fn session_with_artifact() -> (Session, tempfile::TempDir) {
+            let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            let tmp = set_bare_report_wd(&mut session);
+            std::fs::create_dir_all(tmp.path().join("install_logs")).unwrap();
+            std::fs::write(tmp.path().join("install_logs/h1.log"), b"log").unwrap();
+            let base = session.metadata_mut().base_mut();
+            base.document = Some(minimal_document(ID));
+            base.document_etag = Some("\"stale\"".to_owned());
+            (session, tmp)
+        }
+
+        async fn mount_artifact(server: &MockServer, status: u16, expected: u64) {
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}/artifacts/h1.log")))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(expected)
+                .mount(server)
+                .await;
+        }
+
+        #[tokio::test]
+        async fn records_the_reviewer_on_the_document_and_uploads_the_artifacts() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(stored_document("alice"))
+                        .insert_header("etag", "\"fresh\""),
+                )
+                .mount(&server)
+                .await;
+            mount_artifact(&server, 201, 1).await;
+            let (mut session, tmp) = session_with_artifact();
+            let client = teregen_v2_client(&server, store_file);
+
+            record_reviewer_document(&mut session, &client, "alice")
+                .await
+                .unwrap();
+
+            let body = document_put_body(&server, ID).await;
+            assert_eq!(body.pointer("/people/reviewer/name"), Some(&"alice".into()));
+            let base = session.metadata().base();
+            assert_eq!(base.reviewer, "alice");
+            assert!(!base.document_dirty);
+            assert!(!tmp.path().join("log").exists());
+        }
+
+        #[tokio::test]
+        async fn a_412_refuses_and_leaves_everything_as_it_was() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(ResponseTemplate::new(412).set_body_json(serde_json::json!({})))
+                .mount(&server)
+                .await;
+            mount_artifact(&server, 201, 0).await;
+            let (mut session, _tmp) = session_with_artifact();
+            let before = session.metadata().base().document.clone();
+            let client = teregen_v2_client(&server, store_file);
+
+            let err = record_reviewer_document(&mut session, &client, "alice")
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("not approving")),
+                "{err:?}"
+            );
+            let base = session.metadata().base();
+            assert_eq!(base.reviewer, "");
+            assert_eq!(base.document, before);
+            assert!(!base.document_dirty);
+        }
+
+        #[tokio::test]
+        async fn a_failed_artifact_refuses_but_the_document_is_already_stored() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(stored_document("alice"))
+                        .insert_header("etag", "\"fresh\""),
+                )
+                .mount(&server)
+                .await;
+            mount_artifact(&server, 500, 1).await;
+            let (mut session, _tmp) = session_with_artifact();
+            let client = teregen_v2_client(&server, store_file);
+
+            let err = record_reviewer_document(&mut session, &client, "alice")
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.contains("1 artifact") && m.contains("re-run approve")),
+                "{err:?}"
+            );
+            let base = session.metadata().base();
+            assert_eq!(base.reviewer, "");
+            assert_eq!(base.document_etag.as_deref(), Some("\"fresh\""));
+        }
+
+        /// `approve --reviewer` on a document report reaches the teregen writer
+        /// (and so fails on the missing oscrc) before any OBS call or `svn`.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
+        // the mutation of the process-global `$OSC_CONFIG` exclusive.
+        #[allow(unsafe_code)]
+        async fn the_call_routes_a_document_report_to_teregen_not_svn() {
+            let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            session.metadata_mut().base_mut().document = Some(minimal_document(ID));
+            let args = matches(&Approve, &["-r", "alice"]);
+
+            // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+            unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+            let res = Approve.call(&mut session, &args).await;
+            // SAFETY: still inside that critical section.
+            unsafe { std::env::remove_var("OSC_CONFIG") };
+
+            let err = res.unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("could not read oscrc credentials")),
+                "{err:?}"
+            );
+        }
     }
 }
