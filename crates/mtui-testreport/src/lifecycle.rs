@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 
 #[cfg(not(feature = "api-ingest"))]
 use crate::checkout::ReadOutcome;
+#[cfg(not(feature = "api-ingest"))]
 use crate::checkout::TokioSvnRunner;
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
 #[cfg(not(feature = "api-ingest"))]
@@ -159,20 +160,11 @@ pub async fn make_testreport(
     };
 
     // The v2 read path: the document replaces `TestReport::read`'s
-    // log-scraping + `metadata.json` parse as the source of the model, but
-    // the SVN checkout still runs — `report_wd()`, `export`, `commit`,
-    // `showdiff` and `ObsReport::update_repos_parser`'s `project.xml` read
-    // all still need the scratch directory.
+    // log-scraping + `metadata.json` parse as the source of the model, and
+    // nothing is checked out — only the scratch directory is created.
     #[cfg(feature = "api-ingest")]
-    let loaded: Result<(), String> = load_via_document(
-        &mut report,
-        &rrid,
-        &checkout_config,
-        &svn_path,
-        &trpath,
-        None,
-    )
-    .await;
+    let loaded: Result<(), String> =
+        load_via_document(&mut report, &rrid, &checkout_config, &trpath, None).await;
 
     if let Err(reason) = loaded {
         info!("TestReport isn't loaded");
@@ -431,12 +423,9 @@ async fn regenerate_via_teregen(
 
     // The job was accepted: it is now safe to drop the stale local checkout.
     // Under `--features api-ingest` the reload below re-fetches the document
-    // instead of re-checking-out, and `load_via_document` already skips the
-    // checkout when a working copy exists — deleting it here would defeat
-    // that and force a needless `svn co` for a directory the model no longer
-    // reads content from.
+    // and the directory only holds scratch files, so it is kept.
     #[cfg(feature = "api-ingest")]
-    let _ = rrid_dir;
+    let _ = (rrid_dir, svn_path);
     #[cfg(not(feature = "api-ingest"))]
     if rrid_dir.exists() {
         let _ = tokio::fs::remove_dir_all(rrid_dir).await;
@@ -460,8 +449,7 @@ async fn regenerate_via_teregen(
     let mut fresh = tr_factory(update, config.clone());
 
     #[cfg(feature = "api-ingest")]
-    if let Err(e) = load_via_document(&mut fresh, &rrid, config, svn_path, trpath, prev_etag).await
-    {
+    if let Err(e) = load_via_document(&mut fresh, &rrid, config, trpath, prev_etag).await {
         error!("Reload after regeneration failed: {e}");
         return None;
     }
@@ -502,16 +490,15 @@ async fn regenerate_via_teregen(
 /// path exists to surface. A `503 generating` response is retried on
 /// the same bounded poll budget [`TeReGen::wait_for_template`] uses (5s /
 /// 600s) before refusing with the same message. On success, applies the
-/// document (see [`crate::ingest::apply_document`]), then runs the checkout
-/// only if no working copy exists yet, and finally derives `update_repos`
-/// exactly as [`TestReport::read`] does. `ReducedMetadataParser`/
+/// document (see [`crate::ingest::apply_document`]), creates the report's
+/// scratch directory (nothing is checked out), and finally derives
+/// `update_repos`. `ReducedMetadataParser`/
 /// `JSONParser`/`patchinfo_titles` are never invoked on this path.
 #[cfg(feature = "api-ingest")]
 async fn load_via_document(
     report: &mut Box<dyn TestReport + Send + Sync>,
     rrid: &mtui_types::RequestReviewID,
     config: &Config,
-    svn_path: &str,
     trpath: &std::path::Path,
     prev_etag: Option<&str>,
 ) -> Result<(), String> {
@@ -550,11 +537,13 @@ async fn load_via_document(
     crate::ingest::apply_document(report.base_mut(), &document);
     report.base_mut().document = Some(*document);
 
-    if tokio::fs::metadata(trpath).await.is_err() {
-        let runner = TokioSvnRunner;
-        crate::checkout::testreport_svn_checkout(&runner, config, svn_path, rrid)
-            .await
-            .map_err(|e| format!("svn checkout of {rrid} failed: {e}"))?;
+    if let Some(dir) = trpath.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| {
+            format!(
+                "could not create the report directory {}: {e}",
+                dir.display()
+            )
+        })?;
     }
     report.base_mut().path = Some(trpath.to_path_buf());
     let repos = report.update_repos_parser();
@@ -690,7 +679,6 @@ mod ingest_tests {
             &mut report,
             &rrid(),
             &config,
-            "svn+ssh://unused",
             std::path::Path::new("/nonexistent/log"),
             None,
         )
@@ -715,7 +703,6 @@ mod ingest_tests {
             &mut report,
             &rrid(),
             &config,
-            "svn+ssh://unused",
             std::path::Path::new("/nonexistent/log"),
             None,
         )
@@ -745,25 +732,41 @@ mod ingest_tests {
 
         let dir = tempfile::tempdir().unwrap();
         let trpath = dir.path().join("log");
-        // Pre-create the checkout so the metadata-existence check skips the
-        // (real, offline-unreachable) `svn co` this test does not mock.
-        std::fs::write(&trpath, "unused").unwrap();
 
         let config = config_for(&server);
         let mut report: Box<dyn TestReport + Send + Sync> =
             Box::new(ObsReport::new(config.clone()));
-        load_via_document(
-            &mut report,
-            &rrid(),
-            &config,
-            "svn+ssh://unused",
-            &trpath,
-            None,
-        )
-        .await
-        .unwrap();
+        load_via_document(&mut report, &rrid(), &config, &trpath, None)
+            .await
+            .unwrap();
 
         assert_eq!(report.base().document.as_ref().unwrap().id, RRID_STR);
+        assert_eq!(report.base().path.as_deref(), Some(trpath.as_path()));
+    }
+
+    #[tokio::test]
+    async fn document_load_creates_the_dir_and_never_checks_out() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let rrid_dir = dir.path().join(RRID_STR);
+        let trpath = rrid_dir.join("log");
+
+        let mut config = config_for(&server);
+        config.svn_path = "file:///nonexistent".to_owned();
+        let mut report: Box<dyn TestReport + Send + Sync> =
+            Box::new(ObsReport::new(config.clone()));
+        load_via_document(&mut report, &rrid(), &config, &trpath, None)
+            .await
+            .unwrap();
+
+        assert!(rrid_dir.is_dir());
+        assert!(!trpath.exists());
         assert_eq!(report.base().path.as_deref(), Some(trpath.as_path()));
     }
 

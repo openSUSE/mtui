@@ -171,18 +171,13 @@ fn make_svn_repo(root: &Path, rrid: &str, files: &[(&str, &str)]) -> String {
     format!("file://{}", repo.display())
 }
 
-/// A `200` document response loads via `apply_document`, the real SVN checkout
-/// still runs for the scratch directory (P3-D1), and the SVN parsers
-/// (`ReducedMetadataParser`/`JSONParser`) are never consulted: the checked-out
-/// `metadata.json` carries a bug id no document in this file ever declares —
-/// if a regression routed the load back through `TestReport::read`, that id
-/// would appear in `base.bugs`.
+/// A `200` document response loads via `apply_document` without any SVN
+/// checkout (the configured repository does not exist), and the SVN parsers
+/// (`ReducedMetadataParser`/`JSONParser`) are never consulted: only the
+/// scratch directory is created, holding neither `log`, `metadata.json` nor
+/// `.svn`.
 #[tokio::test]
-async fn make_testreport_ingest_200_applies_document_and_runs_the_checkout() {
-    if !svn_available() {
-        return;
-    }
-
+async fn make_testreport_ingest_200_applies_document_without_a_checkout() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("/reports/{MAINT_RRID}")))
@@ -195,20 +190,9 @@ async fn make_testreport_ingest_200_applies_document_and_runs_the_checkout() {
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    // A poison `metadata.json`/`log`: only `TestReport::read`'s SVN parsers
-    // would ever surface bug "424242" — no document here declares it.
-    let svn_path = make_svn_repo(
-        tmp.path(),
-        MAINT_RRID,
-        &[
-            ("log", "Testreport for SUSE:Maintenance:1:2\n"),
-            ("metadata.json", r#"{"bugs": ["424242"]}"#),
-        ],
-    );
-
     let mut config = cfg(tmp.path().to_path_buf());
     config.teregen_api_v2 = server.uri();
-    config.svn_path = svn_path;
+    config.svn_path = "file:///nonexistent".to_owned();
     let update = UpdateID::parse(MAINT_RRID).unwrap();
 
     let report = make_testreport(
@@ -234,23 +218,10 @@ async fn make_testreport_ingest_200_applies_document_and_runs_the_checkout() {
 
     let rrid_dir = tmp.path().join(MAINT_RRID);
     assert_eq!(base.path.as_deref(), Some(rrid_dir.join("log").as_path()));
-    let wd = base.report_wd().expect("report_wd resolves");
-    assert_eq!(wd, rrid_dir);
-    // `report_wd()` itself creates a missing directory, so its `Ok` alone
-    // would be true even without a checkout; `.svn` only exists if the real
-    // `svn co` ran, and the imported `metadata.json` only exists if it
-    // actually pulled the repo's content.
-    assert!(
-        rrid_dir.join(".svn").is_dir(),
-        "the real SVN checkout should have run"
-    );
-    assert!(rrid_dir.join("metadata.json").exists());
-
-    assert!(
-        !base.bugs.contains_key("424242"),
-        "the SVN-only bug must not leak into a document-loaded report: {:?}",
-        base.bugs
-    );
+    assert!(rrid_dir.is_dir());
+    assert!(!rrid_dir.join(".svn").exists(), "no SVN checkout may run");
+    assert!(!rrid_dir.join("log").exists());
+    assert!(!rrid_dir.join("metadata.json").exists());
 }
 
 /// `404` maps to the exact P3-D5 "no document yet" text on a `NullReport`.
