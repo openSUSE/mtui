@@ -534,6 +534,20 @@ async fn load_via_document(
         Err(e) => return Err(document_fetch_message(e)),
     };
 
+    report.base_mut().schema_drift = match client.fetch_schema().await {
+        Ok(live) => {
+            let drift = mtui_types::report_document::schema_drift(&live);
+            if let Some(drift) = &drift {
+                warn!(%drift, "teregen's report schema differs from this mtui's; writes are refused");
+            }
+            drift
+        }
+        Err(e) => {
+            warn!(error = %e, "could not check teregen's report schema");
+            None
+        }
+    };
+
     crate::ingest::apply_document(report.base_mut(), &document);
     report.base_mut().document = Some(*document);
 
@@ -768,6 +782,57 @@ mod ingest_tests {
         assert!(rrid_dir.is_dir());
         assert!(!trpath.exists());
         assert_eq!(report.base().path.as_deref(), Some(trpath.as_path()));
+    }
+
+    /// Loads `RRID_STR` against a server whose `/schema` answers `schema`, and
+    /// returns the loaded report's `schema_drift`.
+    async fn drift_after_loading(schema: ResponseTemplate) -> Option<String> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/schema"))
+            .respond_with(schema)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&server);
+        let mut report: Box<dyn TestReport + Send + Sync> =
+            Box::new(ObsReport::new(config.clone()));
+
+        load_via_document(&mut report, &rrid(), &config, &dir.path().join("log"), None)
+            .await
+            .expect("the load never fails because of the schema");
+        report.base().schema_drift.clone()
+    }
+
+    #[tokio::test]
+    async fn a_drifted_schema_loads_but_is_recorded() {
+        let mut live: serde_json::Value =
+            serde_json::from_str(mtui_types::report_document::SCHEMA_JSON).unwrap();
+        live["title"] = serde_json::json!("changed upstream");
+
+        let drift = drift_after_loading(ResponseTemplate::new(200).set_body_json(live)).await;
+
+        assert!(drift.is_some_and(|d| d.starts_with("/title")));
+    }
+
+    #[tokio::test]
+    async fn a_matching_schema_records_no_drift() {
+        let drift = drift_after_loading(
+            ResponseTemplate::new(200).set_body_string(mtui_types::report_document::SCHEMA_JSON),
+        )
+        .await;
+
+        assert_eq!(drift, None);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_schema_does_not_fail_the_load() {
+        assert_eq!(drift_after_loading(ResponseTemplate::new(500)).await, None);
     }
 
     /// Mounts the v1 regenerate write path: `POST .../regenerate` accepted,
