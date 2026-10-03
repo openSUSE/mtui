@@ -142,6 +142,12 @@ impl KernelExport {
         }
     }
 
+    /// Downloads the kernel logs (and writes `results/`) without rendering or
+    /// touching a template, returning the `*.log` filenames present.
+    pub async fn write_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
+        self.get_logs(fetcher).await
+    }
+
     /// Runs the exporter.
     pub async fn run(&mut self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         self.ctx.install_results();

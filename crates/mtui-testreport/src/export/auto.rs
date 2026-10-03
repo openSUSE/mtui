@@ -219,6 +219,16 @@ impl AutoExport {
         }
     }
 
+    /// Downloads the install logs without rendering or touching a template,
+    /// returning the written filenames.
+    pub async fn write_logs(
+        &self,
+        fetcher: &dyn BytesFetcher,
+        prompt: &dyn OverwritePrompt,
+    ) -> Vec<String> {
+        self.get_logs(fetcher, prompt).await
+    }
+
     /// Runs the exporter, returning the finished template lines.
     pub async fn run(
         &mut self,
