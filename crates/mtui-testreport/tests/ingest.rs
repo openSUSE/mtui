@@ -32,7 +32,9 @@
 //! (`repositories`) is itself equal between the two sides — on this
 //! fixture set that is always, but the guard stays because a future subset
 //! divergence would otherwise fail this assertion for a reason that is really
-//! #3 resurfacing, not a new bug.
+//! #3 resurfacing, not a new bug. For the two classic-OBS pairs it is also
+//! asserted non-empty: the SVN side parses the committed `project.xml`, the
+//! document side reads `install.targets[]`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -103,6 +105,7 @@ fn build_via_document(pair: &Pair) -> (Box<dyn TestReport + Send + Sync>, Report
         .parse()
         .unwrap_or_else(|e| panic!("{}: document.json did not parse: {e}", pair.rrid));
     apply_document(report.base_mut(), &document);
+    report.base_mut().document = Some(document.clone());
     report.base_mut().path = Some(pair_dir(pair.rrid).join("log"));
     let repos = report.update_repos_parser();
     report.base_mut().update_repos = repos;
@@ -152,6 +155,12 @@ fn equivalence_across_every_harvested_pair() {
         // cascades.
         if svn.repositories == doc.repositories {
             assert_eq!(svn.update_repos, doc.update_repos, "{id}: update_repos");
+        }
+        // The OBS pairs commit `project.xml`, so neither side may be empty:
+        // two empty maps would compare equal and prove nothing.
+        if matches!(pair.kind, RequestKind::Maintenance) {
+            assert!(!svn.update_repos.is_empty(), "{id}: SVN-side update_repos");
+            assert!(!doc.update_repos.is_empty(), "{id}: document update_repos");
         }
 
         // Divergence #1: hostnames. Positively asserted both ways so the
