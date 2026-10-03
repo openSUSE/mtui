@@ -155,6 +155,10 @@ pub struct TestReportBase {
     /// sent one — the conditional-GET/`If-Match` key a later write path would
     /// need. `None` alongside `document`.
     pub document_etag: Option<String>,
+    /// How teregen's live report schema differs from the one this build ships
+    /// (the first differing pointer), or `None` when it matches or could not be
+    /// checked. While set, every write to teregen is refused.
+    pub schema_drift: Option<String>,
     /// `true` while [`document`](Self::document) holds authored edits that no
     /// `commit` has uploaded yet.
     pub document_dirty: bool,
@@ -209,6 +213,7 @@ impl TestReportBase {
             document: None,
             document_etag: None,
             document_dirty: false,
+            schema_drift: None,
         }
     }
 

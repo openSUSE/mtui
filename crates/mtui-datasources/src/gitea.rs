@@ -342,16 +342,34 @@ impl Gitea {
 
     /// A private wrapper for a request to the Gitea API, returning the decoded
     /// JSON body (or [`serde_json::Value::Null`] for `204 No Content`).
-    ///
-    /// Folds every failure onto [`GiteaError::FailedCall`], surfacing an
-    /// actionable hint at ERROR for a TLS certificate failure (detail at DEBUG)
-    /// rather than a raw transport error.
     async fn request(
         &self,
         method: Method,
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, GiteaError> {
+        let (status, bytes) = self.send(&method, url, body, "application/json").await?;
+        if status == 204 {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|e| GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url))))
+    }
+
+    /// The one path every Gitea request takes: the trusted-origin check, the
+    /// token header, error sanitizing and the body cap. Returns the status and
+    /// the raw body (empty for `204`).
+    ///
+    /// Folds every failure onto [`GiteaError::FailedCall`], surfacing an
+    /// actionable hint at ERROR for a TLS certificate failure (detail at DEBUG)
+    /// rather than a raw transport error.
+    async fn send(
+        &self,
+        method: &Method,
+        url: &str,
+        body: Option<serde_json::Value>,
+        accept: &str,
+    ) -> Result<(u16, Vec<u8>), GiteaError> {
         // Metadata (`gitea_pr_api`) is attacker-influenceable, so the token
         // goes only to the configured trusted origin. reqwest additionally
         // strips the Authorization header on a cross-origin redirect, so a
@@ -369,7 +387,7 @@ impl Gitea {
             .inner()
             .request(method.clone(), url)
             .header("Authorization", format!("token {}", self.token))
-            .header("Accept", "application/json");
+            .header("Accept", accept);
         if let Some(json) = &body {
             builder = builder.json(json);
         }
@@ -417,15 +435,14 @@ impl Gitea {
         }
 
         if status.as_u16() == 204 {
-            return Ok(serde_json::Value::Null);
+            return Ok((204, Vec::new()));
         }
         let bytes = read_body_capped(response, MAX_API_BODY)
             .await
             .map_err(|e| {
                 GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url)))
             })?;
-        serde_json::from_slice::<serde_json::Value>(&bytes)
-            .map_err(|e| GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url))))
+        Ok((status.as_u16(), bytes.to_vec()))
     }
 
     /// Resolve the acting user for a write operation.
@@ -704,6 +721,17 @@ impl Gitea {
         self.request(Method::POST, &self.prissues, Some(json!({ "body": body })))
             .await?;
         Ok(())
+    }
+
+    /// Fetch the PR's diff as text (`GET <pr>.diff`).
+    ///
+    /// # Errors
+    ///
+    /// [`GiteaError::FailedCall`] if the API call fails.
+    pub async fn pr_diff(&self) -> Result<String, GiteaError> {
+        let url = format!("{}.diff", self.pr);
+        let (_, bytes) = self.send(&Method::GET, &url, None, "text/plain").await?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// Return the PR's HEAD commit SHA.

@@ -69,6 +69,9 @@ impl TestReport for ObsReport {
     }
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
+        if let Some(doc) = self.base.document.as_ref() {
+            return crate::ingest::obs_update_repos(doc);
+        }
         // Degrades to an empty map when no report is loaded or the checkout dir
         // cannot be resolved, rather than panicking.
         match self.base.report_wd() {

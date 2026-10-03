@@ -339,6 +339,39 @@ impl TeregenV2 {
         })
     }
 
+    /// `GET /schema`: the report schema the server validates documents
+    /// against. Anonymous, like the other reads.
+    ///
+    /// # Errors
+    ///
+    /// [`TeregenV2Error::Transport`] for a transport failure, a non-2xx status
+    /// or a body that is not JSON; [`TeregenV2Error::BodyTooLarge`] past
+    /// [`MAX_API_BODY`].
+    pub async fn fetch_schema(&self) -> Result<serde_json::Value, TeregenV2Error> {
+        let url = format!("{}/schema", self.base);
+        let response = self
+            .http
+            .inner()
+            .get(&url)
+            .timeout(HTTP_TIMEOUT.1)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| {
+                let e = HttpError::from(e);
+                tracing::debug!("TeReGen v2 GET schema failed: {e}");
+                TeregenV2Error::Transport(e.to_string())
+            })?;
+        let bytes = read_body_capped(response, MAX_API_BODY)
+            .await
+            .map_err(|e| match e {
+                HttpError::BodyTooLarge { .. } => TeregenV2Error::BodyTooLarge,
+                other => TeregenV2Error::Transport(other.to_string()),
+            })?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| TeregenV2Error::Transport(format!("malformed schema: {e}")))
+    }
+
     /// `GET /reports/{rrid}/artifacts`: the files the server holds for this
     /// report, pipeline-written and tester-uploaded alike. Anonymous, like
     /// [`fetch_document`](Self::fetch_document).

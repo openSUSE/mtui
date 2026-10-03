@@ -191,6 +191,20 @@ impl Command for Export {
             (None, None)
         };
 
+        if session.metadata().base().document.is_some() {
+            return self
+                .export_document(
+                    session,
+                    workflow,
+                    force,
+                    rrid,
+                    manual_results,
+                    manual_overview,
+                    args.get_one::<String>("filename").is_some(),
+                )
+                .await;
+        }
+
         let text = FileList::load(&filename).map_err(|e| {
             CommandError::Other(format!("could not read template {filename:?}: {e}"))
         })?;
@@ -250,6 +264,84 @@ impl Command for Export {
     }
 }
 
+impl Export {
+    /// The document path: author the gathered data onto the report document and
+    /// write the install logs, with no text template read or written.
+    #[allow(clippy::too_many_arguments)]
+    async fn export_document(
+        &self,
+        session: &mut Session,
+        workflow: Workflow,
+        force: bool,
+        rrid: mtui_types::RequestReviewID,
+        manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
+        manual_overview: Option<mtui_datasources::OpenQAOverviewResult>,
+        filename_given: bool,
+    ) -> CommandResult {
+        let ctx = ExportContext::new(session.config.clone(), &[], force, rrid.clone());
+        let (touched, written) = match workflow {
+            Workflow::Auto => {
+                let http = build_http(session)?;
+                let auto = session.metadata().openqa().auto.clone();
+                let overview = session.metadata().openqa().overview.clone();
+                let touched =
+                    author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
+                let written = AutoExport::new(ctx, auto, overview)
+                    .write_logs(&http, &DenyOverwrite)
+                    .await;
+                (touched, written)
+            }
+            Workflow::Kernel => {
+                let http = build_http(session)?;
+                let kernel = session.metadata().openqa().kernel.clone();
+                let overview = session.metadata().openqa().overview.clone();
+                let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
+                let written = KernelExport::new(ctx, kernel, overview)
+                    .write_logs(&http)
+                    .await;
+                (touched, written)
+            }
+            Workflow::Manual => {
+                let (hosts, results) = manual_results.expect("computed for Manual workflow");
+                let auto = session.metadata().openqa().auto.clone();
+                let touched = author_onto_document(
+                    session,
+                    auto.as_ref(),
+                    &[],
+                    manual_overview.as_ref(),
+                    Some(&results),
+                );
+                let written = ManualExport::new(ctx, results, auto, manual_overview)
+                    .write_logs(&hosts, &DenyOverwrite);
+                (touched, written)
+            }
+        };
+
+        if filename_given {
+            session.display.println(
+                "note: FILENAME ignored on the document path (the report document is \
+                 authored instead)",
+            );
+        }
+        if written.is_empty() {
+            session.display.println("no install logs written");
+        } else {
+            let dir = session
+                .config
+                .template_dir
+                .join(rrid.to_string())
+                .join(&session.config.install_logs);
+            session
+                .display
+                .println(&format!("install logs written to {}", dir.display()));
+        }
+        if let Some(line) = document_line(&touched) {
+            session.display.println(&line);
+        }
+        Ok(())
+    }
+}
+
 /// Borrows the session-scoped HTTP client, so one pool serves every command.
 fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
     session
@@ -273,8 +365,8 @@ fn is_unverified(host: &ManualHost) -> bool {
 }
 
 /// Delegates to [`mtui_testreport::author_export`] (the pure authoring
-/// functions, composed), in addition to the text export above, never instead
-/// of it: in-memory only, nothing uploads here.
+/// functions, composed): in memory only, nothing uploads here. On the SVN path
+/// it runs in addition to the text export; on the document path it replaces it.
 ///
 /// A cheap no-op when no document is loaded (every non-`api-ingest` build,
 /// and any `api-ingest` load that fell back to SVN): the guard below skips
@@ -992,10 +1084,9 @@ mod tests {
 
     /// A document present on the report survives an export
     /// (`author_onto_document` reaches `mtui_testreport::author_export`
-    /// without panicking) and the text export still writes — neither path
-    /// replaces the other. The *content* `author_export` composes is
-    /// exhaustively covered in `mtui-testreport`'s own suite under
-    /// `--features api-ingest`
+    /// without panicking) and the text template is left alone. The *content*
+    /// `author_export` composes is exhaustively covered in `mtui-testreport`'s
+    /// own suite under `--features api-ingest`
     /// (`export_authoring.rs`/`authoring::tests`/`tests/authoring.rs`): this
     /// crate never turns that feature on for `mtui-testreport` (doing so
     /// would flip `make_testreport`'s SVN/document branch for every other
@@ -1005,16 +1096,115 @@ mod tests {
         let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
         record_versions(&mut session, "h1");
         session.metadata_mut().base_mut().document = Some(minimal_document());
+        let before = std::fs::read(&path).unwrap();
 
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
         Export.call(&mut session, &args).await.unwrap();
 
         assert!(session.metadata().base().document.is_some());
-        assert!(
-            std::fs::read_to_string(&path)
-                .unwrap()
-                .contains("## export MTUI:")
-        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// A manual-workflow session on the document path: a document loaded, a
+    /// report path whose `log` was never created, and `h1` with recorded
+    /// versions. `dir` is the template dir.
+    async fn document_manual_fixture() -> (Session, Buffer, tempfile::TempDir, PathBuf, MockServer)
+    {
+        let (mut session, buf, dir, path, server) = manual_export_fixture(&["h1"]).await;
+        record_versions(&mut session, "h1");
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(minimal_document());
+        base.path = Some(dir.path().join("SUSE:Maintenance:1:1").join("log"));
+        (session, buf, dir, path, server)
+    }
+
+    /// The document path writes the install logs and never reads or creates the
+    /// text `log`. Mutation caught: moving the branch below `FileList::load`
+    /// fails with "could not read template".
+    #[tokio::test]
+    async fn document_path_writes_install_logs_and_no_text_template() {
+        let (mut session, buf, dir, _path, _server) = document_manual_fixture().await;
+        let rrid_dir = dir.path().join("SUSE:Maintenance:1:1");
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let logs = rrid_dir.join(&session.config.install_logs);
+        assert!(logs.join("h1.log").is_file(), "{:?}", buf.contents());
+        assert!(!rrid_dir.join("log").exists());
+        let out = buf.contents();
+        assert!(out.contains("install logs written to"), "{out:?}");
+        assert!(!out.contains("template exported to"), "{out:?}");
+    }
+
+    /// A FILENAME on the document path is reported as ignored and never
+    /// written; the text template it names stays untouched.
+    #[tokio::test]
+    async fn document_path_ignores_filename_with_a_note() {
+        let (mut session, buf, _dir, path, _server) = document_manual_fixture().await;
+        let before = std::fs::read(&path).unwrap();
+
+        let args = matches(&Export, &[path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("FILENAME ignored"), "{out:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// The Auto workflow on the document path downloads the install log and
+    /// leaves the text template alone.
+    #[tokio::test]
+    async fn document_path_auto_downloads_install_logs_only() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let oqa = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/install.log"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("zypper install body\n"))
+            .mount(&oqa)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let rrid_dir = dir.path().join("SUSE:Maintenance:1:1");
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+        base.path = Some(rrid_dir.join("log"));
+        session.metadata_mut().openqa_mut().auto =
+            Some(seeded_auto(&format!("{}/install.log", oqa.uri())));
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let logfile = rrid_dir
+            .join(&session.config.install_logs)
+            .join("sles_15-SP5_x86_64.log");
+        assert!(logfile.is_file(), "{:?}", buf.contents());
+        assert!(!rrid_dir.join("log").exists());
+    }
+
+    /// With nothing to download the document path says so rather than naming a
+    /// directory that holds nothing.
+    #[tokio::test]
+    async fn document_path_kernel_without_logs_reports_none_written() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Kernel;
+        base.document = Some(minimal_document());
+        base.path = Some(dir.path().join("SUSE:Maintenance:1:1").join("log"));
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("no install logs written"), "{out:?}");
+        assert!(!dir.path().join("SUSE:Maintenance:1:1/log").exists());
     }
 
     /// A session that never loaded a document (every default build) must

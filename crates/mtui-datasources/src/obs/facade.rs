@@ -95,10 +95,10 @@ impl Osc {
     /// Everything fallible — reading oscrc, building the client, the
     /// authenticated calls, XML parsing — happens in here, because callers
     /// invoke the seam methods bare. Nothing in this path panics.
-    async fn run<F, Fut>(&self, op: F) -> Result<(), ObsError>
+    async fn run<T, F, Fut>(&self, op: F) -> Result<T, ObsError>
     where
         F: FnOnce(ObsClient, String) -> Fut,
-        Fut: std::future::Future<Output = Result<(), ObsError>>,
+        Fut: std::future::Future<Output = Result<T, ObsError>>,
     {
         let result = async {
             let (client, user) = (self.factory)(&self.config)?;
@@ -109,6 +109,26 @@ impl Osc {
             tracing::error!("OBS operation on {} failed: {e}", self.rrid);
         }
         result
+    }
+
+    /// Fetch the request's source diff (`POST /request/<id>?cmd=diff`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObsError`] on any credential or transport failure (the
+    /// failure is also logged).
+    pub async fn request_diff(&self) -> Result<String, ObsError> {
+        let review_id = self.rrid.review_id;
+        self.run(move |client, _user| async move {
+            client
+                .post(
+                    &format!("request/{review_id}"),
+                    &[("cmd", "diff".to_owned())],
+                    "",
+                )
+                .await
+        })
+        .await
     }
 
     /// Approve the review for the acting user (group-approve is refused).

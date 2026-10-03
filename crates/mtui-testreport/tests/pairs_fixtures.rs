@@ -98,10 +98,15 @@ fn fixtures_carry_no_unredacted_pii() {
         "glaubitz",
         "Martin Pluskal",
         "mpluskal",
+        "msmeissn",
+        "amattiazzo",
     ];
     for rrid in PAIRS {
-        for file in ["document.json", "metadata.json", "log"] {
-            let content = std::fs::read_to_string(pair_dir(rrid).join(file)).unwrap();
+        for file in ["document.json", "metadata.json", "log", "project.xml"] {
+            let Ok(content) = std::fs::read_to_string(pair_dir(rrid).join(file)) else {
+                assert_eq!(file, "project.xml", "{rrid}: missing {file}");
+                continue;
+            };
             for needle in leaked {
                 assert!(
                     !content.contains(needle),

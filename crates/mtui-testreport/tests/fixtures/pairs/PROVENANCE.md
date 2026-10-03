@@ -4,24 +4,25 @@ Captured 2026-09-15 from production (`https://qam.suse.de/api/v2/reports/<RRID>`
 and `svn+ssh://svn@qam.suse.de/testreports/<RRID>`), for the document-vs-SVN
 equivalence test in `crates/mtui-testreport/tests/ingest.rs`.
 
-Each `<RRID>/` directory holds exactly the three files the equivalence test
-needs: `document.json` (the live `GET /api/v2/reports/<RRID>` body, pretty
-printed and key-sorted), `metadata.json` and `log` (the matching SVN checkout's
-files, byte-for-byte apart from the redaction below). `project.xml` and
-`patchinfo.xml` are deliberately **not** committed:
+Each `<RRID>/` directory holds the files the equivalence test needs:
+`document.json` (the live `GET /api/v2/reports/<RRID>` body, pretty printed and
+key-sorted), `metadata.json` and `log` (the matching SVN checkout's files,
+byte-for-byte apart from the redaction below). The two `SUSE:Maintenance:*`
+pairs also hold `project.xml`, captured 2026-10-03 with
+`osc -A https://api.suse.de meta prj SUSE:Maintenance:<id>`. It drives the
+`update_repos` equivalence check: the SVN side parses it (`obsrepoparse`), the
+document side reads `install.targets[]` (`obs_update_repos`). `patchinfo.xml`
+is deliberately **not** committed:
 
 - Omitting `patchinfo.xml` is what makes divergence #2 (bug/jira titles) live
   in these fixtures — the SVN side falls back to the `NO_DESCRIPTION`
   placeholder exactly as it would on a real checkout that never had one
   fetched, while the document side always carries the real title.
-- Omitting `project.xml` leaves `update_repos_parser()` degrading to an empty
-  map on both sides identically (that function is unchanged by the ingest
-  path and reads from the checkout dir regardless of which path populated the
-  rest of the model), so the comparison never depends on it.
 
 **Redacted:** `update.packager` / `metadata.json`'s `packager` to
-`someone@suse.com`, and the log's `Test Plan Reviewer:` line to `someone`, in
-every fixture (real names/emails of SUSE engineers). No other field carries
+`someone@suse.com`, the log's `Test Plan Reviewer:` line to `someone`, and
+`project.xml`'s `bugowner` `userid` to `someone`, in every fixture (real
+names/emails/logins of SUSE engineers). No other field carries
 personal data — `people.testers`/`people.reviewer.name` were `null`/empty on
 every captured document at capture time.
 

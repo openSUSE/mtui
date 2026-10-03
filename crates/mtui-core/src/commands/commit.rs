@@ -9,6 +9,7 @@ use mtui_testreport::{
     TokioSvnRunner, collect_artifacts, detect_system, svn_commit_testreport, system_info,
     upload_current,
 };
+use mtui_types::report_document::ReportDocument;
 
 use super::apicall::teregen_v2_writer;
 use super::support::{complete_with_templates, stale_hash_gate};
@@ -146,6 +147,45 @@ async fn commit_document(
     client: &TeregenV2,
     msg_given: bool,
 ) -> CommandResult {
+    let summary = upload_and_report(session, client).await?;
+    if msg_given {
+        session.display.println(
+            "note: --msg ignored on the document path (teregen writes its own SVN message)",
+        );
+    }
+    session
+        .display
+        .println("note: the legacy log view may lag (teregen T4)");
+
+    if summary.failed > 0 {
+        return Err(CommandError::Other(format!(
+            "{} of {} artifacts failed; re-run commit to retry",
+            summary.failed, summary.total
+        )));
+    }
+    Ok(())
+}
+
+/// How many artifacts an [`upload_and_report`] sent and how many of those failed.
+pub(crate) struct UploadSummary {
+    pub total: usize,
+    pub failed: usize,
+}
+
+/// Uploads the loaded document and every local artifact, printing the
+/// "document stored", per-artifact and "skipped" lines. A document failure is
+/// an `Err`, and so is a report schema that drifted from this build's, refused
+/// before anything is sent; an artifact failure is only counted, so every
+/// artifact is still attempted.
+pub(crate) async fn upload_and_report(
+    session: &mut Session,
+    client: &TeregenV2,
+) -> Result<UploadSummary, CommandError> {
+    if let Some(drift) = &session.metadata().base().schema_drift {
+        return Err(CommandError::Other(format!(
+            "teregen's report schema differs from this mtui's ({drift}); upgrade mtui before writing"
+        )));
+    }
     let report_wd = session
         .metadata()
         .base()
@@ -192,35 +232,60 @@ async fn commit_document(
             .display
             .println(&format!("skipped {} (not a regular file)", path.display()));
     }
-    if msg_given {
-        session.display.println(
-            "note: --msg ignored on the document path (teregen writes its own SVN message)",
-        );
-    }
-    session
-        .display
-        .println("note: the legacy log view may lag (teregen T4)");
+    Ok(UploadSummary { total, failed })
+}
 
-    if failed > 0 {
-        return Err(CommandError::Other(format!(
-            "{failed} of {total} artifacts failed; re-run commit to retry"
+/// Why [`record_onto_document`] did not finish.
+pub(crate) enum RecordError {
+    /// Nothing was stored: the document edit was rolled back.
+    Upload(CommandError),
+    /// The document was stored, but this many artifacts were not.
+    ArtifactsFailed(usize),
+}
+
+/// Applies `edit` to the loaded document, marks `touched` as authored, then
+/// uploads the document and the artifacts as `commit` does.
+///
+/// On an [`Upload`](RecordError::Upload) error the document and its dirty flag
+/// are restored, so a refused action leaves nothing half-done.
+pub(crate) async fn record_onto_document(
+    session: &mut Session,
+    client: &TeregenV2,
+    touched: &[&str],
+    edit: impl FnOnce(&mut ReportDocument),
+) -> Result<(), RecordError> {
+    let base = session.metadata_mut().base_mut();
+    let saved = base.document.clone();
+    let was_dirty = base.document_dirty;
+    let Some(document) = base.document.as_mut() else {
+        return Err(RecordError::Upload(CommandError::Other(
+            "no report document is loaded".to_owned(),
         )));
+    };
+    edit(document);
+    base.mark_document_authored(touched);
+
+    match upload_and_report(session, client).await {
+        Ok(summary) if summary.failed == 0 => Ok(()),
+        Ok(summary) => Err(RecordError::ArtifactsFailed(summary.failed)),
+        Err(e) => {
+            let base = session.metadata_mut().base_mut();
+            base.document = saved;
+            base.document_dirty = was_dirty;
+            Err(RecordError::Upload(e))
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::str::FromStr;
-
-    use mtui_datasources::teregen::{TeregenAuth, TokenStore};
-    use mtui_datasources::{HttpClient, VerifyPolicy};
-    use mtui_types::report_document::ReportDocument;
     use wiremock::matchers::{method, path as wpath};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::commands::testkit::teregen::{
+        minimal_document, mount_auth_success, set_bare_report_wd, store_path, teregen_v2_client,
+    };
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
@@ -353,82 +418,6 @@ mod tests {
 
     // --- document path (teregen v2) ---
 
-    const NONCE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    const PRINCIPAL: &str = "alice";
-
-    fn fixture(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/obs")
-            .join(name)
-    }
-
-    fn minimal_document(id: &str) -> ReportDocument {
-        let raw = format!(
-            r#"{{
-                "schema_version": "1.0", "id": "{id}", "kind": "pi",
-                "workflow": "obs", "generated_at": "2026-01-01T00:00:00Z",
-                "verdict": null, "comment": null,
-                "people": {{"testers": [], "reviewer": {{"name": null}}}},
-                "update": {{"packager": "p", "source_packages": ["a"], "origin": {{}},
-                           "products": [{{"name": "n", "version": "v", "archs": ["x86_64"]}}],
-                           "patches": [{{"id": "1", "title": "t"}}]}},
-                "install": {{"repository": "http://x/", "targets": [{{
-                    "product": "n", "version": "v", "arch": "x86_64",
-                    "repository": "http://x/r", "binaries": {{"a": "1-1.x86_64"}}
-                }}], "test_platforms": []}},
-                "issues": {{}}, "testing": {{}}
-            }}"#
-        );
-        ReportDocument::from_str(&raw).expect("fixture document parses")
-    }
-
-    fn auth_for(server: &MockServer, store_path: PathBuf) -> TeregenAuth {
-        TeregenAuth::new(
-            server.uri(),
-            PRINCIPAL.to_owned(),
-            Some(fixture("id_ed25519")),
-            None,
-            HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
-        )
-        .with_store(Some(TokenStore::at(store_path)))
-    }
-
-    fn store_path() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let store_file = dir.path().join("teregen-token.json");
-        (dir, store_file)
-    }
-
-    fn teregen_v2_client(server: &MockServer, store_file: PathBuf) -> TeregenV2 {
-        let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
-        TeregenV2::with_client(http, &server.uri()).with_auth(auth_for(server, store_file))
-    }
-
-    async fn mount_auth_success(server: &MockServer) {
-        Mock::given(method("POST"))
-            .and(wpath("/auth/ssh/challenge"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"nonce": NONCE})),
-            )
-            .mount(server)
-            .await;
-        Mock::given(method("POST"))
-            .and(wpath("/auth/ssh/verify"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "token": "a".repeat(64),
-            })))
-            .mount(server)
-            .await;
-    }
-
-    /// Sets a loaded report's `path` to a fresh, empty working directory, so
-    /// `report_wd()`/`collect_artifacts` resolve without touching SVN.
-    fn set_bare_report_wd(session: &mut Session) -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        session.metadata_mut().base_mut().path = Some(tmp.path().join("metadata.json"));
-        tmp
-    }
-
     #[tokio::test]
     async fn document_path_happy_prints_stored_and_artifact_lines() {
         let server = MockServer::start().await;
@@ -506,6 +495,34 @@ mod tests {
             .filter(|r| r.url.path().contains("/artifacts/"))
             .count();
         assert_eq!(artifact_puts, 0, "a 412 must send no artifacts");
+    }
+
+    /// A schema that drifted from this build's refuses every write: no request
+    /// of any kind reaches teregen. Mutation caught: removing the guard sends
+    /// the document PUT.
+    #[tokio::test]
+    async fn document_path_schema_drift_sends_nothing() {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        let doc_id = "SUSE:Maintenance:1:1";
+        let (mut session, _buf) = session_with_hosts(doc_id, &["h1"], "ok");
+        let _tmp = set_bare_report_wd(&mut session);
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(minimal_document(doc_id));
+        base.document_etag = Some("\"x\"".to_owned());
+        base.schema_drift = Some("/properties/kind: \"a\" != \"b\"".to_owned());
+
+        let client = teregen_v2_client(&server, store_file);
+        let err = commit_document(&mut session, &client, false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("upgrade mtui") && m.contains("/properties/kind")),
+            "{err:?}"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

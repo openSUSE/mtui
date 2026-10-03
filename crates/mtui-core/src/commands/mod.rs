@@ -273,6 +273,109 @@ pub(crate) mod testkit {
         }
     }
 
+    /// A mocked teregen v2 write API and report-document builders, shared by the
+    /// document-path tests of `commit`, `approve` and `request_review`.
+    pub(crate) mod teregen {
+        use std::path::{Path, PathBuf};
+        use std::str::FromStr;
+
+        use mtui_datasources::teregen::{TeregenAuth, TeregenV2, TokenStore};
+        use mtui_datasources::{HttpClient, VerifyPolicy};
+        use mtui_types::report_document::ReportDocument;
+        use wiremock::matchers::{method, path as wpath};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use crate::session::Session;
+
+        const NONCE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const PRINCIPAL: &str = "alice";
+
+        pub(crate) fn fixture(name: &str) -> PathBuf {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/obs")
+                .join(name)
+        }
+
+        pub(crate) fn minimal_document(id: &str) -> ReportDocument {
+            let raw = format!(
+                r#"{{
+                    "schema_version": "1.0", "id": "{id}", "kind": "pi",
+                    "workflow": "obs", "generated_at": "2026-01-01T00:00:00Z",
+                    "verdict": null, "comment": null,
+                    "people": {{"testers": [], "reviewer": {{"name": null}}}},
+                    "update": {{"packager": "p", "source_packages": ["a"], "origin": {{}},
+                               "products": [{{"name": "n", "version": "v", "archs": ["x86_64"]}}],
+                               "patches": [{{"id": "1", "title": "t"}}]}},
+                    "install": {{"repository": "http://x/", "targets": [{{
+                        "product": "n", "version": "v", "arch": "x86_64",
+                        "repository": "http://x/r", "binaries": {{"a": "1-1.x86_64"}}
+                    }}], "test_platforms": []}},
+                    "issues": {{}}, "testing": {{}}
+                }}"#
+            );
+            ReportDocument::from_str(&raw).expect("fixture document parses")
+        }
+
+        pub(crate) fn auth_for(server: &MockServer, store_path: PathBuf) -> TeregenAuth {
+            TeregenAuth::new(
+                server.uri(),
+                PRINCIPAL.to_owned(),
+                Some(fixture("id_ed25519")),
+                None,
+                HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
+            )
+            .with_store(Some(TokenStore::at(store_path)))
+        }
+
+        pub(crate) fn store_path() -> (tempfile::TempDir, PathBuf) {
+            let dir = tempfile::tempdir().unwrap();
+            let store_file = dir.path().join("teregen-token.json");
+            (dir, store_file)
+        }
+
+        pub(crate) fn teregen_v2_client(server: &MockServer, store_file: PathBuf) -> TeregenV2 {
+            let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
+            TeregenV2::with_client(http, &server.uri()).with_auth(auth_for(server, store_file))
+        }
+
+        pub(crate) async fn mount_auth_success(server: &MockServer) {
+            Mock::given(method("POST"))
+                .and(wpath("/auth/ssh/challenge"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"nonce": NONCE})),
+                )
+                .mount(server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wpath("/auth/ssh/verify"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "token": "a".repeat(64),
+                })))
+                .mount(server)
+                .await;
+        }
+
+        /// The JSON body of the one `PUT /reports/{id}` that reached `server`.
+        pub(crate) async fn document_put_body(server: &MockServer, id: &str) -> serde_json::Value {
+            let requests = server.received_requests().await.expect("recording is on");
+            let path = format!("/reports/{id}");
+            let mut puts = requests
+                .iter()
+                .filter(|r| r.method.as_str() == "PUT" && r.url.path() == path);
+            let put = puts.next().expect("a document PUT was sent");
+            assert!(puts.next().is_none(), "exactly one document PUT");
+            serde_json::from_slice(&put.body).expect("the PUT body is JSON")
+        }
+
+        /// Sets a loaded report's `path` to a fresh, empty working directory, so
+        /// `report_wd()`/`collect_artifacts` resolve without touching SVN.
+        pub(crate) fn set_bare_report_wd(session: &mut Session) -> tempfile::TempDir {
+            let tmp = tempfile::tempdir().unwrap();
+            session.metadata_mut().base_mut().path = Some(tmp.path().join("metadata.json"));
+            tmp
+        }
+    }
+
     /// A minimal loaded report with a settable RRID and host group.
     pub struct FakeReport {
         base: TestReportBase,

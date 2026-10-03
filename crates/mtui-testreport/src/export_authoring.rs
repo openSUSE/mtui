@@ -149,4 +149,30 @@ mod tests {
         assert_eq!(install.checks.len(), 1);
         assert_eq!(install.checks[0].refhost, "h1");
     }
+
+    /// The overview rows park under `testing.openqa.extra`, which is what the
+    /// `openqa_overview --export` document path relies on.
+    #[cfg(feature = "api-ingest")]
+    #[test]
+    fn parks_overview_rows_under_testing_openqa_extra() {
+        let mut document: Option<ReportDocument> = Some(
+            include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json")
+                .parse()
+                .unwrap(),
+        );
+        let overview = OpenQAOverviewResult {
+            single_incidents: vec![mtui_datasources::oqa_search::VersionResult {
+                version: "15-SP6".to_owned(),
+                status: "passed".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let touched = author_export(&mut document, None, None, &[], Some(&overview), None);
+
+        assert_eq!(touched, ["testing.openqa"]);
+        let openqa = document.unwrap().testing.openqa.expect("openqa authored");
+        assert!(openqa.extra.contains_key("single_incidents"));
+    }
 }
