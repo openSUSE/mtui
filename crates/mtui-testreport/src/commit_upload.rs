@@ -295,6 +295,20 @@ mod tests {
         assert!(collected.skipped.is_empty());
     }
 
+    /// `source.diff` is a cache of a backend fetch, not a report artifact.
+    #[test]
+    fn the_cached_source_diff_is_not_collected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wd = tmp.path();
+        write(wd, "source.diff", b"d");
+        write(wd, "install_logs/h1.log", b"a");
+
+        let collected = collect_artifacts(wd, Path::new("install_logs")).unwrap();
+        let names: Vec<&str> = collected.files.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["h1.log"]);
+        assert!(collected.skipped.is_empty());
+    }
+
     #[test]
     fn missing_sources_yield_an_empty_result_not_an_error() {
         let tmp = tempfile::tempdir().unwrap();

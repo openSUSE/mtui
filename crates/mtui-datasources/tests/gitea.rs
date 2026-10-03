@@ -455,6 +455,35 @@ async fn get_hash_returns_head_sha() {
 }
 
 #[tokio::test]
+async fn pr_diff_gets_the_dot_diff_url_as_text_with_the_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PR_PATH}.diff")))
+        .and(header("Authorization", "token tok"))
+        .and(header("Accept", "text/plain"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("diff --git a/x b/x\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let diff = gitea_for(&server).pr_diff().await.unwrap();
+    assert_eq!(diff, "diff --git a/x b/x\n");
+}
+
+#[tokio::test]
+async fn pr_diff_failure_raises_failed_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{PR_PATH}.diff")))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let err = gitea_for(&server).pr_diff().await.unwrap_err();
+    assert!(matches!(err, mtui_datasources::GiteaError::FailedCall(_)));
+}
+
+#[tokio::test]
 async fn request_failure_raises_failed_call() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -787,6 +816,23 @@ async fn token_refused_for_foreign_host() {
         !format!("{err:?}").contains("s3cr3t-token"),
         "debug leaked token"
     );
+}
+
+/// The diff fetch shares the origin guard: a foreign PR host gets no request.
+#[tokio::test]
+async fn pr_diff_refused_for_foreign_host() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("x"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let client = gitea_with_trust(&server.uri(), "http://127.0.0.1:1");
+    assert!(matches!(
+        client.pr_diff().await,
+        Err(mtui_datasources::error::GiteaError::UntrustedOrigin(_))
+    ));
 }
 
 /// A same-host but *different-port* PR URL is refused (origin is exact).

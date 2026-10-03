@@ -93,6 +93,33 @@ async fn comment_happy_path_posts_via_injected_client() {
 }
 
 #[tokio::test]
+async fn request_diff_posts_cmd_diff_and_returns_the_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/request/56789"))
+        .and(wiremock::matchers::query_param("cmd", "diff"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("changes files:\n-----\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let osc = Osc::with_factory(Config::default(), rrid(), factory_for(server.uri()));
+
+    assert_eq!(osc.request_diff().await.unwrap(), "changes files:\n-----\n");
+}
+
+#[tokio::test]
+async fn request_diff_factory_error_is_a_typed_err() {
+    let osc = Osc::with_factory(
+        Config::default(),
+        rrid(),
+        Arc::new(|_cfg: &Config| Err(ObsError::Config("no credentials".to_owned()))),
+    );
+    let err = osc.request_diff().await.unwrap_err();
+    assert!(matches!(err, ObsError::Config(_)), "{err:?}");
+}
+
+#[tokio::test]
 async fn empty_comment_is_refused_not_panicked() {
     // A whitespace-only comment is an ObsError::Op refusal from the op itself;
     // the factory still builds a (never-contacted) client.
