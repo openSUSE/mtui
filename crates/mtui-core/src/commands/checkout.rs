@@ -14,9 +14,9 @@ use crate::session::Session;
 /// directory. With nothing loaded there is no path, so it errors clearly rather
 /// than shelling out.
 ///
-/// A report loaded from a v2 document also re-fetches that document
-/// (conditional on its `ETag`) and adopts it when it changed. That replaces
-/// the local document, so it is refused before any I/O while it holds edits no
+/// A report loaded from a v2 document has no working copy: there is no `svn up`,
+/// only a re-fetch of that document (conditional on its `ETag`), adopted when
+/// it changed. That replaces the local document, so it is refused before any I/O while it holds edits no
 /// `commit` has uploaded, unless `--discard-authored` is passed.
 pub struct Checkout;
 
@@ -57,6 +57,14 @@ impl Command for Checkout {
             document_edits_guard(session, rrid, discard_authored)?;
         }
 
+        if session.metadata().base().document.is_some() {
+            let http = session
+                .http_client()
+                .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+            let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
+            return refresh_step(session, &client, discard_authored).await;
+        }
+
         let wd = session
             .metadata()
             .base()
@@ -77,14 +85,6 @@ impl Command for Checkout {
         session
             .display
             .println(&format!("template updated from SVN ({})", wd.display()));
-
-        if session.metadata().base().document.is_some() {
-            let http = session
-                .http_client()
-                .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
-            let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
-            refresh_step(session, &client, discard_authored).await?;
-        }
         Ok(())
     }
 }
@@ -320,14 +320,11 @@ mod tests {
         assert!(session.metadata().base().document_dirty);
     }
 
-    /// `--discard-authored` through the whole command: the guard is lifted,
-    /// `svn up` runs, and the document is re-fetched unconditionally so the
-    /// server's copy replaces the local edits even if its `ETag` is unchanged.
+    /// `--discard-authored` through the whole command: the guard is lifted and
+    /// the document is re-fetched unconditionally, so the server's copy
+    /// replaces the local edits even if its `ETag` is unchanged.
     #[tokio::test]
     async fn discard_authored_refreshes_a_dirty_document() {
-        let Some((_tmp, wc)) = svn_working_copy() else {
-            return; // svn not installed in this environment
-        };
         let server = MockServer::start().await;
         let body = serde_json::to_string(&document(Some("server"))).unwrap();
         mount_document(
@@ -338,7 +335,6 @@ mod tests {
         )
         .await;
         let (mut session, buf) = document_session(&server, true);
-        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
 
         let args = matches(&Checkout, &["--discard-authored"]);
         Checkout.call(&mut session, &args).await.unwrap();
@@ -353,6 +349,32 @@ mod tests {
         assert_eq!(base.document, Some(document(Some("server"))));
         let requests = server.received_requests().await.unwrap();
         assert!(requests[0].headers.get("if-none-match").is_none());
+    }
+
+    /// On the document path there is no working copy: the report directory has
+    /// no `.svn`, and the command only refreshes the document.
+    #[tokio::test]
+    async fn a_document_report_refreshes_without_running_svn() {
+        let server = MockServer::start().await;
+        let body = serde_json::to_string(&document(Some("server"))).unwrap();
+        mount_document(
+            &server,
+            ResponseTemplate::new(200)
+                .set_body_string(body)
+                .insert_header("etag", NEW_ETAG),
+        )
+        .await;
+        let (mut session, buf) = document_session(&server, false);
+        let tmp = tempfile::tempdir().unwrap();
+        session.metadata_mut().base_mut().path = Some(tmp.path().join("log"));
+
+        let args = matches(&Checkout, &[]);
+        Checkout.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("document refreshed"), "{out:?}");
+        assert!(!out.contains("svn up"), "{out:?}");
+        assert!(!out.contains("SVN"), "{out:?}");
     }
 
     /// The SVN path (no document) never contacts the document API.
