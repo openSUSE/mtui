@@ -2,6 +2,8 @@
 # oss-fuzz/ClusterFuzzLite build contract: build every cargo-fuzz target and
 # place the resulting binaries in $OUT. cargo-fuzz comes preinstalled in the
 # base-builder-rust image and picks up fuzz/ automatically.
+# OSS-Fuzz CFLAGS override jitterentropy's mandatory -O0; the fuzz targets never use TLS.
+export AWS_LC_SYS_NO_JITTER_ENTROPY=1
 cargo fuzz build
 find fuzz/target/x86_64-unknown-linux-gnu/release -maxdepth 1 -type f -executable ! -name '*.d' -exec cp -t "$OUT" {} +
 
