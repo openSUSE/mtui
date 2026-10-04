@@ -1267,14 +1267,6 @@ mod mcp_nonempty_success_guard {
                 let (mut s, b) = empty_session();
                 let dir = tempfile::tempdir().expect("tempdir");
                 let krrid = "SUSE:Maintenance:24993:275518";
-                let tdir = dir.path().join(krrid);
-                std::fs::create_dir_all(&tdir).expect("mk template dir");
-                std::fs::write(tdir.join("log"), "log\n").expect("write log");
-                std::fs::write(
-                    tdir.join("metadata.json"),
-                    format!("{{\"rrid\": \"{krrid}\", \"repository\": \"http://x/\"}}"),
-                )
-                .expect("write metadata");
                 s.config.template_dir = dir.path().to_path_buf();
                 s.config.teregen_api_v2 = teregen.to_owned();
                 // Leak the guard: the load is synchronous within dispatch.

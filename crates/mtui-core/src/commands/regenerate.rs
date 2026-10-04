@@ -518,8 +518,6 @@ mod tests {
 
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().to_path_buf();
-        // Offline svn: the re-checkout yields a NullReport, no network touched.
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &[]);
         Regenerate.call(&mut session, &args).await.unwrap();
@@ -548,7 +546,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let before = session.targets().len();
         let args = matches(&Regenerate, &[]);
@@ -657,7 +654,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &[rrid]);
         // Crucially: no `require_update` error despite nothing being loaded.
@@ -697,22 +693,9 @@ mod tests {
     /// kind-agnostic). Also drives `Command::run` (not `call`) with a different
     /// template already active: the regenerated RRID must end up active, and a
     /// reverted pointer would fail the `workflow() == Kernel` assert below too
-    /// (the restored template carries no workflow). Skipped where `svn` is
-    /// absent — it still runs on CI's Ubuntu leg, which is where this
-    /// regression would otherwise resurface unnoticed.
+    /// (the restored template carries no workflow).
     #[tokio::test]
     async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
-        // `reload` deletes `template_dir/<rrid>`, so the report must come back
-        // from SVN. A local `file://` repo (never the `qam.suse.de` default)
-        // keeps that hermetic, and skips cleanly where `svn` is absent.
-        if std::process::Command::new("svn")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return; // svn not installed in this environment
-        }
-
         let rrid = "SUSE:Maintenance:24993:275518";
         let server = MockServer::start().await;
         mount_success(&server, rrid).await;
@@ -733,40 +716,8 @@ mod tests {
         assert!(session.activate("SUSE:Maintenance:1:1").is_active());
         let tmp = tempfile::tempdir().unwrap();
 
-        let repo = tmp.path().join("repo");
-        assert!(
-            std::process::Command::new("svnadmin")
-                .args(["create", repo.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        let repo_url = format!("file://{}", repo.display());
-        let import = tmp.path().join("import").join(rrid);
-        std::fs::create_dir_all(&import).unwrap();
-        std::fs::write(import.join("log"), "log\n").unwrap();
-        std::fs::write(
-            import.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
-        assert!(
-            std::process::Command::new("svn")
-                .args([
-                    "import",
-                    "-m",
-                    "seed",
-                    import.parent().unwrap().to_str().unwrap(),
-                    &repo_url,
-                ])
-                .status()
-                .unwrap()
-                .success()
-        );
-
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().join("templates");
-        session.config.svn_path = repo_url;
 
         let args = matches(&Regenerate, &["-k", rrid]);
         Regenerate.run(&mut session, &args).await.unwrap();
@@ -899,7 +850,6 @@ mod tests {
         session.metadata_mut().base_mut().document = Some(doc_with_verdict(rrid));
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &["--discard-authored"]);
         Regenerate.call(&mut session, &args).await.unwrap();
@@ -941,7 +891,6 @@ mod tests {
         base.document_dirty = true;
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &["--discard-authored"]);
         Regenerate.call(&mut session, &args).await.unwrap();
@@ -990,7 +939,6 @@ mod tests {
         session.metadata_mut().base_mut().document = Some(doc_with_verdict(loaded_rrid));
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &[other_rrid]);
         Regenerate.call(&mut session, &args).await.unwrap();
@@ -1012,7 +960,6 @@ mod tests {
         session.metadata_mut().base_mut().document = Some(doc_with_openqa_only(rrid));
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &[]);
         Regenerate.call(&mut session, &args).await.unwrap();

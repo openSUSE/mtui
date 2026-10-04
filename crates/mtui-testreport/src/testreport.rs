@@ -147,9 +147,8 @@ pub struct TestReportBase {
     /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by
     /// the exporters for openQA-enriched templates.
     pub openqa: ReportOpenQA,
-    /// The v2 report document this report was loaded from, when loaded via
-    /// the `api-ingest` feature's ingest path. `None` on every default (SVN)
-    /// load, and on every build without that feature.
+    /// The v2 document this report was loaded from; `None` only on a
+    /// `NullReport`/unloaded report.
     pub document: Option<mtui_types::report_document::ReportDocument>,
     /// The [`document`](Self::document)'s response `ETag`, when the server
     /// sent one — the conditional-GET/`If-Match` key a later write path would

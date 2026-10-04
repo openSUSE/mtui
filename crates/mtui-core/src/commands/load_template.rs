@@ -241,7 +241,6 @@ mod tests {
         let (mut session, _buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
         let server = MockServer::start().await;
         session.config.teregen_api_v2 = server.uri();
 
@@ -250,8 +249,7 @@ mod tests {
         // The threaded-through cause, so the operator sees *why* it failed.
         assert!(
             matches!(&err, CommandError::Other(m)
-            if m.contains("could not load")
-                && (m.contains("svn checkout") || m.contains("no document yet"))),
+            if m.contains("could not load") && m.contains("no document yet")),
             "{err:?}"
         );
         assert!(session.templates.is_empty());
@@ -263,14 +261,6 @@ mod tests {
         let (mut session, buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
         let _teregen = serving(&mut session, rrid, "maintenance").await;
 
@@ -294,14 +284,6 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
         let _teregen = serving(&mut session, rrid, "maintenance").await;
 
@@ -318,7 +300,6 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
         let server = MockServer::start().await;
         session.config.teregen_api_v2 = server.uri();
 
@@ -341,7 +322,6 @@ mod tests {
         session.metadata_mut().base_mut().document_dirty = true;
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
-        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
         let server = MockServer::start().await;
         session.config.teregen_api_v2 = server.uri();
         (session, tmp, server)
@@ -371,8 +351,7 @@ mod tests {
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m)
-                if m.contains("svn checkout") || m.contains("no document yet")),
+            matches!(&err, CommandError::Other(m) if m.contains("no document yet")),
             "the load must have been attempted: {err:?}"
         );
     }
@@ -387,8 +366,7 @@ mod tests {
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m)
-                if m.contains("svn checkout") || m.contains("no document yet")),
+            matches!(&err, CommandError::Other(m) if m.contains("no document yet")),
             "{err:?}"
         );
     }
@@ -402,8 +380,7 @@ mod tests {
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m)
-                if m.contains("svn checkout") || m.contains("no document yet")),
+            matches!(&err, CommandError::Other(m) if m.contains("no document yet")),
             "{err:?}"
         );
     }
@@ -469,26 +446,9 @@ mod tests {
         let (mut session, buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:SLFO:1.2:4413";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            serde_json::json!({
-                "rrid": rrid,
-                "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2/",
-                "products": ["SLES 16.0 (x86_64)"],
-                "gitea_pr_api": format!("{}/pulls/1", gitea.uri()),
-                // Differs from the mocked PR head ("freshsha") — the hash
-                // mismatch this whole path exists to force-continue past.
-                "gitea_commit_hash": "stalesha",
-                "packages": {},
-                "testplatform": [],
-            })
-            .to_string(),
-        )
-        .unwrap();
-        // The document carries the same stale commit the seeded metadata does.
+        // The document carries a commit that differs from the mocked PR head
+        // ("freshsha") — the hash mismatch this whole path exists to
+        // force-continue past.
         let teregen = MockServer::start().await;
         let doc = document_json(rrid, "slfo").replace(
             "\"origin\": {}",

@@ -53,7 +53,6 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
 cargo test --workspace                       # default features only
-cargo test -p mtui-testreport --features api-ingest # while the feature exists (see below)
 cargo build --workspace --no-default-features # feature matrix (compile-only)
 cargo build --workspace --all-features        # feature matrix (compile-only)
 ```
@@ -77,23 +76,6 @@ Notes that save time:
 New or changed code needs **≥80% patch coverage**. For a genuinely un-coverable
 best-effort network/error path, add a focused test or a justified `allow` — never
 leave coverage silently red.
-
-## Dev-only feature flags
-
-`mtui-testreport/api-ingest` is off in every default build; it exists only so
-a developer can opt in locally (`cargo test -p mtui-testreport --features
-api-ingest`) and CI's `--all-features` job compiles it. While the feature
-exists, CI's `test` job also *runs and measures* it — a second, narrower
-`cargo llvm-cov` pass, merged into the same coverage report, since its tests
-are `cfg`-ed out of the default-feature run. It switches
-`make_testreport`'s report-loading path from the SVN `metadata.json`/`log`
-checkout onto TeReGen's v2 JSON report document (`[teregen] api_v2`), retiring
-`ReducedMetadataParser`/`JSONParser`/`patchinfo_titles` for that path while the
-SVN checkout itself still runs (the scratch directory `export`/`commit`/
-`showdiff` need). It is dev-only scaffolding for an in-progress migration of
-report ingest onto TeReGen's JSON document API, and is deleted, along with the
-SVN path it sits beside, once that migration finishes — never gate a released
-feature on it, and never assume it exists in a released binary.
 
 ## Command architecture
 

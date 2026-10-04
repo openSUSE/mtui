@@ -1,12 +1,10 @@
-//! End-to-end `make_testreport` coverage for the `api-ingest` read path.
+//! End-to-end `make_testreport` coverage for the document read path.
 //!
 //! `lifecycle.rs`'s colocated `ingest_tests` module unit-tests
 //! `load_via_document`/`document_fetch_message`/`regenerate_via_teregen`
 //! directly; this file drives the same machinery through the public
-//! `make_testreport` entry point so its `#[cfg(feature = "api-ingest")]`
-//! wiring — including the `HashCheck::Mismatch` -> `handle_stale_hash` ->
-//! `regenerate_via_teregen` branch — is exercised too, not just the private
-//! helpers it calls.
+//! `make_testreport` entry point, including the `HashCheck::Mismatch` ->
+//! `handle_stale_hash` -> `regenerate_via_teregen` branch.
 //!
 //! The 503-past-the-600s-poll-budget status is deliberately not repeated
 //! here as a literal end-to-end wait: `document_fetch_message` already pins
