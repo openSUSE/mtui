@@ -368,11 +368,8 @@ fn is_unverified(host: &ManualHost) -> bool {
 /// functions, composed): in memory only, nothing uploads here. On the SVN path
 /// it runs in addition to the text export; on the document path it replaces it.
 ///
-/// A cheap no-op when no document is loaded (every non-`api-ingest` build,
-/// and any `api-ingest` load that fell back to SVN): the guard below skips
-/// the oscrc read entirely in that common case, and `author_export` itself
-/// is unconditionally callable without `mtui-core` declaring the feature
-/// (see `export_authoring.rs`'s module doc for why that matters).
+/// A cheap no-op when no document is loaded: the guard below skips the oscrc
+/// read entirely in that case.
 ///
 /// Returns the top-level document pointers touched, so the caller can report
 /// what changed.
@@ -395,8 +392,7 @@ fn author_onto_document(
 }
 
 /// Formats `author_onto_document`'s touched pointers as the "document: ..."
-/// line, or `None` when nothing was touched (no document loaded, or a
-/// non-`api-ingest` build).
+/// line, or `None` when nothing was touched (no document loaded).
 fn document_line(touched: &[&str]) -> Option<String> {
     if touched.is_empty() {
         return None;
@@ -1065,8 +1061,7 @@ mod tests {
 
     /// A minimal, schema-valid `ReportDocument` (mirrors `mtui-types`'
     /// `schema_conformance.rs` minimal golden) with no `testing.*` content
-    /// yet — the starting state authoring works from. `mtui_types` is not
-    /// feature-gated, so this needs no `api-ingest` on this crate.
+    /// yet — the starting state authoring works from.
     fn minimal_document() -> mtui_types::report_document::ReportDocument {
         let raw = r#"{
             "schema_version": "1.0", "id": "SUSE:Maintenance:1:1",
@@ -1082,18 +1077,13 @@ mod tests {
         raw.parse().expect("minimal document parses")
     }
 
-    /// A document present on the report survives an export
-    /// (`author_onto_document` reaches `mtui_testreport::author_export`
-    /// without panicking) and the text template is left alone. The *content*
-    /// `author_export` composes is exhaustively covered in `mtui-testreport`'s
-    /// own suite under `--features api-ingest`
-    /// (`export_authoring.rs`/`authoring::tests`/`tests/authoring.rs`): this
-    /// crate never turns that feature on for `mtui-testreport` (doing so
-    /// would flip `make_testreport`'s SVN/document branch for every other
-    /// test in this binary), so it cannot assert on authored content itself.
+    /// A document present on the report is authored by an export — marked
+    /// dirty, with `testing.install` filled in and the change reported — and
+    /// the text template is left alone. The content `author_export` composes
+    /// is covered exhaustively in `mtui-testreport`'s own suite.
     #[tokio::test]
-    async fn manual_export_does_not_panic_when_a_document_is_loaded() {
-        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+    async fn manual_export_authors_the_loaded_document() {
+        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
         record_versions(&mut session, "h1");
         session.metadata_mut().base_mut().document = Some(minimal_document());
         let before = std::fs::read(&path).unwrap();
@@ -1101,7 +1091,20 @@ mod tests {
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
         Export.call(&mut session, &args).await.unwrap();
 
-        assert!(session.metadata().base().document.is_some());
+        let base = session.metadata().base();
+        assert!(base.document_dirty);
+        assert!(
+            base.document
+                .as_ref()
+                .is_some_and(|d| d.testing.install.is_some())
+        );
+        let out = buf.contents();
+        assert!(
+            out.contains("document: ")
+                && out.contains("testing.install")
+                && out.contains("updated"),
+            "{out:?}"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
@@ -1207,8 +1210,7 @@ mod tests {
         assert!(!dir.path().join("SUSE:Maintenance:1:1/log").exists());
     }
 
-    /// A session that never loaded a document (every default build) must
-    /// export exactly as before: no panic, and `document` stays `None`
+    /// A session that never loaded a document must export exactly as before: no panic, and `document` stays `None`
     /// rather than being conjured from nothing.
     #[tokio::test]
     async fn author_onto_document_is_a_noop_without_a_loaded_document() {

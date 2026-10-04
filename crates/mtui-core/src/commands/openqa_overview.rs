@@ -804,10 +804,8 @@ mod tests {
         );
     }
 
-    /// On the document path the export never reads or creates the text `log`.
-    /// The authored `testing.openqa.extra` content is pinned in
-    /// `mtui-testreport`: `author_export` is a no-op here (this crate never
-    /// enables `api-ingest`), so the message is the only thing asserted on it.
+    /// On the document path the export never reads or creates the text `log`,
+    /// and authors the rows under `testing.openqa.extra`.
     #[tokio::test]
     async fn export_on_the_document_path_never_touches_the_log() {
         let dir = tempfile::tempdir().unwrap();
@@ -832,6 +830,14 @@ mod tests {
         let out = buf.contents();
         assert!(!out.contains("NOT exported"), "{out}");
         assert!(!out.contains("written to"), "{out}");
+        let base = session.metadata().base();
+        assert!(base.document_dirty);
+        let openqa = base
+            .document
+            .as_ref()
+            .and_then(|d| d.testing.openqa.as_ref())
+            .expect("testing.openqa authored");
+        assert!(openqa.extra.contains_key("single_incidents"));
     }
 
     // ------------------------------------------------------------ row budget
