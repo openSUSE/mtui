@@ -1,8 +1,8 @@
 //! The test-report construction lifecycle (`make_testreport`).
 //!
-//! Selects the report class by RRID kind (`tr_factory`), runs the checkout +
-//! read cycle, and applies workflow selection + the deferred-autoconnect flag
-//! for the auto/kernel update kinds.
+//! Selects the report class by RRID kind (`tr_factory`), loads it from the
+//! teregen v2 document, and applies workflow selection + the
+//! deferred-autoconnect flag for the auto/kernel update kinds.
 //!
 //! This crate stays free of the host-connect layer: the connect belongs to the
 //! composition root (`mtui-core::Session::load_update`), which owns the arbiter
@@ -21,13 +21,7 @@ use mtui_types::enums::RequestKind;
 use mtui_types::{UpdateID, Workflow};
 use tracing::{error, info, warn};
 
-#[cfg(not(feature = "api-ingest"))]
-use crate::checkout::ReadOutcome;
-#[cfg(not(feature = "api-ingest"))]
-use crate::checkout::TokioSvnRunner;
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
-#[cfg(not(feature = "api-ingest"))]
-use crate::testreport::ReadError;
 use crate::testreport::{HashCheck, TestReport};
 
 /// Which update kind produced the report — selects the workflow and whether
@@ -80,8 +74,8 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 /// Builds and populates a [`TestReport`] for `update`.
 ///
 /// 1. Selects the report class by RRID kind (`tr_factory`).
-/// 2. Reads `template_dir/<rrid>/log`; a missing template triggers a `svn`
-///    checkout and one retry.
+/// 2. Loads the report from the teregen v2 document; nothing is checked out,
+///    and `template_dir/<rrid>/` is only a scratch directory.
 /// 3. On a load failure returns a [`NullReport`], so the caller can add a
 ///    benign inactive template rather than propagate an error.
 /// 4. Verifies the Gitea token + template hash ([`TestReport::check_hash`]): a
@@ -113,56 +107,17 @@ pub async fn make_testreport(
     force_continue: bool,
 ) -> Box<dyn TestReport + Send + Sync> {
     let template_dir = config.template_dir.clone();
-    let svn_path = config.svn_path.clone();
     let max_parallel = config.max_parallel as usize;
     let mut report = tr_factory(update, config);
 
     let rrid_dir = template_dir.join(update.id.to_string());
     let trpath = rrid_dir.join("log");
 
-    #[cfg(not(feature = "api-ingest"))]
-    let runner = TokioSvnRunner;
     let checkout_config = report.base().config.clone();
     let rrid = update.id.clone();
 
-    // Inlined rather than routed through `checkout_and_read`: the `read` step
-    // must mutate `report`, which clashes with the borrows the closures need.
-    #[cfg(not(feature = "api-ingest"))]
-    let loaded: Result<(), String> = match to_outcome(report.read(&trpath)) {
-        ReadOutcome::Ok => Ok(()),
-        ReadOutcome::Io(e) if !e.is_not_found() => {
-            // A non-ENOENT read error is not a "needs checkout" signal.
-            info!("{e}");
-            Err(format!("reading {}: {e}", trpath.display()))
-        }
-        ReadOutcome::Io(_missing) => {
-            match crate::checkout::testreport_svn_checkout(
-                &runner,
-                &checkout_config,
-                &svn_path,
-                &rrid,
-            )
-            .await
-            {
-                Ok(()) => match to_outcome(report.read(&trpath)) {
-                    ReadOutcome::Ok => Ok(()),
-                    ReadOutcome::Io(e) => {
-                        info!("{e}");
-                        Err(format!("reading {} after checkout: {e}", trpath.display()))
-                    }
-                },
-                Err(e) => {
-                    info!("{e}");
-                    Err(format!("svn checkout of {rrid} failed: {e}"))
-                }
-            }
-        }
-    };
-
-    // The v2 read path: the document replaces `TestReport::read`'s
-    // log-scraping + `metadata.json` parse as the source of the model, and
-    // nothing is checked out — only the scratch directory is created.
-    #[cfg(feature = "api-ingest")]
+    // The document is the source of the model; nothing is checked out — only
+    // the scratch directory is created.
     let loaded: Result<(), String> =
         load_via_document(&mut report, &rrid, &checkout_config, &trpath, None).await;
 
@@ -195,7 +150,6 @@ pub async fn make_testreport(
             match handle_stale_hash(
                 update,
                 &checkout_config,
-                &svn_path,
                 &rrid_dir,
                 &trpath,
                 is_repl,
@@ -309,7 +263,6 @@ pub async fn make_testreport(
 async fn handle_stale_hash(
     update: &UpdateID,
     config: &Config,
-    svn_path: &str,
     rrid_dir: &std::path::Path,
     trpath: &std::path::Path,
     is_repl: bool,
@@ -330,9 +283,7 @@ async fn handle_stale_hash(
     };
 
     if regenerate {
-        if let Some(fresh) =
-            regenerate_via_teregen(update, config, svn_path, rrid_dir, trpath, prev_etag).await
-        {
+        if let Some(fresh) = regenerate_via_teregen(update, config, trpath, prev_etag).await {
             return Some(Some(fresh));
         }
         warn!("Regeneration failed; falling back to manual handling");
@@ -378,11 +329,10 @@ async fn handle_stale_hash(
     None
 }
 
-/// Regenerates a stale template via TeReGen, then reloads it — under
-/// `--features api-ingest`, by re-fetching the v2 document (passing
-/// `prev_etag`, so a `304` means the regenerate did not actually change the
-/// document and is reported as such rather than misread as success); by
-/// re-checking-out and re-reading otherwise.
+/// Regenerates a stale template via TeReGen, then reloads it by re-fetching the
+/// v2 document (passing `prev_etag`, so a `304` means the regenerate did not
+/// actually change the document and is reported as such rather than misread as
+/// success).
 ///
 /// Returns the freshly loaded, hash-verified report on success, or `None` so the
 /// caller falls back to the manual force/decline handling. Any TeReGen failure,
@@ -391,8 +341,6 @@ async fn handle_stale_hash(
 async fn regenerate_via_teregen(
     update: &UpdateID,
     config: &Config,
-    svn_path: &str,
-    rrid_dir: &std::path::Path,
     trpath: &std::path::Path,
     prev_etag: Option<&str>,
 ) -> Option<Box<dyn TestReport + Send + Sync>> {
@@ -421,17 +369,6 @@ async fn regenerate_via_teregen(
     }
     info!("Regeneration job {:?} enqueued for {}", outcome.job, rrid);
 
-    // The job was accepted: it is now safe to drop the stale local checkout.
-    // Under `--features api-ingest` the reload below re-fetches the document
-    // and the directory only holds scratch files, so it is kept.
-    #[cfg(feature = "api-ingest")]
-    let _ = (rrid_dir, svn_path);
-    #[cfg(not(feature = "api-ingest"))]
-    if rrid_dir.exists() {
-        let _ = tokio::fs::remove_dir_all(rrid_dir).await;
-        info!("Removed stale checked out template {}", rrid_dir.display());
-    }
-
     if !outcome.ok {
         let detail = outcome
             .minion_error
@@ -448,25 +385,9 @@ async fn regenerate_via_teregen(
     // A still-failing hash on the fresh template is a reload failure.
     let mut fresh = tr_factory(update, config.clone());
 
-    #[cfg(feature = "api-ingest")]
     if let Err(e) = load_via_document(&mut fresh, &rrid, config, trpath, prev_etag).await {
         error!("Reload after regeneration failed: {e}");
         return None;
-    }
-    #[cfg(not(feature = "api-ingest"))]
-    {
-        let _ = prev_etag;
-        let runner = TokioSvnRunner;
-        if let Err(e) =
-            crate::checkout::testreport_svn_checkout(&runner, config, svn_path, &rrid).await
-        {
-            error!("Reload after regeneration failed: {e}");
-            return None;
-        }
-        if let Err(e) = fresh.read(trpath) {
-            error!("Reload after regeneration failed: {e}");
-            return None;
-        }
     }
 
     match fresh.check_hash().await {
@@ -494,7 +415,6 @@ async fn regenerate_via_teregen(
 /// scratch directory (nothing is checked out), and finally derives
 /// `update_repos`. `ReducedMetadataParser`/
 /// `JSONParser`/`patchinfo_titles` are never invoked on this path.
-#[cfg(feature = "api-ingest")]
 async fn load_via_document(
     report: &mut Box<dyn TestReport + Send + Sync>,
     rrid: &mtui_types::RequestReviewID,
@@ -569,7 +489,6 @@ async fn load_via_document(
 /// a distinct refusal text per status, naming the remedy, and for
 /// [`Invalid`](mtui_datasources::teregen::TeregenV2Error::Invalid) the
 /// `DocumentError` pointer verbatim rather than wrapped in extra prose.
-#[cfg(feature = "api-ingest")]
 fn document_fetch_message(e: mtui_datasources::teregen::TeregenV2Error) -> String {
     use mtui_datasources::teregen::TeregenV2Error;
     match e {
@@ -582,29 +501,11 @@ fn document_fetch_message(e: mtui_datasources::teregen::TeregenV2Error) -> Strin
     }
 }
 
-/// Maps a [`TestReport::read`] result to the checkout seam's [`ReadOutcome`].
-///
-/// A present-but-unparseable `metadata.json` becomes a **non-ENOENT** read error
-/// so the seam does not loop into a (pointless) checkout for it.
-#[cfg(not(feature = "api-ingest"))]
-fn to_outcome(res: Result<(), ReadError>) -> ReadOutcome {
-    match res {
-        Ok(()) => ReadOutcome::Ok,
-        Err(ReadError::Template(e)) => ReadOutcome::Io(e),
-        Err(_) => ReadOutcome::Io(crate::checkout::TemplateIoError::from_io(
-            &std::io::Error::other("metadata.json present but could not be parsed"),
-        )),
-    }
-}
-
 /// `load_via_document`'s refusal-message mapping and backoff.
 ///
-/// Colocated here rather than in `tests/lifecycle.rs` for two reasons: this
-/// needs the private `load_via_document`/`document_fetch_message` seam, and
-/// that integration suite is SVN-`make_testreport`-only — `tests/it.rs` excludes
-/// it entirely under `--features api-ingest`, since the SVN branch it exercises
-/// does not exist under the feature.
-#[cfg(all(test, feature = "api-ingest"))]
+/// Colocated here because it needs the private
+/// `load_via_document`/`document_fetch_message` seam.
+#[cfg(test)]
 mod ingest_tests {
     use mtui_datasources::teregen::TeregenV2Error;
     use mtui_types::RequestReviewID;
@@ -875,16 +776,9 @@ mod ingest_tests {
         config.teregen_api = server.uri();
         let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
 
-        let fresh = regenerate_via_teregen(
-            &update,
-            &config,
-            "svn+ssh://unused",
-            &rrid_dir,
-            &trpath,
-            None,
-        )
-        .await
-        .expect("regenerate + reload succeeds");
+        let fresh = regenerate_via_teregen(&update, &config, &trpath, None)
+            .await
+            .expect("regenerate + reload succeeds");
         assert_eq!(fresh.base().document.as_ref().unwrap().id, RRID_STR);
     }
 
@@ -910,15 +804,7 @@ mod ingest_tests {
         config.teregen_api = server.uri();
         let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
 
-        let fresh = regenerate_via_teregen(
-            &update,
-            &config,
-            "svn+ssh://unused",
-            &rrid_dir,
-            &trpath,
-            Some("\"prev\""),
-        )
-        .await;
+        let fresh = regenerate_via_teregen(&update, &config, &trpath, Some("\"prev\"")).await;
         assert!(fresh.is_none());
     }
 }

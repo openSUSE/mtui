@@ -875,8 +875,8 @@ impl Session {
     /// Loads a template into the registry and, when requested, connects its
     /// reference hosts.
     ///
-    /// 1. [`make_testreport`] checks out and reads the report (or returns a null
-    ///    report on failure, which [`TemplateRegistry::add`] silently ignores).
+    /// 1. [`make_testreport`] loads the report from its teregen document (or
+    ///    returns a null report on failure, which [`TemplateRegistry::add`] silently ignores).
     /// 2. The report is registered and, with a real RRID, made active.
     ///    Re-loading an already-loaded RRID replaces its stored report;
     ///    siblings are untouched.
@@ -912,7 +912,7 @@ impl Session {
     ///
     /// Returns `(rrid, load_error)`: on failure an empty RRID plus the
     /// diagnostic [`make_testreport`] stashed on the substituted null report
-    /// (svn checkout / gitea / hash / read failure), so `load_template` can
+    /// (document fetch / gitea / hash failure), so `load_template` can
     /// surface the real cause instead of a bare "could not load".
     pub(crate) async fn load_update_reported(
         &mut self,
@@ -2173,20 +2173,12 @@ mod tests {
         assert_eq!(hosts, vec!["ref-only.example.com".to_owned()]);
     }
 
-    /// A kernel update loads the on-disk template and activates it without
+    /// A kernel update loads the report and activates it without
     /// autoconnecting, so a load never touches a live host.
     #[tokio::test]
     async fn load_update_kernel_loads_and_activates_without_connect() {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
@@ -2211,14 +2203,6 @@ mod tests {
     async fn load_update_reported_seeds_pi_lock_comment_when_enabled() {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:PI:1.2:5";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
@@ -2242,14 +2226,6 @@ mod tests {
     async fn load_update_reported_leaves_lock_comment_empty_for_maintenance_rrid() {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
@@ -2269,14 +2245,6 @@ mod tests {
     async fn load_update_reported_leaves_lock_comment_empty_when_autolock_disabled() {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:PI:1.2:5";
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
-        std::fs::write(
-            dir.join("metadata.json"),
-            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
-        )
-        .unwrap();
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
@@ -2298,8 +2266,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
-        // Make the internal `svn co` fail fast offline.
-        config.svn_path = format!("file://{}/no-such-repo", tmp.path().display());
         let teregen = wiremock::MockServer::start().await;
         config.teregen_api_v2 = teregen.uri();
         let mut s = Session::new(config, false);
@@ -2313,7 +2279,7 @@ mod tests {
         assert!(s.templates.is_empty());
         let reason = reason.expect("a failed load should report a reason");
         assert!(
-            reason.contains("svn checkout") || reason.contains("no document yet"),
+            reason.contains("no document yet"),
             "reason should name the underlying cause: {reason}"
         );
     }

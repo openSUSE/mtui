@@ -1,16 +1,7 @@
-//! Feature-independent adapter between the `export` command and
-//! [`crate::authoring`].
+//! Adapter between the `export` command and [`crate::authoring`].
 //!
-//! [`author_export`] is **always** compiled and callable, so `mtui-core`
-//! never needs to declare the `api-ingest` Cargo feature itself — its body is
-//! a real no-op unless this crate was built with the feature, and even then
-//! only when `document` is `Some`. That matters beyond tidiness:
-//! `mtui-core`'s own test suite calls `make_testreport` (SVN checkout)
-//! throughout, and that function's `#[cfg(feature = "api-ingest")]` branch
-//! replaces SVN with a live document fetch crate-wide — turning the feature
-//! on for the whole of `mtui-core` would send unrelated tests to
-//! `qam.suse.de` for real. Keeping the gate confined to this crate (already
-//! the case for `authoring`/`ingest`) avoids that entirely.
+//! [`author_export`] authors the loaded report document in addition to the
+//! text export, and does nothing when no document is loaded.
 
 use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -24,15 +15,8 @@ use crate::export::ManualHost;
 /// it. `hosts` is only meaningful for the manual workflow; pass `None` for
 /// `Auto`/`Kernel`.
 ///
-/// Returns the top-level pointers touched — empty without `api-ingest` or
-/// when `document` is `None`, since neither case authors anything.
-#[cfg_attr(
-    not(feature = "api-ingest"),
-    allow(
-        unused_variables,
-        reason = "the whole body compiles out without api-ingest"
-    )
-)]
+/// Returns the top-level pointers touched — empty when `document` is `None`,
+/// since nothing is authored then.
 pub fn author_export(
     document: &mut Option<ReportDocument>,
     hosts: Option<&[ManualHost]>,
@@ -41,29 +25,24 @@ pub fn author_export(
     overview: Option<&OpenQAOverviewResult>,
     tester: Option<TesterEntry>,
 ) -> Vec<&'static str> {
-    #[cfg(feature = "api-ingest")]
-    {
-        let Some(document) = document.as_mut() else {
-            return Vec::new();
-        };
-        let install = hosts
-            .map(|hosts| crate::authoring::manual::install_from_hosts(hosts, &document.install));
-        let openqa_install = crate::authoring::auto::openqa_install_from_auto(auto);
-        let regression = crate::authoring::kernel::regression_from_kernel(kernel);
-        let openqa_extra = overview
-            .map(crate::authoring::overview::openqa_extra_from_overview)
-            .unwrap_or_default();
-        crate::authoring::author_document(
-            document,
-            install,
-            openqa_install,
-            regression,
-            openqa_extra,
-            tester,
-        )
-    }
-    #[cfg(not(feature = "api-ingest"))]
-    Vec::new()
+    let Some(document) = document.as_mut() else {
+        return Vec::new();
+    };
+    let install =
+        hosts.map(|hosts| crate::authoring::manual::install_from_hosts(hosts, &document.install));
+    let openqa_install = crate::authoring::auto::openqa_install_from_auto(auto);
+    let regression = crate::authoring::kernel::regression_from_kernel(kernel);
+    let openqa_extra = overview
+        .map(crate::authoring::overview::openqa_extra_from_overview)
+        .unwrap_or_default();
+    crate::authoring::author_document(
+        document,
+        install,
+        openqa_install,
+        regression,
+        openqa_extra,
+        tester,
+    )
 }
 
 #[cfg(test)]
@@ -80,9 +59,7 @@ mod tests {
 
     /// The composition itself (join, verdicts, tester dedup) is unit-tested
     /// exhaustively in `authoring::tests`; this proves the adapter actually
-    /// reaches it with a document present, under the same feature-scoped CI
-    /// job that already runs `--features api-ingest` for this crate.
-    #[cfg(feature = "api-ingest")]
+    /// reaches it with a document present.
     #[test]
     fn composes_testing_install_when_a_document_and_hosts_are_present() {
         use mtui_types::hostlog::HostLog;
@@ -152,7 +129,6 @@ mod tests {
 
     /// The overview rows park under `testing.openqa.extra`, which is what the
     /// `openqa_overview --export` document path relies on.
-    #[cfg(feature = "api-ingest")]
     #[test]
     fn parks_overview_rows_under_testing_openqa_extra() {
         let mut document: Option<ReportDocument> = Some(
