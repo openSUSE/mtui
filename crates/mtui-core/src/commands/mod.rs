@@ -297,10 +297,17 @@ pub(crate) mod testkit {
         }
 
         pub(crate) fn minimal_document(id: &str) -> ReportDocument {
-            let raw = format!(
+            ReportDocument::from_str(&document_json(id, "pi")).expect("fixture document parses")
+        }
+
+        /// A minimal schema-valid document of `kind` (`maintenance`, `slfo` or
+        /// `pi`), as the JSON text a teregen server would send.
+        pub(crate) fn document_json(id: &str, kind: &str) -> String {
+            let workflow = if kind == "slfo" { "gitea" } else { "obs" };
+            format!(
                 r#"{{
-                    "schema_version": "1.0", "id": "{id}", "kind": "pi",
-                    "workflow": "obs", "generated_at": "2026-01-01T00:00:00Z",
+                    "schema_version": "1.0", "id": "{id}", "kind": "{kind}",
+                    "workflow": "{workflow}", "generated_at": "2026-01-01T00:00:00Z",
                     "verdict": null, "comment": null,
                     "people": {{"testers": [], "reviewer": {{"name": null}}}},
                     "update": {{"packager": "p", "source_packages": ["a"], "origin": {{}},
@@ -312,8 +319,32 @@ pub(crate) mod testkit {
                     }}], "test_platforms": []}},
                     "issues": {{}}, "testing": {{}}
                 }}"#
-            );
-            ReportDocument::from_str(&raw).expect("fixture document parses")
+            )
+        }
+
+        /// Serves `doc_json` as `GET /reports/{id}`.
+        pub(crate) async fn mount_document(server: &MockServer, id: &str, doc_json: &str) {
+            Mock::given(method("GET"))
+                .and(wpath(format!("/reports/{id}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(doc_json)
+                        .insert_header("etag", "\"fixture\""),
+                )
+                .mount(server)
+                .await;
+        }
+
+        /// Serves the shipped schema as `GET /schema`, so a load sees no drift.
+        pub(crate) async fn mount_schema(server: &MockServer) {
+            Mock::given(method("GET"))
+                .and(wpath("/schema"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(mtui_types::report_document::SCHEMA_JSON),
+                )
+                .mount(server)
+                .await;
         }
 
         pub(crate) fn auth_for(server: &MockServer, store_path: PathBuf) -> TeregenAuth {
@@ -1015,6 +1046,7 @@ mod mcp_nonempty_success_guard {
     };
     use crate::session::Session;
     use crate::{MCP_DENYLIST, dispatch_command, register_all};
+    use wiremock::MockServer;
 
     const RRID: &str = "SUSE:Maintenance:1:1";
 
@@ -1063,7 +1095,10 @@ mod mcp_nonempty_success_guard {
     /// Build the loaded session + argv that drives `name` to a successful
     /// dispatch with output, for every command the guard *enforces*. Returns
     /// `None` for a name not enforced here (it must then be on the allow-list).
-    fn fixture(name: &str) -> Option<(Session, Buffer, Vec<String>)> {
+    ///
+    /// `teregen` is the base URL of a mocked teregen serving the load fixture's
+    /// document.
+    fn fixture(name: &str, teregen: &str) -> Option<(Session, Buffer, Vec<String>)> {
         let hosts = || session_with_hosts(RRID, &["h1"], "ok");
         let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
 
@@ -1241,6 +1276,7 @@ mod mcp_nonempty_success_guard {
                 )
                 .expect("write metadata");
                 s.config.template_dir = dir.path().to_path_buf();
+                s.config.teregen_api_v2 = teregen.to_owned();
                 // Leak the guard: the load is synchronous within dispatch.
                 std::mem::forget(dir);
                 (s, b, argv(&["-k", krrid]))
@@ -1262,7 +1298,7 @@ mod mcp_nonempty_success_guard {
             if MCP_DENYLIST.contains(&name) {
                 continue;
             }
-            let enforced = fixture(name).is_some();
+            let enforced = fixture(name, "").is_some();
             let allowed = ALLOW_EMPTY_SUCCESS.contains(&name);
             assert!(
                 enforced ^ allowed,
@@ -1285,13 +1321,22 @@ mod mcp_nonempty_success_guard {
     #[tokio::test]
     async fn enforced_commands_write_something_on_success() {
         let registry = register_all();
+        let teregen = MockServer::start().await;
+        let krrid = "SUSE:Maintenance:24993:275518";
+        super::testkit::teregen::mount_document(
+            &teregen,
+            krrid,
+            &super::testkit::teregen::document_json(krrid, "maintenance"),
+        )
+        .await;
+        super::testkit::teregen::mount_schema(&teregen).await;
         let mut names: Vec<&str> = registry.names().collect();
         names.sort_unstable();
         for name in names {
             if MCP_DENYLIST.contains(&name) || ALLOW_EMPTY_SUCCESS.contains(&name) {
                 continue;
             }
-            let Some((mut session, buf, argv)) = fixture(name) else {
+            let Some((mut session, buf, argv)) = fixture(name, &teregen.uri()) else {
                 panic!("enforced command {name:?} has no success fixture");
             };
             let command = registry.get(name).expect("registered");

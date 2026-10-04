@@ -716,6 +716,13 @@ mod tests {
         let rrid = "SUSE:Maintenance:24993:275518";
         let server = MockServer::start().await;
         mount_success(&server, rrid).await;
+        crate::commands::testkit::teregen::mount_document(
+            &server,
+            rrid,
+            &crate::commands::testkit::teregen::document_json(rrid, "maintenance"),
+        )
+        .await;
+        crate::commands::testkit::teregen::mount_schema(&server).await;
 
         let (mut session, buf) = empty_session();
         // A different template is already active; the regenerated RRID must
