@@ -151,6 +151,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Reports load from TeReGen API v2 (`[teregen] api_v2`) only. No SVN checkout
+  is made, and `<template_dir>/<RRID>/` is just a scratch directory for install
+  logs and results; an old checkout there is no longer read. A report with no
+  document on the server fails to load with "run `regenerate` first" (the server
+  answered 404 or 409); TeReGen at commit `d564571` or later is required.
+  - `export` authors the report document and writes the install logs; it no
+    longer writes the text template. `FILENAME` is ignored, with a note.
+  - `commit`, `approve` and `request_review` upload the document plus its
+    artifacts; `approve` refuses if that fails.
+  - `checkout` only refreshes the document. `openqa_overview --export` authors
+    `testing.openqa`. `show_diff` fetches and caches `source.diff`.
+  - The load warns when TeReGen's report schema differs from the one this mtui
+    ships, and writes are refused until mtui is upgraded.
 - Re-running `export` on a loaded report document keeps the tester's
   `testing.install` and `testing.regression` verdicts and comments instead of
   replacing them. The install checks are still rewritten from the connected
