@@ -2064,6 +2064,16 @@ mod tests {
         c
     }
 
+    /// A teregen serving `rrid`'s document, and `config` pointed at it.
+    async fn teregen_serving(config: &mut Config, rrid: &str, kind: &str) -> wiremock::MockServer {
+        use crate::commands::testkit::teregen::{document_json, mount_document, mount_schema};
+        let server = wiremock::MockServer::start().await;
+        mount_document(&server, rrid, &document_json(rrid, kind)).await;
+        mount_schema(&server).await;
+        config.teregen_api_v2 = server.uri();
+        server
+    }
+
     /// Adds an active `ObsReport` with the given reference hostnames and
     /// testplatforms to `session`.
     fn seed_active_report(
@@ -2180,6 +2190,7 @@ mod tests {
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
+        let _teregen = teregen_serving(&mut config, rrid, "maintenance").await;
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse(rrid).unwrap();
@@ -2211,6 +2222,7 @@ mod tests {
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
+        let _teregen = teregen_serving(&mut config, rrid, "pi").await;
         assert!(config.lock_pi_autolock, "default must be enabled");
         let mut s = Session::new(config, false);
 
@@ -2241,6 +2253,7 @@ mod tests {
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
+        let _teregen = teregen_serving(&mut config, rrid, "maintenance").await;
         assert!(config.lock_pi_autolock, "default must be enabled");
         let mut s = Session::new(config, false);
 
@@ -2267,6 +2280,7 @@ mod tests {
 
         let mut config = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
+        let _teregen = teregen_serving(&mut config, rrid, "pi").await;
         config.lock_pi_autolock = false;
         let mut s = Session::new(config, false);
 
@@ -2286,6 +2300,8 @@ mod tests {
         config.template_dir = tmp.path().to_path_buf();
         // Make the internal `svn co` fail fast offline.
         config.svn_path = format!("file://{}/no-such-repo", tmp.path().display());
+        let teregen = wiremock::MockServer::start().await;
+        config.teregen_api_v2 = teregen.uri();
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
@@ -2297,7 +2313,7 @@ mod tests {
         assert!(s.templates.is_empty());
         let reason = reason.expect("a failed load should report a reason");
         assert!(
-            reason.contains("svn checkout"),
+            reason.contains("svn checkout") || reason.contains("no document yet"),
             "reason should name the underlying cause: {reason}"
         );
     }

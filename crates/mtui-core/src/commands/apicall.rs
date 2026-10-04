@@ -614,6 +614,7 @@ mod tests {
         session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
+        session.config.teregen_api = server.uri();
 
         // Force assign skips the open-group guard.
         let args = matches(&Assign, &["--force"]);

@@ -187,7 +187,18 @@ impl Command for LoadTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::testkit::teregen::{document_json, mount_document, mount_schema};
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use wiremock::MockServer;
+
+    /// A teregen serving `rrid`'s document, and the session config pointing at it.
+    async fn serving(session: &mut Session, rrid: &str, kind: &str) -> MockServer {
+        let server = MockServer::start().await;
+        mount_document(&server, rrid, &document_json(rrid, kind)).await;
+        mount_schema(&server).await;
+        session.config.teregen_api_v2 = server.uri();
+        server
+    }
 
     #[test]
     fn name_and_single_scope() {
@@ -231,13 +242,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
         session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+        let server = MockServer::start().await;
+        session.config.teregen_api_v2 = server.uri();
 
         let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:1:1"]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
         // The threaded-through cause, so the operator sees *why* it failed.
         assert!(
             matches!(&err, CommandError::Other(m)
-            if m.contains("could not load") && m.contains("svn checkout")),
+            if m.contains("could not load")
+                && (m.contains("svn checkout") || m.contains("no document yet"))),
             "{err:?}"
         );
         assert!(session.templates.is_empty());
@@ -258,6 +272,7 @@ mod tests {
         )
         .unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
+        let _teregen = serving(&mut session, rrid, "maintenance").await;
 
         let args = matches(&LoadTemplate, &["-k", rrid]);
         LoadTemplate.call(&mut session, &args).await.unwrap();
@@ -288,6 +303,7 @@ mod tests {
         )
         .unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
+        let _teregen = serving(&mut session, rrid, "maintenance").await;
 
         let args = matches(&LoadTemplate, &["-k", rrid]);
         LoadTemplate.run(&mut session, &args).await.unwrap();
@@ -303,6 +319,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
         session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+        let server = MockServer::start().await;
+        session.config.teregen_api_v2 = server.uri();
 
         let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:2:2"]);
         let err = LoadTemplate.run(&mut session, &args).await.unwrap_err();
@@ -313,23 +331,26 @@ mod tests {
         );
     }
 
-    /// A session with `rrid` loaded, its document marked dirty, and a
-    /// `template_dir` whose `svn_path` cannot be checked out: any load attempt
-    /// fails with an `svn checkout` error, so a refusal is distinguishable from
-    /// a load that ran.
-    fn dirty_session_with_unreachable_svn(rrid: &str) -> (Session, tempfile::TempDir) {
+    /// A session with `rrid` loaded, its document marked dirty, and a teregen
+    /// that has no document for anything: any load attempt fails, so a refusal
+    /// is distinguishable from a load that ran.
+    async fn dirty_session_with_no_document(
+        rrid: &str,
+    ) -> (Session, tempfile::TempDir, MockServer) {
         let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
         session.metadata_mut().base_mut().document_dirty = true;
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
         session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
-        (session, tmp)
+        let server = MockServer::start().await;
+        session.config.teregen_api_v2 = server.uri();
+        (session, tmp, server)
     }
 
     #[tokio::test]
     async fn reload_of_a_dirty_template_is_refused_before_any_load() {
         let rrid = "SUSE:Maintenance:1:1";
-        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+        let (mut session, _tmp, _teregen) = dirty_session_with_no_document(rrid).await;
 
         let args = matches(&LoadTemplate, &["-k", rrid]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
@@ -344,13 +365,14 @@ mod tests {
     #[tokio::test]
     async fn discard_authored_lets_a_dirty_template_reload() {
         let rrid = "SUSE:Maintenance:1:1";
-        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+        let (mut session, _tmp, _teregen) = dirty_session_with_no_document(rrid).await;
 
         let args = matches(&LoadTemplate, &["-k", rrid, "--discard-authored"]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            matches!(&err, CommandError::Other(m)
+                if m.contains("svn checkout") || m.contains("no document yet")),
             "the load must have been attempted: {err:?}"
         );
     }
@@ -358,27 +380,30 @@ mod tests {
     #[tokio::test]
     async fn reload_of_a_clean_template_is_not_refused() {
         let rrid = "SUSE:Maintenance:1:1";
-        let (mut session, _tmp) = dirty_session_with_unreachable_svn(rrid);
+        let (mut session, _tmp, _teregen) = dirty_session_with_no_document(rrid).await;
         session.metadata_mut().base_mut().document_dirty = false;
 
         let args = matches(&LoadTemplate, &["-k", rrid]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            matches!(&err, CommandError::Other(m)
+                if m.contains("svn checkout") || m.contains("no document yet")),
             "{err:?}"
         );
     }
 
     #[tokio::test]
     async fn a_dirty_sibling_does_not_block_loading_another_template() {
-        let (mut session, _tmp) = dirty_session_with_unreachable_svn("SUSE:Maintenance:1:1");
+        let (mut session, _tmp, _teregen) =
+            dirty_session_with_no_document("SUSE:Maintenance:1:1").await;
 
         let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:2:2"]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
 
         assert!(
-            matches!(&err, CommandError::Other(m) if m.contains("svn checkout")),
+            matches!(&err, CommandError::Other(m)
+                if m.contains("svn checkout") || m.contains("no document yet")),
             "{err:?}"
         );
     }
@@ -463,6 +488,19 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+        // The document carries the same stale commit the seeded metadata does.
+        let teregen = MockServer::start().await;
+        let doc = document_json(rrid, "slfo").replace(
+            "\"origin\": {}",
+            &format!(
+                "\"origin\": {{\"api\": \"{}/pulls/1\", \"commit\": \"stalesha\", \
+                 \"pull_request\": \"https://x/pr/1\"}}",
+                gitea.uri()
+            ),
+        );
+        mount_document(&teregen, rrid, &doc).await;
+        mount_schema(&teregen).await;
+        session.config.teregen_api_v2 = teregen.uri();
         session.config.template_dir = tmp.path().to_path_buf();
         session.config.gitea_token = "tok".to_owned();
         session.config.gitea_url = gitea.uri();

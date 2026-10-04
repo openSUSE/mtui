@@ -196,6 +196,7 @@ mod tests {
     #[tokio::test]
     async fn named_hosts_that_cannot_connect_are_error() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
         let err = AddHost.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("unreachable.invalid")));
@@ -213,6 +214,7 @@ mod tests {
     #[tokio::test]
     async fn existing_mock_host_survives_a_failed_add() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
         add_mock_host(&mut session, "h2");
         let before = session.targets().len();
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
@@ -227,6 +229,7 @@ mod tests {
     #[tokio::test]
     async fn switches_auto_workflow_to_manual() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
@@ -237,6 +240,7 @@ mod tests {
     #[tokio::test]
     async fn keep_mode_preserves_auto_workflow() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable.invalid", "-k"]);
         let _ = AddHost.call(&mut session, &args).await;
@@ -247,6 +251,7 @@ mod tests {
     #[tokio::test]
     async fn manual_workflow_is_left_untouched() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Manual);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
