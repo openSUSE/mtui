@@ -224,8 +224,7 @@ fn diff_source(
 
 /// The `source.diff` at `path`, or a clear error if unavailable.
 ///
-/// A file there wins: it is the SVN checkout's copy, or an earlier fetch's
-/// cache. Only when `may_fetch` does a missing file fall back to `fetch`, whose
+/// A file there wins: it is an earlier fetch's cache. Only when `may_fetch` does a missing file fall back to `fetch`, whose
 /// result is then cached there.
 async fn source_diff(
     path: &Path,

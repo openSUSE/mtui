@@ -89,7 +89,7 @@ impl Registry {
 /// Commands that must not be synthesised into MCP tools.
 ///
 /// They either drive the interactive shell / need a controlling terminal, or are
-/// replaced by richer hand-written tools: `edit` → the `testreport_*` tools, and
+/// replaced by richer hand-written tools: `edit` → the `report_*` document tools, and
 /// `get`/`put` → the in-band transfer tools (#434), because their synthesised
 /// forms exchange server-local paths a remote `--transport http` client cannot
 /// reach. Neither local process execution nor terminal launching is a category

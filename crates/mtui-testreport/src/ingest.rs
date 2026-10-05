@@ -177,8 +177,7 @@ fn repositories_set(targets: &[Target]) -> HashSet<String> {
 }
 
 /// `install.targets[]` -> `SystemProduct -> update repository URL`: the
-/// document-side equivalent of `obsrepoparse`'s `project.xml` walk, for the
-/// classic OBS workflow. A target whose URL fails `RepoUrl` validation is dropped.
+/// update repos of the classic OBS workflow. A target whose URL fails `RepoUrl` validation is dropped.
 ///
 /// Deliberately independent of `should_compose`: this feeds `update_repos`
 /// only, never `repositories`/`composed`.

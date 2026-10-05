@@ -1,8 +1,8 @@
 //! Product-identity normalizers.
 //!
 //! These are pure, I/O-free functions that canonicalize SUSE product
-//! identity so downstream repo parsers (`obsrepoparse`/`reporepoparse`,
-//! landing in a later task) can key on a stable `(name, version, arch)`
+//! identity so downstream repo parsers (`reporepoparse` and the OBS update
+//! repos) can key on a stable `(name, version, arch)`
 //! tuple.
 //!
 //! ## Design
