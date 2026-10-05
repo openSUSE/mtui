@@ -650,8 +650,7 @@ mod ingest_tests {
         let rrid_dir = dir.path().join(RRID_STR);
         let trpath = rrid_dir.join("log");
 
-        let mut config = config_for(&server);
-        config.svn_path = "file:///nonexistent".to_owned();
+        let config = config_for(&server);
         let mut report: Box<dyn TestReport + Send + Sync> =
             Box::new(ObsReport::new(config.clone()));
         load_via_document(&mut report, &rrid(), &config, &trpath, None)

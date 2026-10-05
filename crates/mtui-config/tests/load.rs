@@ -27,7 +27,6 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.bugzilla_url, "https://bugzilla.example.com");
     assert_eq!(cfg.reports_url, "https://qam.example.com/testreports");
     assert_eq!(cfg.refhosts_resolvers, "https,path");
-    assert_eq!(cfg.svn_path, "svn+ssh://svn@svn.example/testreports");
 
     assert_eq!(cfg.connection_timeout, 450);
     assert_eq!(cfg.reboot_timeout, 25);
@@ -120,6 +119,24 @@ fn retired_mtui_tempdir_key_is_ignored_not_rejected() {
     std::fs::write(
         &path,
         "[mtui]\ntempdir = \"/scratch\"\nuser = \"leniencyuser\"\n",
+    )
+    .unwrap();
+
+    let cfg = Config::load(Some(path));
+
+    assert_eq!(cfg.session_user, "leniencyuser");
+}
+
+/// An `mtui.toml` still carrying the retired `[svn]` table must keep loading —
+/// and applying its other keys — rather than erroring on the now-unknown
+/// section.
+#[test]
+fn retired_svn_section_is_ignored_not_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mtui.toml");
+    std::fs::write(
+        &path,
+        "[svn]\npath = \"svn+ssh://svn@svn.example/testreports\"\n\n[mtui]\nuser = \"leniencyuser\"\n",
     )
     .unwrap();
 

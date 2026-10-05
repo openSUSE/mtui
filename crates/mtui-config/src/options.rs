@@ -1,7 +1,7 @@
 //! Typed configuration options and their defaults.
 //!
 //! The on-disk format is **sectioned TOML** (`[mtui]`, `[connection]`,
-//! `[refhosts]`, `[url]`, `[qem_dashboard]`, `[teregen]`, `[openqa]`, `[svn]`,
+//! `[refhosts]`, `[url]`, `[qem_dashboard]`, `[teregen]`, `[openqa]`,
 //! `[target]`, `[gitea]`, `[slack]`, `[lock]`, `[mcp]`, `[obs]`); `RawConfig`
 //! mirrors it for serde, [`Config`] is the flattened, fully-typed view the rest
 //! of the workspace consumes. Every serde field defaults, so an empty or
@@ -177,9 +177,6 @@ fn default_max_parallel() -> u64 {
 }
 fn default_max_oqa_parallel() -> u64 {
     8
-}
-fn default_svn_path() -> String {
-    "svn+ssh://svn@qam.suse.de/testreports".to_owned()
 }
 fn default_bugzilla_url() -> String {
     "https://bugzilla.suse.com".to_owned()
@@ -410,13 +407,6 @@ pub(crate) struct OpenqaSection {
     pub distri: Option<String>,
 }
 
-/// `[svn]` table.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct SvnSection {
-    pub path: Option<String>,
-}
-
 /// `[target]` table.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -519,7 +509,6 @@ pub(crate) struct RawConfig {
     pub qem_dashboard: QemDashboardSection,
     pub teregen: TeregenSection,
     pub openqa: OpenqaSection,
-    pub svn: SvnSection,
     pub target: TargetSection,
     pub gitea: GiteaSection,
     pub slack: SlackSection,
@@ -562,7 +551,6 @@ impl RawConfig {
         take!(openqa, openqa);
         take!(openqa, baremetal);
         take!(openqa, distri);
-        take!(svn, path);
         take!(target, tempdir);
         take!(gitea, token);
         take!(gitea, url);
@@ -676,10 +664,6 @@ pub struct Config {
     pub openqa_instance_baremetal: String,
     /// openQA install `distri` parameter.
     pub openqa_install_distri: String,
-
-    // [svn]
-    /// SVN base path for test-report checkout.
-    pub svn_path: String,
 
     // [gitea]
     /// API token for the Gitea PR review workflow. Empty by default; the Gitea
@@ -838,7 +822,6 @@ impl Default for Config {
             openqa_instance: default_openqa_instance(),
             openqa_instance_baremetal: default_openqa_instance_baremetal(),
             openqa_install_distri: default_openqa_install_distri(),
-            svn_path: default_svn_path(),
             gitea_token: String::new(),
             gitea_url: default_gitea_url(),
             slack_enabled: default_slack_enabled(),
@@ -1004,7 +987,6 @@ impl Config {
                 d.openqa_instance_baremetal
             ),
             openqa_install_distri: raw.openqa.distri.unwrap_or(d.openqa_install_distri),
-            svn_path: raw.svn.path.unwrap_or(d.svn_path),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
             gitea_url: validated_url!(raw.gitea.url, "gitea_url", d.gitea_url),
 
@@ -1122,7 +1104,6 @@ mod tests {
         assert_eq!(c.bugzilla_url, "https://bugzilla.suse.com");
         assert_eq!(c.reports_url, "https://qam.suse.de/testreports");
         assert_eq!(c.fancy_reports_url, "https://qam.suse.de/reports");
-        assert_eq!(c.svn_path, "svn+ssh://svn@qam.suse.de/testreports");
         assert_eq!(
             c.refhosts_https_uri,
             "https://qam.suse.de/refhosts/refhosts.yml"
