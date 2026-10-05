@@ -41,13 +41,13 @@ pub enum CommandError {
     /// A dispatch could not claim the template's report entry: someone else
     /// holds it — an asynchronously-aborted job's dispatch task still
     /// unwinding, a gate-free teardown, or the resolve-then-acquire window.
-    /// (Not the testreport tools: they take the same gate-shared + per-RRID
+    /// (Not the document tools: they take the same gate-shared + per-RRID
     /// pair `command_lock` does, so a same-RRID dispatch serialises behind them
     /// instead of racing.) Refusing *is* the fix — before #524 the dispatch ran
     /// on the null sentinel instead and answered about nothing.
     ///
     /// Lower-case to match the same refusal from
-    /// `mtui-mcp`'s `testreport_tools::resolve_path`, which operators already
+    /// `mtui-mcp`'s document tools, which operators already
     /// grep for.
     #[error("template busy: {0}")]
     TemplateBusy(String),

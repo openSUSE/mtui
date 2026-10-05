@@ -726,8 +726,8 @@ pub struct Config {
     /// tail with a notice so one large result (a fan-out `run`) cannot dwarf the
     /// client's context. `0` disables the cap. Default 100_000.
     pub mcp_max_output_bytes: usize,
-    /// Upper bound (bytes) on how much of an on-disk checkout file a
-    /// `testreport_read` call reads. Unlike `mcp_max_output_bytes` this bounds
+    /// Upper bound (bytes) on how much of a report file a `report_file_read`
+    /// call reads. Unlike `mcp_max_output_bytes` this bounds
     /// the *source* read, so a huge file cannot exhaust memory while a caller
     /// pages through it via `offset`/`limit`; reads past it truncate with a
     /// notice, never refuse. `0` disables the cap. Default 10_000_000.

@@ -2,8 +2,8 @@
 //!
 //! Three surfaces need the same answer to "one template, or refuse": the core
 //! fan-out driver's `Scope::Explicit`/`Scope::Active` headless path, and the two
-//! hand-written MCP tool families (`transfer_tools::resolve_rrid`,
-//! `testreport_tools::resolve_path`) that bypass the fan-out driver entirely.
+//! hand-written MCP tool families (`transfer_tools::resolve_rrid` and the
+//! document tools that reuse it) that bypass the fan-out driver entirely.
 //! Before this module the rule was hand-copied twice and had already diverged
 //! in wording; [`Session::resolve_single_template`] and
 //! [`ambiguous_template_message`] are the one implementation all three consume.
