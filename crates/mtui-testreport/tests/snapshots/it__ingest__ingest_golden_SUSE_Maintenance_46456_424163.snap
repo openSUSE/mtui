@@ -1,0 +1,25 @@
+---
+source: crates/mtui-testreport/tests/ingest.rs
+expression: projection(report.base())
+---
+rrid: Some(RequestReviewID { project: "SUSE", kind: Maintenance, maintenance_id: "46456", review_id: 424163 })
+realid: Some("SUSE:Maintenance:46456:424163")
+packager: "someone@suse.com"
+rating: Some("important")
+category: "security"
+repository: "http://download.suse.de/ibs/SUSE:/Maintenance:/46456/"
+products: ["SLE-Module-Packagehub-Subpackages 15-SP7 (aarch64, ppc64le, s390x)", "SLE-Product-WE 15-SP7 (x86_64)"]
+testplatforms: ["base=SLED(major=15,minor=SP7);arch=[aarch64,ppc64le,s390x];addon=PackageHub(major=15,minor=SP7)", "base=SLES(major=15,minor=SP7);arch=[aarch64,ppc64le,s390x];addon=PackageHub(major=15,minor=SP7)", "base=SLES(major=15,minor=SP7);arch=[x86_64];addon=sle-we(major=15,minor=SP7)", "base=SLES_SAP(major=15,minor=SP7);arch=[aarch64,ppc64le,s390x];addon=PackageHub(major=15,minor=SP7)"]
+giteapr: None
+giteaprapi: None
+giteacohash: None
+update_source: Obs
+slack_review: None
+reviewer: ""
+repositories: []
+hostnames: []
+bugs: [("1271649", "VUL-0: MozillaFirefox / MozillaThunderbird: update to 153 and 140.13esr / 153esr"), ("1274867", "VUL-0: MozillaFirefox / MozillaThunderbird: update to 154 and 140.14esr / 153.1esr"), ("1278001", "VUL-0: MozillaFirefox / MozillaThunderbird: update to 155 and 115.40esr/ 140.15esr / 153.2esr")]
+jira: []
+packages: [("15-SP7", [("MozillaThunderbird", "153.2.0-150400.13.3.1"), ("MozillaThunderbird-translations-common", "153.2.0-150400.13.3.1"), ("MozillaThunderbird-translations-other", "153.2.0-150400.13.3.1")])]
+composed: []
+update_repos: [("SystemProduct { name: \"sle-module-packagehub-subpackages\", version: \"15-SP7\", arch: \"aarch64\" }", "http://download.suse.de/ibs/SUSE:/Maintenance:/46456/SUSE_Updates_SLE-Module-Packagehub-Subpackages_15-SP7_aarch64"), ("SystemProduct { name: \"sle-module-packagehub-subpackages\", version: \"15-SP7\", arch: \"ppc64le\" }", "http://download.suse.de/ibs/SUSE:/Maintenance:/46456/SUSE_Updates_SLE-Module-Packagehub-Subpackages_15-SP7_ppc64le"), ("SystemProduct { name: \"sle-module-packagehub-subpackages\", version: \"15-SP7\", arch: \"s390x\" }", "http://download.suse.de/ibs/SUSE:/Maintenance:/46456/SUSE_Updates_SLE-Module-Packagehub-Subpackages_15-SP7_s390x"), ("SystemProduct { name: \"sle-we\", version: \"15-SP7\", arch: \"x86_64\" }", "http://download.suse.de/ibs/SUSE:/Maintenance:/46456/SUSE_Updates_SLE-Product-WE_15-SP7_x86_64")]

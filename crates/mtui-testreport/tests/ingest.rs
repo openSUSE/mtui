@@ -114,6 +114,65 @@ fn build_via_document(pair: &Pair) -> (Box<dyn TestReport + Send + Sync>, Report
 
 const NO_DESCRIPTION: &str = "Description not available";
 
+/// Every field `apply_document` and `update_repos_parser` set, in a stable,
+/// sorted text form (`TestReportBase` has no `Debug`).
+fn projection(base: &TestReportBase) -> String {
+    use std::fmt::Write as _;
+
+    fn sorted<T: Ord>(items: impl IntoIterator<Item = T>) -> Vec<T> {
+        let mut v: Vec<T> = items.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    let mut out = String::new();
+    let mut line = |name: &str, value: String| {
+        writeln!(out, "{name}: {value}").unwrap();
+    };
+    line("rrid", format!("{:?}", base.rrid));
+    line("realid", format!("{:?}", base.realid));
+    line("packager", format!("{:?}", base.packager));
+    line("rating", format!("{:?}", base.rating));
+    line("category", format!("{:?}", base.category));
+    line("repository", format!("{:?}", base.repository));
+    line("products", format!("{:?}", base.products));
+    line("testplatforms", format!("{:?}", base.testplatforms));
+    line("giteapr", format!("{:?}", base.giteapr));
+    line("giteaprapi", format!("{:?}", base.giteaprapi));
+    line("giteacohash", format!("{:?}", base.giteacohash));
+    line("update_source", format!("{:?}", base.update_source));
+    line("slack_review", format!("{:?}", base.slack_review));
+    line("reviewer", format!("{:?}", base.reviewer));
+    line("repositories", format!("{:?}", sorted(&base.repositories)));
+    line("hostnames", format!("{:?}", sorted(&base.hostnames)));
+    line("bugs", format!("{:?}", sorted(&base.bugs)));
+    line("jira", format!("{:?}", sorted(&base.jira)));
+    let packages: Vec<_> = sorted(
+        base.packages
+            .iter()
+            .map(|(k, v)| (k, sorted(v.iter().collect::<Vec<_>>()))),
+    );
+    line("packages", format!("{packages:?}"));
+    let composed: Vec<_> = sorted(
+        base.composed
+            .iter()
+            .map(|(k, v)| (format!("{k:?}"), v.iter().collect::<Vec<_>>())),
+    );
+    line("composed", format!("{composed:?}"));
+    let update_repos: Vec<_> = sorted(base.update_repos.iter().map(|(k, v)| (format!("{k:?}"), v)));
+    line("update_repos", format!("{update_repos:?}"));
+    out
+}
+
+#[test]
+fn ingest_golden_per_pair() {
+    for pair in PAIRS {
+        let (report, _document) = build_via_document(pair);
+        let name = format!("ingest_golden_{}", pair.rrid.replace(':', "_"));
+        insta::assert_snapshot!(name, projection(report.base()));
+    }
+}
+
 #[test]
 fn equivalence_across_every_harvested_pair() {
     for pair in PAIRS {
