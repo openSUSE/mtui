@@ -25,7 +25,7 @@ impl Command for Edit {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Edit the loaded report document, or the active template or a local file in $EDITOR.")
+        Some("Edit the loaded report document, or a local file in $EDITOR.")
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -33,7 +33,7 @@ impl Command for Edit {
             Arg::new("filename")
                 .num_args(0..=1)
                 .value_name("FILENAME")
-                .help("File to edit (defaults to the report document, or the active template)"),
+                .help("File to edit (defaults to the report document)"),
         )
     }
 
