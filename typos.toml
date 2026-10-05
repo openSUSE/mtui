@@ -16,6 +16,8 @@ extend-exclude = [
   "crates/*/tests/fixtures/**/*.json",
   "crates/*/tests/fixtures/**/*.log",
   "crates/*/tests/fixtures/**/log",
+  # Insta goldens projecting those captured fixtures verbatim (the same CVE title).
+  "crates/*/tests/snapshots/it__ingest__ingest_golden_*.snap",
 ]
 
 [default.extend-words]
