@@ -54,8 +54,8 @@ pub(crate) fn cap_output(text: String, limit: usize) -> String {
 /// [`McpSession::run_command`](crate::session::McpSession::run_command), so both
 /// emit byte-identical text. `dropped` is the budget overrun.
 ///
-/// The cap is shared by every tool, but only `show_log` and the testreport
-/// reads offer offset/limit paging, so that recourse is stated as
+/// The cap is shared by every tool, but only `show_log` and `report_file_read`
+/// offer offset/limit paging, so that recourse is stated as
 /// tool-conditional rather than universal.
 #[must_use]
 pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
@@ -63,7 +63,7 @@ pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
         "\n…[truncated {dropped} bytes; output exceeded the \
          [mcp] max_output_bytes={limit} budget — narrow the call (fewer hosts, \
          a less verbose command), page with offset/limit where the tool offers \
-         it (show_log, testreport reads), or raise [mcp] max_output_bytes]"
+         it (show_log, report_file_read), or raise [mcp] max_output_bytes]"
     )
 }
 
@@ -411,7 +411,7 @@ mod tests {
         // The dropped tail is gone.
         assert!(!out.contains("efghij"), "tail dropped: {out:?}");
         assert!(
-            out.contains("where the tool offers it (show_log, testreport reads)"),
+            out.contains("where the tool offers it (show_log, report_file_read)"),
             "paging is framed as tool-conditional, not universal: {out:?}"
         );
         assert!(

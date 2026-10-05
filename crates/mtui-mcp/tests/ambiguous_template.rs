@@ -1,6 +1,6 @@
 //! Anti-drift test for #575: the three surfaces that resolve "which template
 //! does this call address" — the core fan-out driver's `Scope::Explicit` path,
-//! the `get`/`put` transfer tools, and the `testreport_*` tools — must render
+//! the `get`/`put` transfer tools, and the `report_*` tools — must render
 //! the byte-identical ambiguity stem when several templates are loaded and none
 //! is named. All three ultimately call
 //! [`mtui_core::ambiguous_template_message`]; this test is what would catch one
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use mtui_config::Config;
 use mtui_core::{Registry, ambiguous_template_message, register_all};
-use mtui_mcp::{McpSession, dispatch_testreport_tool, dispatch_transfer_tool};
+use mtui_mcp::{McpSession, dispatch_document_tool, dispatch_transfer_tool};
 use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
 use serde_json::{Map, json};
@@ -77,15 +77,15 @@ async fn transfer_tool_get_matches_the_shared_stem() {
 }
 
 #[tokio::test]
-async fn testreport_read_matches_the_shared_stem() {
+async fn report_sections_matches_the_shared_stem() {
     let session = two_loaded().await;
 
-    let err = dispatch_testreport_tool(&session, "testreport_read", &Map::new(), None)
+    let err = dispatch_document_tool(&session, "report_sections", &Map::new(), None)
         .await
-        .expect_err("ambiguous testreport_read must refuse");
+        .expect_err("ambiguous report_sections must refuse");
     assert!(
         err.stderr.contains(&expected_stem()),
-        "testreport_read stderr must contain the shared stem: {}",
+        "report_sections stderr must contain the shared stem: {}",
         err.stderr
     );
 }

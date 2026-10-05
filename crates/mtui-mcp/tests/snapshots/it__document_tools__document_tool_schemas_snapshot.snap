@@ -4,7 +4,7 @@ expression: pretty
 ---
 [
   {
-    "description": "List the report document's sections (`name`, byte `size` — advisory, `has_unanswered`) and its completeness: `complete`, and `unfilled`, the RFC 6901 pointer of every null leaf. `dirty` is true while edits are not yet uploaded by `commit`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "List the report document's sections (`name`, byte `size` — advisory, `has_unanswered`) and its completeness: `complete`, and `unfilled`, the RFC 6901 pointer of every null leaf. `dirty` is true while edits are not yet uploaded by `commit`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -19,7 +19,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Read one section of the report document as JSON (`data`). Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Read one section of the report document as JSON (`data`). Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -51,7 +51,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Replace one tester section of the report document with `value`. `update` and `install` are pipeline-owned and refused; a section the report lacks (`review` on a PI report) is refused; an `issues` write must keep exactly the same issue keys (use report_issue_write for one entry). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. A later `export` overwrites testing.install, testing.openqa and people.testers. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Replace one tester section of the report document with `value`. `update` and `install` are pipeline-owned and refused; a section the report lacks (`review` on a PI report) is refused; an `issues` write must keep exactly the same issue keys (use report_issue_write for one entry). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. A later `export` overwrites testing.install, testing.openqa and people.testers. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -85,7 +85,7 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`); with it, read that issue in full. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`); with it, read that issue in full. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -104,7 +104,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Replace one existing issue of the report document with `value`; the issue set cannot grow or shrink. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Replace one existing issue of the report document with `value`; the issue set cannot grow or shrink. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -130,7 +130,7 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: they cannot be read yet. A failed server listing leaves the local list and sets `server_error`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: they cannot be read yet. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -145,7 +145,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Read one report file as text: `content` and `total_lines`. `path` is relative to the report directory and must be `checkers.log` or sit directly in `build_checks/`, the install-log directory or `results/` (see report_files). `offset`/`limit` page a 1-indexed line window; a window also returns `offset` and `returned_lines`. Needs a report loaded from a document; an SVN-path report refuses (use testreport_*). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Read one report file as text: `content` and `total_lines`. `path` is relative to the report directory and must be `checkers.log` or sit directly in `build_checks/`, the install-log directory or `results/` (see report_files). `offset`/`limit` page a 1-indexed line window; a window also returns `offset` and `returned_lines`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {

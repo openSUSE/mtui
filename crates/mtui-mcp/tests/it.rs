@@ -32,8 +32,6 @@ mod session_registry;
 mod slim_profile;
 #[path = "stdio_roundtrip.rs"]
 mod stdio_roundtrip;
-#[path = "testreport_tools.rs"]
-mod testreport_tools;
 #[path = "tools_synthesis.rs"]
 mod tools_synthesis;
 #[path = "transfer_tools.rs"]

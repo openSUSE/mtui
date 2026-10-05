@@ -12,8 +12,8 @@
 //! MCP-side accessor.
 //!
 //! - `quit`, `exit`, `EOF`: exit the process, tearing the server down with it.
-//! - `edit`: spawns `$EDITOR` on the controlling TTY; the testreport tools
-//!   operate on the loaded report file directly instead.
+//! - `edit`: spawns `$EDITOR` on the controlling TTY; the `report_*` tools
+//!   operate on the loaded report document instead.
 //! - `shell`: an interactive root PTY needs a TTY the MCP transports lack.
 //! - `help`: the MCP protocol already advertises tool descriptions.
 //! - `switch`: REPL-only active-template pointer; tools select a template per
@@ -21,7 +21,7 @@
 //! - `get`, `put`: their synthesized forms exchange **server-local paths** a
 //!   remote `--transport http` client cannot reach. The hand-written tools in
 //!   [`crate::transfer_tools`] carry the content in-band under the same names
-//!   instead (#434) — the `edit` → testreport-tools precedent, with name reuse
+//!   instead (#434) — the `edit` → report-document tools precedent, with name reuse
 //!   made collision-free by this very deny.
 //!
 //! `unload` is deliberately **not** denied: it names an explicit RRID, mutates

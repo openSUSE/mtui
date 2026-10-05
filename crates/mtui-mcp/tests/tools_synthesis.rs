@@ -9,7 +9,7 @@
 #![cfg(feature = "mcp")]
 
 use mtui_core::register_all;
-use mtui_mcp::{build_tools, job_tool_descriptors, testreport_tool_descriptors};
+use mtui_mcp::{build_tools, document_tool_descriptors, job_tool_descriptors};
 use serde_json::{Value, json};
 
 /// Deny-listed commands never appear as tools.
@@ -79,7 +79,7 @@ fn job_tool_schemas_snapshot() {
     insta::assert_snapshot!(pretty);
 }
 
-/// Every advertised tool schema — synthesised, job and hand-written testreport
+/// Every advertised tool schema — synthesised, job and hand-written document
 /// alike — must be strict (`additionalProperties: false`), so a client cannot
 /// silently pass a misspelled field. A tool regressing to an open schema fails here.
 #[test]
@@ -87,7 +87,7 @@ fn every_tool_schema_rejects_unknown_properties() {
     let all = build_tools(&register_all())
         .into_iter()
         .chain(job_tool_descriptors())
-        .chain(testreport_tool_descriptors());
+        .chain(document_tool_descriptors());
     for tool in all {
         assert_eq!(
             tool.input_schema.get("additionalProperties"),

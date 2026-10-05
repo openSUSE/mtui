@@ -321,7 +321,7 @@ pub(crate) fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 /// `client_ct` is the MCP request's own cancellation token: only this
 /// synthesised-command path can hold `/var/lock/mtui.lock`, so it is the one
 /// call site that needs the two-stage cancel/abort/unlock sequence instead of
-/// the bare drop [`crate::server`] uses for the testreport/transfer branches.
+/// the bare drop [`crate::server`] uses for the document/transfer branches.
 pub(crate) async fn dispatch_tool(
     registry: &Arc<Registry>,
     session: &Arc<McpSession>,

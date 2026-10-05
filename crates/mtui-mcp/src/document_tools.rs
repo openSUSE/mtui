@@ -1,13 +1,12 @@
 //! Hand-written `report_*` MCP tools over the report **document**.
 //!
-//! Where the `testreport_*` tools edit the report as text, these read and
-//! write it as data: one named section, or one issue, at a time. A write is
+//! These read and write the report as data: one named section, or one issue,
+//! at a time. A write is
 //! validated locally (a typed parse of the whole candidate document, plus a
 //! check that no key is silently dropped) and changes local state only;
 //! `commit` uploads it.
 //!
-//! Only a report loaded from a document has one; any other report refuses with
-//! a pointer at `testreport_*`.
+//! With no document loaded every tool refuses.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -31,7 +30,7 @@ const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded 
      than one is loaded.";
 
 const DOCUMENT_NOTE: &str =
-    "Needs a report loaded from a document; an SVN-path report refuses (use testreport_*).";
+    "Needs a loaded report document; without one it refuses (run load_template or regenerate).";
 
 const WRITE_NOTE: &str = "Validated against the report schema locally, refused with the offending pointers, and \
      applied to local state only; `commit` uploads it.";
@@ -45,7 +44,7 @@ fn refuse(msg: impl Into<String>) -> McpCommandError {
 }
 
 fn no_document() -> McpCommandError {
-    refuse("no report document loaded (SVN-path report); use testreport_*")
+    refuse("no report document loaded — run load_template or regenerate")
 }
 
 fn access_refusal(access: ReportAccess, rrid: &str) -> McpCommandError {
