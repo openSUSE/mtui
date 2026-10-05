@@ -1,5 +1,5 @@
-//! The `edit` REPL command: the report-document editor when a document is
-//! loaded, `$EDITOR` otherwise.
+//! The `edit` REPL command: the report-document editor, or `$EDITOR` on an
+//! explicit file.
 //!
 //! Spawning `$EDITOR` (default `vim`) inherits the process stdio, so the child
 //! needs the controlling terminal only the `mtui` binary owns. `mtui-core`'s
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use clap::Arg;
-use mtui_core::Session;
+use mtui_core::{CommandError, Session};
 
 /// Peeks a REPL input line: if its first token is the `edit` command, returns
 /// its argv (everything after the command word); otherwise `None`.
@@ -37,64 +37,48 @@ pub(crate) enum EditTarget {
 }
 
 /// Routes `edit`: an explicit `filename` is a file, and with none the document
-/// editor when the active report holds a document, else the report's template
-/// path.
+/// editor over the active report's document.
 ///
 /// # Errors
 ///
-/// As [`resolve_path`], when it falls through to the template path.
+/// [`CommandError::NoDocument`] when no `filename` is given and the active
+/// report holds no document.
 pub(crate) fn edit_target(
     session: &Session,
     filename: Option<&String>,
 ) -> anyhow::Result<EditTarget> {
-    let has_document = || {
-        let rrid = session.templates.active_rrid()?;
+    if let Some(name) = filename {
+        return Ok(EditTarget::File(PathBuf::from(name)));
+    }
+    let has_document = session.templates.active_rrid().is_some_and(|rrid| {
         session
             .with_report(rrid, |report| report.base().document.is_some())
-            .ok()
-    };
-    if filename.is_none() && has_document() == Some(true) {
-        return Ok(EditTarget::Form);
+            .unwrap_or(false)
+    });
+    if has_document {
+        Ok(EditTarget::Form)
+    } else {
+        Err(CommandError::NoDocument.into())
     }
-    resolve_path(session, filename).map(EditTarget::File)
-}
-
-/// Resolves the edit target: the explicit `filename` argument, or — when none is
-/// given — the active report's template path.
-///
-/// Errors when nothing is loaded, with the engine's own `require_update`
-/// message.
-fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<PathBuf> {
-    if let Some(name) = filename {
-        return Ok(PathBuf::from(name));
-    }
-    let meta = session.metadata();
-    if !meta.is_loaded() {
-        anyhow::bail!("Metadata not loaded, please use load_template first");
-    }
-    meta.base()
-        .path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Metadata not loaded, please use load_template first"))
 }
 
 /// Runs the `edit` command: parse the optional `filename`, then either open the
-/// document editor or resolve the path and spawn `$EDITOR` (default `vim`) on
-/// it with inherited stdio.
+/// document editor or spawn `$EDITOR` (default `vim`) on the file with
+/// inherited stdio.
 ///
 /// `$EDITOR` reaches `Command::new` unsplit, so `$EDITOR="code -w"` is one
 /// program name — deliberate, not an oversight.
 ///
 /// # Errors
 ///
-/// Returns an error on an argument-parse failure, an unresolved default path
-/// (no template loaded), a spawn failure, or a non-zero editor exit.
+/// Returns an error on an argument-parse failure, no filename with no report
+/// document loaded, a spawn failure, or a non-zero editor exit.
 pub(crate) fn run_edit(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
     let parser = clap::Command::new("edit").no_binary_name(true).arg(
         Arg::new("filename")
             .num_args(0..=1)
             .value_name("FILENAME")
-            .help("File to edit (defaults to the report document, or the active template)"),
+            .help("File to edit (defaults to the report document)"),
     );
     let matches = parser
         .try_get_matches_from(argv)
@@ -194,12 +178,14 @@ mod tests {
     }
 
     #[test]
-    fn a_report_without_a_document_opens_its_log() {
+    fn a_report_without_a_document_refuses() {
         let session = session_with_report(false, Some("/tmp/x/log"));
 
-        assert_eq!(
-            edit_target(&session, None).unwrap(),
-            EditTarget::File(PathBuf::from("/tmp/x/log"))
+        let err = edit_target(&session, None).unwrap_err();
+
+        assert!(
+            matches!(err.downcast_ref(), Some(CommandError::NoDocument)),
+            "{err:?}"
         );
     }
 
@@ -220,29 +206,14 @@ mod tests {
 
         let err = edit_target(&session, None).unwrap_err();
 
-        assert!(err.to_string().contains("Metadata not loaded"));
+        assert!(err.to_string().contains("no report document loaded"));
     }
 
     #[test]
-    fn resolve_path_uses_explicit_filename() {
-        let session = empty_session();
-        let arg = "some/file.txt".to_owned();
-        let p = resolve_path(&session, Some(&arg)).unwrap();
-        assert_eq!(p, PathBuf::from("some/file.txt"));
-    }
-
-    #[test]
-    fn resolve_path_no_arg_no_template_errors() {
-        let session = empty_session();
-        let err = resolve_path(&session, None).unwrap_err();
-        assert!(err.to_string().contains("Metadata not loaded"));
-    }
-
-    #[test]
-    fn run_edit_no_template_and_no_arg_errors() {
+    fn run_edit_no_document_and_no_arg_errors() {
         let mut session = empty_session();
         let err = run_edit(&mut session, &[]).unwrap_err();
-        assert!(err.to_string().contains("Metadata not loaded"));
+        assert!(err.to_string().contains("no report document loaded"));
     }
 
     #[cfg(unix)]

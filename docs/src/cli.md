@@ -1140,14 +1140,14 @@ Options:
 
 ## `edit`
 
-Edit the loaded report document, or the active template or a local file in $EDITOR.
+Edit the loaded report document, or a local file in $EDITOR.
 
 ```text
 Usage: edit [FILENAME]
 
 Arguments:
   [FILENAME]
-          File to edit (defaults to the report document, or the active template)
+          File to edit (defaults to the report document)
 
 Options:
   -h, --help
