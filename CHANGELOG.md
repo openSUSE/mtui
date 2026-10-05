@@ -15,12 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Ctrl-S` saves, `q`/`Ctrl-C` quits). Saving marks the document edited but not
   uploaded, so `commit` uploads it and `unload`/`regenerate` guard it. The
   `update` and `install` sections are read-only, as are the fields the pipeline
-  or `export` fills in. `edit FILE`, and `edit` on a report without a document,
-  still open `$EDITOR`. REPL only; MCP clients keep the `report_*` tools.
+  or `export` fills in. `edit FILE` still opens `$EDITOR`; `edit` with no
+  argument on a report without a document refuses. REPL only; MCP clients keep
+  the `report_*` tools.
 - `export` now reports which report document sections it updated (e.g.
   `document: testing.install, people.testers updated`), printed after the
-  "template exported to" line so both the REPL and MCP result surface it.
-  Silent (no line) when no document is loaded, matching prior behaviour.
+  install-logs line so both the REPL and MCP result surface it.
 - New config key `[teregen] api_v2` (default `https://qam.suse.de/api/v2`):
   the TeReGen v2 report/queue API base URL, read by `config show`/`config set`
   and by `xtask corpus-survey`/`xtask schema-check`.
@@ -64,7 +64,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tamper-evident: there is no hash chain or HMAC, so ship it off-host (see the
   OTLP bullet) if that is needed. `config_set` never records the value, so
   secrets cannot leak into the log; file-body payloads (`put` `content`/`content_b64`,
-  `testreport_write` `content`, `testreport_patch` `replacement`) record
+  `report_section_write`/`report_issue_write` `value`) record
   `{bytes, sha256}` instead of the bytes, always fingerprinted regardless of
   size. Free-text arguments — `run`/`comment` argv included, at any nesting —
   are masked rather than trusted: URL userinfo is stripped through the shared
@@ -121,9 +121,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   committed or the flag is passed. A report that cannot be read at that moment
   (held by another call) refuses too, asking to retry. **MCP schema note:**
   additive only — a new optional `discard_authored` boolean on each.
-- `checkout` on a report loaded from a v2 document also re-fetches that
-  document (conditional on its stored `ETag`) after `svn up`, printing
-  `document unchanged (etag …)` or `document refreshed (etag …)`; a newer
+- `checkout` re-fetches the report document (conditional on its stored
+  `ETag`), printing `document unchanged (etag …)` or `document refreshed (etag …)`; a newer
   document is adopted and re-applied, and a refusal from the server (missing,
   stale, still generating) is reported with the local document left as it was.
   With `--discard-authored` the fetch is unconditional, so the server's copy
@@ -136,8 +135,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `report_issue_write`. A write is validated against the typed schema before
   it lands and refused with the offending pointers, `update`/`install` are
   read-only, and an `issues` write cannot add or drop an issue; `commit`
-  uploads what was written. A report without a document refuses and points at
-  `testreport_*`. **MCP schema note:** additive only — five new tools, all in
+  uploads what was written. A report without a document refuses. **MCP schema note:** additive only — five new tools, all in
   the `core` profile.
 
 - Two read-only MCP tools expose a document-loaded report's files:
@@ -157,13 +155,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   document on the server fails to load with "run `regenerate` first" (the server
   answered 404 or 409); TeReGen at commit `d564571` or later is required.
   - `export` authors the report document and writes the install logs; it no
-    longer writes the text template. `FILENAME` is ignored, with a note.
+    longer writes the text template.
   - `commit`, `approve` and `request_review` upload the document plus its
     artifacts; `approve` refuses if that fails.
   - `checkout` only refreshes the document. `openqa_overview --export` authors
     `testing.openqa`. `show_diff` fetches and caches `source.diff`.
   - The load warns when TeReGen's report schema differs from the one this mtui
     ships, and writes are refused until mtui is upgraded.
+- `edit` with no argument and no loaded report document refuses; every command
+  that reads or writes the document (`commit`, `checkout`, `export`,
+  `openqa_overview --export`, `approve --reviewer`) now refuses the same way,
+  with "no report document loaded — run load_template or regenerate".
+  `request_review` still posts, and warns that recording the marker failed.
+- Declining a stale-hash load keeps `<template_dir>/<RRID>/`; the "Delete
+  checked out template" prompt is gone.
 - Re-running `export` on a loaded report document keeps the tester's
   `testing.install` and `testing.regression` verdicts and comments instead of
   replacing them. The install checks are still rewritten from the connected
@@ -184,10 +189,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `quit`/`exit`/`EOF` print `warning: uncommitted document edits for <rrid>
   discarded` for each report holding such edits. Quitting is never refused.
 - `commit` uploads the report document (conditional on its stored `ETag`) and
-  its logs (`install_logs/`, `results/`, `checkers.log`) to teregen's v2 API
-  instead of running `svn ci`, when the loaded report came from a v2 document;
-  SVN-loaded reports are unchanged. `-m/--msg` is accepted but ignored on this
-  path (teregen writes its own commit message) and noted as such. A stale
+  its logs (`install_logs/`, `results/`, `checkers.log`) to teregen's v2 API. A stale
   document (reloaded elsewhere since) refuses with no upload attempted; a
   failed artifact upload does not block the others, and the command reports
   how many of them failed so `commit` can simply be re-run to retry.
@@ -240,8 +242,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `profile = "core"` for agent clients (36 tools on every request vs 65 in
   `full`), with a `tools_deny = ["updates", "openqa_overview"]` recipe for
   workflows that never use them; the `updates -F`/`--json` helps point at
-  `--limit`, and the `testreport_read`/`patch`/`write` and `get`/`put` tool
-  descriptions are terser wordings of the same contracts.
+  `--limit`, and the `get`/`put` tool descriptions are terser wordings of the
+  same contracts.
 - `config show` over MCP prints less than at the REPL (#410): the no-argument
   bulk dump is refused (name attributes explicitly), the operator-local values
   (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
@@ -275,23 +277,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   huge rows; `openqa_overview` per-section caps sum to ~600 rows total.
   **MCP schema note:** additive only — `updates` gains `offset`, `list_refhosts`
   gains `limit`/`offset`; no renames/removals.
-- `testreport_read` collapses an exact re-read (same file, offset/limit with
-  unchanged content) to `[unchanged since …, N lines; pass force=true to
-  resend, …]` instead of resending the window. Per-session cache of the last
-  16 windows keyed by the canonical resolved path (defaulted and explicit
-  `template` share one entry); any edit resends in full. Additive schema
-  change: optional `force` boolean bypasses the notice and resends. The
-  response carries additive `deduped` (true on the collapsed notice, false
-  on file text), so a non-LLM consumer need not string-match `content`.
-  The window hash is FNV-1a (specified, no new deps).
 
 ### Deprecated
-
-- MCP: the five `testreport_*` tools (`testreport_read`, `testreport_logs`,
-  `testreport_patch`, `testreport_write`, `testreport_fill`). Their
-  descriptions now say so and point at `report_section_*` / `report_issue_*`.
-  Behaviour is unchanged, and they are removed together with the SVN report
-  path, not on a release date.
 
 - MCP: the `template` and `all_templates` keys on the `unload`, `list_templates`,
   `list_refhosts`, `updates`, `whoami` and `set_log_level` tools, and
@@ -299,6 +286,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   still accepted — ignored, with a warning in the server log — so a client
   pinned to the old schemas keeps working; 26.5 refuses them as
   `unknown argument(s): …` (`crates/mtui-mcp/src/tools.rs::DEPRECATED_KWARGS`).
+
+### Removed
+
+- The SVN load and commit path, and with it `svn` as a runtime dependency of
+  the code: no command checks out, updates or commits a working copy, and the
+  text template (`log`, `metadata.json`, `project.xml`) is no longer read or
+  written.
+- `export FILENAME` and `commit -m/--msg`, removed outright from the REPL and
+  from the MCP `export` and `commit` tools (no deprecation window: no release
+  ever shipped them deprecated).
+- MCP: the five `testreport_*` tools (`testreport_read`, `testreport_logs`,
+  `testreport_patch`, `testreport_write`, `testreport_fill`); use the
+  `report_*` and `report_file*` tools. **MCP schema note:** five tools gone.
+- The `[svn] path` config key and the `svn_path` attribute of `config`. An
+  `[svn]` table left in `mtui.toml` is ignored, not an error.
 
 ### Fixed
 
@@ -358,11 +360,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rendering per-property descriptions show one. **MCP schema note:** each
   array property gains a `description` equal to its `items.description`;
   `items` keeps its copy (#545).
-- `commit` (and the `approve`/`request_review` paths that commit the
-  testreport) now reports what failed and why — `svn <subcommand> failed:
-  <svn stderr>` (stderr capped at 1 KB, cut marked `…[truncated]`) —
-  instead of the empty `Test report for  does not exist`
-  that hid every `svn` failure behind the checkout-missing text (#607).
 - `updates -F` now serves `Products`, `SRCRPMs`, `Bugs` and `Creator` from the
   TeReGen queue listing; only `Package-Streams`, `Issues` and `Comments` remain
   unavailable (#415).
@@ -407,11 +404,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   parameter follows: it is now a plain `boolean` with no default (was
   `{"type":"boolean","default":false}`), and its description states each
   command's actual default rather than a generic one.
-- The `testreport_*` MCP tools' "several templates loaded, none named"
-  refusal now reads `more than one template is loaded (…)` instead of
-  `multiple templates loaded (…)`, matching the wording every other surface
-  (the `get`/`put` transfer tools, and the new core-dispatch refusal above)
-  already used and that the tools' own descriptions already advertised.
 - `get` in a session with no template loaded (`add_host` without a
   `load_template`) now refuses with `no report working directory` instead of
   downloading into `<cwd>/downloads/` — the download target is the report
