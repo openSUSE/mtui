@@ -1,6 +1,5 @@
-//! Covers the `ObsReport` surface: `id`, `parser`, `update_repos_parser`
-//! (dispatching to `obsrepoparse` over `report_wd()`), `check_hash` (constant)
-//! and `set_repo`.
+//! Covers the `ObsReport` surface: `id`, `update_repos_parser` (from the report
+//! document), `check_hash` (constant) and `set_repo`.
 //!
 //! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
 //! the no-op stub is smoke-checked.
@@ -31,39 +30,9 @@ fn id_empty_when_no_rrid() {
     assert_eq!(r.id(), "");
 }
 
+/// With a document loaded the update repos come from `install.targets[]`.
 #[test]
-fn parser_returns_hosts_and_json_keys() {
-    let r = ObsReport::new(config());
-    let keys: std::collections::BTreeSet<_> = r.parser().into_keys().collect();
-    assert_eq!(
-        keys,
-        ["hosts".to_string(), "json".to_string()]
-            .into_iter()
-            .collect()
-    );
-}
-
-/// OBS dispatches to `obsrepoparse`, reading `project.xml` from `report_wd()`
-/// (the parent dir of the loaded report path). Points `base.path` into the
-/// OBS fixture directory so `report_wd()` resolves there.
-#[test]
-fn update_repos_parser_parses_obs_project_xml() {
-    let fixture_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/obs");
-    let mut r = ObsReport::new(config());
-    r.base_mut().rrid = Some(rrid("SUSE:Maintenance:12358:199773"));
-    r.base_mut().repository = "https://example.com".to_string();
-    // report_wd() == path.parent(), so make the parent the fixture dir.
-    r.base_mut().path = Some(std::path::Path::new(fixture_dir).join("log"));
-
-    let out = r.update_repos_parser();
-    let product = SystemProduct::new("SLES", "15", "x86_64");
-    assert_eq!(out[&product], "https://example.com/SLE-15-x86_64");
-}
-
-/// With a document loaded the update repos come from `install.targets[]`, not
-/// from a checkout: the report directory holds no `project.xml`.
-#[test]
-fn update_repos_parser_reads_the_document_when_there_is_no_project_xml() {
+fn update_repos_parser_reads_the_document() {
     let dir = tempfile::tempdir().unwrap();
     let doc: mtui_types::report_document::ReportDocument =
         include_str!("../../mtui-types/tests/fixtures/document/maintenance_addon.json")
@@ -74,16 +43,26 @@ fn update_repos_parser_reads_the_document_when_there_is_no_project_xml() {
     r.base_mut().document = Some(doc);
 
     let out = r.update_repos_parser();
-    assert!(!dir.path().join("project.xml").exists());
     assert_eq!(out.len(), 1);
     assert!(out.values().all(|u| u.contains("SUSE_Updates_")));
 }
 
-/// When no report is loaded, `report_wd()` errors and `update_repos_parser`
-/// degrades to an empty map gracefully, like the sibling reports.
+/// With no document `update_repos_parser` degrades to an empty map, and never
+/// reads a `project.xml` from the report directory.
 #[test]
-fn update_repos_parser_empty_when_no_report_loaded() {
-    let r = ObsReport::new(config());
+fn update_repos_parser_empty_without_a_document() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("project.xml"),
+        r#"<project><repository name="SUSE_Updates_SLES_15_x86_64">
+             <path project="p" repository="update"/>
+             <releasetarget project="SUSE:SLE-15:Update:x86_64" repository="standard"/>
+           </repository></project>"#,
+    )
+    .unwrap();
+    let mut r = ObsReport::new(config());
+    r.base_mut().path = Some(dir.path().join("log"));
+    assert!(r.base().document.is_none());
     assert!(r.update_repos_parser().is_empty());
 }
 

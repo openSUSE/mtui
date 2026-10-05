@@ -1,9 +1,9 @@
 //! Commit-time collection of a report's local artifacts and their upload
 //! through teregen v2's document + artifact write clients — the `commit`
-//! command's document path (SVN stays [`crate::checkout::svn_commit_testreport`]).
+//! command.
 //!
-//! [`collect_artifacts`] gathers the same sources `svn_commit_testreport`
-//! adds (`install_logs/`, `results/`, `checkers.log`), entirely offline.
+//! [`collect_artifacts`] gathers the report directory's artifacts
+//! (`install_logs/`, `results/`, `checkers.log`), entirely offline.
 //! [`upload_current`] then sends the loaded document (conditional on its
 //! stored `ETag`) followed by each artifact, sequentially — the server's
 //! per-id `minion->guard($id, 60)` makes two concurrent writes to one id fail
@@ -137,8 +137,7 @@ fn collect_dir(
 }
 
 /// Collects every regular file directly under `<report_wd>/<install_logs>/`,
-/// under `<report_wd>/results/`, plus `<report_wd>/checkers.log` (6b-D1) — the
-/// same sources [`crate::checkout::svn_commit_testreport`] adds. Absent
+/// under `<report_wd>/results/`, plus `<report_wd>/checkers.log` (6b-D1). Absent
 /// sources contribute nothing; a subdirectory or a symlink is skipped rather
 /// than followed or erroring (A3).
 ///

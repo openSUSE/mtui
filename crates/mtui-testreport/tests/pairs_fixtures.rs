@@ -1,6 +1,5 @@
 //! Smoke test for the committed paired fixtures
-//! (`tests/fixtures/pairs/<RRID>/{document.json,metadata.json,log}`): every
-//! `document.json` must parse into a [`ReportDocument`] and validate against
+//! (`tests/fixtures/pairs/<RRID>/document.json`): every `document.json` must parse into a [`ReportDocument`] and validate against
 //! the committed schema copy.
 //!
 //! The schema-conformance check is a local copy of
@@ -50,16 +49,14 @@ static COMPILED: LazyLock<(Schemas, SchemaIndex)> = LazyLock::new(|| {
 });
 
 #[test]
-fn every_pair_directory_has_all_three_files() {
+fn every_pair_directory_has_its_document() {
     for rrid in PAIRS {
         let dir = pair_dir(rrid);
-        for file in ["document.json", "metadata.json", "log"] {
-            assert!(
-                dir.join(file).is_file(),
-                "{rrid}: missing {file} at {}",
-                dir.display()
-            );
-        }
+        assert!(
+            dir.join("document.json").is_file(),
+            "{rrid}: missing document.json at {}",
+            dir.display()
+        );
     }
 }
 
@@ -102,17 +99,13 @@ fn fixtures_carry_no_unredacted_pii() {
         "amattiazzo",
     ];
     for rrid in PAIRS {
-        for file in ["document.json", "metadata.json", "log", "project.xml"] {
-            let Ok(content) = std::fs::read_to_string(pair_dir(rrid).join(file)) else {
-                assert_eq!(file, "project.xml", "{rrid}: missing {file}");
-                continue;
-            };
-            for needle in leaked {
-                assert!(
-                    !content.contains(needle),
-                    "{rrid}/{file}: unredacted PII {needle:?} found"
-                );
-            }
+        let content = std::fs::read_to_string(pair_dir(rrid).join("document.json"))
+            .unwrap_or_else(|e| panic!("{rrid}: reading document.json: {e}"));
+        for needle in leaked {
+            assert!(
+                !content.contains(needle),
+                "{rrid}/document.json: unredacted PII {needle:?} found"
+            );
         }
     }
 }

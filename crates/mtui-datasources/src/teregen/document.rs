@@ -1,6 +1,5 @@
 //! The v2 read/write client for TeReGen's JSON report document
-//! (`qam.suse.de/api/v2`), an alternative source for the typed
-//! `ReportDocument` model alongside the SVN `metadata.json` pair.
+//! (`qam.suse.de/api/v2`), the source of the typed `ReportDocument` model.
 //!
 //! Reads are anonymous: [`fetch_document`](TeregenV2::fetch_document) sends no
 //! `Authorization` header — reads are anonymous on the live server, and

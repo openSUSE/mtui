@@ -60,15 +60,6 @@ impl TestReport for SlReport {
             .unwrap_or_default()
     }
 
-    fn parser(&self) -> HashMap<String, String> {
-        // The trait models the table's *keys* as strings; the values are the
-        // parser names, so callers can branch on them.
-        HashMap::from([
-            ("hosts".to_string(), "ReducedMetadataParser".to_string()),
-            ("json".to_string(), "JSONParser".to_string()),
-        ])
-    }
-
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         // The `repositories` short-circuit must stay first: it is populated
         // upstream of TeReGen and can start appearing for a git-served update

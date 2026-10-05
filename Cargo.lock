@@ -2782,7 +2782,6 @@ dependencies = [
  "mtui-datasources",
  "mtui-hosts",
  "mtui-types",
- "quick-xml",
  "regex",
  "serde",
  "serde_json",

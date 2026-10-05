@@ -1,5 +1,5 @@
-//! Pins the null-object contract: falsy, empty ID, unset report path, empty
-//! parser tables, `target_wd` rooted under `config.target_tempdir`, no-op
+//! Pins the null-object contract: falsy, empty ID, unset report path,
+//! `target_wd` rooted under `config.target_tempdir`, no-op
 //! update-command listing, and a trivially-valid hash.
 
 use std::path::PathBuf;
@@ -52,12 +52,6 @@ fn null_report_wd_is_not_found() {
         .report_wd()
         .expect_err("the null report has no working directory");
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
-}
-
-#[test]
-fn null_parser_returns_empty() {
-    let (cfg, _) = config_with_tmp("parser");
-    assert!(NullReport::new(cfg).parser().is_empty());
 }
 
 #[test]

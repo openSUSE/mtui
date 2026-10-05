@@ -14,8 +14,7 @@ use mtui_types::report_document::{
 };
 use mtui_types::{RequestReviewID, SystemProduct};
 
-use crate::metadata_parsers::register;
-use crate::products::normalize;
+use crate::products::{normalize, normalize_16};
 use crate::reports::repoparse::validated_url;
 use crate::testreport::{SlackReviewMarker, TestReportBase};
 
@@ -195,6 +194,25 @@ pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> 
         .collect()
 }
 
+/// Records `names` for `raw` under one key per normalizer the tree's repo
+/// parsers use — raw (`gitrepoparse`/`slrepoparse`), `normalize_16`
+/// (`reporepoparse`) and `normalize` (the OBS update repos) — because the host reports whichever form its own
+/// `/etc/products.d` carries. Where two agree the entry simply merges; where a
+/// normalizer's output collides with another product's raw name the sets
+/// union, which is over-inclusive and so degrades toward today's behaviour.
+///
+/// An empty `names` still creates the keys: "composes nothing here" is a
+/// statement, distinct from an absent key's "nothing is known here".
+pub(crate) fn register(
+    out: &mut HashMap<SystemProduct, BTreeSet<String>>,
+    raw: SystemProduct,
+    names: &BTreeSet<String>,
+) {
+    for form in BTreeSet::from([normalize_16(raw.clone()), normalize(raw.clone()), raw]) {
+        out.entry(form).or_default().extend(names.iter().cloned());
+    }
+}
+
 /// `install.targets[]` -> `SystemProduct -> the package names this update
 /// composes for it`, via the existing three-normalizer [`register`] helper.
 ///
@@ -244,8 +262,8 @@ fn composed_index(doc: &ReportDocument) -> HashMap<SystemProduct, BTreeSet<Strin
 
 /// `issues` -> `(bugs, jira)`, splitting each key on its tracker: `bsc#` /
 /// `bnc#` / `boo#` go to `bugs`, `jsc#` to `jira`; the value is
-/// `issue.title`. Retires both the `NO_DESCRIPTION` placeholder and the
-/// `patchinfo.xml` overlay the SVN path needs (gap analysis §0.1 #9).
+/// `issue.title`, so no placeholder description or `patchinfo.xml` overlay is
+/// needed.
 fn issue_maps(issues: &Issues) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut bugs = HashMap::new();
     let mut jira = HashMap::new();

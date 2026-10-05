@@ -1,10 +1,9 @@
 //! The OBS [`TestReport`] implementation ([`ObsReport`]).
 //!
 //! Keys its identity on the parsed [`RequestReviewID`] and derives its
-//! update-repo map by parsing the OBS/IBS checkout's `project.xml` via
-//! [`obsrepoparse`], reading the checkout under
-//! [`report_wd`](TestReportBase::report_wd). OBS is checked out with `osc qam`
-//! / SVN, not Gitea, so there is no git commit to verify and
+//! update-repo map from the report document's `install.targets[]`
+//! ([`obs_update_repos`](crate::ingest::obs_update_repos)). OBS is not
+//! Gitea-backed, so there is no git commit to verify and
 //! [`check_hash`](TestReport::check_hash) is constant.
 //!
 //! `set_repo` adds with the OBS-specific `-n ar -ckn` — no `fG`, unlike SL/PI.
@@ -20,7 +19,6 @@ use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
-use super::repoparse::obsrepoparse;
 use super::set_repo_with_add_flags;
 use super::update_flow;
 use crate::testreport::{HashCheck, TestReport, TestReportBase};
@@ -59,25 +57,11 @@ impl TestReport for ObsReport {
             .unwrap_or_default()
     }
 
-    fn parser(&self) -> HashMap<String, String> {
-        // The trait models the table's *keys* as strings; the values are the
-        // parser names, so callers can branch on them.
-        HashMap::from([
-            ("hosts".to_string(), "ReducedMetadataParser".to_string()),
-            ("json".to_string(), "JSONParser".to_string()),
-        ])
-    }
-
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
-        if let Some(doc) = self.base.document.as_ref() {
-            return crate::ingest::obs_update_repos(doc);
-        }
-        // Degrades to an empty map when no report is loaded or the checkout dir
-        // cannot be resolved, rather than panicking.
-        match self.base.report_wd() {
-            Ok(dir) => obsrepoparse(&self.base.repository, &dir),
-            Err(e) => {
-                debug!(error = %e, "update_repos_parser: no report working dir");
+        match self.base.document.as_ref() {
+            Some(doc) => crate::ingest::obs_update_repos(doc),
+            None => {
+                debug!("update_repos_parser: no report document loaded");
                 HashMap::new()
             }
         }
@@ -143,7 +127,7 @@ impl TestReport for ObsReport {
     }
 
     async fn check_hash(&self) -> HashCheck {
-        // OBS/IBS checks out via osc qam / SVN, so there is no hash to verify.
+        // OBS/IBS is not Gitea-backed, so there is no hash to verify.
         HashCheck::Ok
     }
 }
