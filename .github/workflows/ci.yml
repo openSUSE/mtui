@@ -125,10 +125,6 @@ jobs:
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
-      # `svn` is a runtime dependency; a few tests drive a local file:// repo and
-      # skip cleanly when absent, so install it to keep those paths covered.
-      - name: SVN fixture
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
       - name: Install llvm-tools
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
@@ -176,8 +172,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The SSH integration suite authenticates from an identity file; the
       # in-process fixture accepts any key but the runner ships none. Generate a
-      # throwaway ed25519 key so the pubkey path is exercised. (svn is omitted:
-      # the file:// repo tests skip cleanly when it is absent.)
+      # throwaway ed25519 key so the pubkey path is exercised.
       - name: SSH fixture
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
