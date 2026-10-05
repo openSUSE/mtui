@@ -873,11 +873,7 @@ async fn make_testreport_slfo_interactive_force_continue_arg_ignored_when_prompt
     let tmp = tempfile::tempdir().unwrap();
     let (config, _gitea, _teregen, update) =
         slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "n"),
-        ("Force continue", "n"),
-        ("Delete", "n"),
-    ]);
+    let prompter = scripted_prompter(&[("Regenerate", "n"), ("Force continue", "n")]);
 
     let report = make_testreport(
         &update,
@@ -896,20 +892,20 @@ async fn make_testreport_slfo_interactive_force_continue_arg_ignored_when_prompt
     );
 }
 
-/// Declining regenerate and force-continue, then **confirming delete**, removes
-/// the report directory and abandons the load. That directory holds only
-/// scratch files on the document path, but the prompt is unchanged.
+/// Declining regenerate and force-continue abandons the load and keeps the
+/// report directory. The scripted prompter answers only those two questions: a
+/// further prompt would get an empty answer, so a restored delete prompt
+/// (default yes) would remove the directory.
 #[tokio::test]
-async fn make_testreport_slfo_mismatch_decline_deletes_checkout_document() {
+async fn make_testreport_slfo_mismatch_decline_keeps_scratch_dir_document() {
     let tmp = tempfile::tempdir().unwrap();
     let (config, _gitea, _teregen, update) =
         slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
     let rrid_dir = tmp.path().join(SLFO_RRID);
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "n"),
-        ("Force continue", "n"),
-        ("Delete", "y"),
-    ]);
+    let logs = rrid_dir.join("install_logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("x.log"), "kept").unwrap();
+    let prompter = scripted_prompter(&[("Regenerate", "n"), ("Force continue", "n")]);
 
     let report = make_testreport(
         &update,
@@ -924,41 +920,7 @@ async fn make_testreport_slfo_mismatch_decline_deletes_checkout_document() {
 
     assert!(!report.is_loaded(), "declining both abandons the load");
     assert_eq!(report.id(), "");
-    assert!(
-        !rrid_dir.exists(),
-        "confirming delete must remove the report directory"
-    );
-}
-
-/// Declining delete too abandons the load but leaves the directory in place.
-#[tokio::test]
-async fn make_testreport_slfo_mismatch_decline_keeps_checkout_when_delete_declined_document() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (config, _gitea, _teregen, update) =
-        slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
-    let rrid_dir = tmp.path().join(SLFO_RRID);
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "n"),
-        ("Force continue", "n"),
-        ("Delete", "n"),
-    ]);
-
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
-
-    assert!(!report.is_loaded(), "declining both abandons the load");
-    assert!(
-        rrid_dir.exists(),
-        "declining delete must leave the report directory in place"
-    );
+    assert_eq!(std::fs::read_to_string(logs.join("x.log")).unwrap(), "kept");
 }
 
 /// Accepting regenerate but teregen refusing the job falls back to the manual
@@ -978,11 +940,7 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual_document()
         .mount(&refusing)
         .await;
     config.teregen_api = refusing.uri();
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "y"),
-        ("Force continue", "n"),
-        ("Delete", "n"),
-    ]);
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
     let report = make_testreport(
         &update,
@@ -1013,11 +971,7 @@ async fn make_testreport_slfo_regenerate_job_unfinished_keeps_scratch_dir_docume
     mount_v1_regenerate(&failing, SLFO_RRID, "failed").await;
     config.teregen_api = failing.uri();
     let rrid_dir = tmp.path().join(SLFO_RRID);
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "y"),
-        ("Force continue", "n"),
-        ("Delete", "n"),
-    ]);
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
     let report = make_testreport(
         &update,
@@ -1061,11 +1015,7 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails_document() {
     mount_v1_regenerate(&teregen, SLFO_RRID, "finished").await;
     config.teregen_api = teregen.uri();
     config.teregen_api_v2 = teregen.uri();
-    let prompter = scripted_prompter(&[
-        ("Regenerate", "y"),
-        ("Force continue", "n"),
-        ("Delete", "n"),
-    ]);
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
     let report = make_testreport(
         &update,

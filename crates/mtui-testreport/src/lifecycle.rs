@@ -80,7 +80,7 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 ///    benign inactive template rather than propagate an error.
 /// 4. Verifies the Gitea token + template hash ([`TestReport::check_hash`]): a
 ///    missing token or failed call abandons the load; a stale hash goes to the
-///    TeReGen regenerate / force-continue / delete-checkout handling.
+///    TeReGen regenerate / force-continue handling.
 /// 5. Sets the workflow from `kind`. The `-a` (auto) kind builds the
 ///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; with no install jobs
 ///    (or an unreachable dashboard) the workflow is **downgraded to
@@ -150,7 +150,6 @@ pub async fn make_testreport(
             match handle_stale_hash(
                 update,
                 &checkout_config,
-                &rrid_dir,
                 &trpath,
                 is_repl,
                 prompter,
@@ -246,7 +245,7 @@ pub async fn make_testreport(
 }
 
 /// Handles a stale template hash: log, offer TeReGen regeneration, then the
-/// manual force-continue / delete-checkout fallback.
+/// manual force-continue fallback.
 ///
 /// * `Some(Some(fresh))` — TeReGen regenerated a fresh, verified report;
 /// * `Some(None)` — force-continue; the caller keeps its existing stale report;
@@ -259,11 +258,9 @@ pub async fn make_testreport(
 /// It reaches exactly the outcome the REPL's own "y" answer does — `Some(None)`
 /// — and does nothing else: no regeneration, no re-checkout, no write. The
 /// `regenerate` question is unaffected and stays interactive-only.
-#[allow(clippy::too_many_arguments)]
 async fn handle_stale_hash(
     update: &UpdateID,
     config: &Config,
-    rrid_dir: &std::path::Path,
     trpath: &std::path::Path,
     is_repl: bool,
     prompter: Option<&Prompter>,
@@ -308,24 +305,7 @@ async fn handle_stale_hash(
         return Some(None);
     }
 
-    // Declined: optionally delete the stale checkout, then abandon the load.
-    let delete = match (is_repl, prompter) {
-        (true, Some(p)) if rrid_dir.exists() => {
-            p.confirm(
-                &format!(
-                    "Delete checked out template {}? [Y/n]: ",
-                    rrid_dir.display()
-                ),
-                true,
-            )
-            .await
-        }
-        _ => false,
-    };
-    if delete {
-        let _ = tokio::fs::remove_dir_all(rrid_dir).await;
-        info!("Removed checked out template {}", rrid_dir.display());
-    }
+    // Declined: abandon the load; the scratch directory stays.
     None
 }
 
