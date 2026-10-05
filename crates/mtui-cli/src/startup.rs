@@ -104,8 +104,8 @@ mod tests {
     }
 
     /// A session whose load fails instantly **offline**: the teregen address is
-    /// a closed local port, `svn_path` is a bogus `file://` repo over a
-    /// `template_dir` that does not exist, and refhosts resolve from a local file.
+    /// a closed local port, `template_dir` does not exist, and refhosts resolve
+    /// from a local file.
     fn session_with_buffer() -> (Session, Arc<Mutex<Vec<u8>>>) {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let display = CommandPromptDisplay::with_sink(
@@ -115,7 +115,6 @@ mod tests {
         let mut config = Config::default();
         config.teregen_api_v2 = "http://127.0.0.1:1".to_owned();
         config.refhosts_resolvers = "path".to_owned();
-        config.svn_path = "file:///nonexistent/mtui-p67-offline-repo".to_owned();
         config.template_dir =
             std::env::temp_dir().join("mtui-p67-empty-template-dir-that-does-not-exist");
         (Session::with_display(config, true, display), buf)

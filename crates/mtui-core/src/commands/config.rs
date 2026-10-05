@@ -36,7 +36,6 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "bugzilla_url" => config.bugzilla_url.clone(),
         "reports_url" => config.reports_url.clone(),
         "fancy_reports_url" => config.fancy_reports_url.clone(),
-        "svn_path" => config.svn_path.clone(),
         "qem_dashboard_api" => config.qem_dashboard_api.clone(),
         "teregen_api" => config.teregen_api.clone(),
         "teregen_api_v2" => config.teregen_api_v2.clone(),
@@ -117,7 +116,6 @@ const MCP_URL_ATTRS: &[&str] = &[
     "bugzilla_url",
     "reports_url",
     "fancy_reports_url",
-    "svn_path",
     "qem_dashboard_api",
     "teregen_api",
     "teregen_api_v2",
@@ -185,7 +183,7 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
 
 /// The attribute names `show` lists when given none, in a stable order.
 /// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
-const ATTRS: [&str; 40] = [
+const ATTRS: [&str; 39] = [
     "template_dir",
     "session_user",
     "install_logs",
@@ -203,7 +201,6 @@ const ATTRS: [&str; 40] = [
     "bugzilla_url",
     "reports_url",
     "fancy_reports_url",
-    "svn_path",
     "qem_dashboard_api",
     "teregen_api",
     "teregen_api_v2",
@@ -302,7 +299,6 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "bugzilla_url" => config.bugzilla_url = raw.to_owned(),
         "reports_url" => config.reports_url = raw.to_owned(),
         "fancy_reports_url" => config.fancy_reports_url = raw.to_owned(),
-        "svn_path" => config.svn_path = raw.to_owned(),
         "qem_dashboard_api" => config.qem_dashboard_api = raw.to_owned(),
         "teregen_api" => config.teregen_api = raw.to_owned(),
         "teregen_api_v2" => config.teregen_api_v2 = raw.to_owned(),
