@@ -23,8 +23,6 @@ mod lifecycle_ingest;
 mod null_report;
 #[path = "obs_report.rs"]
 mod obs_report;
-#[path = "overview_inject.rs"]
-mod overview_inject;
 #[path = "pairs_fixtures.rs"]
 mod pairs_fixtures;
 #[path = "pi_report.rs"]

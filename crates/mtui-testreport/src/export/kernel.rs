@@ -1,10 +1,7 @@
 //! Exporter for kernel jobs.
 //!
-//! Inserts the kernel openQA result matrices under the `regression tests:`
-//! section, downloads the per-job logs via the shared [`download_logs`], and
-//! runs the base sequence.
+//! Downloads the per-job kernel openQA logs via the shared [`download_logs`].
 
-use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_types::OpenQAResult;
 
@@ -17,23 +14,13 @@ pub struct KernelExport {
     pub ctx: ExportContext,
     /// The kernel openQA connector results (regular + baremetal instances).
     kernel: Vec<KernelOpenQA>,
-    /// The openqa_overview payload, if the overview command ran.
-    overview: Option<OpenQAOverviewResult>,
 }
 
 impl KernelExport {
     /// Builds a kernel exporter over `ctx`.
     #[must_use]
-    pub fn new(
-        ctx: ExportContext,
-        kernel: Vec<KernelOpenQA>,
-        overview: Option<OpenQAOverviewResult>,
-    ) -> Self {
-        Self {
-            ctx,
-            kernel,
-            overview,
-        }
+    pub fn new(ctx: ExportContext, kernel: Vec<KernelOpenQA>) -> Self {
+        Self { ctx, kernel }
     }
 
     /// Downloads the kernel logs and returns the `*.log` filenames now present
@@ -90,82 +77,10 @@ impl KernelExport {
         filenames
     }
 
-    /// Inserts the kernel result matrices under `regression tests:`.
-    ///
-    /// The insertion point is the `(put your details here)` placeholder (removed
-    /// if present); otherwise the block replaces any existing content between the
-    /// kernel-default link (or the `regression tests:` header) and
-    /// `build log review:`.
-    fn kernel_results(&mut self, now: &str) {
-        let template = &mut self.ctx.template;
-        let Some(regression) = template.iter().position(|l| l == "regression tests:\n") else {
-            return;
-        };
-
-        let mut line = if let Some(placeholder) = template
-            .iter()
-            .skip(regression)
-            .position(|l| l == "(put your details here)\n")
-            .map(|i| i + regression)
-        {
-            template.remove(placeholder);
-            placeholder
-        } else {
-            let start = template
-                .iter()
-                .position(|l| l == "    * https://pes.suse.de/QA_Maintenance/kernel-default/\n")
-                .map_or(regression + 1, |i| i + 1);
-            if let Some(e_line) = template.iter().position(|l| l == "build log review:\n") {
-                template.drain(start..e_line);
-            }
-            start
-        };
-
-        template.insert(line, format!("Results added on {now}\n"));
-        template.insert(line + 1, "\n".to_string());
-        template.insert(line + 2, "Results from openQA:\n".to_string());
-        template.insert(line + 3, "\n".to_string());
-        line += 4;
-
-        for results in &self.kernel {
-            if results.has_results() {
-                for r in results.pp() {
-                    template.insert(line, r.clone());
-                    line += 1;
-                }
-                line += 1;
-            }
-        }
-
-        if let Some(build_review) = template.iter().position(|l| l == "build log review:\n") {
-            template.insert(build_review, "\n".to_string());
-        }
-    }
-
-    /// Downloads the kernel logs (and writes `results/`) without rendering or
-    /// touching a template, returning the `*.log` filenames present.
+    /// Downloads the kernel logs (and writes `results/`), returning the `*.log`
+    /// filenames present.
     pub async fn write_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         self.get_logs(fetcher).await
-    }
-
-    /// Runs the exporter.
-    pub async fn run(&mut self, fetcher: &dyn BytesFetcher) -> Vec<String> {
-        self.ctx.install_results();
-        // Kernel exports have no "auto" connector, so inject_openqa is a
-        // no-op.
-        self.ctx.inject_openqa(&[]);
-        if let Some(overview) = self.overview.clone() {
-            self.ctx.inject_overview(&overview);
-        }
-        let now = chrono::Local::now()
-            .format("%Y-%m-%d %H:%M:%S%.6f")
-            .to_string();
-        self.kernel_results(&now);
-        let filenames = self.get_logs(fetcher).await;
-        self.ctx.installlogs_lines(&filenames);
-        self.ctx.add_sysinfo();
-        self.ctx.dedup_lines();
-        self.ctx.template.clone()
     }
 }
 
@@ -173,41 +88,6 @@ impl KernelExport {
 mod tests {
     use super::*;
     use mtui_config::options::Config;
-
-    fn ctx(template: &[&str]) -> ExportContext {
-        let cfg = Config::default();
-        let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
-        let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
-        ExportContext::new(cfg, &lines, false, rrid)
-    }
-
-    #[test]
-    fn kernel_results_replaces_placeholder_and_inserts_headers() {
-        let mut ex = KernelExport::new(
-            ctx(&[
-                "regression tests:\n",
-                "\n",
-                "(put your details here)\n",
-                "\n",
-                "build log review:\n",
-            ]),
-            Vec::new(),
-            None,
-        );
-        ex.kernel_results("2026-01-01 00:00:00");
-        let body = ex.ctx.template.concat();
-        assert!(!body.contains("(put your details here)"));
-        assert!(body.contains("Results added on 2026-01-01 00:00:00\n"));
-        assert!(body.contains("Results from openQA:\n"));
-    }
-
-    #[test]
-    fn kernel_results_noop_without_regression_header() {
-        let mut ex = KernelExport::new(ctx(&["nothing\n"]), Vec::new(), None);
-        let before = ex.ctx.template.clone();
-        ex.kernel_results("t");
-        assert_eq!(ex.ctx.template, before);
-    }
 
     struct OkFetcher;
 
@@ -218,19 +98,18 @@ mod tests {
         }
     }
 
-    fn temp_ctx(template: &[&str]) -> ExportContext {
+    fn temp_ctx() -> ExportContext {
         let mut cfg = Config::default();
         let dir = tempfile::tempdir().unwrap();
         // Leak the tempdir so the path stays valid for the test's lifetime.
         cfg.template_dir = dir.keep();
         let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
-        let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
-        ExportContext::new(cfg, &lines, false, rrid)
+        ExportContext::new(cfg, false, rrid)
     }
 
     #[tokio::test]
     async fn get_logs_creates_dirs_and_lists_logs() {
-        let ex = KernelExport::new(temp_ctx(&[]), Vec::new(), None);
+        let ex = KernelExport::new(temp_ctx(), Vec::new());
         let in_path = ex.ctx.install_logs_dir();
         std::fs::create_dir_all(&in_path).unwrap();
         std::fs::write(in_path.join("h-zypper-x86_64.log"), b"x").unwrap();
@@ -238,23 +117,5 @@ mod tests {
 
         let out = ex.get_logs(&OkFetcher).await;
         assert_eq!(out, vec!["h-zypper-x86_64.log".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn run_returns_template_with_footer() {
-        let mut ex = KernelExport::new(
-            temp_ctx(&[
-                "regression tests:\n",
-                "\n",
-                "(put your details here)\n",
-                "\n",
-                "build log review:\n",
-            ]),
-            Vec::new(),
-            None,
-        );
-        let out = ex.run(&OkFetcher).await;
-        assert!(out.iter().any(|l| l.contains("Results from openQA:")));
-        assert!(out.last().unwrap().starts_with("## export MTUI:"));
     }
 }

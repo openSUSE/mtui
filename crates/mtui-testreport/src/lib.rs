@@ -29,7 +29,7 @@ pub use commit_upload::{
 pub use document_refresh::{RefreshError, Refreshed, refresh_document};
 pub use export::{
     AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,
-    ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
+    ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs,
 };
 pub use export_authoring::author_export;
 pub use ingest::apply_document;
@@ -39,6 +39,6 @@ pub use reports::repoparse::{
     ProductParseError, gitrepoparse, parse_product, reporepoparse, slrepoparse,
 };
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
-pub use support::{FileList, atomic_write_file, detect_system, system_info};
+pub use support::{atomic_write_file, detect_system};
 pub use testreport::{HashCheck, ReportOpenQA, SlackReviewMarker, TestReport, TestReportBase};
 pub use update_workflow::{Diagnostic, UpdateError};

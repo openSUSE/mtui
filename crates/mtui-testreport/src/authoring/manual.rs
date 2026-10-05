@@ -1,9 +1,6 @@
 //! Authoring for the manual workflow: `testing.install` from connected hosts.
 //!
-//! Mirrors `export::manual`'s verdict rules (P4-D3), extracted from
-//! `ManualExport::fillup_hosts_to_template` rather than re-derived, so a
-//! divergence between the text and typed paths fails a test instead of
-//! shipping.
+//! The verdict rules are pinned by the tests below.
 
 use std::collections::BTreeMap;
 
@@ -58,7 +55,7 @@ fn install_check(host: &ManualHost, targets: &Install) -> InstallCheck {
 
     let mut before = BTreeMap::new();
     let mut after = BTreeMap::new();
-    // #396's precedence, extracted from `fillup_hosts_to_template`: a
+    // #396's precedence: a
     // regression always flips FAILED even when another package is
     // unverified; an unverified block with no failure stays undecided.
     let mut failed = false;
@@ -144,8 +141,7 @@ mod tests {
         SystemProduct::new("SLES", "15.5", "x86_64")
     }
 
-    /// Mirrors `manual.rs::install_results_says_not_checked_for_unobserved`:
-    /// an unobserved package leaves the check undecided, never "not
+    /// An unobserved package leaves the check undecided, never "not
     /// installed".
     #[test]
     fn unobserved_package_is_unverified_not_failed() {
@@ -157,7 +153,7 @@ mod tests {
         assert!(!check.after.contains_key("bash"));
     }
 
-    /// Mirrors `manual.rs::install_results_keeps_is_not_installed_for_observed_absent`.
+    /// An observed-absent package renders as not installed.
     #[test]
     fn observed_absent_is_not_installed() {
         let doc = install_from_hosts(&[host(sles(), vec![pkg("bash", None, None)])], &install());
@@ -169,7 +165,7 @@ mod tests {
         assert_eq!(*check.verdict, Some(Verdict::Passed));
     }
 
-    /// Mirrors `manual.rs::install_results_failed_wins_over_unverified`.
+    /// A regression wins over an unverified package.
     #[test]
     fn failed_wins_over_unverified() {
         let doc = install_from_hosts(
@@ -204,7 +200,7 @@ mod tests {
         assert_eq!(*doc.checks[0].verdict, Some(Verdict::Failed));
     }
 
-    /// Mirrors `manual.rs::install_results_skips_empty_host_block`: no
+    /// No
     /// recorded package data keeps the verdict undecided.
     #[test]
     fn no_packages_is_undecided() {

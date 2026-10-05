@@ -757,7 +757,7 @@ mod tests {
         assert!(buf.contents().contains("OpenQA:"));
     }
 
-    /// On the document path the export never reads or creates the text `log`,
+    /// The export never reads or creates a `log` file,
     /// and authors the rows under `testing.openqa.extra`.
     #[tokio::test]
     async fn export_on_the_document_path_never_touches_the_log() {

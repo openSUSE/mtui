@@ -2774,7 +2774,6 @@ version = "26.4.0"
 dependencies = [
  "async-trait",
  "boon",
- "chrono",
  "criterion",
  "futures",
  "insta",
@@ -2782,7 +2781,6 @@ dependencies = [
  "mtui-datasources",
  "mtui-hosts",
  "mtui-types",
- "regex",
  "serde",
  "serde_json",
  "tempfile",

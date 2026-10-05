@@ -200,7 +200,7 @@ impl Export {
         manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
         manual_overview: Option<mtui_datasources::OpenQAOverviewResult>,
     ) -> CommandResult {
-        let ctx = ExportContext::new(session.config.clone(), &[], force, rrid.clone());
+        let ctx = ExportContext::new(session.config.clone(), force, rrid.clone());
         let (touched, written) = match workflow {
             Workflow::Auto => {
                 let http = build_http(session)?;
@@ -208,7 +208,7 @@ impl Export {
                 let overview = session.metadata().openqa().overview.clone();
                 let touched =
                     author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
-                let written = AutoExport::new(ctx, auto, overview)
+                let written = AutoExport::new(ctx, auto)
                     .write_logs(&http, &DenyOverwrite)
                     .await;
                 (touched, written)
@@ -218,9 +218,7 @@ impl Export {
                 let kernel = session.metadata().openqa().kernel.clone();
                 let overview = session.metadata().openqa().overview.clone();
                 let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
-                let written = KernelExport::new(ctx, kernel, overview)
-                    .write_logs(&http)
-                    .await;
+                let written = KernelExport::new(ctx, kernel).write_logs(&http).await;
                 (touched, written)
             }
             Workflow::Manual => {
@@ -233,8 +231,7 @@ impl Export {
                     manual_overview.as_ref(),
                     Some(&results),
                 );
-                let written = ManualExport::new(ctx, results, auto, manual_overview)
-                    .write_logs(&hosts, &DenyOverwrite);
+                let written = ManualExport::new(ctx, results).write_logs(&hosts, &DenyOverwrite);
                 (touched, written)
             }
         };
@@ -889,7 +886,7 @@ mod tests {
         (session, buf, dir, server)
     }
 
-    /// The export writes the install logs and never creates the text `log`.
+    /// The export writes the install logs and creates no `log` file.
     #[tokio::test]
     async fn export_writes_install_logs_and_no_text_template() {
         let (mut session, buf, dir, _server) = document_manual_fixture().await;
@@ -1022,7 +1019,7 @@ mod tests {
         assert!(tester.at.is_none(), "server-stamped, never set by mtui");
     }
 
-    /// A missing/unusable oscrc must not block the text export: `None`, not
+    /// A missing/unusable oscrc must not block the export: `None`, not
     /// an error.
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]

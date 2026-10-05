@@ -1,10 +1,8 @@
-//! Typed document authoring — builds `testing.*` subtrees from the same data
-//! the legacy text exporters already collect, instead of mutating a
-//! `Vec<String>` template (P4-D1).
+//! Typed document authoring — builds `testing.*` subtrees from the data the
+//! exporters collect.
 //!
 //! Every function here is pure: no I/O, no template anchors, no `Vec<String>`.
-//! The legacy exporters (`crate::export`) are untouched and stay the shipped
-//! path until Phase 7 deletes them.
+//! The exporters (`crate::export`) only write install logs.
 
 pub mod auto;
 pub mod kernel;
