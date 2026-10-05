@@ -379,22 +379,20 @@ async fn regenerate_via_teregen(
     }
 }
 
-/// Loads a report from the teregen v2 JSON document instead of the SVN
-/// `metadata.json`/`log` pair.
+/// Loads a report from the teregen v2 JSON document.
 ///
 /// Fetches `config.teregen_api_v2`'s document for `rrid`, conditional on
 /// `prev_etag` (the initial load passes `None`; [`regenerate_via_teregen`]
 /// passes the just-superseded report's etag, so a `304` after a regenerate
 /// job is reported as "unchanged" rather than misread as fresh). Every
 /// non-`Fresh` outcome maps to a distinct, actionable message rather than
-/// falling back to SVN — a fallback would mask exactly the corpus gap this
-/// path exists to surface. A `503 generating` response is retried on
+/// falling back to anything else — a fallback would mask exactly the corpus
+/// gap this path exists to surface. A `503 generating` response is retried on
 /// the same bounded poll budget [`TeReGen::wait_for_template`] uses (5s /
 /// 600s) before refusing with the same message. On success, applies the
 /// document (see [`crate::ingest::apply_document`]), creates the report's
 /// scratch directory (nothing is checked out), and finally derives
-/// `update_repos`. `ReducedMetadataParser`/
-/// `JSONParser`/`patchinfo_titles` are never invoked on this path.
+/// `update_repos`.
 async fn load_via_document(
     report: &mut Box<dyn TestReport + Send + Sync>,
     rrid: &mtui_types::RequestReviewID,

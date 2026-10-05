@@ -553,9 +553,6 @@ pub(crate) mod testkit {
                 None
             }
         }
-        fn parser(&self) -> HashMap<String, String> {
-            HashMap::new()
-        }
         fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
             HashMap::new()
         }

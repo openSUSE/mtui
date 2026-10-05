@@ -47,18 +47,6 @@ fn id_empty_when_no_rrid() {
 }
 
 #[test]
-fn parser_returns_hosts_and_json_keys() {
-    let r = SlReport::new(config());
-    let keys: std::collections::BTreeSet<_> = r.parser().into_keys().collect();
-    assert_eq!(
-        keys,
-        ["hosts".to_string(), "json".to_string()]
-            .into_iter()
-            .collect()
-    );
-}
-
-#[test]
 fn update_repos_parser_uses_reporepoparse_when_repositories_set() {
     let mut r = SlReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));

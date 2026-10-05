@@ -591,9 +591,6 @@ mod tests {
         fn id(&self) -> String {
             "SUSE:SLFO:1.2:5".to_owned()
         }
-        fn parser(&self) -> HashMap<String, String> {
-            HashMap::new()
-        }
         fn update_repos_parser(&self) -> HashMap<mtui_types::SystemProduct, String> {
             HashMap::new()
         }

@@ -6,13 +6,12 @@
 //! so trait-default and caller code need no downcast.
 //!
 //! Only the shared state and the abstract surface land here: the concrete
-//! lifecycle (load/checkout/commit/export) is [`crate::lifecycle`], metadata
-//! parsing [`crate::metadata_parsers`], per-report host-connect logic
+//! lifecycle (load/refresh/commit/export) is [`crate::lifecycle`], document
+//! ingest [`crate::ingest`], per-report host-connect logic
 //! [`crate::reports`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -21,7 +20,6 @@ use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::package::Package;
 use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, UpdateSource, Workflow};
-use regex::Regex;
 
 /// The concrete openQA state holder carried on a report.
 ///
@@ -29,9 +27,6 @@ use regex::Regex;
 /// per-instance "kernel" results and the `openqa_overview` payload; pinning
 /// them here adds no new crate edge (`mtui-datasources` is already a dep).
 pub type ReportOpenQA = OpenQAResults<DashboardAutoOpenQA, KernelOpenQA, OpenQAOverviewResult>;
-
-use crate::checkout::TemplateIoError;
-use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
@@ -76,7 +71,7 @@ pub struct TestReportBase {
     pub autoconnect_pending: bool,
     /// The reason a load failed, stashed on the [`NullReport`](crate::reports::NullReport)
     /// substituted by [`make_testreport`](crate::make_testreport) so the caller
-    /// can surface *why* (svn checkout / gitea / hash / read failure) rather than
+    /// can surface *why* (teregen / gitea / hash failure) rather than
     /// a bare "could not load". `None` on a successfully loaded report.
     pub load_error: Option<String>,
     /// Set when this report **loaded successfully but its checked-out hash
@@ -113,10 +108,10 @@ pub struct TestReportBase {
     /// Update repository URLs.
     pub repositories: HashSet<String>,
     /// `SystemProduct -> the package names this update composes for it`,
-    /// indexed from the metadata envelope's `binaries` block.
+    /// indexed from the document's `install.targets[].binaries`.
     ///
-    /// Empty when the report carries no `binaries` block, or when the block
-    /// could not be indexed (`metadata_parsers::index_binaries` owns that rule).
+    /// Empty when the document composes nothing (`ingest::should_compose`
+    /// owns that rule).
     pub composed: HashMap<SystemProduct, BTreeSet<String>>,
     /// Nested package map: `product -> { package name -> version }`.
     ///
@@ -127,7 +122,7 @@ pub struct TestReportBase {
     pub rrid: Option<RequestReviewID>,
     /// Update rating.
     pub rating: Option<String>,
-    /// Raw request id from the metadata envelope (JSON key `id`).
+    /// Raw request id from the report document (`id`).
     pub realid: Option<String>,
     /// Gitea pull-request reference (JSON key `gitea_pr`).
     pub giteapr: Option<String>,
@@ -136,8 +131,7 @@ pub struct TestReportBase {
     /// Gitea commit hash (JSON key `gitea_commit_hash`).
     pub giteacohash: Option<String>,
     /// Which update workflow mtui drives for this report, resolved once at
-    /// load from [`giteacohash`](Self::giteacohash) by
-    /// [`JSONParser`]. Defaults to
+    /// load from [`giteacohash`](Self::giteacohash). Defaults to
     /// [`UpdateSource::Obs`] until a report is loaded.
     pub update_source: UpdateSource,
     /// `hostname -> product-drift warning lines` from the last connect.
@@ -224,12 +218,10 @@ impl TestReportBase {
         }
     }
 
-    /// The working directory of the loaded report checkout.
+    /// The working directory of the loaded report: scratch space for install
+    /// logs and other artifacts.
     ///
-    /// The parent directory of [`path`](Self::path), created if absent. The OBS
-    /// report feeds this to
-    /// [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
-    /// `project.xml` from it.
+    /// The parent directory of [`path`](Self::path), created if absent.
     ///
     /// Returns [`std::io::ErrorKind::NotFound`] when no report is loaded, and
     /// propagates any directory-creation error, so callers can degrade
@@ -317,73 +309,11 @@ pub trait TestReport {
     /// The report ID. Empty for an unloaded report.
     fn id(&self) -> String;
 
-    /// The metadata field parser table.
-    ///
-    /// Maps a template field name to its parsed value. The table models
-    /// values as `String`; the null object leaves it empty.
-    fn parser(&self) -> HashMap<String, String>;
-
     /// The update-repository parser table.
     ///
     /// Keyed on the flat [`SystemProduct`] to match the `*repoparse` helpers and
     /// [`TestReportBase::update_repos`].
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String>;
-
-    /// Reads and parses a checkout's test-report template into this report.
-    ///
-    /// `path` names the checkout's `log` file; `metadata.json` is read from the
-    /// same directory. Two-parser pipeline: [`ReducedMetadataParser`] over the
-    /// `log` lines (reference hosts + bug/jira titles), then [`JSONParser`] over
-    /// the metadata envelope, then `patchinfo.xml` overlays real bug/jira titles
-    /// onto the ids the envelope carried. On success
-    /// [`path`](TestReportBase::path) is set and the update-repo map derived via
-    /// [`update_repos_parser`](Self::update_repos_parser).
-    ///
-    /// Gitea-hash verification is deferred to
-    /// [`make_testreport`](crate::make_testreport): `read` is sync while
-    /// [`check_hash`](Self::check_hash) is async.
-    ///
-    /// # Errors
-    ///
-    /// * [`ReadError::Template`] when the `log` file cannot be read (missing →
-    ///   `ENOENT`, which the checkout seam treats as "needs checkout").
-    /// * [`ReadError::MetadataMissing`] when `metadata.json` is absent.
-    /// * [`ReadError::MetadataInvalid`] when `metadata.json` is not valid JSON.
-    fn read(&mut self, path: &Path) -> Result<(), ReadError> {
-        let tpl = std::fs::read_to_string(path).map_err(|e| {
-            // Carry the errno so the checkout seam can branch on ENOENT.
-            ReadError::Template(TemplateIoError::from_io(&e))
-        })?;
-
-        let dir = path.parent().unwrap_or_else(|| Path::new(""));
-        let metadata_path = dir.join("metadata.json");
-        if !metadata_path.is_file() {
-            return Err(ReadError::MetadataMissing);
-        }
-        let metadata = std::fs::read_to_string(&metadata_path)
-            .map_err(|e| ReadError::Template(TemplateIoError::from_io(&e)))?;
-
-        let base = self.base_mut();
-        for line in tpl.lines() {
-            ReducedMetadataParser::parse(base, line);
-        }
-        JSONParser::parse_str(base, &metadata).map_err(|_| ReadError::MetadataInvalid)?;
-
-        // The envelope's id set stays authoritative: titles overlay, never add.
-        let titles = patchinfo_titles(dir);
-        for (iid, title) in titles {
-            if let Some(slot) = base.bugs.get_mut(&iid) {
-                *slot = title;
-            } else if let Some(slot) = base.jira.get_mut(&iid) {
-                *slot = title;
-            }
-        }
-
-        self.base_mut().path = Some(path.to_path_buf());
-        let repos = self.update_repos_parser();
-        self.base_mut().update_repos = repos;
-        Ok(())
-    }
 
     /// Drops this report's arbiter ownership and removes its remote pool locks.
     ///
@@ -747,8 +677,7 @@ pub trait TestReport {
 
     /// Which update workflow mtui drives for this report.
     ///
-    /// See [`UpdateSource`] for the precedence rule; resolved once at load by
-    /// [`JSONParser`] from
+    /// See [`UpdateSource`] for the precedence rule; resolved once at load from
     /// [`giteacohash`](Self::giteacohash).
     fn update_source(&self) -> UpdateSource {
         self.base().update_source
@@ -761,133 +690,7 @@ pub trait TestReport {
     fn incident_id(&self) -> Option<String> {
         self.base().rrid.as_ref().map(|r| r.maintenance_id.clone())
     }
-
-    /// Records the reviewer in the loaded testreport template on disk.
-    ///
-    /// Replaces the `Test Plan Reviewer:` line with the trimmed `name`
-    /// (normalising away older `Suggested …` phrasings), rewrites the file
-    /// atomically, and updates [`reviewer`](TestReportBase::reviewer) only
-    /// after the write succeeds.
-    ///
-    /// # Errors
-    ///
-    /// * [`ReviewerError::Empty`] when `name` is empty/whitespace.
-    /// * [`ReviewerError::NoTemplate`] when no template is loaded (`path` unset).
-    /// * [`ReviewerError::NoReviewerLine`] when the template has no
-    ///   `Test Plan Reviewer:` line to replace.
-    /// * [`ReviewerError::Io`] when reading or atomically rewriting the file fails.
-    fn set_reviewer(&mut self, name: &str) -> Result<(), ReviewerError> {
-        let name = name.trim().to_owned();
-        if name.is_empty() {
-            return Err(ReviewerError::Empty);
-        }
-        let path = self.base().path.clone().ok_or(ReviewerError::NoTemplate)?;
-
-        let text = std::fs::read_to_string(&path).map_err(ReviewerError::Io)?;
-        if !REVIEWER_LINE_RE.is_match(&text) {
-            return Err(ReviewerError::NoReviewerLine);
-        }
-        let new_text = REVIEWER_LINE_RE
-            .replace(&text, format!("Test Plan Reviewer: {name}").as_str())
-            .into_owned();
-
-        crate::support::atomic_write_file(new_text.as_bytes(), &path).map_err(ReviewerError::Io)?;
-        self.base_mut().reviewer = name;
-        Ok(())
-    }
-
-    /// Records the Slack message a review was requested on, in the loaded
-    /// template on disk.
-    ///
-    /// Unlike [`set_reviewer`](TestReport::set_reviewer) the line does **not**
-    /// pre-exist in a server-generated template, so this replaces an existing
-    /// marker and otherwise *inserts* after the `Test Plan Reviewer:` line;
-    /// replacing-only would fail on every first use, and overwriting rather
-    /// than duplicating keeps a re-run of `request_review` pointed at the
-    /// newest message. As in `set_reviewer`, the in-memory field is updated
-    /// only after the write succeeds, so a caller treating the error as fatal
-    /// is not left believing a marker was persisted.
-    ///
-    /// # Errors
-    ///
-    /// * [`SlackReviewError::NoTemplate`] when no template is loaded.
-    /// * [`SlackReviewError::NoAnchor`] when the template has no
-    ///   `Test Plan Reviewer:` line to insert after.
-    /// * [`SlackReviewError::Io`] when reading or rewriting the file fails.
-    fn set_slack_review(&mut self, marker: &SlackReviewMarker) -> Result<(), SlackReviewError> {
-        let path = self
-            .base()
-            .path
-            .clone()
-            .ok_or(SlackReviewError::NoTemplate)?;
-
-        let text = std::fs::read_to_string(&path).map_err(SlackReviewError::Io)?;
-        let line = marker.to_line();
-
-        let new_text = if SLACK_REVIEW_LINE_RE.is_match(&text) {
-            // `replace` hits the first marker; the collapse below removes any others.
-            let replaced = SLACK_REVIEW_LINE_RE
-                .replace(&text, line.as_str())
-                .into_owned();
-            collapse_extra_marker_lines(&replaced)
-        } else {
-            let Some(m) = REVIEWER_LINE_RE.find(&text) else {
-                return Err(SlackReviewError::NoAnchor);
-            };
-            let mut out = String::with_capacity(text.len() + line.len() + 1);
-            out.push_str(&text[..m.end()]);
-            out.push('\n');
-            out.push_str(&line);
-            out.push_str(&text[m.end()..]);
-            out
-        };
-
-        crate::support::atomic_write_file(new_text.as_bytes(), &path)
-            .map_err(SlackReviewError::Io)?;
-        self.base_mut().slack_review = Some(marker.clone());
-        Ok(())
-    }
 }
-
-/// Drop every `Slack Review:` line after the first.
-///
-/// A template that somehow accumulated several markers (a merge, a hand edit)
-/// would otherwise leave the reader picking one arbitrarily; collapsing on
-/// write makes the file agree with the first-wins read.
-fn collapse_extra_marker_lines(text: &str) -> String {
-    let mut seen = false;
-    let mut out: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if line.starts_with("Slack Review:") {
-            if seen {
-                continue;
-            }
-            seen = true;
-        }
-        out.push(line);
-    }
-    let mut joined = out.join("\n");
-    // `lines()` drops a trailing newline; keep the file's original ending.
-    if text.ends_with('\n') {
-        joined.push('\n');
-    }
-    joined
-}
-
-/// Matches the `Test Plan Reviewer:` (or legacy `Suggested Test Plan
-/// Reviewer:`) metadata line.
-///
-/// [`TestReport::set_reviewer`] replaces it;
-/// [`TestReport::set_slack_review`] anchors its insert after it.
-static REVIEWER_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
-        .expect("static reviewer-line regex is valid")
-});
-
-/// Matches the `Slack Review:` marker line written by `request_review`.
-static SLACK_REVIEW_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^Slack Review:.*$").expect("static slack-review regex is valid")
-});
 
 /// The Slack message a review request was posted to.
 ///
@@ -900,50 +703,6 @@ pub struct SlackReviewMarker {
     pub channel: String,
     /// Message timestamp, which is also its ID within the channel.
     pub ts: String,
-}
-
-impl SlackReviewMarker {
-    /// Render the marker as it appears in the template.
-    #[must_use]
-    fn to_line(&self) -> String {
-        format!("Slack Review: {} {}", self.channel, self.ts)
-    }
-
-    /// Parse a `Slack Review: <channel> <ts>` line.
-    ///
-    /// Anything not exactly that shape is `None`: a hand-edited or truncated
-    /// marker is treated as absent rather than pointing at no real message.
-    #[must_use]
-    pub(crate) fn parse_line(line: &str) -> Option<Self> {
-        let rest = line.strip_prefix("Slack Review:")?;
-        let mut parts = rest.split_whitespace();
-        let channel = parts.next()?;
-        let ts = parts.next()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some(Self {
-            channel: channel.to_owned(),
-            ts: ts.to_owned(),
-        })
-    }
-}
-
-/// Failures from [`TestReport::set_slack_review`].
-#[derive(Debug, thiserror::Error)]
-pub enum SlackReviewError {
-    /// No template is loaded, so there is nothing to write the marker into.
-    #[error("Called while missing path")]
-    NoTemplate,
-    /// The template has no `Test Plan Reviewer:` line to anchor the marker to.
-    ///
-    /// The marker never pre-exists, so it must be inserted somewhere
-    /// deterministic; guessing risks corrupting the template.
-    #[error("no 'Test Plan Reviewer:' line found in template to anchor the Slack marker to")]
-    NoAnchor,
-    /// Reading or atomically rewriting the template file failed.
-    #[error("failed to write the Slack review marker to template: {0}")]
-    Io(#[source] std::io::Error),
 }
 
 /// The outcome of [`TestReport::check_hash`], so the load path
@@ -966,41 +725,6 @@ pub enum HashCheck {
     /// The Gitea API call failed; carries the underlying error text for
     /// logging.
     Failed(String),
-}
-
-/// Failure reading/parsing a checkout's template.
-#[derive(Debug, thiserror::Error)]
-pub enum ReadError {
-    /// The template `log` file could not be read.
-    ///
-    /// Carries the [`TemplateIoError`] so the checkout seam can branch on
-    /// [`is_not_found`](TemplateIoError::is_not_found) to decide whether to
-    /// trigger a fresh checkout.
-    #[error(transparent)]
-    Template(#[from] TemplateIoError),
-    /// The sibling `metadata.json` is absent.
-    #[error("metadata.json is missing from the checkout")]
-    MetadataMissing,
-    /// The `metadata.json` is not valid JSON.
-    #[error("metadata.json is not valid JSON")]
-    MetadataInvalid,
-}
-
-/// Failure recording a reviewer into the loaded template.
-#[derive(Debug, thiserror::Error)]
-pub enum ReviewerError {
-    /// The reviewer name was empty or whitespace-only.
-    #[error("reviewer must be a non-empty string")]
-    Empty,
-    /// No template is loaded.
-    #[error("Called while missing path")]
-    NoTemplate,
-    /// The template has no `Test Plan Reviewer:` line to replace.
-    #[error("no 'Test Plan Reviewer:' line found in template")]
-    NoReviewerLine,
-    /// Reading or atomically rewriting the template file failed.
-    #[error("failed to write reviewer to template: {0}")]
-    Io(#[source] std::io::Error),
 }
 
 #[cfg(test)]
@@ -1045,7 +769,7 @@ mod tests {
         assert!(base.giteacohash.is_none());
         assert_eq!(base.update_source, UpdateSource::Obs);
         assert!(base.product_warnings.is_empty());
-        // Unset on every default (SVN) load.
+        // Unset until a document is loaded.
         assert!(base.document.is_none());
         assert!(base.document_etag.is_none());
         assert!(!base.document_dirty);
@@ -1172,9 +896,6 @@ mod tests {
         fn id(&self) -> String {
             "SUSE:Maintenance:1:1".to_owned()
         }
-        fn parser(&self) -> HashMap<String, String> {
-            HashMap::new()
-        }
         fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
             HashMap::new()
         }
@@ -1256,200 +977,6 @@ mod tests {
         assert_eq!(r.giteacohash(), Some("deadbeef"));
         assert_eq!(r.update_source(), UpdateSource::Git);
         assert_eq!(r.workflow(), Workflow::Kernel);
-    }
-
-    /// Build a report backed by a temp template containing `body`.
-    fn report_with_template(dir: &tempfile::TempDir, body: &str) -> (MetaReport, PathBuf) {
-        let path = dir.path().join("log");
-        std::fs::write(&path, body).unwrap();
-        let mut base = TestReportBase::new(config());
-        base.path = Some(path.clone());
-        (MetaReport { base }, path)
-    }
-
-    fn marker(channel: &str, ts: &str) -> SlackReviewMarker {
-        SlackReviewMarker {
-            channel: channel.to_owned(),
-            ts: ts.to_owned(),
-        }
-    }
-
-    #[test]
-    fn set_slack_review_inserts_when_the_marker_is_absent() {
-        // The marker never pre-exists, so a replace-only implementation (like
-        // set_reviewer's) would fail on every first use.
-        let dir = tempfile::tempdir().unwrap();
-        let (mut r, path) = report_with_template(
-            &dir,
-            "Category: recommended\nTest Plan Reviewer: bob\nEnd\n",
-        );
-
-        r.set_slack_review(&marker("C123", "1700000000.000100"))
-            .unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(
-            written,
-            "Category: recommended\nTest Plan Reviewer: bob\nSlack Review: C123 1700000000.000100\nEnd\n"
-        );
-        assert_eq!(
-            r.base().slack_review,
-            Some(marker("C123", "1700000000.000100"))
-        );
-    }
-
-    #[test]
-    fn set_slack_review_replaces_an_existing_marker() {
-        // Re-running request_review must re-point the gate, not leave two markers.
-        let dir = tempfile::tempdir().unwrap();
-        let (mut r, path) = report_with_template(
-            &dir,
-            "Test Plan Reviewer: bob\nSlack Review: COLD 1.0\nEnd\n",
-        );
-
-        r.set_slack_review(&marker("CNEW", "2.0")).unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("Slack Review: CNEW 2.0"), "{written}");
-        assert!(!written.contains("COLD"), "{written}");
-        assert_eq!(written.matches("Slack Review:").count(), 1, "{written}");
-    }
-
-    #[test]
-    fn set_slack_review_collapses_duplicate_markers() {
-        // A hand-edited or merged template can carry several markers; the writer
-        // must leave exactly the one the reader would have picked.
-        let dir = tempfile::tempdir().unwrap();
-        let (mut r, path) = report_with_template(
-            &dir,
-            "Test Plan Reviewer: bob\nSlack Review: C1 1.0\nmiddle\nSlack Review: C2 2.0\nEnd\n",
-        );
-
-        r.set_slack_review(&marker("CNEW", "3.0")).unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written.matches("Slack Review:").count(), 1, "{written}");
-        assert!(written.contains("Slack Review: CNEW 3.0"), "{written}");
-        // Unrelated content between the markers survives.
-        assert!(written.contains("middle"), "{written}");
-        assert!(
-            written.ends_with('\n'),
-            "trailing newline kept: {written:?}"
-        );
-    }
-
-    #[test]
-    fn set_slack_review_needs_an_anchor_and_a_template() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // No reviewer line: refuse rather than guess where the marker goes.
-        let (mut r, _) = report_with_template(&dir, "Category: recommended\nEnd\n");
-        assert!(matches!(
-            r.set_slack_review(&marker("C1", "1.0")).unwrap_err(),
-            SlackReviewError::NoAnchor
-        ));
-
-        // No template loaded at all.
-        let mut unloaded = MetaReport {
-            base: TestReportBase::new(config()),
-        };
-        assert!(matches!(
-            unloaded.set_slack_review(&marker("C1", "1.0")).unwrap_err(),
-            SlackReviewError::NoTemplate
-        ));
-    }
-
-    #[test]
-    fn set_slack_review_leaves_memory_untouched_when_the_write_fails() {
-        // Mirrors set_reviewer: a caller that aborts must not believe it persisted.
-        let dir = tempfile::tempdir().unwrap();
-        let mut base = TestReportBase::new(config());
-        base.path = Some(dir.path().join("does/not/exist/log"));
-        let mut r = MetaReport { base };
-
-        assert!(r.set_slack_review(&marker("C1", "1.0")).is_err());
-        assert_eq!(r.base().slack_review, None);
-    }
-
-    #[test]
-    fn slack_marker_round_trips_through_its_line() {
-        let m = marker("C0123456789", "1700000000.000100");
-        assert_eq!(SlackReviewMarker::parse_line(&m.to_line()), Some(m));
-    }
-
-    #[test]
-    fn slack_marker_rejects_malformed_lines() {
-        // A truncated or over-long marker points at no real message.
-        assert_eq!(SlackReviewMarker::parse_line("Slack Review: C1"), None);
-        assert_eq!(SlackReviewMarker::parse_line("Slack Review:"), None);
-        assert_eq!(
-            SlackReviewMarker::parse_line("Slack Review: C1 1.0 extra"),
-            None
-        );
-        assert_eq!(SlackReviewMarker::parse_line("Reviewer: bob"), None);
-    }
-
-    #[test]
-    fn set_reviewer_rewrites_template_line_and_updates_memory() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("log");
-        std::fs::write(
-            &path,
-            "Category: recommended\nTest Plan Reviewer: old\nEnd\n",
-        )
-        .unwrap();
-        let mut base = TestReportBase::new(config());
-        base.path = Some(path.clone());
-        let mut r = MetaReport { base };
-
-        r.set_reviewer("  bob  ").unwrap();
-        assert_eq!(r.base().reviewer, "bob");
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("Test Plan Reviewer: bob"), "{written}");
-        assert!(!written.contains("old"), "{written}");
-    }
-
-    #[test]
-    fn set_reviewer_normalizes_legacy_suggested_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("log");
-        std::fs::write(&path, "Suggested Test Plan Reviewer: \n").unwrap();
-        let mut base = TestReportBase::new(config());
-        base.path = Some(path.clone());
-        let mut r = MetaReport { base };
-        r.set_reviewer("carol").unwrap();
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written.trim(), "Test Plan Reviewer: carol");
-    }
-
-    #[test]
-    fn set_reviewer_rejects_empty_missing_path_and_missing_line() {
-        // Empty name.
-        assert!(matches!(
-            MetaReport {
-                base: TestReportBase::new(config())
-            }
-            .set_reviewer("   "),
-            Err(ReviewerError::Empty)
-        ));
-        // No template path loaded.
-        assert!(matches!(
-            MetaReport {
-                base: TestReportBase::new(config())
-            }
-            .set_reviewer("bob"),
-            Err(ReviewerError::NoTemplate)
-        ));
-        // Path set but no reviewer line.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("log");
-        std::fs::write(&path, "Category: recommended\n").unwrap();
-        let mut base = TestReportBase::new(config());
-        base.path = Some(path);
-        assert!(matches!(
-            MetaReport { base }.set_reviewer("bob"),
-            Err(ReviewerError::NoReviewerLine)
-        ));
     }
 
     #[tokio::test]

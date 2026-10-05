@@ -17,7 +17,7 @@
 //! the same retry loop is reachable from `make_testreport`, at the same ~5s
 //! real cost the colocated retry test already pays.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_testreport::{UpdateKind, make_testreport};
@@ -188,55 +188,8 @@ fn scripted_prompter(script: &'static [(&'static str, &'static str)]) -> mtui_ho
     }))
 }
 
-/// Whether `svn`/`svnadmin` are on `PATH`. The real-checkout case below skips
-/// cleanly when absent, mirroring `mtui-core::commands::checkout`'s own gate
-/// and the CI `test` job's `SVN fixture` step (the only job that installs
-/// `subversion` and runs this feature).
-fn svn_available() -> bool {
-    std::process::Command::new("svn")
-        .arg("--version")
-        .output()
-        .is_ok()
-        && std::process::Command::new("svnadmin")
-            .arg("--version")
-            .output()
-            .is_ok()
-}
-
-/// Creates a local `file://` SVN repo under `root` with `<rrid>` pre-populated
-/// from `files` (name, content pairs), via a real `svnadmin create` + `svn
-/// import`. Returns the `svn_path` base (no trailing `/<rrid>`) a real `svn
-/// co` can check out from — offline, no network involved.
-fn make_svn_repo(root: &Path, rrid: &str, files: &[(&str, &str)]) -> String {
-    let repo = root.join("svnrepo");
-    assert!(
-        std::process::Command::new("svnadmin")
-            .args(["create", repo.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success()
-    );
-    let staging = root.join("staging");
-    std::fs::create_dir_all(&staging).unwrap();
-    for (name, content) in files {
-        std::fs::write(staging.join(name), content).unwrap();
-    }
-    let url = format!("file://{}/{rrid}", repo.display());
-    assert!(
-        std::process::Command::new("svn")
-            .args(["import", staging.to_str().unwrap(), &url, "-m", "init"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    format!("file://{}", repo.display())
-}
-
-/// A `200` document response loads via `apply_document` without any SVN
-/// checkout (the configured repository does not exist), and the SVN parsers
-/// (`ReducedMetadataParser`/`JSONParser`) are never consulted: only the
-/// scratch directory is created, holding neither `log`, `metadata.json` nor
-/// `.svn`.
+/// A `200` document response loads via `apply_document`: only the scratch
+/// directory is created, holding neither `log` nor `metadata.json`.
 #[tokio::test]
 async fn make_testreport_ingest_200_applies_document_without_a_checkout() {
     let server = MockServer::start().await;
@@ -253,7 +206,6 @@ async fn make_testreport_ingest_200_applies_document_without_a_checkout() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = cfg(tmp.path().to_path_buf());
     config.teregen_api_v2 = server.uri();
-    config.svn_path = "file:///nonexistent".to_owned();
     let update = UpdateID::parse(MAINT_RRID).unwrap();
 
     let report = make_testreport(
@@ -280,7 +232,6 @@ async fn make_testreport_ingest_200_applies_document_without_a_checkout() {
     let rrid_dir = tmp.path().join(MAINT_RRID);
     assert_eq!(base.path.as_deref(), Some(rrid_dir.join("log").as_path()));
     assert!(rrid_dir.is_dir());
-    assert!(!rrid_dir.join(".svn").exists(), "no SVN checkout may run");
     assert!(!rrid_dir.join("log").exists());
     assert!(!rrid_dir.join("metadata.json").exists());
 }
@@ -432,15 +383,11 @@ async fn make_testreport_ingest_503_then_404_retries_before_failing() {
 }
 
 /// A stale Gitea hash on the v2 document drives `handle_stale_hash` ->
-/// `regenerate_via_teregen` (the feature-gated reload-via-document branch),
+/// `regenerate_via_teregen` (the reload-via-document branch),
 /// which reloads a fresh document and loads it — covering the wiring
 /// `lifecycle.rs`'s colocated unit tests exercise only in isolation.
 #[tokio::test]
 async fn make_testreport_ingest_gitea_mismatch_regenerates_and_reloads_via_document() {
-    if !svn_available() {
-        return;
-    }
-
     let gitea = MockServer::start().await;
     mount_pr_head_sha(&gitea, "freshsha").await;
     let gitea_api = format!("{}/pulls/1", gitea.uri());
@@ -468,16 +415,9 @@ async fn make_testreport_ingest_gitea_mismatch_regenerates_and_reloads_via_docum
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    let svn_path = make_svn_repo(
-        tmp.path(),
-        SLFO_RRID,
-        &[("log", "Testreport for SUSE:SLFO:1.2:7819\n")],
-    );
-
     let mut config = cfg(tmp.path().to_path_buf());
     config.teregen_api = teregen.uri();
     config.teregen_api_v2 = teregen.uri();
-    config.svn_path = svn_path;
     config.gitea_token = "tok".to_owned();
     config.gitea_url = gitea.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
@@ -509,10 +449,6 @@ async fn make_testreport_ingest_gitea_mismatch_regenerates_and_reloads_via_docum
 /// load with the exact P3-D5-adjacent decline text.
 #[tokio::test]
 async fn make_testreport_ingest_gitea_mismatch_noninteractive_declines_and_yields_null() {
-    if !svn_available() {
-        return;
-    }
-
     let gitea = MockServer::start().await;
     mount_pr_head_sha(&gitea, "freshsha").await;
     let gitea_api = format!("{}/pulls/1", gitea.uri());
@@ -528,15 +464,8 @@ async fn make_testreport_ingest_gitea_mismatch_noninteractive_declines_and_yield
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    let svn_path = make_svn_repo(
-        tmp.path(),
-        SLFO_RRID,
-        &[("log", "Testreport for SUSE:SLFO:1.2:7819\n")],
-    );
-
     let mut config = cfg(tmp.path().to_path_buf());
     config.teregen_api_v2 = server.uri();
-    config.svn_path = svn_path;
     config.gitea_token = "tok".to_owned();
     config.gitea_url = gitea.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
@@ -960,7 +889,7 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual_document()
 }
 
 /// An accepted regenerate job that does **not finish** falls back to the manual
-/// prompts. Unlike an SVN working copy, the report directory only holds scratch
+/// prompts. The report directory only holds scratch
 /// files here and is kept.
 #[tokio::test]
 async fn make_testreport_slfo_regenerate_job_unfinished_keeps_scratch_dir_document() {

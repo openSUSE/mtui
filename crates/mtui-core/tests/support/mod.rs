@@ -111,9 +111,6 @@ impl TestReport for FakeReport {
     fn id(&self) -> String {
         self.rrid.clone()
     }
-    fn parser(&self) -> HashMap<String, String> {
-        HashMap::new()
-    }
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         HashMap::new()
     }

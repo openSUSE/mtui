@@ -1,8 +1,8 @@
 //! Update identifier.
 //!
 //! An [`UpdateID`] is the value-type slice of an update: the parsed
-//! [`RequestReviewID`] and nothing else. The TestReport factory, the SVN/Gitea
-//! checkout and the interactive prompter live in `mtui-testreport` /
+//! [`RequestReviewID`] and nothing else. The TestReport factory, the teregen/Gitea
+//! load and the interactive prompter live in `mtui-testreport` /
 //! `mtui-core` — this crate is I/O-free.
 //!
 //! Because the RRID grammar is an interop **Contract** (see `AGENTS.md`),

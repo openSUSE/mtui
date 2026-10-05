@@ -30,18 +30,6 @@ fn id_empty_when_no_rrid() {
     assert_eq!(r.id(), "");
 }
 
-#[test]
-fn parser_returns_hosts_and_json_keys() {
-    let r = PiReport::new(config());
-    let keys: std::collections::BTreeSet<_> = r.parser().into_keys().collect();
-    assert_eq!(
-        keys,
-        ["hosts".to_string(), "json".to_string()]
-            .into_iter()
-            .collect()
-    );
-}
-
 /// PI dispatches unconditionally to `reporepoparse` (no maintenance-id branch).
 #[test]
 fn update_repos_parser_uses_reporepoparse() {
