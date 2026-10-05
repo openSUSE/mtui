@@ -134,6 +134,10 @@ pub enum CommandError {
     #[error("cancelled{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     Cancelled(String),
 
+    /// A command that reads or writes the report document ran with none loaded.
+    #[error("no report document loaded — run load_template or regenerate")]
+    NoDocument,
+
     /// A command-specific failure whose message the command supplies directly:
     /// the catch-all until a condition warrants its own variant.
     #[error("{0}")]
@@ -188,6 +192,14 @@ mod tests {
             "more than one template is loaded (SUSE:Maintenance:1:1, SUSE:Maintenance:2:2); \
              pass -T/--template <RRID> (template=<RRID> over MCP), or --all-templates to run it \
              on all 2"
+        );
+    }
+
+    #[test]
+    fn no_document_message_is_stable() {
+        assert_eq!(
+            CommandError::NoDocument.to_string(),
+            "no report document loaded — run load_template or regenerate"
         );
     }
 

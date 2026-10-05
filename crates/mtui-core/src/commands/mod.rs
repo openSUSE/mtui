@@ -399,7 +399,7 @@ pub(crate) mod testkit {
         }
 
         /// Sets a loaded report's `path` to a fresh, empty working directory, so
-        /// `report_wd()`/`collect_artifacts` resolve without touching SVN.
+        /// `report_wd()`/`collect_artifacts` resolve against an empty directory.
         pub(crate) fn set_bare_report_wd(session: &mut Session) -> tempfile::TempDir {
             let tmp = tempfile::tempdir().unwrap();
             session.metadata_mut().base_mut().path = Some(tmp.path().join("metadata.json"));
@@ -1056,8 +1056,8 @@ mod mcp_nonempty_success_guard {
     /// plumbing beyond the testkit, and asserts its own success line in its
     /// per-command unit tests.
     const ALLOW_EMPTY_SUCCESS: &[&str] = &[
-        // why: shell out to `svn`; success needs a real repo + checkout (their
-        // tests skip when svn is absent).
+        // why: success needs a teregen document round trip, which their own
+        // tests mock per case.
         "checkout",
         "commit",
         // why: the QAM review workflow needs a live OBS/IBS or Gitea call.
@@ -1082,8 +1082,8 @@ mod mcp_nonempty_success_guard {
         // why: connects a brand-new host over SSH to a reachable refhost (its
         // tests only exercise the connect-failure path).
         "add_host",
-        // why: folds openQA-sourced per-host logs into a template file, so
-        // success needs a source template + openQA/QEM backend.
+        // why: authors openQA-sourced per-host results onto the report document,
+        // so success needs a loaded document + openQA/QEM backend.
         "export",
         // why: resolves the refhosts store; needs a refhosts YAML fixture.
         "list_refhosts",
@@ -1403,6 +1403,45 @@ mod repoints_active_scope_guard {
                      run only honours the opt-out on the single-template path",
                 );
             }
+        }
+    }
+}
+
+/// Every command that reads or writes the report document refuses, with the
+/// one shared error, when none is loaded — before any I/O.
+#[cfg(test)]
+mod document_required_guard {
+    use super::testkit::{matches, session_with_hosts};
+    use crate::error::CommandError;
+    use crate::register_all;
+    use mtui_types::Workflow;
+
+    #[tokio::test]
+    async fn commands_refuse_without_a_document() {
+        let registry = register_all();
+        let table: &[(&str, &[&str])] = &[
+            ("commit", &[]),
+            ("checkout", &[]),
+            ("export", &[]),
+            ("openqa_overview", &["--export"]),
+            ("approve", &["--reviewer", "x"]),
+        ];
+        for (name, argv) in table {
+            let command = registry.get(name).expect("registered");
+            let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+            let wd = tempfile::tempdir().unwrap();
+            let base = session.metadata_mut().base_mut();
+            base.workflow = Workflow::Auto;
+            base.path = Some(wd.path().join("log"));
+            assert!(base.document.is_none());
+            session.config.template_dir = wd.path().to_path_buf();
+
+            let args = matches(command.as_ref(), argv);
+            let err = command.call(&mut session, &args).await.unwrap_err();
+
+            assert!(matches!(err, CommandError::NoDocument), "{name}: {err:?}");
+            assert!(buf.contents().is_empty(), "{name}: {}", buf.contents());
+            assert_eq!(std::fs::read_dir(wd.path()).unwrap().count(), 0, "{name}");
         }
     }
 }

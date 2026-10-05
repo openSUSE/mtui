@@ -112,6 +112,18 @@ pub(crate) fn require_update(
     })
 }
 
+/// Guards a command body that reads or writes the report document.
+///
+/// # Errors
+///
+/// [`CommandError::NoDocument`] when the active report has no document.
+pub(crate) fn require_document(session: &Session) -> Result<(), CommandError> {
+    match session.metadata().base().document {
+        Some(_) => Ok(()),
+        None => Err(CommandError::NoDocument),
+    }
+}
+
 /// Refuses a write (`commit`, `export`) against a template that loaded with a
 /// stale Gitea hash, unless `allow_stale` is set.
 ///

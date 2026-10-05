@@ -1,36 +1,34 @@
-//! The `export` command (writes the gathered update data to the template).
-
-use std::path::PathBuf;
+//! The `export` command (authors the gathered update data onto the report document).
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::HttpClient;
 use mtui_testreport::{
-    AutoExport, DenyOverwrite, ExportContext, FileList, KernelExport, ManualExport, ManualHost,
+    AutoExport, DenyOverwrite, ExportContext, KernelExport, ManualExport, ManualHost,
 };
 use mtui_types::Workflow;
 use mtui_types::package::VersionCheck;
 
 use super::support::{
-    add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_update, select_names,
-    stale_hash_gate, template_completion,
+    add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_document,
+    require_update, select_names, stale_hash_gate, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Exports the gathered update data to the testing template.
+/// Exports the gathered update data onto the report document.
 ///
-/// Picks the exporter by the report's [`Workflow`] and writes the pre/post
-/// package versions and update log into the template (or `filename`). Requires a
-/// loaded report.
+/// Picks the exporter by the report's [`Workflow`], authors the pre/post
+/// package versions and openQA results onto the document in memory (`commit`
+/// uploads it) and writes the install logs. Requires a loaded report document.
 ///
 /// ## openQA enrichment (Manual)
 ///
 /// `Manual` folds openQA results in via the report's holder (`metadata.openqa`):
 /// an absent "auto" result is lazily built and run from the QEM Dashboard, then
 /// the connected-host results and any `openqa_overview` payload go into
-/// [`ManualExport`]. `Auto`/`Kernel` render their full local template.
+/// [`ManualExport`]. `Auto`/`Kernel` author from their own openQA results.
 ///
 /// A `Manual` export refuses to write at all when *no* selected host has
 /// recorded package versions — the signal that this session never ran `update`
@@ -50,7 +48,7 @@ impl Command for Export {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Exports the gathered update data to the testing template.")
+        Some("Exports the gathered update data onto the report document.")
     }
 
     fn scope(&self) -> Scope {
@@ -72,10 +70,7 @@ impl Command for Export {
                     .short('f')
                     .long("force")
                     .action(ArgAction::SetTrue)
-                    .help(
-                        "force overwrite existing template and re-download openQA \
-                         results present in the log",
-                    ),
+                    .help("force overwrite of existing install logs"),
             )
             .arg(
                 Arg::new("allow_unverified")
@@ -85,11 +80,6 @@ impl Command for Export {
                         "write the unverified scaffold even when no selected host has \
                          recorded package versions",
                     ),
-            )
-            .arg(
-                Arg::new("filename")
-                    .value_name("FILENAME")
-                    .help("output template file name (defaults to the loaded template)"),
             )
             .arg(
                 Arg::new("allow_stale")
@@ -118,16 +108,6 @@ impl Command for Export {
                 .println("skipped: manual export needs a connected host");
             return Ok(());
         }
-
-        let filename: PathBuf = match args.get_one::<String>("filename") {
-            Some(f) => PathBuf::from(f),
-            None => session
-                .metadata()
-                .base()
-                .path
-                .clone()
-                .ok_or_else(|| CommandError::Other("no report path to export to".to_owned()))?,
-        };
 
         let (manual_results, manual_overview) = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
@@ -191,72 +171,16 @@ impl Command for Export {
             (None, None)
         };
 
-        if session.metadata().base().document.is_some() {
-            return self
-                .export_document(
-                    session,
-                    workflow,
-                    force,
-                    rrid,
-                    manual_results,
-                    manual_overview,
-                    args.get_one::<String>("filename").is_some(),
-                )
-                .await;
-        }
-
-        let text = FileList::load(&filename).map_err(|e| {
-            CommandError::Other(format!("could not read template {filename:?}: {e}"))
-        })?;
-        let ctx = ExportContext::new(session.config.clone(), text.lines(), force, rrid);
-
-        let (template, touched): (Vec<String>, Vec<&'static str>) = match workflow {
-            Workflow::Auto => {
-                let http = build_http(session)?;
-                let auto = session.metadata().openqa().auto.clone();
-                let overview = session.metadata().openqa().overview.clone();
-                let touched =
-                    author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
-                let template = AutoExport::new(ctx, auto, overview)
-                    .run(&http, &DenyOverwrite)
-                    .await;
-                (template, touched)
-            }
-            Workflow::Kernel => {
-                let http = build_http(session)?;
-                let kernel = session.metadata().openqa().kernel.clone();
-                let overview = session.metadata().openqa().overview.clone();
-                let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
-                let template = KernelExport::new(ctx, kernel, overview).run(&http).await;
-                (template, touched)
-            }
-            Workflow::Manual => {
-                let (hosts, results) = manual_results.expect("computed for Manual workflow");
-                let auto = session.metadata().openqa().auto.clone();
-                let touched = author_onto_document(
-                    session,
-                    auto.as_ref(),
-                    &[],
-                    manual_overview.as_ref(),
-                    Some(&results),
-                );
-                let template = ManualExport::new(ctx, results, auto, manual_overview)
-                    .run(&hosts, &DenyOverwrite);
-                (template, touched)
-            }
-        };
-
-        let mut out = FileList::from_lines(&filename, template);
-        out.write().map_err(|e| {
-            CommandError::Other(format!("could not write template {filename:?}: {e}"))
-        })?;
-        session
-            .display
-            .println(&format!("template exported to {}", filename.display()));
-        if let Some(line) = document_line(&touched) {
-            session.display.println(&line);
-        }
-        Ok(())
+        require_document(session)?;
+        self.export_document(
+            session,
+            workflow,
+            force,
+            rrid,
+            manual_results,
+            manual_overview,
+        )
+        .await
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
@@ -265,9 +189,8 @@ impl Command for Export {
 }
 
 impl Export {
-    /// The document path: author the gathered data onto the report document and
-    /// write the install logs, with no text template read or written.
-    #[allow(clippy::too_many_arguments)]
+    /// Author the gathered data onto the report document and write the install
+    /// logs.
     async fn export_document(
         &self,
         session: &mut Session,
@@ -276,7 +199,6 @@ impl Export {
         rrid: mtui_types::RequestReviewID,
         manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
         manual_overview: Option<mtui_datasources::OpenQAOverviewResult>,
-        filename_given: bool,
     ) -> CommandResult {
         let ctx = ExportContext::new(session.config.clone(), &[], force, rrid.clone());
         let (touched, written) = match workflow {
@@ -317,12 +239,6 @@ impl Export {
             }
         };
 
-        if filename_given {
-            session.display.println(
-                "note: FILENAME ignored on the document path (the report document is \
-                 authored instead)",
-            );
-        }
         if written.is_empty() {
             session.display.println("no install logs written");
         } else {
@@ -365,8 +281,7 @@ fn is_unverified(host: &ManualHost) -> bool {
 }
 
 /// Delegates to [`mtui_testreport::author_export`] (the pure authoring
-/// functions, composed): in memory only, nothing uploads here. On the SVN path
-/// it runs in addition to the text export; on the document path it replaces it.
+/// functions, composed): in memory only, nothing uploads here.
 ///
 /// A cheap no-op when no document is loaded: the guard below skips the oscrc
 /// read entirely in that case.
@@ -403,7 +318,7 @@ fn document_line(touched: &[&str]) -> Option<String> {
 /// The `people.testers` entry for this export: identity comes from the same
 /// principal the teregen auth layer uses (the oscrc user), never a
 /// second config key. `None` (and a warning) when oscrc has no usable
-/// credentials — a missing identity must not block the text export.
+/// credentials — a missing identity must not block the export.
 fn build_tester_entry(session: &Session) -> Option<mtui_types::report_document::TesterEntry> {
     let creds = match mtui_datasources::obs::oscrc::read_credentials(&session.config.obs_api_url) {
         Ok(creds) => creds,
@@ -481,38 +396,15 @@ mod tests {
     #[tokio::test]
     async fn allow_stale_permits_export_of_a_stale_template() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Auto;
-        session.metadata_mut().base_mut().stale_hash_warning =
-            Some("template hash mismatch (stale checkout)".to_owned());
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+        base.stale_hash_warning = Some("template hash mismatch (stale checkout)".to_owned());
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap(), "--allow-stale"]);
+        let args = matches(&Export, &["--allow-stale"]);
         Export.call(&mut session, &args).await.unwrap();
 
-        assert!(buf.contents().contains("template exported to"));
-    }
-
-    #[tokio::test]
-    async fn auto_writes_template_to_explicit_filename() {
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Auto;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
-
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"));
-        // A success line reaches the display so the MCP result is never empty.
-        assert!(
-            buf.contents().contains("template exported to"),
-            "{:?}",
-            buf.contents()
-        );
+        assert!(buf.contents().contains("no install logs written"));
     }
 
     /// A `DashboardAutoOpenQA` with `results`/`pp` set directly as `run()`
@@ -541,78 +433,11 @@ mod tests {
         auto
     }
 
-    /// The Auto branch must read the holder end-to-end: install status, `pp`
-    /// block and per-job install log all land in the template / on disk. Guards
-    /// against a regression to the `None, None` stub.
+    /// The Kernel branch must read the report's `openqa.kernel` list and author
+    /// its matrix onto `testing.regression`, not export against an empty
+    /// `Vec::new()`. Guards against a regression to the `Vec::new(), None` stub.
     #[tokio::test]
-    async fn auto_reads_holder_status_pp_and_downloads_log() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let oqa = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/install.log"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("zypper install body\n"))
-            .mount(&oqa)
-            .await;
-        let log_url = format!("{}/install.log", oqa.uri());
-
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Auto;
-        let dir = tempfile::tempdir().unwrap();
-        session.config.template_dir = dir.path().to_path_buf();
-        // A header above the `source code change review:` anchor keeps
-        // `inject_openqa`'s insertion point in range.
-        let path_out = dir.path().join("template.txt");
-        std::fs::write(
-            &path_out,
-            "Test results by product-arch:\n\nsource code change review:\n",
-        )
-        .unwrap();
-
-        // As `reload_openqa` would.
-        session.metadata_mut().openqa_mut().auto = Some(seeded_auto(&log_url));
-
-        let args = matches(&Export, &["-f", path_out.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
-
-        let written = std::fs::read_to_string(&path_out).unwrap();
-        assert!(
-            written.contains("Installation tests done in openQA with following results: PASSED"),
-            "status line missing:\n{written}"
-        );
-        assert!(
-            written.contains("Results from openQA jobs"),
-            "pp block missing:\n{written}"
-        );
-        let logfile = dir
-            .path()
-            .join("SUSE:Maintenance:1:1")
-            .join(&session.config.install_logs)
-            .join("sles_15-SP5_x86_64.log");
-        assert!(logfile.exists(), "install log not written: {logfile:?}");
-    }
-
-    #[tokio::test]
-    async fn kernel_writes_template_to_explicit_filename() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Kernel;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "regression tests:\n").unwrap();
-
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"));
-    }
-
-    /// The Kernel branch must read the report's `openqa.kernel` list and render
-    /// its matrix, not export against an empty `Vec::new()`. Guards against a
-    /// regression to the `Vec::new(), None` stub.
-    #[tokio::test]
-    async fn kernel_reads_holder_and_renders_matrix() {
+    async fn kernel_reads_holder_and_authors_matrix() {
         use mtui_datasources::{HttpClient, VerifyPolicy};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -634,11 +459,11 @@ mod tests {
             .await;
 
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Kernel;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
-        let path_out = dir.path().join("template.txt");
-        std::fs::write(&path_out, "regression tests:\n\nbuild log review:\n").unwrap();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Kernel;
+        base.document = Some(minimal_document());
 
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
@@ -662,18 +487,21 @@ mod tests {
         );
         session.metadata_mut().openqa_mut().kernel.push(kernel);
 
-        let args = matches(&Export, &["-f", path_out.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
-        let written = std::fs::read_to_string(&path_out).unwrap();
-        // The matrix header + row prove the holder was read.
+        let comment = session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .and_then(|d| d.testing.regression.as_ref())
+            .and_then(|r| r.comment.0.clone())
+            .expect("testing.regression.comment authored");
+        // The instance line + row prove the holder was read.
         assert!(
-            written.contains("Results from openQA:"),
-            "kernel results header missing:\n{written}"
-        );
-        assert!(
-            written.contains("openQA instance:") && written.contains("ltp_syscalls"),
-            "kernel matrix rows missing:\n{written}"
+            comment.contains("openQA instance:") && comment.contains("ltp_syscalls"),
+            "kernel matrix rows missing:\n{comment}"
         );
     }
 
@@ -696,54 +524,21 @@ mod tests {
         server
     }
 
-    #[tokio::test]
-    async fn manual_lazily_builds_and_folds_openqa_auto() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
-        // #526: without recorded versions the export now refuses; this test is
-        // about the openQA fold, so give it a verified host.
-        record_versions(&mut session, "h1");
-        let server = dashboard_server("1").await;
-        session.config.qem_dashboard_api = format!("{}/api", server.uri());
-        session.config.openqa_instance = server.uri();
-        let dir = tempfile::tempdir().unwrap();
-        // Keeps the per-host install logs the manual exporter writes out of the
-        // working tree.
-        session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
-
-        assert!(session.metadata().openqa().auto.is_none());
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
-
-        assert!(session.metadata().openqa().auto.is_some());
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"));
-    }
-
     /// A manual-workflow session wired to `dashboard_server`, `n` hosts and a
-    /// scaffold template on disk. Returns the template path (and keeps `dir`
-    /// alive for the caller).
+    /// loaded report document. Install logs land in the returned `dir`.
     async fn manual_export_fixture(
         hosts: &[&str],
-    ) -> (Session, Buffer, tempfile::TempDir, PathBuf, MockServer) {
+    ) -> (Session, Buffer, tempfile::TempDir, MockServer) {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", hosts, "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let server = dashboard_server("1").await;
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
         session.config.openqa_instance = server.uri();
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        // The product-arch anchor is what lets the exporter create a per-host
-        // block, so the rendered verdict lines are assertable.
-        std::fs::write(
-            &path,
-            "Test results by product-arch:\n\nsource code change review:\n",
-        )
-        .unwrap();
-        (session, buf, dir, path, server)
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Manual;
+        base.document = Some(minimal_document());
+        (session, buf, dir, server)
     }
 
     /// Seeds `host`'s tracked packages with a recorded before/after pair, as a
@@ -756,18 +551,33 @@ mod tests {
         t.set_packages(vec![pkg]);
     }
 
+    #[tokio::test]
+    async fn manual_lazily_builds_and_folds_openqa_auto() {
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
+        // #526: without recorded versions the export now refuses; this test is
+        // about the openQA fold, so give it a verified host.
+        record_versions(&mut session, "h1");
+
+        assert!(session.metadata().openqa().auto.is_none());
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(session.metadata().openqa().auto.is_some());
+        assert!(session.metadata().base().document_dirty);
+    }
+
     /// #526: no host has package data at all — the whole selection is
-    /// unverified, so `export` must refuse and leave the template untouched,
+    /// unverified, so `export` must refuse and leave the document untouched,
     /// naming *every* unverified host (the issue plan's wording).
     /// Mutations caught: dropping the refusal (back to warn-and-write) makes the
     /// `Err` assertion fail; writing first and erroring after makes the
-    /// byte-identity assertion fail; naming only the first host drops `h2`.
+    /// untouched-document assertions fail; naming only the first host drops `h2`.
     #[tokio::test]
     async fn manual_errors_on_unverified_hosts_without_writing() {
-        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1", "h2"]).await;
-        let before = std::fs::read(&path).unwrap();
+        let (mut session, _buf, dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        let before = session.metadata().base().document.clone();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
 
         let CommandError::Other(msg) = err else {
@@ -779,11 +589,13 @@ mod tests {
             "every unverified host must be named: {msg}"
         );
         assert!(msg.contains("update"), "{msg}");
+        let base = session.metadata().base();
         assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "no partial write may reach the template"
+            base.document, before,
+            "no partial write may reach the document"
         );
+        assert!(!base.document_dirty);
+        assert!(!dir.path().join("SUSE:Maintenance:1:1").exists());
     }
 
     /// #437 + #526: a host seeded with packages the version query never answered
@@ -791,20 +603,22 @@ mod tests {
     /// when a host dies between seed and check.
     #[tokio::test]
     async fn manual_errors_on_seeded_but_unchecked_hosts_without_writing() {
-        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
         for t in session.targets_mut().targets_mut() {
             t.set_packages(vec![mtui_types::package::Package::new("bash")]);
         }
-        let before = std::fs::read(&path).unwrap();
+        let before = session.metadata().base().document.clone();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
 
         let CommandError::Other(msg) = err else {
             panic!("expected Other");
         };
         assert!(msg.contains("h1"), "{msg}");
-        assert_eq!(std::fs::read(&path).unwrap(), before, "no partial write");
+        let base = session.metadata().base();
+        assert_eq!(base.document, before, "no partial write");
+        assert!(!base.document_dirty);
     }
 
     /// #526: the predicate is **every** selected host, not **any**. One verified
@@ -813,11 +627,11 @@ mod tests {
     /// into an `Err`.
     #[tokio::test]
     async fn manual_partially_verified_group_still_writes_with_warning() {
-        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
         record_versions(&mut session, "h1");
         // h2 keeps an empty package list: unverified.
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.expect("must write");
 
         let out = buf.contents();
@@ -829,8 +643,7 @@ mod tests {
             !out.contains("recorded for h1"),
             "the verified host must not be warned about: {out}"
         );
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"), "{written}");
+        assert!(session.metadata().base().document_dirty);
     }
 
     /// #526: `is_unverified` is per-host, not per-package — one checked package
@@ -842,13 +655,13 @@ mod tests {
     /// unchecked, so the host does too).
     #[tokio::test]
     async fn manual_mixed_checked_and_unchecked_packages_is_verified() {
-        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
         let t = session.targets_mut().get_mut("h1").expect("host present");
         let mut after_only = mtui_types::package::Package::new("bash-doc");
         after_only.set_after(Some("5.1-1")).unwrap();
         t.set_packages(vec![mtui_types::package::Package::new("bash"), after_only]);
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.expect("must write");
 
         assert!(
@@ -856,8 +669,7 @@ mod tests {
             "{}",
             buf.contents()
         );
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"), "{written}");
+        assert!(session.metadata().base().document_dirty);
     }
 
     /// #526: the guard's `!unverified.is_empty()` term. `-t all` opts out of the
@@ -866,43 +678,40 @@ mod tests {
     /// Mutation caught: dropping the term refuses with an empty host list.
     #[tokio::test]
     async fn manual_zero_selected_hosts_does_not_refuse() {
-        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&[]).await;
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&[]).await;
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap(), "-t", "all"]);
+        let args = matches(&Export, &["-t", "all"]);
         Export.call(&mut session, &args).await.expect("must write");
 
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"), "{written}");
+        assert!(session.metadata().base().document_dirty);
     }
 
-    /// #526: `--allow-unverified` is the deliberate opt-out — the scaffold is
-    /// written, carries the `not checked` lines, and its verdict placeholder
-    /// stays unflipped (pins the `manual.rs` rendering the opt-out relies on).
+    /// #526: `--allow-unverified` is the deliberate opt-out — the host's check
+    /// is authored, and its verdict stays undecided rather than flipping to
+    /// passed (pins the verdict rule the opt-out relies on).
     #[tokio::test]
-    async fn manual_allow_unverified_writes_unflipped_scaffold() {
-        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+    async fn manual_allow_unverified_authors_an_undecided_check() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
         for t in session.targets_mut().targets_mut() {
             t.set_packages(vec![mtui_types::package::Package::new("bash")]);
         }
 
-        let args = matches(
-            &Export,
-            &["-f", "--allow-unverified", path.to_str().unwrap()],
-        );
+        let args = matches(&Export, &["--allow-unverified"]);
         Export.call(&mut session, &args).await.expect("must write");
 
-        let written = std::fs::read_to_string(&path).unwrap();
+        let install = session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .and_then(|d| d.testing.install.clone())
+            .expect("testing.install authored");
+        assert_eq!(install.checks.len(), 1);
+        assert_eq!(install.checks[0].refhost, "h1");
         assert!(
-            written.contains("package bash: not checked (no version data recorded)"),
-            "{written}"
-        );
-        assert!(
-            written.contains("=> PASSED/FAILED"),
-            "verdict must stay undecided:\n{written}"
-        );
-        assert!(
-            !written.contains("=> PASSED\n") && !written.contains("=> FAILED\n"),
-            "verdict must not be flipped:\n{written}"
+            install.checks[0].verdict.0.is_none(),
+            "verdict must stay undecided: {:?}",
+            install.checks[0].verdict
         );
         assert!(
             buf.contents()
@@ -915,22 +724,14 @@ mod tests {
     /// Negative control killing the warn-unconditionally mutant.
     #[tokio::test]
     async fn manual_does_not_warn_when_package_data_recorded() {
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
         for t in session.targets_mut().targets_mut() {
             let mut pkg = mtui_types::package::Package::new("bash");
             pkg.set_before(Some("5.1-1")).unwrap();
             t.set_packages(vec![pkg]);
         }
-        let server = dashboard_server("1").await;
-        session.config.qem_dashboard_api = format!("{}/api", server.uri());
-        session.config.openqa_instance = server.uri();
-        let dir = tempfile::tempdir().unwrap();
-        session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
         assert!(
@@ -943,15 +744,9 @@ mod tests {
     #[tokio::test]
     async fn manual_reuses_existing_openqa_auto() {
         // An existing "auto" result must not be rebuilt.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        let (mut session, _buf, _dir, server) = manual_export_fixture(&["h1"]).await;
         record_versions(&mut session, "h1");
-        let dir = tempfile::tempdir().unwrap();
-        session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
 
-        let server = dashboard_server("1").await;
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = session.http_client().unwrap();
         let incident = build_incident(
@@ -971,18 +766,9 @@ mod tests {
 
         // A rebuild would still succeed (errors are folded away), so the
         // assertion is that the pre-seeded result survives.
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
         assert!(session.metadata().openqa().auto.is_some());
-    }
-
-    #[tokio::test]
-    async fn missing_file_errors_cleanly() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Auto;
-        let args = matches(&Export, &["-f", "/nonexistent/dir/nope.txt"]);
-        let err = Export.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
     }
 
     #[test]
@@ -995,18 +781,16 @@ mod tests {
     #[tokio::test]
     async fn auto_exports_with_zero_hosts() {
         // The data comes from openQA, so zero hosts must still write, not error.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.metadata_mut().base_mut().workflow = Workflow::Auto;
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
         assert!(session.targets().is_empty());
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("## export MTUI:"));
+        assert!(buf.contents().contains("no install logs written"));
     }
 
     #[tokio::test]
@@ -1015,19 +799,17 @@ mod tests {
         // dashboard — whose config points nowhere, so a real attempt would error
         // and prove the early return did not fire.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Manual;
+        base.document = Some(minimal_document());
         assert!(session.targets().is_empty());
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
-        let written = std::fs::read_to_string(&path).unwrap();
         assert!(
-            !written.contains("## export MTUI:"),
-            "should not export:\n{written}"
+            !session.metadata().base().document_dirty,
+            "should not export"
         );
         // Nothing was lazily built: the body returned before that.
         assert!(session.metadata().openqa().auto.is_none());
@@ -1043,18 +825,9 @@ mod tests {
     #[tokio::test]
     async fn manual_with_named_missing_host_still_fails_loudly() {
         // The host-less skip only applies when no `-t` is named.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
-        let dir = tempfile::tempdir().unwrap();
-        session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&[]).await;
 
-        let server = dashboard_server("1").await;
-        session.config.qem_dashboard_api = format!("{}/api", server.uri());
-        session.config.openqa_instance = server.uri();
-
-        let args = matches(&Export, &["-f", path.to_str().unwrap(), "-t", "bogus"]);
+        let args = matches(&Export, &["-t", "bogus"]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
     }
@@ -1077,18 +850,16 @@ mod tests {
         raw.parse().expect("minimal document parses")
     }
 
-    /// A document present on the report is authored by an export — marked
-    /// dirty, with `testing.install` filled in and the change reported — and
-    /// the text template is left alone. The content `author_export` composes
-    /// is covered exhaustively in `mtui-testreport`'s own suite.
+    /// An export authors the loaded document — marked dirty, with
+    /// `testing.install` filled in and the change reported. The content
+    /// `author_export` composes is covered exhaustively in `mtui-testreport`'s
+    /// own suite.
     #[tokio::test]
     async fn manual_export_authors_the_loaded_document() {
-        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1"]).await;
         record_versions(&mut session, "h1");
-        session.metadata_mut().base_mut().document = Some(minimal_document());
-        let before = std::fs::read(&path).unwrap();
 
-        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
         let base = session.metadata().base();
@@ -1105,28 +876,23 @@ mod tests {
                 && out.contains("updated"),
             "{out:?}"
         );
-        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     /// A manual-workflow session on the document path: a document loaded, a
     /// report path whose `log` was never created, and `h1` with recorded
     /// versions. `dir` is the template dir.
-    async fn document_manual_fixture() -> (Session, Buffer, tempfile::TempDir, PathBuf, MockServer)
-    {
-        let (mut session, buf, dir, path, server) = manual_export_fixture(&["h1"]).await;
+    async fn document_manual_fixture() -> (Session, Buffer, tempfile::TempDir, MockServer) {
+        let (mut session, buf, dir, server) = manual_export_fixture(&["h1"]).await;
         record_versions(&mut session, "h1");
-        let base = session.metadata_mut().base_mut();
-        base.document = Some(minimal_document());
-        base.path = Some(dir.path().join("SUSE:Maintenance:1:1").join("log"));
-        (session, buf, dir, path, server)
+        session.metadata_mut().base_mut().path =
+            Some(dir.path().join("SUSE:Maintenance:1:1").join("log"));
+        (session, buf, dir, server)
     }
 
-    /// The document path writes the install logs and never reads or creates the
-    /// text `log`. Mutation caught: moving the branch below `FileList::load`
-    /// fails with "could not read template".
+    /// The export writes the install logs and never creates the text `log`.
     #[tokio::test]
-    async fn document_path_writes_install_logs_and_no_text_template() {
-        let (mut session, buf, dir, _path, _server) = document_manual_fixture().await;
+    async fn export_writes_install_logs_and_no_text_template() {
+        let (mut session, buf, dir, _server) = document_manual_fixture().await;
         let rrid_dir = dir.path().join("SUSE:Maintenance:1:1");
 
         let args = matches(&Export, &[]);
@@ -1140,25 +906,10 @@ mod tests {
         assert!(!out.contains("template exported to"), "{out:?}");
     }
 
-    /// A FILENAME on the document path is reported as ignored and never
-    /// written; the text template it names stays untouched.
+    /// The Auto workflow downloads the install log and creates no text
+    /// template.
     #[tokio::test]
-    async fn document_path_ignores_filename_with_a_note() {
-        let (mut session, buf, _dir, path, _server) = document_manual_fixture().await;
-        let before = std::fs::read(&path).unwrap();
-
-        let args = matches(&Export, &[path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
-
-        let out = buf.contents();
-        assert!(out.contains("FILENAME ignored"), "{out:?}");
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-    }
-
-    /// The Auto workflow on the document path downloads the install log and
-    /// leaves the text template alone.
-    #[tokio::test]
-    async fn document_path_auto_downloads_install_logs_only() {
+    async fn auto_downloads_install_logs_only() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
 
@@ -1190,10 +941,10 @@ mod tests {
         assert!(!rrid_dir.join("log").exists());
     }
 
-    /// With nothing to download the document path says so rather than naming a
+    /// With nothing to download the export says so rather than naming a
     /// directory that holds nothing.
     #[tokio::test]
-    async fn document_path_kernel_without_logs_reports_none_written() {
+    async fn kernel_without_logs_reports_none_written() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
@@ -1210,8 +961,8 @@ mod tests {
         assert!(!dir.path().join("SUSE:Maintenance:1:1/log").exists());
     }
 
-    /// A session that never loaded a document must export exactly as before: no panic, and `document` stays `None`
-    /// rather than being conjured from nothing.
+    /// With no document loaded nothing is authored: no panic, and `document`
+    /// stays `None` rather than being conjured from nothing.
     #[tokio::test]
     async fn author_onto_document_is_a_noop_without_a_loaded_document() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");

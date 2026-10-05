@@ -326,22 +326,39 @@ mod tests {
         assert_eq!(fields, ["Rating", "Assigned Roles"]);
     }
 
+    /// No registered command takes an `Append` flag with `num_args(1..)`; pin
+    /// the branch on a bespoke parser.
+    fn msg_probe() -> clap::Command {
+        clap::Command::new("probe")
+            .no_binary_name(true)
+            .arg(clap::Arg::new("template").long("template").num_args(1))
+            .arg(
+                clap::Arg::new("verbose")
+                    .long("verbose")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                clap::Arg::new("msg")
+                    .long("msg")
+                    .action(ArgAction::Append)
+                    .num_args(1..),
+            )
+    }
+
     #[test]
     fn append_multi_flag_repeats_per_element_and_reparses_identically() {
-        // `commit -m/--msg` (Append, num_args 1..): tail-routed so a trailing
-        // base flag stays safe, and for `num_args(1..)` the repeated form parses
-        // to the same value list as the flag-once one — pinned by re-parsing.
-        let out = argv(
-            "commit",
-            json!({ "msg": ["hello", "world"], "template": "a:b:1:1" }),
-        );
-        // `-T` (flag) precedes the tail-routed `--msg`.
+        // `Append` with `num_args 1..`: tail-routed so a trailing base flag
+        // stays safe, and the repeated form parses to the same value list as
+        // the flag-once one — pinned by re-parsing.
+        let parser = msg_probe();
+        let kwargs = json!({ "msg": ["hello", "world"], "template": "a:b:1:1" });
+        let out = kwargs_to_argv(&parser, kwargs.as_object().unwrap(), &[]);
+        // `--template` (flag) precedes the tail-routed `--msg`.
         assert_eq!(
             out,
             vec!["--template", "a:b:1:1", "--msg", "hello", "--msg", "world"]
         );
-        assert_reparses("commit", &out);
-        let parsed = parser_for("commit").try_get_matches_from(&out).unwrap();
+        let parsed = parser.try_get_matches_from(&out).unwrap();
         let msgs: Vec<&String> = parsed.get_many::<String>("msg").unwrap().collect();
         assert_eq!(msgs, ["hello", "world"]);
     }
@@ -447,9 +464,11 @@ mod tests {
     #[test]
     fn per_command_flags_precede_tail_routed_multi() {
         // A plain scalar flag comes before an append flag routed to the tail.
-        let out = argv("commit", json!({ "msg": ["m"], "all_templates": true }));
-        assert_eq!(out, vec!["--all-templates=true", "--msg", "m"]);
-        assert_reparses("commit", &out);
+        let parser = msg_probe();
+        let kwargs = json!({ "msg": ["m"], "verbose": true });
+        let out = kwargs_to_argv(&parser, kwargs.as_object().unwrap(), &[]);
+        assert_eq!(out, vec!["--verbose", "--msg", "m"]);
+        parser.try_get_matches_from(&out).unwrap();
     }
 
     // ------------------------------------------------------- mutex group

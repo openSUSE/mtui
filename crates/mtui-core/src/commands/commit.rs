@@ -1,33 +1,22 @@
-//! The `commit` command: commits the testing template working copy to SVN, or
-//! uploads it to teregen's v2 API when the loaded report came from a v2
-//! document.
+//! The `commit` command: uploads the report document and its artifacts to
+//! teregen's v2 API.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::{ArtifactStored, TeregenV2};
-use mtui_testreport::{
-    TokioSvnRunner, collect_artifacts, detect_system, svn_commit_testreport, system_info,
-    upload_current,
-};
+use mtui_testreport::{collect_artifacts, upload_current};
 use mtui_types::report_document::ReportDocument;
 
 use super::apicall::teregen_v2_writer;
-use super::support::{complete_with_templates, stale_hash_gate};
+use super::support::{complete_with_templates, require_document, stale_hash_gate};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Commits the testing template working copy, persisting the final template
-/// after testing. Requires a loaded report.
-///
-/// A report loaded from a v2 document goes through `commit_document`
-/// instead of `svn`: it uploads the document (conditional on its stored
-/// `ETag`) and its local artifacts through teregen's write API. Every other
-/// report still runs `svn ci` — without `-m/--msg` a message is generated
-/// from the local system info (the export footer, via
-/// `system_info(..., prefix="committed from")`), so the commit never opens
-/// `svn`'s editor. `-m/--msg` on the document path is accepted but ignored
-/// (teregen writes its own commit message) and noted as such.
+/// Stores the report document and its local artifacts in teregen: uploads the
+/// document (conditional on its stored `ETag`) and every artifact
+/// [`collect_artifacts`] finds through teregen's write API. Requires a loaded
+/// report document.
 ///
 /// Refuses on a template that loaded with a stale Gitea hash
 /// (`load_template --force-continue`) unless `--allow-stale` is given —
@@ -41,7 +30,7 @@ impl Command for Commit {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Commits the testing template working copy to SVN.")
+        Some("Stores the report document and artifacts in teregen.")
     }
 
     fn scope(&self) -> Scope {
@@ -50,15 +39,6 @@ impl Command for Commit {
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
-            Arg::new("msg")
-                .short('m')
-                .long("msg")
-                .action(ArgAction::Append)
-                .num_args(1..)
-                .value_name("MSG")
-                .help("commit message"),
-        )
-        .arg(
             Arg::new("allow_stale")
                 .long("allow-stale")
                 .action(ArgAction::SetTrue)
@@ -70,68 +50,19 @@ impl Command for Commit {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        complete_with_templates(
-            session,
-            &[&["-m", "--msg"], &["--allow-stale"]],
-            Vec::new(),
-            line,
-            text,
-        )
+        complete_with_templates(session, &[&["--allow-stale"]], Vec::new(), line, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         stale_hash_gate(session, args.get_flag("allow_stale"))?;
 
-        let msg_tokens: Vec<String> = args
-            .try_get_many::<String>("msg")
-            .ok()
-            .flatten()
-            .map(|it| it.cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-
-        // A report loaded from a v2 document goes through teregen's write
-        // API instead of `svn ci`; a report loaded from SVN is unaffected.
-        if session.metadata().base().document.is_some() {
-            let client = teregen_v2_writer(session)?;
-            return commit_document(session, &client, !msg_tokens.is_empty()).await;
-        }
-
-        let checkout = session
-            .metadata()
-            .base()
-            .report_wd()
-            .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
-        let install_logs = session.config.install_logs.clone();
-
-        let msg: Vec<String> = if msg_tokens.is_empty() {
-            let (distro, verid, kernel) = detect_system();
-            let default = system_info(
-                &distro,
-                &verid,
-                &kernel,
-                &session.config.session_user,
-                "committed from",
-            )
-            .trim_end()
-            .to_owned();
-            vec!["-m".to_owned(), default]
-        } else {
-            vec!["-m".to_owned(), format!("\"{}\"", msg_tokens.join(" "))]
-        };
-
-        let runner = TokioSvnRunner;
-        svn_commit_testreport(&runner, &checkout, &install_logs, &msg)
-            .await
-            .map_err(|e| CommandError::Other(format!("committing template failed: {e}")))?;
-        session.display.println(&format!(
-            "testreport committed: {}",
-            session.metadata().fancy_report_url()
-        ));
-        Ok(())
+        require_document(session)?;
+        let client = teregen_v2_writer(session)?;
+        commit_document(session, &client).await
     }
 }
 
-/// The document-path half of [`Commit::call`]: upload the loaded document
+/// The body of [`Commit::call`]: upload the loaded document
 /// (conditional on its stored `ETag`) plus every artifact
 /// [`collect_artifacts`] finds, then report the outcome. Split out so tests
 /// can inject `client` instead of hitting the real teregen v2 API.
@@ -142,17 +73,8 @@ impl Command for Commit {
 /// and the command fails only afterwards, naming how many failed. Re-running
 /// `commit` is the recovery path: every upload is replace-by-name, so it is
 /// idempotent.
-async fn commit_document(
-    session: &mut Session,
-    client: &TeregenV2,
-    msg_given: bool,
-) -> CommandResult {
+async fn commit_document(session: &mut Session, client: &TeregenV2) -> CommandResult {
     let summary = upload_and_report(session, client).await?;
-    if msg_given {
-        session.display.println(
-            "note: --msg ignored on the document path (teregen writes its own SVN message)",
-        );
-    }
     session
         .display
         .println("note: the legacy log view may lag (teregen T4)");
@@ -289,13 +211,11 @@ mod tests {
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
-    fn complete_offers_msg_flag_and_templates_no_hosts() {
+    fn complete_offers_allow_stale_and_templates_no_hosts() {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let out = Commit.complete(&session, "", "commit ");
-        assert!(
-            out.contains(&"-m".to_owned()) && out.contains(&"--msg".to_owned()),
-            "{out:?}"
-        );
+        assert!(out.contains(&"--allow-stale".to_owned()), "{out:?}");
+        assert!(!out.contains(&"--msg".to_owned()), "{out:?}");
         assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
         assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
@@ -307,16 +227,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_report_errors_before_shelling_out() {
+    async fn no_report_is_refused() {
         let (mut session, _buf) = empty_session();
         let args = matches(&Commit, &[]);
         let err = Commit.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
+        assert!(matches!(err, CommandError::NoDocument), "{err:?}");
     }
 
     /// A template that loaded with a stale Gitea hash (`load_template
     /// --force-continue`) refuses `commit` unless `--allow-stale` is given —
-    /// checked before any `svn` shell-out, same as `no_report_errors_before_shelling_out`.
+    /// checked before the document is looked at.
     #[tokio::test]
     async fn refuses_stale_template_without_allow_stale() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -330,93 +250,6 @@ mod tests {
             "{err:?}"
         );
     }
-
-    /// A successful commit must print the report URL, so the MCP result is never
-    /// empty.
-    #[tokio::test]
-    async fn success_prints_committed_url_to_display() {
-        if std::process::Command::new("svn")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return; // svn not installed in this environment
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let wc = tmp.path().join("wc");
-        assert!(
-            std::process::Command::new("svnadmin")
-                .args(["create", repo.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        let repo_url = format!("file://{}", repo.display());
-        assert!(
-            std::process::Command::new("svn")
-                .args(["checkout", &repo_url, wc.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-
-        // The commit runs `svn add --force install_logs`.
-        std::fs::create_dir_all(wc.join("install_logs")).unwrap();
-
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
-
-        let args = matches(&Commit, &["-m", "test commit"]);
-        Commit.call(&mut session, &args).await.unwrap();
-
-        let out = buf.contents();
-        assert!(out.contains("testreport committed:"), "{out:?}");
-    }
-
-    /// `--allow-stale` permits committing a template that loaded with a stale
-    /// Gitea hash, past the gate `refuses_stale_template_without_allow_stale` pins.
-    #[tokio::test]
-    async fn allow_stale_permits_commit_of_a_stale_template() {
-        if std::process::Command::new("svn")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return; // svn not installed in this environment
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let wc = tmp.path().join("wc");
-        assert!(
-            std::process::Command::new("svnadmin")
-                .args(["create", repo.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        let repo_url = format!("file://{}", repo.display());
-        assert!(
-            std::process::Command::new("svn")
-                .args(["checkout", &repo_url, wc.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        std::fs::create_dir_all(wc.join("install_logs")).unwrap();
-
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
-        session.metadata_mut().base_mut().stale_hash_warning =
-            Some("template hash mismatch (stale checkout)".to_owned());
-
-        let args = matches(&Commit, &["-m", "test commit", "--allow-stale"]);
-        Commit.call(&mut session, &args).await.unwrap();
-
-        assert!(buf.contents().contains("testreport committed:"));
-    }
-
-    // --- document path (teregen v2) ---
 
     #[tokio::test]
     async fn document_path_happy_prints_stored_and_artifact_lines() {
@@ -448,7 +281,7 @@ mod tests {
         session.metadata_mut().base_mut().document_etag = Some("\"stale\"".to_owned());
 
         let client = teregen_v2_client(&server, store_file);
-        commit_document(&mut session, &client, false).await.unwrap();
+        commit_document(&mut session, &client).await.unwrap();
 
         let out = buf.contents();
         assert!(
@@ -482,9 +315,7 @@ mod tests {
         let before_etag = session.metadata().base().document_etag.clone();
 
         let client = teregen_v2_client(&server, store_file);
-        let err = commit_document(&mut session, &client, false)
-            .await
-            .unwrap_err();
+        let err = commit_document(&mut session, &client).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
         assert_eq!(session.metadata().base().document, before_doc);
         assert_eq!(session.metadata().base().document_etag, before_etag);
@@ -513,9 +344,7 @@ mod tests {
         base.schema_drift = Some("/properties/kind: \"a\" != \"b\"".to_owned());
 
         let client = teregen_v2_client(&server, store_file);
-        let err = commit_document(&mut session, &client, false)
-            .await
-            .unwrap_err();
+        let err = commit_document(&mut session, &client).await.unwrap_err();
 
         assert!(
             matches!(&err, CommandError::Other(m)
@@ -553,9 +382,7 @@ mod tests {
         session.metadata_mut().base_mut().document_etag = Some("\"x\"".to_owned());
 
         let client = teregen_v2_client(&server, store_file);
-        let err = commit_document(&mut session, &client, false)
-            .await
-            .unwrap_err();
+        let err = commit_document(&mut session, &client).await.unwrap_err();
         assert!(
             matches!(&err, CommandError::Other(m) if m.contains("1 of 1 artifacts failed")),
             "{err:?}"
@@ -578,9 +405,7 @@ mod tests {
         // document_etag stays unset.
 
         let client = teregen_v2_client(&server, store_file);
-        let err = commit_document(&mut session, &client, false)
-            .await
-            .unwrap_err();
+        let err = commit_document(&mut session, &client).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
 
         let requests = server.received_requests().await.unwrap();
@@ -590,39 +415,8 @@ mod tests {
         );
     }
 
-    /// `-m/--msg` is accepted but noted as ignored on the document path.
-    #[tokio::test]
-    async fn document_path_notes_ignored_msg() {
-        let server = MockServer::start().await;
-        let (_dir, store_file) = store_path();
-        mount_auth_success(&server).await;
-        let doc_id = "SUSE:Maintenance:1:1";
-        let doc = minimal_document(doc_id);
-        Mock::given(method("PUT"))
-            .and(wpath(format!("/reports/{doc_id}")))
-            .respond_with(
-                ResponseTemplate::new(202).set_body_string(serde_json::to_string(&doc).unwrap()),
-            )
-            .mount(&server)
-            .await;
-
-        let (mut session, buf) = session_with_hosts(doc_id, &["h1"], "ok");
-        let _tmp = set_bare_report_wd(&mut session);
-        session.metadata_mut().base_mut().document = Some(doc);
-        session.metadata_mut().base_mut().document_etag = Some("\"x\"".to_owned());
-
-        let client = teregen_v2_client(&server, store_file);
-        commit_document(&mut session, &client, true).await.unwrap();
-
-        assert!(
-            buf.contents().contains("--msg ignored"),
-            "{}",
-            buf.contents()
-        );
-    }
-
     /// Proves `Commit::call` actually routes a document-loaded report to the
-    /// teregen builder instead of `svn` — using a broken `$OSC_CONFIG` so the
+    /// teregen builder — using a broken `$OSC_CONFIG` so the
     /// call fails immediately at credential resolution rather than reaching
     /// the network (the real builder must never be exercised against the
     /// ambient environment in a test).
@@ -631,7 +425,7 @@ mod tests {
     // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
     // mutation of the process-global `$OSC_CONFIG` exclusive.
     #[allow(unsafe_code)]
-    async fn document_loaded_dispatches_to_teregen_builder_not_svn() {
+    async fn document_loaded_dispatches_to_teregen_builder() {
         let doc_id = "SUSE:Maintenance:1:1";
         let (mut session, _buf) = session_with_hosts(doc_id, &["h1"], "ok");
         session.metadata_mut().base_mut().document = Some(minimal_document(doc_id));
