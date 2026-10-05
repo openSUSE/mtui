@@ -405,7 +405,7 @@ Options:
 
 ## `checkout`
 
-Updates the loaded template's files from SVN (`svn up`).
+Refreshes the loaded report document from teregen.
 
 ```text
 Usage: checkout [OPTIONS]
@@ -420,15 +420,12 @@ Options:
 
 ## `commit`
 
-Commits the testing template working copy to SVN.
+Stores the report document and artifacts in teregen.
 
 ```text
 Usage: commit [OPTIONS]
 
 Options:
-  -m, --msg <MSG>...
-          commit message
-
       --allow-stale
           Commit a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.
 
@@ -967,7 +964,7 @@ Options:
           [default: ""]
 
   -r, --reviewer <NAME>
-          Record reviewer in the testreport, commit to SVN, then approve
+          Record reviewer on the report document, then approve
 
   -h, --help
           Print help
@@ -1027,21 +1024,17 @@ Options:
 
 ## `export`
 
-Exports the gathered update data to the testing template.
+Exports the gathered update data onto the report document.
 
 ```text
-Usage: export [OPTIONS] [FILENAME]
-
-Arguments:
-  [FILENAME]
-          output template file name (defaults to the loaded template)
+Usage: export [OPTIONS]
 
 Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
   -f, --force
-          force overwrite existing template and re-download openQA results present in the log
+          force overwrite of existing install logs
 
       --allow-unverified
           write the unverified scaffold even when no selected host has recorded package versions

@@ -537,8 +537,8 @@ mod tests {
 
     #[test]
     fn optional_positional_is_nullable_and_not_required() {
-        // `export filename` (num_args 0..=1) → optional, nullable string.
-        let schema = schema_for("export");
+        // `edit filename` (num_args 0..=1) → optional, nullable string.
+        let schema = schema_for("edit");
         let filename = &props(&schema)["filename"];
         assert!(!required(&schema).contains(&"filename"));
         let alts = filename["anyOf"].as_array().unwrap();

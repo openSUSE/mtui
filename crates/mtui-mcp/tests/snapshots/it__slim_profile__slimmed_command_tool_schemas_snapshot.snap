@@ -74,7 +74,7 @@ expression: pretty
           "type": "array"
         },
         "reviewer": {
-          "description": "Record reviewer in the testreport, commit to SVN, then approve",
+          "description": "Record reviewer on the report document, then approve",
           "type": "string"
         },
         "template": {
@@ -214,15 +214,6 @@ expression: pretty
           "description": "Commit a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.",
           "type": "boolean"
         },
-        "msg": {
-          "description": "commit message",
-          "items": {
-            "description": "commit message",
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"
@@ -322,13 +313,9 @@ expression: pretty
           "description": "write the unverified scaffold even when no selected host has recorded package versions",
           "type": "boolean"
         },
-        "filename": {
-          "description": "output template file name (defaults to the loaded template)",
-          "type": "string"
-        },
         "force": {
           "default": false,
-          "description": "force overwrite existing template and re-download openQA results present in the log",
+          "description": "force overwrite of existing install logs",
           "type": "boolean"
         },
         "hosts": {

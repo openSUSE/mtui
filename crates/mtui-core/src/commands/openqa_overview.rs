@@ -3,10 +3,9 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
-use mtui_testreport::{FileList, inject_overview};
 
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_document, require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -39,8 +38,8 @@ const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "secur
 /// Prints an openQA / QAM Dashboard / build-checks overview for the loaded MU.
 ///
 /// Fetches and prints three sections — single incidents, aggregated updates,
-/// build checks; `--export` also injects the plain-text block into the loaded
-/// testreport's `log` under `regression tests:`.
+/// build checks; `--export` also authors the rows onto the report document's
+/// `testing.openqa.extra`, and refuses when no document is loaded.
 ///
 /// `--no-fetch` cache reuse is not implemented: it logs and fetches anyway.
 pub struct OpenQAOverview;
@@ -144,6 +143,9 @@ impl Command for OpenQAOverview {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
+        if args.get_flag("export") {
+            require_document(session)?;
+        }
 
         if args.get_flag("no_fetch") {
             tracing::warn!(
@@ -383,8 +385,7 @@ impl Command for OpenQAOverview {
     }
 }
 
-/// Injects the overview block into the loaded testreport `log`, or, on the
-/// document path, authors it onto `testing.openqa.extra`.
+/// Authors the overview onto the report document's `testing.openqa.extra`.
 fn export_to_testreport(
     session: &mut Session,
     single_incidents: &[oqa::VersionResult],
@@ -392,64 +393,22 @@ fn export_to_testreport(
     build_checks: &[oqa::BuildCheckResult],
     no_aggregated: bool,
 ) -> CommandResult {
-    if session.metadata().base().document.is_some() {
-        let overview = oqa::OpenQAOverviewResult {
-            single_incidents: single_incidents.to_vec(),
-            aggregated_updates: aggregated.to_vec(),
-            build_checks: build_checks.to_vec(),
-            skip_aggregated: no_aggregated,
-        };
-        let base = session.metadata_mut().base_mut();
-        let touched = mtui_testreport::author_export(
-            &mut base.document,
-            None,
-            None,
-            &[],
-            Some(&overview),
-            None,
-        );
-        base.mark_document_authored(&touched);
-        let msg = if touched.is_empty() {
-            "nothing to export".to_owned()
-        } else {
-            "document: testing.openqa updated".to_owned()
-        };
-        session.display.println(&msg);
-        return Ok(());
-    }
-    let Some(path) = session.metadata().base().path.clone() else {
-        return Err(CommandError::Other(
-            "No testreport path available; cannot export".to_owned(),
-        ));
+    let overview = oqa::OpenQAOverviewResult {
+        single_incidents: single_incidents.to_vec(),
+        aggregated_updates: aggregated.to_vec(),
+        build_checks: build_checks.to_vec(),
+        skip_aggregated: no_aggregated,
     };
-    let mut file = FileList::load(&path).map_err(|e| {
-        CommandError::Other(format!("Could not read testreport {}: {e}", path.display()))
-    })?;
-    let modified = inject_overview(
-        &mut file,
-        single_incidents,
-        aggregated,
-        build_checks,
-        no_aggregated,
-    );
-    if modified {
-        file.write().map_err(|e| {
-            CommandError::Other(format!(
-                "Failed to write overview to {}: {e}",
-                path.display()
-            ))
-        })?;
-        let msg = format!("openqa_overview block written to {}", path.display());
-        session.display.println(&msg);
+    let base = session.metadata_mut().base_mut();
+    let touched =
+        mtui_testreport::author_export(&mut base.document, None, None, &[], Some(&overview), None);
+    base.mark_document_authored(&touched);
+    let msg = if touched.is_empty() {
+        "nothing to export".to_owned()
     } else {
-        // Not a hard failure — there is simply nowhere to inject — but say so
-        // rather than succeed silently.
-        let msg = session.display.yellow(&format!(
-            "Could not locate 'regression tests:' section in {}; overview NOT exported",
-            path.display()
-        ));
-        session.display.println(&msg);
-    }
+        "document: testing.openqa updated".to_owned()
+    };
+    session.display.println(&msg);
     Ok(())
 }
 
@@ -697,6 +656,12 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
+    fn maintenance_document() -> mtui_types::report_document::ReportDocument {
+        include_str!("../../../mtui-types/tests/fixtures/document/maintenance_obs.json")
+            .parse()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn full_fetch_renders_sections_and_exports() {
         use wiremock::matchers::{method, path_regex};
@@ -719,17 +684,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        // A `log` with a regression-tests section for the export to find.
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("log");
-        std::fs::write(
-            &log,
-            "comment: hi\n\nregression tests:\n-----------------\n\n",
-        )
-        .unwrap();
-
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(log.clone());
+        session.metadata_mut().base_mut().document = Some(maintenance_document());
 
         let args = matches(
             &OpenQAOverview,
@@ -747,16 +703,30 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("Single incidents - Core"), "{out}");
         assert!(out.contains("Build checks:"), "{out}");
-        let written = std::fs::read_to_string(&log).unwrap();
-        assert!(written.contains("OpenQA Overview"), "{written}");
+        assert!(out.contains("document: testing.openqa updated"), "{out}");
+        assert!(session.metadata().base().document_dirty);
     }
 
+    /// `--export` with no document is refused before any fetch: the URLs point
+    /// nowhere, so a fetch would fail with a different error.
     #[tokio::test]
-    async fn export_without_report_path_is_an_error() {
-        // No path on the report: an Err, not a silent no-op.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        let err = export_to_testreport(&mut session, &[], &[], &[], false).unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
+    async fn export_without_a_document_is_refused_before_any_fetch() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAOverview,
+            &[
+                "--export",
+                "--url-dashboard-qam",
+                "http://127.0.0.1:1",
+                "--url-openqa",
+                "http://127.0.0.1:1",
+            ],
+        );
+
+        let err = OpenQAOverview.call(&mut session, &args).await.unwrap_err();
+
+        assert!(matches!(err, CommandError::NoDocument), "{err:?}");
+        assert!(buf.contents().is_empty(), "{}", buf.contents());
     }
 
     #[tokio::test]
@@ -787,23 +757,6 @@ mod tests {
         assert!(buf.contents().contains("OpenQA:"));
     }
 
-    #[tokio::test]
-    async fn export_without_regression_section_reports_to_display() {
-        // With no regression-tests section `inject_overview` returns false, so
-        // nothing is written — but the user is told rather than left in silence.
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("log");
-        std::fs::write(&log, "comment: hi\n").unwrap();
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(log);
-        export_to_testreport(&mut session, &[], &[], &[], false).unwrap();
-        assert!(
-            buf.contents().contains("NOT exported"),
-            "{}",
-            buf.contents()
-        );
-    }
-
     /// On the document path the export never reads or creates the text `log`,
     /// and authors the rows under `testing.openqa.extra`.
     #[tokio::test]
@@ -813,11 +766,7 @@ mod tests {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let base = session.metadata_mut().base_mut();
         base.path = Some(log.clone());
-        base.document = Some(
-            include_str!("../../../mtui-types/tests/fixtures/document/maintenance_obs.json")
-                .parse()
-                .unwrap(),
-        );
+        base.document = Some(maintenance_document());
         let rows = [oqa::VersionResult {
             version: "15-SP6".to_owned(),
             status: "passed".to_owned(),
@@ -985,17 +934,10 @@ mod tests {
             anomaly_severity_version,
         );
         assert!(!crushed.kept.iter().any(|r| r.version == "15-SP060"));
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("log");
-        std::fs::write(
-            &log,
-            "comment: hi\n\nregression tests:\n-----------------\n\n",
-        )
-        .unwrap();
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(log.clone());
+        session.metadata_mut().base_mut().document = Some(maintenance_document());
         export_to_testreport(&mut session, &versions, &[], &[], true).unwrap();
-        let written = std::fs::read_to_string(&log).unwrap();
+        let written = serde_json::to_string(&session.metadata().base().document).unwrap();
         assert!(written.contains("15-SP060"), "{written}");
         assert!(
             written.contains("15-SP000") && written.contains("15-SP149"),

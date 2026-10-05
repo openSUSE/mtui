@@ -4,23 +4,22 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::TeregenV2;
 use mtui_datasources::{Slack, is_ack_reaction};
-use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
+use mtui_testreport::HashCheck;
 use mtui_types::report_document::Req;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{gitea_client, is_gitea_workflow, osc_client, teregen_v2_writer};
 use crate::commands::commit::{RecordError, record_onto_document};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_document, require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Approves the loaded update, dispatching to OSC or Gitea like the other
 /// backend-API commands.
 ///
-/// With `-r/--reviewer` the reviewer is recorded and the template committed to
-/// SVN (for a report loaded from a v2 document: stored on the document and
-/// uploaded to teregen with the artifacts) *before* the approval; either
-/// failing aborts it. On the Gitea path a
+/// With `-r/--reviewer` the reviewer is stored on the report document and
+/// uploaded to teregen with the artifacts *before* the approval; either failing
+/// (or no document being loaded) aborts it. On the Gitea path a
 /// checkout-hash mismatch prompts for confirmation in the REPL (default no) and
 /// refuses non-interactively; a missing token or a failed call always refuses.
 /// Unlocks PI reference hosts afterwards.
@@ -64,7 +63,7 @@ impl Command for Approve {
                 .short('r')
                 .long("reviewer")
                 .value_name("NAME")
-                .help("Record reviewer in the testreport, commit to SVN, then approve"),
+                .help("Record reviewer on the report document, then approve"),
         )
     }
 
@@ -85,7 +84,7 @@ impl Command for Approve {
         // half-done.
         slack_review_gate(session, &rrid).await?;
 
-        // Record + commit before approving; abort on failure.
+        // Record + upload before approving; abort on failure.
         if let Some(reviewer) = args.get_one::<String>("reviewer") {
             record_reviewer(session, reviewer).await?;
         }
@@ -235,9 +234,9 @@ async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
     }
 }
 
-/// Records the reviewer and commits the testreport to SVN (or, for a report
-/// loaded from a v2 document, uploads the document and artifacts to teregen).
-/// `Err` aborts the approval rather than swallowing the record/commit failure.
+/// Records the reviewer on the report document and uploads it with the
+/// artifacts to teregen. `Err` aborts the approval rather than swallowing the
+/// record/upload failure.
 async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
     let name = name.trim();
     if name.is_empty() {
@@ -245,32 +244,9 @@ async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), Comman
             "reviewer must be a non-empty string; not approving".to_owned(),
         ));
     }
-
-    if session.metadata().base().document.is_some() {
-        let client = teregen_v2_writer(session)?;
-        return record_reviewer_document(session, &client, name).await;
-    }
-
-    session.metadata_mut().set_reviewer(name).map_err(|e| {
-        CommandError::Other(format!("failed to record reviewer, not approving: {e}"))
-    })?;
-
-    let checkout = session
-        .metadata()
-        .base()
-        .report_wd()
-        .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
-    let install_logs = session.config.install_logs.clone();
-    let msg = vec!["-m".to_owned(), format!("Add Test Plan Reviewer: {name}")];
-    let runner = TokioSvnRunner;
-    svn_commit_testreport(&runner, &checkout, &install_logs, &msg)
-        .await
-        .map_err(|e| {
-            CommandError::Other(format!(
-                "failed to commit testreport to SVN, not approving: {e}"
-            ))
-        })?;
-    Ok(())
+    require_document(session)?;
+    let client = teregen_v2_writer(session)?;
+    record_reviewer_document(session, &client, name).await
 }
 
 /// The document-path half of [`record_reviewer`]: set `people.reviewer.name` on
@@ -483,13 +459,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reviewer_with_no_template_path_errors() {
-        // No `path` on the report, so `set_reviewer` fails and the approval must
-        // abort with a surfaced error rather than dispatching.
+    async fn reviewer_without_a_document_aborts_the_approval() {
+        // No document to record the reviewer on, so the approval must abort
+        // with a surfaced error rather than dispatching.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Approve, &["-r", "alice"]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(m) if m.contains("record reviewer")));
+        assert!(matches!(err, CommandError::NoDocument), "{err:?}");
         assert_eq!(session.metadata().base().reviewer, "");
     }
 
@@ -936,13 +912,13 @@ mod tests {
         }
 
         /// `approve --reviewer` on a document report reaches the teregen writer
-        /// (and so fails on the missing oscrc) before any OBS call or `svn`.
+        /// (and so fails on the missing oscrc) before any OBS call.
         #[tokio::test]
         #[serial_test::serial(osc_config_env)]
         // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
         // the mutation of the process-global `$OSC_CONFIG` exclusive.
         #[allow(unsafe_code)]
-        async fn the_call_routes_a_document_report_to_teregen_not_svn() {
+        async fn the_call_routes_a_document_report_to_teregen() {
             let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
             session.metadata_mut().base_mut().document = Some(minimal_document(ID));
             let args = matches(&Approve, &["-r", "alice"]);

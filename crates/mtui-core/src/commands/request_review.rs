@@ -1,16 +1,16 @@
 //! The `request_review` command — ask for review of the loaded update in Slack.
 //!
 //! Posts a request naming the update's RRID into the configured channel, records
-//! the resulting message in the testreport template so the request is traceable
+//! the resulting message on the report document so the request is traceable
 //! afterwards, and optionally watches it for reviewer reactions. Three
 //! deliberate departures:
 //!
 //! * **The watch is opt-in (`--watch`).** It runs for up to an hour, and over
 //!   MCP a blocking call outliving the client's timeout is indistinguishable
 //!   from a hang; posting is fast and total, watching belongs in a job.
-//! * **The marker is committed, not just written.** `approve` gates on it and
+//! * **The marker is uploaded, not just recorded.** `approve` gates on it and
 //!   the approver is often someone else, so it must be visible from another
-//!   checkout rather than waiting for a later `commit`.
+//!   machine rather than waiting for a later `commit`.
 //! * **Rate limiting is not failure.** A `429` leaves the watch running;
 //!   counting it would end a busy channel's watch early and report "no
 //!   reaction" when the truth is "we were not allowed to look".
@@ -21,14 +21,14 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::TeregenV2;
 use mtui_datasources::{PostedMessage, Slack, SlackError, is_ack_reaction, is_nack_reaction};
-use mtui_testreport::{SlackReviewMarker, SvnRunner, TokioSvnRunner, svn_commit_testreport};
+use mtui_testreport::SlackReviewMarker;
 use mtui_types::report_document::SlackRef;
 use tokio_util::sync::CancellationToken;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_v2_writer;
 use crate::commands::commit::{RecordError, record_onto_document};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_document, require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -227,41 +227,18 @@ async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline:
     }
 }
 
-/// Write the marker into the template and commit it to SVN (or, for a report
-/// loaded from a v2 document, upload it to teregen) — the commit matters
-/// because `approve` gates on the marker and the approver may be in a different
-/// checkout. Mirrors `approve`'s `record_reviewer` including its ordering: the
-/// in-memory field is set only once the write succeeded, so a caller treating
-/// failure as fatal cannot proceed otherwise.
+/// Store the marker on the report document and upload it to teregen — the
+/// upload matters because `approve` gates on the marker and the approver may be
+/// on another machine. Mirrors `approve`'s `record_reviewer` including its
+/// ordering: the in-memory field is set only once the write succeeded, so a
+/// caller treating failure as fatal cannot proceed otherwise.
 async fn record_marker(
     session: &mut Session,
     marker: &SlackReviewMarker,
-    rrid: &str,
-    runner: &dyn SvnRunner,
 ) -> Result<(), CommandError> {
-    if session.metadata().base().document.is_some() {
-        let client = teregen_v2_writer(session)?;
-        return record_marker_document(session, &client, marker).await;
-    }
-
-    session
-        .metadata_mut()
-        .set_slack_review(marker)
-        .map_err(|e| CommandError::Other(format!("failed to record the marker: {e}")))?;
-
-    let checkout = session
-        .metadata()
-        .base()
-        .report_wd()
-        .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
-    let install_logs = session.config.install_logs.clone();
-    let msg = vec![
-        "-m".to_owned(),
-        format!("Add Slack review request for {rrid}"),
-    ];
-    svn_commit_testreport(runner, &checkout, &install_logs, &msg)
-        .await
-        .map_err(|e| CommandError::Other(format!("failed to commit the testreport: {e}")))
+    require_document(session)?;
+    let client = teregen_v2_writer(session)?;
+    record_marker_document(session, &client, marker).await
 }
 
 /// The document-path half of [`record_marker`]: set `people.reviewer.slack` on
@@ -378,21 +355,20 @@ impl Command for RequestReview {
             channel: posted.channel.clone(),
             ts: posted.ts.clone(),
         };
-        let recorded =
-            match record_marker(session, &marker, &rrid.to_string(), &TokioSvnRunner).await {
-                Ok(()) => true,
-                Err(e) => {
-                    // Failing here would misreport a real, visible message as
-                    // not sent; but the approval gate reads this marker, so say
-                    // now that approve will refuse.
-                    let msg = session.display.yellow(&format!(
-                        "warning: review request posted, but recording it failed: {e}\n\
+        let recorded = match record_marker(session, &marker).await {
+            Ok(()) => true,
+            Err(e) => {
+                // Failing here would misreport a real, visible message as
+                // not sent; but the approval gate reads this marker, so say
+                // now that approve will refuse.
+                let msg = session.display.yellow(&format!(
+                    "warning: review request posted, but recording it failed: {e}\n\
                      approve will not see this request; re-run request_review once fixed"
-                    ));
-                    session.display.println(&msg);
-                    false
-                }
-            };
+                ));
+                session.display.println(&msg);
+                false
+            }
+        };
 
         session
             .display
@@ -400,7 +376,7 @@ impl Command for RequestReview {
         if recorded {
             session
                 .display
-                .println("recorded the request in the testreport and committed it");
+                .println("recorded the request on the report document and uploaded it");
         }
 
         if !args.get_flag("watch") {
@@ -559,132 +535,17 @@ mod tests {
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 
-    /// Records argv and replays a fixed outcome, driving the commit step both
-    /// ways without a real working copy.
-    #[derive(Debug)]
-    struct StubSvn {
-        succeed: bool,
-        calls: std::sync::Mutex<Vec<Vec<String>>>,
-    }
-
-    impl StubSvn {
-        fn new(succeed: bool) -> Self {
-            Self {
-                succeed,
-                calls: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-        fn argv(&self) -> Vec<Vec<String>> {
-            self.calls.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl SvnRunner for StubSvn {
-        async fn run(
-            &self,
-            args: &[String],
-            _cwd: &std::path::Path,
-        ) -> std::io::Result<mtui_testreport::SvnOutcome> {
-            self.calls.lock().unwrap().push(args.to_vec());
-            Ok(mtui_testreport::SvnOutcome {
-                success: self.succeed,
-                stderr: if self.succeed {
-                    String::new()
-                } else {
-                    "E155007: not a working copy".to_owned()
-                },
-            })
-        }
-    }
-
-    /// A loaded report backed by a real template file (returned for
-    /// assertions), so the marker can be written.
-    fn report_with_template(session: &mut Session, dir: &tempfile::TempDir) -> std::path::PathBuf {
-        let path = dir.path().join("log");
-        std::fs::write(&path, "Test Plan Reviewer: bob\n").unwrap();
-        session.metadata_mut().base_mut().path = Some(path.clone());
-        path
-    }
-
-    #[tokio::test]
-    async fn record_marker_writes_the_template_and_commits_it() {
-        let server = MockServer::start().await;
-        let (mut session, _buf) = slack_session(&server);
-        let dir = tempfile::tempdir().unwrap();
-        let path = report_with_template(&mut session, &dir);
-        let svn = StubSvn::new(true);
-
-        let marker = SlackReviewMarker {
-            channel: CHANNEL.to_owned(),
-            ts: TS.to_owned(),
-        };
-        record_marker(&mut session, &marker, "SUSE:Maintenance:1:2", &svn)
-            .await
-            .unwrap();
-
-        // The post response's canonical channel is recorded, not the
-        // configured name.
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            written.contains(&format!("Slack Review: {CHANNEL} {TS}")),
-            "{written}"
-        );
-        assert_eq!(
-            session.metadata().base().slack_review.as_ref().unwrap().ts,
-            TS
-        );
-        // The commit is what makes the marker visible from another reviewer's
-        // checkout, so its message must name the update.
-        let argv = svn.argv();
-        assert!(!argv.is_empty(), "svn was invoked");
-        let ci = argv.iter().find(|a| a.first().is_some_and(|s| s == "ci"));
-        let ci = ci.expect("an `svn ci` was issued");
-        assert!(
-            ci.iter().any(|a| a.contains("SUSE:Maintenance:1:2")),
-            "commit message names the update: {ci:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_commit_is_reported_as_a_failure_to_record() {
-        let server = MockServer::start().await;
-        let (mut session, _buf) = slack_session(&server);
-        let dir = tempfile::tempdir().unwrap();
-        report_with_template(&mut session, &dir);
-        let svn = StubSvn::new(false);
-
-        let marker = SlackReviewMarker {
-            channel: CHANNEL.to_owned(),
-            ts: TS.to_owned(),
-        };
-        let err = record_marker(&mut session, &marker, "SUSE:Maintenance:1:2", &svn)
-            .await
-            .unwrap_err();
-
-        assert!(err.to_string().contains("commit"), "{err}");
-    }
-
     #[tokio::test]
     async fn posts_and_reports_the_request() {
         let server = MockServer::start().await;
         mount_post_path(&server).await;
         let (mut session, buf) = slack_session(&server);
-        let dir = tempfile::tempdir().unwrap();
-        let path = report_with_template(&mut session, &dir);
 
         let args = matches(&RequestReview, &[]);
         RequestReview.call(&mut session, &args).await.unwrap();
 
         let out = buf.contents();
         assert!(out.contains("requested review"), "{out}");
-        // The write must not depend on the commit: the real `svn ci` cannot
-        // succeed against a tempdir that is not a working copy.
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            written.contains(&format!("Slack Review: {CHANNEL} {TS}")),
-            "{written}"
-        );
     }
 
     #[tokio::test]
@@ -692,8 +553,8 @@ mod tests {
         let server = MockServer::start().await;
         mount_post_path(&server).await;
         let (mut session, buf) = slack_session(&server);
-        // No template path: the marker write fails before any commit.
-        session.metadata_mut().base_mut().path = None;
+        // No document: recording the marker is refused after the post.
+        assert!(session.metadata().base().document.is_none());
 
         let args = matches(&RequestReview, &[]);
         RequestReview.call(&mut session, &args).await.unwrap();
@@ -702,10 +563,11 @@ mod tests {
         // The message really was posted; reporting failure would be a lie.
         assert!(out.contains("requested review"), "{out}");
         assert!(out.contains("warning"), "{out}");
+        assert!(out.contains("no report document loaded"), "{out}");
         // And the user is told the consequence: approve will refuse.
         assert!(out.contains("approve will not see"), "{out}");
         // The success line must NOT appear when nothing was recorded.
-        assert!(!out.contains("committed it"), "{out}");
+        assert!(!out.contains("uploaded it"), "{out}");
     }
 
     #[tokio::test]
@@ -1125,19 +987,18 @@ mod tests {
         }
 
         /// `record_marker` on a document report reaches the teregen writer (and so
-        /// fails on the missing oscrc) without running `svn`.
+        /// fails on the missing oscrc).
         #[tokio::test]
         #[serial_test::serial(osc_config_env)]
         // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes
         // the mutation of the process-global `$OSC_CONFIG` exclusive.
         #[allow(unsafe_code)]
-        async fn record_marker_routes_a_document_report_to_teregen_not_svn() {
+        async fn record_marker_routes_a_document_report_to_teregen() {
             let (mut session, _tmp) = document_session();
-            let svn = StubSvn::new(true);
 
             // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
             unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
-            let res = record_marker(&mut session, &marker(), ID, &svn).await;
+            let res = record_marker(&mut session, &marker()).await;
             // SAFETY: still inside that critical section.
             unsafe { std::env::remove_var("OSC_CONFIG") };
 
@@ -1146,7 +1007,6 @@ mod tests {
                 err.to_string().contains("could not read oscrc credentials"),
                 "{err}"
             );
-            assert!(svn.argv().is_empty(), "svn must not run");
         }
     }
 }

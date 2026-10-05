@@ -1,23 +1,19 @@
-//! The `checkout` command (SVN update of the template working copy).
+//! The `checkout` command (refreshes the loaded report document from teregen).
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::TeregenV2;
-use mtui_testreport::{Refreshed, SvnRunner, TokioSvnRunner, refresh_document};
+use mtui_testreport::{Refreshed, refresh_document};
 
-use super::support::{complete_with_templates, document_edits_guard};
+use super::support::{complete_with_templates, document_edits_guard, require_document};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Updates the loaded template's files from SVN (`svn up`) in the report working
-/// directory. With nothing loaded there is no path, so it errors clearly rather
-/// than shelling out.
-///
-/// A report loaded from a v2 document has no working copy: there is no `svn up`,
-/// only a re-fetch of that document (conditional on its `ETag`), adopted when
-/// it changed. That replaces the local document, so it is refused before any I/O while it holds edits no
-/// `commit` has uploaded, unless `--discard-authored` is passed.
+/// Re-fetches the loaded report document from teregen (conditional on its
+/// `ETag`), adopting it when it changed. That replaces the local document, so it
+/// is refused before any I/O while it holds edits no `commit` has uploaded,
+/// unless `--discard-authored` is passed.
 pub struct Checkout;
 
 #[async_trait]
@@ -27,7 +23,7 @@ impl Command for Checkout {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Updates the loaded template's files from SVN (`svn up`).")
+        Some("Refreshes the loaded report document from teregen.")
     }
 
     fn scope(&self) -> Scope {
@@ -57,35 +53,12 @@ impl Command for Checkout {
             document_edits_guard(session, rrid, discard_authored)?;
         }
 
-        if session.metadata().base().document.is_some() {
-            let http = session
-                .http_client()
-                .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
-            let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
-            return refresh_step(session, &client, discard_authored).await;
-        }
-
-        let wd = session
-            .metadata()
-            .base()
-            .report_wd()
-            .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
-
-        let runner = TokioSvnRunner;
-        let outcome = runner
-            .run(&["up".to_owned()], &wd)
-            .await
-            .map_err(|e| CommandError::Other(format!("svn up could not run: {e}")))?;
-        if !outcome.success {
-            return Err(CommandError::Other(format!(
-                "svn up failed: {}",
-                outcome.stderr.trim()
-            )));
-        }
-        session
-            .display
-            .println(&format!("template updated from SVN ({})", wd.display()));
-        Ok(())
+        require_document(session)?;
+        let http = session
+            .http_client()
+            .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+        let client = TeregenV2::with_client(http, &session.config.teregen_api_v2);
+        refresh_step(session, &client, discard_authored).await
     }
 }
 
@@ -143,59 +116,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_report_errors_before_shelling_out() {
+    async fn no_report_is_refused() {
         let (mut session, _buf) = empty_session();
         let args = matches(&Checkout, &[]);
         let err = Checkout.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
-    }
-
-    /// A local SVN working copy, or `None` where `svn` is not installed.
-    fn svn_working_copy() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
-        if std::process::Command::new("svn")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return None;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
-        let wc = tmp.path().join("wc");
-        assert!(
-            std::process::Command::new("svnadmin")
-                .args(["create", repo.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        let repo_url = format!("file://{}", repo.display());
-        assert!(
-            std::process::Command::new("svn")
-                .args(["checkout", &repo_url, wc.to_str().unwrap()])
-                .status()
-                .unwrap()
-                .success()
-        );
-        Some((tmp, wc))
-    }
-
-    /// A successful `svn up` must print a confirmation, so the MCP result is
-    /// never empty. Driven against a real local SVN repo.
-    #[tokio::test]
-    async fn success_prints_confirmation_to_display() {
-        let Some((_tmp, wc)) = svn_working_copy() else {
-            return; // svn not installed in this environment
-        };
-
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
-
-        let args = matches(&Checkout, &[]);
-        Checkout.call(&mut session, &args).await.unwrap();
-
-        let out = buf.contents();
-        assert!(out.contains("template updated from SVN"), "{out:?}");
+        assert!(matches!(err, CommandError::NoDocument), "{err:?}");
     }
 
     const DOC_ID: &str = "SUSE:PI:16.0:1";
@@ -351,10 +276,9 @@ mod tests {
         assert!(requests[0].headers.get("if-none-match").is_none());
     }
 
-    /// On the document path there is no working copy: the report directory has
-    /// no `.svn`, and the command only refreshes the document.
+    /// There is no working copy: the command only refreshes the document.
     #[tokio::test]
-    async fn a_document_report_refreshes_without_running_svn() {
+    async fn a_document_report_refreshes_the_document_only() {
         let server = MockServer::start().await;
         let body = serde_json::to_string(&document(Some("server"))).unwrap();
         mount_document(
@@ -373,25 +297,6 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("document refreshed"), "{out:?}");
-        assert!(!out.contains("svn up"), "{out:?}");
-        assert!(!out.contains("SVN"), "{out:?}");
-    }
-
-    /// The SVN path (no document) never contacts the document API.
-    #[tokio::test]
-    async fn a_report_without_a_document_sends_no_document_request() {
-        let Some((_tmp, wc)) = svn_working_copy() else {
-            return; // svn not installed in this environment
-        };
-        let server = MockServer::start().await;
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.config.teregen_api_v2 = server.uri();
-        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
-
-        let args = matches(&Checkout, &[]);
-        Checkout.call(&mut session, &args).await.unwrap();
-
-        assert!(!buf.contents().contains("document"), "{:?}", buf.contents());
-        assert!(server.received_requests().await.unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 }
