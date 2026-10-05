@@ -1,7 +1,7 @@
 //! Adapter between the `export` command and [`crate::authoring`].
 //!
-//! [`author_export`] authors the loaded report document in addition to the
-//! text export, and does nothing when no document is loaded.
+//! [`author_export`] authors the loaded report document, and does nothing when
+//! no document is loaded.
 
 use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -10,10 +10,8 @@ use mtui_types::report_document::{ReportDocument, TesterEntry};
 
 use crate::export::ManualHost;
 
-/// Composes authoring's typed `testing.*` subtrees onto `document`, in
-/// addition to the text export the caller already performs, never instead of
-/// it. `hosts` is only meaningful for the manual workflow; pass `None` for
-/// `Auto`/`Kernel`.
+/// Composes authoring's typed `testing.*` subtrees onto `document`. `hosts` is
+/// only meaningful for the manual workflow; pass `None` for `Auto`/`Kernel`.
 ///
 /// Returns the top-level pointers touched — empty when `document` is `None`,
 /// since nothing is authored then.

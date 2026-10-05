@@ -1,4 +1,4 @@
-//! Shared export state and template-mutation helpers.
+//! Shared export state and the install-log writer.
 //!
 //! Rust has no class inheritance, so the shared state and common methods live
 //! in [`ExportContext`], which each concrete exporter (`auto`, `manual`,
@@ -16,7 +16,6 @@ use mtui_config::options::Config;
 use mtui_types::RequestReviewID;
 
 use crate::support::fileops::{atomic_write_file, timestamp};
-use crate::support::sysinfo::{EXPORT_PREFIX, detect_system, system_info};
 
 /// The decision an exporter makes when an existing file differs from what it is
 /// about to write.
@@ -49,8 +48,6 @@ impl OverwritePrompt for DenyOverwrite {
 pub struct ExportContext {
     /// The application configuration.
     pub(crate) config: Config,
-    /// The working template (a copy the exporter mutates).
-    pub template: Vec<String>,
     /// Whether to overwrite existing files without prompting.
     pub(crate) force: bool,
     /// The RRID of the current update.
@@ -58,12 +55,11 @@ pub struct ExportContext {
 }
 
 impl ExportContext {
-    /// Builds an export context over a copy of `template`.
+    /// Builds an export context.
     #[must_use]
-    pub fn new(config: Config, template: &[String], force: bool, rrid: RequestReviewID) -> Self {
+    pub fn new(config: Config, force: bool, rrid: RequestReviewID) -> Self {
         Self {
             config,
-            template: template.to_vec(),
             force,
             rrid,
         }
@@ -101,268 +97,6 @@ impl ExportContext {
         }
     }
 
-    /// Adds install-log links to the template.
-    ///
-    /// Links are deduplicated against the template from just past a
-    /// `HAS_UNTRACKED` marker (or the whole template if absent). An existing
-    /// `Links for update logs:` header is reused rather than freshly inserted,
-    /// so manual/kernel re-exports do not stack empty duplicate sections.
-    pub fn installlogs_lines(&mut self, filenames: &[String]) {
-        let mut o = 0usize;
-        for (i, line) in self.template.iter().enumerate() {
-            if line.contains("HAS_UNTRACKED") {
-                o = i + 1;
-                break;
-            }
-        }
-
-        let marker = "Links for update logs:\n";
-        let reports_url = self.config.reports_url.clone();
-
-        let mut index = if let Some(header) = self.template.iter().position(|l| l == marker) {
-            // Reuse the section; new links append after its existing ones.
-            let mut index = header + 1;
-            self.drop_empty_link_sections(marker, index);
-            if index >= self.template.len()
-                || (self.template[index] != "\n" && !self.template[index].contains(&reports_url))
-            {
-                // Hand-trimmed template: restore the canonical blank so links
-                // land inside the section rather than after the export footer.
-                self.template.insert(index, "\n".to_string());
-            }
-            while index + 1 < self.template.len() && self.template[index + 1].contains(&reports_url)
-            {
-                index += 1;
-            }
-            index
-        } else {
-            let mut index = self.template.len();
-            if self
-                .template
-                .last()
-                .is_some_and(|l| l.contains("## export MTUI:"))
-            {
-                index -= 1;
-            }
-            self.template.insert(index, "\n".to_string());
-            self.template.insert(index + 1, marker.to_string());
-            self.template.insert(index + 2, "\n".to_string());
-            index + 2
-        };
-
-        let install_logs = self.config.install_logs.display().to_string();
-        let mut add_empty_line = false;
-        for fn_name in filenames {
-            let install_log = format!("{reports_url}/{}/{install_logs}/{fn_name}\n", self.rrid);
-            if !self.template[o..].contains(&install_log) {
-                index += 1;
-                self.template.insert(index, install_log);
-                add_empty_line = true;
-            }
-        }
-
-        if add_empty_line && (index + 1 >= self.template.len() || self.template[index + 1] != "\n")
-        {
-            self.template.insert(index + 1, "\n".to_string());
-        }
-    }
-
-    /// Removes empty duplicate `Links for update logs:` headers.
-    ///
-    /// `dedup_lines` never collapses blank-separated duplicates, so a damaged
-    /// template's header blocks with nothing but blanks under them would
-    /// survive forever. A duplicate section that *does* hold links is left
-    /// alone — never delete content.
-    fn drop_empty_link_sections(&mut self, marker: &str, search_from: usize) {
-        let reports_url = self.config.reports_url.clone();
-        let mut i = search_from;
-        loop {
-            let Some(j) = self
-                .template
-                .iter()
-                .skip(i)
-                .position(|l| l == marker)
-                .map(|p| p + i)
-            else {
-                return;
-            };
-            let mut k = j + 1;
-            while k < self.template.len() && self.template[k] == "\n" {
-                k += 1;
-            }
-            if k < self.template.len() && self.template[k].contains(&reports_url) {
-                i = k; // a section with real links: keep it
-                continue;
-            }
-            // Empty duplicate: drop the header, its blanks, and the one before it.
-            let start = if j > 0 && self.template[j - 1] == "\n" {
-                j - 1
-            } else {
-                j
-            };
-            self.template.drain(start..k);
-            i = start;
-        }
-    }
-
-    /// Collapses consecutive duplicate non-blank lines.
-    pub(crate) fn dedup_lines(&mut self) {
-        let mut lines: Vec<String> = Vec::with_capacity(self.template.len());
-        let mut prev: Option<&String> = None;
-        for cur in &self.template {
-            let is_dup = prev == Some(cur) && cur != "\n";
-            if !is_dup {
-                lines.push(cur.clone());
-            }
-            prev = Some(cur);
-        }
-        self.template = lines;
-    }
-
-    /// Appends the system-information footer, unless the last line already
-    /// is it.
-    pub(crate) fn add_sysinfo(&mut self) {
-        let (distro, verid, kernel) = detect_system();
-        let info = system_info(
-            &distro,
-            &verid,
-            &kernel,
-            &self.config.session_user,
-            EXPORT_PREFIX,
-        );
-        let last_trimmed = self
-            .template
-            .last()
-            .map(|l| l.trim_end().to_string())
-            .unwrap_or_default();
-        if info.trim_end() != last_trimmed {
-            self.template.push(info);
-        }
-    }
-
-    /// Injects the openqa_overview block, if an overview payload is present.
-    ///
-    /// Idempotent via begin/end markers — a prior block is replaced in place.
-    /// Returns `true` when the template was modified.
-    pub(crate) fn inject_overview(
-        &mut self,
-        overview: &mtui_datasources::OpenQAOverviewResult,
-    ) -> bool {
-        if !mtui_types::OverviewResult::has_overview(overview) {
-            return false;
-        }
-        let modified = super::overview_inject::inject_overview(
-            &mut self.template,
-            &overview.single_incidents,
-            &overview.aggregated_updates,
-            &overview.build_checks,
-            overview.skip_aggregated,
-        );
-        if modified {
-            tracing::info!("Injected openqa_overview block into template");
-        }
-        modified
-    }
-
-    /// Inserts the pretty-printed openQA "auto" results block, removing a
-    /// previous results block first.
-    ///
-    /// `pp` is the connector's pretty-print lines (`self.openqa.auto.pp`). A
-    /// no-op when `pp` is empty, or when the `source code change review:`
-    /// anchor is absent — a missing anchor means the file is not mtui-shaped,
-    /// matching how the injector guards on its header. The block goes just
-    /// before the anchor, clamped to index 0 when the anchor is the first line.
-    pub(crate) fn inject_openqa(&mut self, pp: &[String]) {
-        if pp.is_empty() {
-            return;
-        }
-
-        // Remove a previous results block (first matching title wins).
-        for title in [
-            "Results from openQA jobs:\n",
-            "Results from incidents openQA jobs:\n",
-            "Results from openQA incidents jobs:\n",
-        ] {
-            let Some(r_start) = self.template.iter().position(|l| l == title) else {
-                continue;
-            };
-            let r_end = if let Some(end) = self
-                .template
-                .iter()
-                .position(|l| l == "End of openQA Incidents results\n")
-            {
-                end + 1
-            } else {
-                match self.anchor_index() {
-                    Some(anchor) => anchor.saturating_sub(1),
-                    None => return,
-                }
-            };
-            self.template.drain(r_start..r_end);
-            break;
-        }
-
-        let Some(anchor) = self.anchor_index() else {
-            return;
-        };
-        let mut index = anchor.saturating_sub(1);
-        for line in pp.iter().rev() {
-            self.template.insert(index, line.clone());
-        }
-
-        let Some(anchor) = self.anchor_index() else {
-            return;
-        };
-        index = anchor.saturating_sub(1);
-        self.template.insert(index, "\n".to_string());
-        self.template
-            .insert(index + 1, "End of openQA Incidents results\n".to_string());
-        self.template.insert(index + 2, "\n".to_string());
-    }
-
-    /// Inserts the "installation tests done in openQA" note under the
-    /// `Test results by product-arch:` header.
-    ///
-    /// A no-op when that header is absent — a missing header means the file
-    /// is not mtui-shaped.
-    pub fn install_results(&mut self) {
-        let Some(index) = self
-            .template
-            .iter()
-            .position(|l| l == "Test results by product-arch:\n")
-        else {
-            return;
-        };
-        let line = "All installation tests done in openQA please see installlogs section\n";
-        // A blank line separates the copies, so `dedup_lines` cannot collapse
-        // them; drop stacked ones here and converge on a single notice.
-        while self.template.iter().filter(|l| l.as_str() == line).count() > 1 {
-            let extra = self.template.len()
-                - 1
-                - self
-                    .template
-                    .iter()
-                    .rev()
-                    .position(|l| l.as_str() == line)
-                    .expect("count > 1 guarantees a match");
-            self.template.remove(extra);
-            if extra < self.template.len() && self.template[extra] == "\n" {
-                self.template.remove(extra);
-            }
-        }
-        if !self.template.iter().any(|l| l.as_str() == line) {
-            self.template.insert(index + 3, line.to_string());
-            self.template.insert(index + 4, "\n".to_string());
-        }
-    }
-
-    /// The index of the `source code change review:` anchor, if present.
-    fn anchor_index(&self) -> Option<usize> {
-        self.template
-            .iter()
-            .position(|l| l == "source code change review:\n")
-    }
-
     /// Path of the per-RRID install-logs directory
     /// (`template_dir/<rrid>/install_logs`).
     #[must_use]
@@ -378,52 +112,11 @@ impl ExportContext {
 mod tests {
     use super::*;
 
-    fn ctx_with(template: &[&str]) -> ExportContext {
+    fn ctx_with() -> ExportContext {
         let mut cfg = Config::default();
-        cfg.reports_url = "https://reports".to_string();
         cfg.install_logs = PathBuf::from("install_logs");
-        cfg.session_user = "alice".to_string();
         let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
-        let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
-        ExportContext::new(cfg, &lines, false, rrid)
-    }
-
-    #[test]
-    fn dedup_collapses_consecutive_nonblank_dups_keeps_blanks() {
-        let mut c = ctx_with(&["a\n", "a\n", "b\n", "\n", "\n", "b\n"]);
-        c.dedup_lines();
-        assert_eq!(
-            c.template,
-            vec!["a\n", "b\n", "\n", "\n", "b\n"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn installlogs_lines_dedups_and_uses_reports_url() {
-        let mut c = ctx_with(&["HAS_UNTRACKED\n", "body\n"]);
-        c.installlogs_lines(&["h1.log".to_string(), "h1.log".to_string()]);
-        let body = c.template.concat();
-        assert!(body.contains("Links for update logs:\n"));
-        // Duplicate filename only appears once.
-        assert_eq!(
-            body.matches("https://reports/SUSE:Maintenance:1:2/install_logs/h1.log")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn add_sysinfo_appends_once() {
-        let mut c = ctx_with(&["body\n"]);
-        c.add_sysinfo();
-        let len_after_first = c.template.len();
-        assert!(c.template.last().unwrap().starts_with("## export MTUI:"));
-        // Idempotent: appending again when it's already the last line is a no-op.
-        c.add_sysinfo();
-        assert_eq!(c.template.len(), len_after_first);
+        ExportContext::new(cfg, false, rrid)
     }
 
     #[test]
@@ -431,7 +124,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.log");
         std::fs::write(&path, "a\nb").unwrap();
-        let c = ctx_with(&[]);
+        let c = ctx_with();
         c.writer(&path, &["a".into(), "b".into()], &DenyOverwrite);
         // Unchanged, and no timestamped sibling created.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb");
@@ -444,7 +137,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.log");
         std::fs::write(&path, "old").unwrap();
-        let c = ctx_with(&[]);
+        let c = ctx_with();
         c.writer(&path, &["new".into()], &DenyOverwrite);
         // Original untouched.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
@@ -459,53 +152,5 @@ mod tests {
                 .is_some_and(|e| e.chars().all(|c| c.is_ascii_digit()))
                 && std::fs::read_to_string(p).unwrap() == "new"
         }));
-    }
-
-    #[test]
-    fn inject_openqa_noop_on_empty_pp() {
-        let mut c = ctx_with(&["source code change review:\n"]);
-        let before = c.template.clone();
-        c.inject_openqa(&[]);
-        assert_eq!(c.template, before);
-    }
-
-    #[test]
-    fn inject_openqa_inserts_before_anchor() {
-        let mut c = ctx_with(&["intro\n", "\n", "source code change review:\n"]);
-        c.inject_openqa(&["job1 => PASSED\n".to_string()]);
-        let body = c.template.concat();
-        assert!(body.contains("job1 => PASSED"));
-        assert!(body.contains("End of openQA Incidents results\n"));
-        let job = body.find("job1 => PASSED").unwrap();
-        let anchor = body.find("source code change review:").unwrap();
-        assert!(job < anchor);
-    }
-
-    #[test]
-    fn inject_openqa_anchor_at_index_zero_does_not_panic() {
-        // Anchor at index 0: the `anchor - 1` insertion position would
-        // underflow `usize` and panic.
-        let mut c = ctx_with(&["source code change review:\n"]);
-        c.inject_openqa(&["job1 => PASSED\n".to_string()]);
-        let body = c.template.concat();
-        assert!(
-            body.contains("job1 => PASSED"),
-            "block not injected:\n{body}"
-        );
-        assert!(body.contains("End of openQA Incidents results\n"));
-        let job = body.find("job1 => PASSED").unwrap();
-        let anchor = body.find("source code change review:").unwrap();
-        assert!(job < anchor, "block should precede the anchor:\n{body}");
-    }
-
-    #[test]
-    fn inject_openqa_replaces_prior_block_with_anchor_at_index_zero() {
-        // The removal path also hits `anchor - 1` (as the block-end fallback);
-        // a re-inject on an anchor-at-0 template must not panic either.
-        let mut c = ctx_with(&["source code change review:\n"]);
-        c.inject_openqa(&["job1 => PASSED\n".to_string()]);
-        c.inject_openqa(&["job2 => FAILED\n".to_string()]);
-        let body = c.template.concat();
-        assert!(body.contains("job2 => FAILED"), "re-inject failed:\n{body}");
     }
 }
