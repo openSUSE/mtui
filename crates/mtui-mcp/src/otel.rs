@@ -1651,12 +1651,12 @@ mod tests {
                 json!({"filename": "id_rsa", "content": "SECRET", "template": "t"}),
             ),
             (
-                "testreport_write",
-                json!({"content": "SECRET", "relpath": "log"}),
+                "report_section_write",
+                json!({"value": "SECRET", "section": "comment"}),
             ),
             (
-                "testreport_patch",
-                json!({"replacement": "SECRET", "start_line": 1}),
+                "report_issue_write",
+                json!({"value": "SECRET", "issue": "bsc#1"}),
             ),
         ] {
             let kwargs: serde_json::Map<String, serde_json::Value> =

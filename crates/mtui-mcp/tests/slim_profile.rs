@@ -15,12 +15,12 @@ use std::collections::BTreeSet;
 use mtui_core::register_all;
 use mtui_mcp::{
     CORE, build_tools, document_tool_descriptors, job_tool_descriptors, resolve_keep_set,
-    slim_input_schema, testreport_tool_descriptors,
+    slim_input_schema,
 };
 use serde_json::{Value, json};
 
 /// Golden of every command tool's **slimmed** schema (name + read_only +
-/// input_schema), mirroring `testreport_tools`' full-schema snapshot. Locks the
+/// input_schema), mirroring `document_tools`' full-schema snapshot. Locks the
 /// output of the slimming pass over the real synthesised surface.
 #[test]
 fn slimmed_command_tool_schemas_snapshot() {
@@ -92,7 +92,6 @@ fn core_keep_set_snapshot() {
         .map(|d| d.name.clone())
         .collect();
     registered.extend(job_tool_descriptors().iter().map(|d| d.name.clone()));
-    registered.extend(testreport_tool_descriptors().iter().map(|d| d.name.clone()));
     registered.extend(document_tool_descriptors().iter().map(|d| d.name.clone()));
 
     let keep = resolve_keep_set(&registered, "core", &[], &[]);
@@ -109,7 +108,6 @@ fn core_names_all_exist_in_registry() {
         .map(|d| d.name.clone())
         .collect();
     registered.extend(job_tool_descriptors().iter().map(|d| d.name.clone()));
-    registered.extend(testreport_tool_descriptors().iter().map(|d| d.name.clone()));
     registered.extend(document_tool_descriptors().iter().map(|d| d.name.clone()));
 
     let missing: Vec<&str> = CORE

@@ -6,7 +6,7 @@
 //! `--transport http` the client is on another machine, so those paths are
 //! unreachable and `put` is unusable outright. Both commands are therefore on
 //! [`MCP_DENYLIST`](mtui_core::MCP_DENYLIST) and re-served here under the same
-//! names — the `edit` → `testreport_*` precedent — carrying the content
+//! names — the `edit` → document tools precedent — carrying the content
 //! **in-band** in both directions, on both transports.
 //!
 //! The REPL/CLI `get`/`put` commands are untouched: literal paths (#399), the
@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::tools::ToolDescriptor;
 
-/// Shared "which template" note, kept textually aligned with the testreport
+/// Shared "which template" note, kept textually aligned with the document
 /// tools' `TEMPLATE_NOTE`.
 const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded template; required when more \
      than one is loaded.";
@@ -227,7 +227,7 @@ fn opt_str<'a>(
 /// Resolves the target template rrid: the single loaded one, or the named one.
 ///
 /// Refuses when nothing is loaded, when `template` names an unloaded rrid, and
-/// when more than one is loaded with no `template`, as the testreport tools do.
+/// when more than one is loaded with no `template`, as the document tools do.
 /// The ambiguous case shares its wording with every other surface via
 /// [`mtui_core::ambiguous_template_message`]; the other two refusals are this
 /// tool family's own, pre-existing and grepped.
@@ -403,7 +403,7 @@ async fn transfer_get(
         let entry = match text {
             Some(text) => {
                 // No embedded notice: `cap_output` would splice its
-                // testreport-flavoured text into the file content. `truncated` +
+                // tool-flavoured text into the file content. `truncated` +
                 // `size` are the signal, symmetric with the binary arm.
                 let mut text = text;
                 if share > 0 && text.len() > share {

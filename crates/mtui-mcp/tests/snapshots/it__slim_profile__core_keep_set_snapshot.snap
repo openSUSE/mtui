@@ -36,11 +36,6 @@ run
 set_repo
 show_diff
 show_log
-testreport_fill
-testreport_logs
-testreport_patch
-testreport_read
-testreport_write
 uninstall
 unload
 update

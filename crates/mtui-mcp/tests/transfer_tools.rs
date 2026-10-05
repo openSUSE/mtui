@@ -4,7 +4,7 @@
 
 use mtui_core::registry::register_all;
 use mtui_mcp::{
-    build_tools, job_tool_descriptors, testreport_tool_descriptors, transfer_tool_descriptors,
+    build_tools, document_tool_descriptors, job_tool_descriptors, transfer_tool_descriptors,
 };
 use serde_json::{Value, json};
 
@@ -38,7 +38,7 @@ fn tool_surface_has_no_duplicate_names() {
         .into_iter()
         .map(|d| d.name)
         .chain(job_tool_descriptors().into_iter().map(|d| d.name))
-        .chain(testreport_tool_descriptors().into_iter().map(|d| d.name))
+        .chain(document_tool_descriptors().into_iter().map(|d| d.name))
         .chain(transfer_tool_descriptors().into_iter().map(|d| d.name))
         .collect();
     let total = names.len();

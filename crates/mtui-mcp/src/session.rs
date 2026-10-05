@@ -45,9 +45,8 @@
 //! idempotent, bounded by [`HOST_CLOSE_TIMEOUT`] so a wedged close cannot block
 //! the idle-sweep. Groups keep their now-dead targets, dropped with the report.
 //!
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -563,8 +562,7 @@ pub struct McpSession {
     /// config, with the four fields below, because the server holds the session
     /// rather than the [`Config`].
     max_output_bytes: usize,
-    /// `config.mcp_max_input_bytes`; `0` disables the cap. Bounds how much of an
-    /// on-disk checkout file `testreport_read` reads before stopping.
+    /// `config.mcp_max_input_bytes`; `0` disables the cap.
     max_input_bytes: usize,
     /// `config.mcp_profile`, consumed by
     /// [`McpServer::new`](crate::server::McpServer::new) to narrow the tools.
@@ -597,10 +595,6 @@ pub struct McpSession {
     /// `config.mcp_max_completed_jobs`: terminal records beyond it are evicted
     /// oldest-finished-first. `0` disables the cap.
     max_completed_jobs: usize,
-    /// Last [`MAX_REREAD_WINDOWS`] `testreport_read` windows (LRU, most-recent
-    /// last). Per-session, so no cross-client leakage; the key carries the
-    /// resolved path so templates never collide. Guard held only for the integer compare.
-    reread: StdMutex<VecDeque<(RereadKey, RereadEntry)>>,
     /// The durable audit sink (`config.mcp_audit_log`); `None` disables
     /// auditing and leaves dispatch behaviour byte-identical.
     audit: Option<AuditLog>,
@@ -611,29 +605,6 @@ pub struct McpSession {
     /// OTLP exporter handle, if the process enabled one via the `OTEL_*`
     /// environment. Cloned from the global at mint; tests inject a mock.
     otel: Option<Arc<OtelExporter>>,
-}
-
-/// Bound on cached `testreport_read` windows per session (see `reread`).
-///
-/// Mirrors the `max_active_jobs = 16` default: small enough to stay O(1).
-pub(crate) const MAX_REREAD_WINDOWS: usize = 16;
-
-/// Cache key for one `testreport_read` window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RereadKey {
-    /// Canonical resolved file; isolates templates and relpath spellings.
-    pub path: PathBuf,
-    /// 1-based first line.
-    pub offset: usize,
-    /// Max lines (`None` = to end).
-    pub limit: Option<usize>,
-}
-
-/// Cached outcome of one window: hash of the returned (capped) text + total.
-#[derive(Debug, Clone, Copy)]
-struct RereadEntry {
-    hash: u64,
-    line_count: usize,
 }
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
@@ -716,7 +687,6 @@ impl McpSession {
             job_counter: AtomicU64::new(0),
             max_active_jobs,
             max_completed_jobs,
-            reread: StdMutex::new(VecDeque::new()),
             audit,
             transport,
             otel,
@@ -745,8 +715,8 @@ impl McpSession {
 
     /// The per-result output-size budget in bytes (`0` disables the cap).
     ///
-    /// Exposed for [`crate::testreport_tools`], which cap their file-content
-    /// payloads with the same [`cap_output`] budget.
+    /// Exposed for the report-document tools, which cap their payloads with the
+    /// same [`cap_output`] budget.
     #[must_use]
     pub(crate) fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
@@ -754,61 +724,11 @@ impl McpSession {
 
     /// The configured source read-size budget (bytes); `0` disables it.
     ///
-    /// Exposed for [`testreport_read`](crate::testreport_tools), which stops at
-    /// this many bytes (appending a truncation notice) so a huge or slow checkout
-    /// file cannot exhaust memory.
+    /// Exposed for the `report_files` and transfer tools, which stop at this many
+    /// bytes so a huge or slow file cannot exhaust memory.
     #[must_use]
     pub(crate) fn max_input_bytes(&self) -> usize {
         self.max_input_bytes
-    }
-
-    /// Hash of a returned window, for the re-read cache.
-    #[must_use]
-    pub(crate) fn hash_content(text: &str) -> u64 {
-        // FNV-1a64: specified and std-independent (DefaultHasher is not stable).
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in text.as_bytes() {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h
-    }
-
-    /// Short notice replacing an exact re-read's payload.
-    #[must_use]
-    pub(crate) fn reread_notice(hash: u64, line_count: usize) -> String {
-        format!(
-            "[unchanged since {:08x}, {line_count} lines; pass force=true to resend, or use offset/limit to move]",
-            hash as u32
-        )
-    }
-
-    /// Exact re-read dedup: `Some(notice)` on identical window+content, else
-    /// records the window and returns `None` (caller sends the full text).
-    ///
-    /// LRU to [`MAX_REREAD_WINDOWS`]; a changed file (other hash or total)
-    /// always misses, so it is never suppressed.
-    pub(crate) fn dedup_reread(
-        &self,
-        key: RereadKey,
-        hash: u64,
-        line_count: usize,
-    ) -> Option<String> {
-        let mut cache = self.reread.lock().expect("reread cache poisoned");
-        if let Some(pos) = cache.iter().position(|(k, _)| *k == key) {
-            let entry = cache[pos].1;
-            if entry.hash == hash && entry.line_count == line_count {
-                let record = cache.remove(pos).expect("position checked");
-                cache.push_back(record);
-                return Some(Self::reread_notice(hash, line_count));
-            }
-            cache.remove(pos);
-        }
-        cache.push_back((key, RereadEntry { hash, line_count }));
-        while cache.len() > MAX_REREAD_WINDOWS {
-            cache.pop_front();
-        }
-        None
     }
 
     /// The configured tool-surface profile (`full` / `core`), consumed by
@@ -879,7 +799,7 @@ impl McpSession {
     }
 
     /// Template scope for a hand-written tool call carrying an optional
-    /// `template` kwarg (the testreport/transfer families): the named
+    /// `template` kwarg (the document/transfer families): the named
     /// template, else the active one, else nothing. Best-effort like
     /// [`audit_hosts`](Self::audit_hosts): empty while an exclusive dispatch
     /// holds the session, so a record write never waits on a running job. A
@@ -1051,7 +971,7 @@ impl McpSession {
 
     /// Holds the registry-shared gate plus one template's per-RRID lock.
     ///
-    /// For the hand-written testreport tools, which act on one template's files:
+    /// For the hand-written document/transfer tools, which act on one template:
     /// the shared gate keeps the loaded set stable for the body while still
     /// letting tools on *other* templates run in parallel, and the per-RRID lock
     /// serialises against foreground dispatch for the *same* template.
@@ -1354,7 +1274,7 @@ impl McpSession {
     /// → [`CANCEL_GRACE`] → forced abort → best-effort operation-lock release.
     ///
     /// Only a synthesised **command** tool can hold `/var/lock/mtui.lock`
-    /// (testreport/transfer tools do not dispatch through the engine at all), so
+    /// (document/transfer tools do not dispatch through the engine at all), so
     /// this is the one call site the server layer routes here rather than through
     /// the bare `cancellable`.
     ///

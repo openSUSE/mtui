@@ -227,8 +227,10 @@ async fn a_report_without_a_document_refuses_every_tool() {
         ("report_file_read", json!({"path": "checkers.log"})),
     ] {
         let msg = refusal(&session, name, kwargs).await;
-        assert!(msg.contains("SVN-path"), "{name}: {msg}");
-        assert!(msg.contains("testreport_"), "{name}: {msg}");
+        assert!(
+            msg.contains("no report document loaded — run load_template or regenerate"),
+            "{name}: {msg}"
+        );
     }
 }
 

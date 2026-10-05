@@ -1,5 +1,5 @@
 //! The report directory's files: the path guard and bounded line reader shared
-//! by the `testreport_*` and `report_*` file tools.
+//! by the `report_*` file tools.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

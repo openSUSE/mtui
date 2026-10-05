@@ -5,7 +5,7 @@
 //! wiring end to end:
 //!
 //! 1. `tools/list` reflects the full synthesised surface (command tools + job
-//!    tools + the hand-written testreport tools) and **omits** every deny-listed
+//!    tools + the hand-written report-document tools) and **omits** every deny-listed
 //!    command.
 //! 2. `call_tool("whoami")` routes through the *same* engine the REPL uses and
 //!    returns the `User: <user>, app pid: …` banner the command prints.
@@ -92,19 +92,17 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
             );
         }
 
-        // The hand-written testreport tools.
-        for expected in [
-            "testreport_read",
-            "testreport_logs",
-            "testreport_patch",
-            "testreport_write",
-            "testreport_fill",
-        ] {
+        // The hand-written report-document tools; the retired text tools stay gone.
+        for expected in ["report_sections", "report_section_write", "report_files"] {
             assert!(
                 names.contains(&expected),
-                "expected testreport tool `{expected}` in tools/list, got: {names:?}"
+                "expected report tool `{expected}` in tools/list, got: {names:?}"
             );
         }
+        assert!(
+            !names.iter().any(|n| n.starts_with("testreport")),
+            "a testreport tool is still listed: {names:?}"
+        );
 
         // whoami carries the read-only annotation.
         let whoami = tools

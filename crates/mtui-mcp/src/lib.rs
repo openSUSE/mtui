@@ -43,8 +43,6 @@ pub mod slim;
 #[cfg(all(test, feature = "mcp"))]
 pub(crate) mod test_log;
 #[cfg(feature = "mcp")]
-pub mod testreport_tools;
-#[cfg(feature = "mcp")]
 pub mod tools;
 #[cfg(feature = "mcp")]
 pub mod transfer_tools;
@@ -62,8 +60,6 @@ pub use server::McpServer;
 pub use session::{JobState, JobView, McpCommandError, McpSession};
 #[cfg(feature = "mcp")]
 pub use slim::slim_input_schema;
-#[cfg(feature = "mcp")]
-pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]
 pub use tools::{ToolDescriptor, ToolRoute, build_tools, job_tool_descriptors};
 #[cfg(feature = "mcp")]

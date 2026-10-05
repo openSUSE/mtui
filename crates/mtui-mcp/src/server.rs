@@ -18,8 +18,8 @@
 //! Scope: this handler serves **one** [`McpSession`]. Under stdio one server
 //! instance serves the process's one client; under http the
 //! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server —
-//! hence a fresh isolated session — per MCP session. The testreport tools are
-//! hand-written; the job tools drive the session's background-job table.
+//! hence a fresh isolated session — per MCP session. The report-document and
+//! transfer tools are hand-written; the job tools drive the session's background-job table.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
@@ -43,7 +43,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::provider::SessionGuard;
 use crate::session::{AbortUnlock, McpSession, ProgressSink, ToolOutcome, forced_abort_note};
-use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 use crate::tools::{
     ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_call_waits,
     job_tool_descriptors, tool_routes,
@@ -66,8 +65,6 @@ pub struct McpServer {
     routes: Arc<BTreeMap<String, ToolRoute>>,
     /// The set of job-control tool names (`job_list`/…), for dispatch routing.
     job_tools: Arc<HashSet<String>>,
-    /// The set of hand-written testreport tool names (`testreport_read`/…).
-    testreport_tools: Arc<HashSet<String>>,
     /// The set of hand-written report-document tool names (`report_sections`/…).
     document_tools: Arc<HashSet<String>>,
     /// The set of hand-written in-band transfer tool names (`get`/`put`, #434).
@@ -152,18 +149,16 @@ impl McpServer {
     ) -> Self {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
-        let testreport_descriptors = testreport_tool_descriptors();
         let document_descriptors = crate::document_tools::document_tool_descriptors();
         let transfer_descriptors = crate::transfer_tools::transfer_tool_descriptors();
         let mut routes = tool_routes(&registry);
 
-        // Command tools + the four job tools + the hand-written testreport tools
+        // Command tools + the four job tools + the report-document tools
         // + the in-band get/put transfer tools (#434 — their command forms are on
         // MCP_DENYLIST, which makes the same-name reuse here collision-free).
         let mut descriptors: Vec<ToolDescriptor> = command_descriptors
             .into_iter()
             .chain(job_descriptors)
-            .chain(testreport_descriptors)
             .chain(document_descriptors)
             .chain(transfer_descriptors)
             .collect();
@@ -186,11 +181,6 @@ impl McpServer {
         // list so a profiled-out tool cannot still be called.
         routes.retain(|name, _| kept.contains(name));
         let job_tools: HashSet<String> = job_tool_descriptors()
-            .iter()
-            .map(|d| d.name.clone())
-            .filter(|n| kept.contains(n))
-            .collect();
-        let testreport_tools: HashSet<String> = testreport_tool_descriptors()
             .iter()
             .map(|d| d.name.clone())
             .filter(|n| kept.contains(n))
@@ -223,7 +213,6 @@ impl McpServer {
             tools: Arc::new(tools),
             routes: Arc::new(routes),
             job_tools: Arc::new(job_tools),
-            testreport_tools: Arc::new(testreport_tools),
             document_tools: Arc::new(document_tools),
             transfer_tools: Arc::new(transfer_tools),
             read_only_tools: Arc::new(read_only_tools),
@@ -507,37 +496,6 @@ impl McpServer {
                         };
                         result = Ok(render(dispatched).into());
                     }
-                }
-            }
-        }
-        // Acts directly on the loaded checkout. Neither this nor the transfer
-        // branch below dispatches through the engine, so neither can hold
-        // `/var/lock/mtui.lock`: a plain drop on cancel strands nothing.
-        else if self.testreport_tools.contains(name) {
-            // Audit-only scope: skipped when no sink is on, so unaudited
-            // dispatch never takes the session mutex for the record (#613).
-            if auditing {
-                let template = kwargs.get("template").and_then(Value::as_str);
-                rrids = self.session.audit_template_scope(template).await;
-            }
-            let dispatched = cancellable(
-                dispatch_testreport_tool(&self.session, name, kwargs, sink),
-                client_ct,
-            )
-            .await;
-            match dispatched {
-                None => {
-                    outcome = AuditOutcome::Error;
-                    result = Err(cancelled_error(None));
-                }
-                Some(dispatched) => {
-                    outcome = if dispatched.is_ok() {
-                        AuditOutcome::Ok
-                    } else {
-                        AuditOutcome::Error
-                    };
-                    // One text block, matching the command tools' wire shape.
-                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
                 }
             }
         }
@@ -828,7 +786,7 @@ fn response_bytes_of(result: &Result<CallToolResponse, McpError>) -> Option<usiz
 /// parked on `wait_seconds`; a plain poll is fast, and cancelling `job_cancel`
 /// makes no sense.
 ///
-/// For the testreport and transfer branches only: neither dispatches through the
+/// For the document and transfer branches only: neither dispatches through the
 /// engine, so dropping `fut` strands no `/var/lock/mtui.lock`. The
 /// synthesised-command branch *can* hold that lock and routes through
 /// [`McpSession::run_command_client_cancellable`](crate::session::McpSession::run_command_client_cancellable)
@@ -852,7 +810,7 @@ async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) ->
 /// (`dispatch_tool` returning [`ToolOutcome::Aborted`]); its
 /// [`forced_abort_note`] is appended so the client learns a host operation lock
 /// may have been left behind, not merely that the call was cancelled. The
-/// testreport/transfer branches cannot hold that lock and always pass `None`.
+/// document/transfer branches cannot hold that lock and always pass `None`.
 fn cancelled_error(unlock: Option<&AbortUnlock>) -> McpError {
     tracing::info!("MCP tool call cancelled by client notification");
     let message = match unlock {
@@ -907,13 +865,11 @@ mod tests {
         assert!(names.iter().any(|n| n == "run"));
         assert!(names.iter().any(|n| n == "set_log_level"));
         assert!(names.iter().any(|n| n == "job_list"));
-        assert!(names.iter().any(|n| n == "testreport_read"));
         assert!(names.iter().any(|n| n == "report_sections"));
         assert!(!names.iter().any(|n| n == "shell"));
         assert!(server.routes.contains_key("run"));
         assert!(!server.routes.contains_key("shell"));
         assert!(server.job_tools.contains("job_list"));
-        assert!(server.testreport_tools.contains("testreport_read"));
         assert!(server.document_tools.contains("report_sections"));
     }
 
@@ -935,9 +891,8 @@ mod tests {
             !server.routes.contains_key("set_log_level"),
             "non-core route pruned"
         );
-        // Job, testreport and document tools are always core.
+        // Job and document tools are always core.
         assert!(server.job_tools.contains("job_list"));
-        assert!(server.testreport_tools.contains("testreport_read"));
         assert!(server.document_tools.contains("report_section_write"));
     }
 
@@ -1029,14 +984,14 @@ mod tests {
                     "list_hosts",
                     "job_status",
                     "show_log",
-                    "testreport_read",
+                    "report_section_read",
                     "report_sections",
                 ],
                 [
                     "run",
                     "job_cancel",
                     "update",
-                    "testreport_write",
+                    "report_issue_write",
                     "report_section_write",
                 ],
             ),
