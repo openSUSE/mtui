@@ -1,31 +1,20 @@
 //! `qam.suse.de` testreport preconditions for the native QAM ops.
 //!
-//! A plain HTTPS GET of the machine-readable testreport log — **no OBS auth**,
-//! this is the public reports host, not the OBS API — applying the same guards
-//! the `osc qam` plugin does: [`assign`](crate::obs::qam::assign) needs only a
-//! 200, while [`approve`](crate::obs::qam::approve) /
-//! [`reject`](crate::obs::qam::reject) also require `SUMMARY: PASSED` /
-//! `SUMMARY: FAILED` plus, for reject, a non-empty `comment:`. The caller skips
-//! it for PI/SLFO requests, which carry no maintenance testreport.
-
-use std::sync::LazyLock;
-
-use regex::Regex;
+//! [`assign`](crate::obs::qam::assign) needs only a 200 on the public text log
+//! (a plain HTTPS GET, **no OBS auth** — this is the reports host, not the OBS
+//! API). [`approve`](crate::obs::qam::approve) /
+//! [`reject`](crate::obs::qam::reject) read the tester's `verdict` and
+//! `comment` from the report document on TeReGen v2 instead ([`report_verdict`]):
+//! mtui no longer writes the text log, and a document upload does not re-render
+//! it. The caller skips both for PI/SLFO requests, which carry no maintenance
+//! testreport.
 
 use mtui_types::RequestReviewID;
+use mtui_types::report_document::Verdict;
 
 use crate::error::HttpError;
 use crate::http::{HttpClient, MAX_API_BODY, read_body_capped, sanitize_url};
-
-/// Captures the whole trimmed `SUMMARY:` value, not just the first token, so a
-/// trailing qualifier ("PASSED with notes") reads as UNKNOWN rather than
-/// approving on the first word.
-static SUMMARY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^SUMMARY:\s*(.+?)\s*$").expect("static SUMMARY regex"));
-
-/// Capture the `comment:` value.
-static COMMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^comment:\s*(.*)$").expect("static comment regex"));
+use crate::teregen::document::{DocumentFetch, TeregenV2};
 
 /// The machine-readable testreport log URL:
 /// `reports_url.rstrip('/') + "/" + rrid + "/log"`.
@@ -79,25 +68,25 @@ pub(crate) async fn fetch_testreport_log(
     }
 }
 
-/// The upper-cased `SUMMARY:` value of a testreport log (else `UNKNOWN`).
+/// The report document's `verdict` and top-level `comment`, fetched fresh.
 ///
-/// The WHOLE trimmed value is upper-cased, so "PASSED with notes" becomes
-/// `PASSED WITH NOTES` — not exactly `PASSED`.
-#[must_use]
-pub(crate) fn summary(log: &str) -> String {
-    SUMMARY_RE
-        .captures(log)
-        .and_then(|c| c.get(1))
-        .map_or_else(|| "UNKNOWN".to_owned(), |m| m.as_str().to_uppercase())
-}
-
-/// The `comment:` value of a testreport log (empty when absent).
-#[must_use]
-pub(crate) fn comment(log: &str) -> String {
-    COMMENT_RE
-        .captures(log)
-        .and_then(|c| c.get(1))
-        .map_or_else(String::new, |m| m.as_str().trim().to_owned())
+/// # Errors
+///
+/// The cause, ready to embed in a refusal: no document, a stale one, or the
+/// transport/status failure.
+pub(crate) async fn report_verdict(
+    v2: &TeregenV2,
+    rrid: &RequestReviewID,
+) -> Result<(Option<Verdict>, Option<String>), String> {
+    match v2.fetch_document(&rrid.to_string(), None).await {
+        Ok(DocumentFetch::Fresh { document, .. }) => {
+            Ok((document.verdict.0, document.comment.0.clone()))
+        }
+        Ok(DocumentFetch::NotModified) => {
+            Err("the server answered 304 to an unconditional request".to_owned())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -107,27 +96,6 @@ mod tests {
 
     fn http() -> HttpClient {
         HttpClient::new(VerifyPolicy::Default(true)).unwrap()
-    }
-
-    #[test]
-    fn summary_captures_whole_value_not_first_token() {
-        assert_eq!(summary("SUMMARY: PASSED\n"), "PASSED");
-        assert_eq!(summary("SUMMARY: PASSED with notes\n"), "PASSED WITH NOTES");
-    }
-
-    #[test]
-    fn summary_unknown_when_absent() {
-        assert_eq!(summary("no summary here\n"), "UNKNOWN");
-    }
-
-    #[test]
-    fn comment_extracts_trimmed_value() {
-        assert_eq!(comment("SUMMARY: FAILED\ncomment: broken\n"), "broken");
-    }
-
-    #[test]
-    fn comment_empty_when_absent() {
-        assert_eq!(comment("SUMMARY: FAILED\n"), "");
     }
 
     // The 404 -> None path is covered end-to-end by the qam integration test

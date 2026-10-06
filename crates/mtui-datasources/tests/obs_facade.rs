@@ -247,6 +247,70 @@ async fn reject_happy_path_declines_via_injected_client() {
         .unwrap();
 }
 
+/// A Maintenance approve/reject reads the verdict from the document at the
+/// configured `teregen_api_v2`, not from any text log.
+#[tokio::test]
+async fn maintenance_approve_and_reject_read_the_verdict_from_the_configured_teregen() {
+    let doc = |verdict: Option<&str>, comment: Option<&str>| {
+        let mut doc: serde_json::Value = serde_json::from_str(include_str!(
+            "../../mtui-types/tests/fixtures/document/maintenance_obs.json"
+        ))
+        .unwrap();
+        doc["verdict"] = verdict.into();
+        doc["comment"] = comment.into();
+        doc.to_string()
+    };
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<request id='56789'><state name='review'/>\
+             <action type='maintenance_release'>\
+             <source project='SUSE:Maintenance:1' package='p'/></action>\
+             <review state='accepted' by_group='qam-sle'>\
+             <history who='qamuser' when='2020-01-01T00:00:00'>\
+             <description>Review got accepted</description></history></review></request>",
+        ))
+        .mount(&api)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<status code='ok'/>"))
+        .mount(&api)
+        .await;
+    let mut config = Config::default();
+    config.teregen_api_v2 = teregen.uri();
+    let osc = Osc::with_factory(config, rrid(), factory_for(api.uri()));
+
+    Mock::given(method("GET"))
+        .and(path("/reports/SUSE:Maintenance:1:56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(doc(Some("PASSED"), None)))
+        .up_to_n_times(1)
+        .mount(&teregen)
+        .await;
+    osc.approve(&[]).await.expect("PASSED verdict approves");
+
+    Mock::given(method("GET"))
+        .and(path("/reports/SUSE:Maintenance:1:56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(doc(None, None)))
+        .mount(&teregen)
+        .await;
+    let err = osc.approve(&[]).await.unwrap_err();
+    assert!(err.to_string().contains("not PASSED"), "{err}");
+    let err = osc.reject(&[], "regression", "m").await.unwrap_err();
+    assert!(err.to_string().contains("not FAILED"), "{err}");
+
+    let posts = api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    assert_eq!(posts, 1, "only the approved call posts");
+}
+
 // --------------------------------------------------------------------------- //
 // Never-raise escape hatches through the production Osc::new path             //
 // --------------------------------------------------------------------------- //

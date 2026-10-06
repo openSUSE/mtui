@@ -35,6 +35,7 @@ use crate::obs::client::ObsClient;
 use crate::obs::errors::ObsError;
 use crate::obs::oscrc::read_credentials;
 use crate::obs::qam;
+use crate::teregen::document::TeregenV2;
 
 /// A resolved, authenticated OBS client plus the acting user, produced by the
 /// facade's credential/transport build step.
@@ -142,15 +143,8 @@ impl Osc {
         let rrid = self.rrid.clone();
         let groups = groups.to_vec();
         self.run(move |client, user| async move {
-            qam::approve(
-                &client,
-                &cfg.reports_url,
-                &cfg.fancy_reports_url,
-                &rrid,
-                &user,
-                &groups,
-            )
-            .await
+            let v2 = TeregenV2::with_client(client.http().clone(), &cfg.teregen_api_v2);
+            qam::approve(&client, &v2, &cfg.fancy_reports_url, &rrid, &user, &groups).await
         })
         .await
     }
@@ -222,9 +216,10 @@ impl Osc {
         let reason = reason.to_owned();
         let message = message.to_owned();
         self.run(move |client, user| async move {
+            let v2 = TeregenV2::with_client(client.http().clone(), &cfg.teregen_api_v2);
             qam::reject(
                 &client,
-                &cfg.reports_url,
+                &v2,
                 &cfg.fancy_reports_url,
                 &rrid,
                 &user,
