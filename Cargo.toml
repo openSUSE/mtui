@@ -71,7 +71,7 @@ depends = ""
 # Mirrors the spec: this package shipped `mtui-mcp` itself until the split, so
 # a plain install has to keep providing it. Unversioned — cargo-deb has no
 # substitution for the package's own version.
-recommends = "mtui-mcp, subversion"
+recommends = "mtui-mcp"
 # Without this cargo-deb inlines the entire README as the extended description.
 extended-description = "Interactive REPL for validating SUSE maintenance updates: load a request by RRID, install and test it on reference hosts over SSH in parallel, then approve or reject."
 assets = [
@@ -87,8 +87,6 @@ assets = [
 # Explicit: the base sets `name`, which suppresses cargo-deb's automatic
 # "<pkg>-<variant>" suffixing, so without this both variants would be "mtui".
 name = "mtui-mcp"
-# `checkout`/`commit` are reachable over MCP, so the server needs svn on its own.
-recommends = "subversion"
 extended-description = "Model Context Protocol server exposing mtui's command registry as MCP tools over stdio or HTTP."
 assets = [
     ["target/release/mtui-mcp", "usr/bin/", "755"],
@@ -109,7 +107,7 @@ require-sh = false
 summary = "Interactive REPL for validating SUSE maintenance updates"
 # A table, not a list: cargo-generate-rpm keys each dependency by its version
 # constraint. "*" is unversioned.
-recommends = { mtui-mcp = "*", subversion = "*" }
+recommends = { mtui-mcp = "*" }
 assets = [
     { source = "target/release/mtui", dest = "/usr/bin/mtui", mode = "755" },
     { source = "dist/completions/bash/mtui.bash", dest = "/usr/share/bash-completion/completions/mtui", mode = "644" },
@@ -137,7 +135,6 @@ assets = [
 [package.metadata.generate-rpm.variants.mcp]
 name = "mtui-mcp"
 summary = "Model Context Protocol server for mtui"
-recommends = { subversion = "*" }
 assets = [
     { source = "target/release/mtui-mcp", dest = "/usr/bin/mtui-mcp", mode = "755" },
     { source = "dist/completions/bash/mtui-mcp.bash", dest = "/usr/share/bash-completion/completions/mtui-mcp", mode = "644" },
@@ -245,7 +242,7 @@ ruoqa = "0.3"
 hmac = "0.13"
 sha1 = "0.11"
 # SHA-256, for the MCP audit record's file-body payload fingerprints (#411):
-# `put`/`testreport_write`/`testreport_patch` bodies never land verbatim.
+# `put` bodies and `report_*` write values never land verbatim.
 sha2 = "0.11"
 # percent-encoding of URL components (Slack/TeReGen/OBS API params, oqa-search
 # build-check log URLs).

@@ -33,8 +33,6 @@ BuildRequires:  cargo
 BuildRequires:  cargo-packaging >= 1.2.0
 BuildRequires:  zstd
 ExclusiveArch:  %{rust_tier1_arches}
-# Optional runtime tool; mtui degrades gracefully when it is absent.
-Recommends:     subversion
 # Recommends, not Requires: this package shipped `mtui-mcp` itself until the
 # split, so a plain `zypper in mtui` has to keep providing it — and Requires
 # would defeat the split. Known gap: an upgrade run with --no-recommends (or
@@ -45,15 +43,14 @@ Recommends:     %{name}-mcp = %{version}-%{release}
 An improved, idiomatic Rust successor to MTUI — the Maintenance Test Update
 Installer, SUSE QE's tool for validating maintenance updates: load a request by
 RRID, install and test it on reference hosts over SSH in parallel, then approve
-or reject. It drives osc/svn/Gitea and openQA/QEM natively under the hood.
+or reject. It drives OBS/IBS and Gitea review workflows and openQA/QEM
+natively under the hood.
 
 This package ships the `mtui` interactive REPL. The Model Context Protocol
 server is the %{name}-mcp subpackage.
 
 %package mcp
 Summary:        Model Context Protocol server for mtui
-# Reachable over MCP (checkout/commit), so the subpackage needs it on its own.
-Recommends:     subversion
 
 %description mcp
 The `mtui-mcp` Model Context Protocol server exposes mtui's maintenance-update
