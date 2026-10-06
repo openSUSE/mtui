@@ -13,11 +13,11 @@ higher ones; `mtui-core` is the composition root that wires everything together.
 
 | Crate | Job |
 |-------|-----|
-| `mtui-types` | Domain types + the error hierarchy. Pure, sync, no I/O. Includes the typed `report_document` model of the JSON-native TeReGen report (schema v1.0) — not yet wired into the report lifecycle. |
+| `mtui-types` | Domain types + the error hierarchy. Pure, sync, no I/O. Includes the typed `report_document` model of the JSON-native TeReGen report (schema v1.0). |
 | `mtui-config` | TOML config + XDG path resolution. |
 | `mtui-hosts` | SSH/SFTP (russh), the `Target`/`HostsGroup` model, locks, the pool arbiter. Async. |
 | `mtui-datasources` | Shared HTTP; refhosts resolve/search/verify; the openQA/QEM/Gitea/OBS/oqa-search clients. Async. |
-| `mtui-testreport` | Testreport lifecycle, metadata parsers, SVN/Gitea checkout, and the update workflow (actions/checks/export). |
+| `mtui-testreport` | Testreport lifecycle (TeReGen v2 document ingest/upload) and the update workflow (actions/checks/export). |
 | `mtui-core` | The `Command` trait + registry, `Session`, the dispatch engine, and the wiring that ties the crates together. |
 | `mtui` (root) | Facade package owning `src/bin/{mtui,mtui-mcp}.rs` behind the `cli`/`mcp` features; its integration tests are in `tests/it.rs`. |
 | `mtui-tui` | The report-document editor: a walker over the report JSON Schema, the form model built on it, and the ratatui screen. Pure and sync; depends only on `mtui-types`, so neither the MCP server nor a `--no-default-features` build compiles ratatui. |
@@ -68,7 +68,7 @@ command while still reporting success.
 These data-format and workflow contracts keep mtui interoperable with the SUSE
 maintenance ecosystem. Each is owed to something live: the RRID grammar to
 OBS/IBS/QEM, the `refhosts.yml` schema to the qam-metadata fleet database, the
-testreport/export format to SVN/Gitea/TeReGen, the MCP tool surface to downstream
+report document schema to TeReGen, the MCP tool surface to downstream
 LLM clients, and the on-host formats to **other mtui processes sharing a fleet**
 — including older releases, which is why they are a wire format and not an
 implementation detail. The `crates/*/tests/` fixtures are the authority.
@@ -78,8 +78,9 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
 - **`refhosts.yml` schema** — location-grouped on disk, but rows are
   merged/flattened/de-duplicated at load; parses identically to the golden
   fixtures.
-- **Testreport / export text format** — including the idempotent
-  `overview_inject` BEGIN/END block under `regression tests:`.
+- **Report document schema v1** — the JSON schema TeReGen serves
+  (`report_document::SCHEMA_JSON`); drift from the live schema is checked at
+  load.
 - **Remote-lock wire format** — one line, `timestamp:user:pid[:comment]`, shared
   by the operation lock and the pool-claim lock (see
   [Workflow concepts](concepts.md#locking)).
@@ -107,12 +108,12 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
 - **Two static binaries** (`mtui`, `mtui-mcp`), no runtime interpreter or
   virtualenv to install.
 - **Async I/O** (`tokio`) with true parallel host fan-out.
-- **Git-vs-OBS is decided per update, from the template, not from the RRID.**
+- **Git-vs-OBS is decided per update, from the report document, not from the RRID.**
   During the SL-Micro 6.0/6.1 cutover both workflows share the `SLFO:1.1` id
   space, so no rule over the RRID's shape can be correct — and an update can
   briefly be served *both* ways at once. `mtui_types::UpdateSource` is a
-  **selection, not an observation**: `Git` when the template carries
-  `gitea_commit_hash`, `Obs` otherwise, resolved once at load. On a
+  **selection, not an observation**: `Git` when the report document's
+  `workflow` is `gitea`, `Obs` otherwise, resolved once at load. On a
   dual-served update `Git` wins by design, and mtui leaves that update's OBS
   review request untouched — `assign`/`approve`/`reject`/`comment` only ever
   reach the Gitea side. See [`approve`](cli.md#approve) for the operator-facing

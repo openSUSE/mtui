@@ -183,11 +183,11 @@ display) passed into each call. There are no hidden globals.
   clap parser exactly as the engine does.
 - **Mock, don't hit the network or real hosts.** SSH goes through
   `MockConnection` (`crates/mtui-hosts/src/connection/mock.rs`, implementing the
-  `Connection` trait); HTTP goes through `wiremock`; `svn`/`osc` behaviour is
+  `Connection` trait); HTTP goes through `wiremock`; subprocesses are
   driven through a command-runner trait or a stub on `PATH`. Real
   hosts/containers are gated behind `#[ignore]` + a CI env flag.
-- **Snapshot text contracts** with `insta` (testreport/export rendering, metadata
-  parsing, MCP schemas, the lock wire format, display output). Review new
+- **Snapshot text contracts** with `insta` (report document goldens, MCP
+  schemas, the lock wire format, display output). Review new
   snapshots with `cargo insta review`.
 - **Make sure the test can fail.** A green run means something only if red was
   reachable. Watch for fixtures that quietly disarm the assertion: a
@@ -240,7 +240,7 @@ these crates: `it__<module>__<name>.snap`.
 ## Debugging the MCP server
 
 The [MCP server](mcp.md) page is the operator reference; this covers iterating on
-the server itself (schema synthesis, the deny-list, a new `testreport_*` tool).
+the server itself (schema synthesis, the deny-list, a new `report_*` tool).
 
 Start it under HTTP with debug logging:
 
@@ -262,8 +262,8 @@ attaches to its stdio streams.
 
 `whoami` is the cheapest end-to-end check — no loaded report, no hosts — so a
 successful `whoami()` confirms schema synthesis, the dispatch wrapper, the session
-lock, and the response envelope. The testreport tools refuse cleanly with a
-"no testreport loaded" message until a `load_template` call has run, which is the
+lock, and the response envelope. The `report_*` tools refuse cleanly with a
+"no report document loaded" message until a `load_template` call has run, which is the
 correct refusal path.
 
 Common issues:

@@ -1,6 +1,6 @@
-//! Fuzzes the template repository/product metadata parsers in
-//! `mtui-testreport`. The product strings and repository URL come from the
-//! RRID template checkout — externally-sourced metadata.
+//! Fuzzes the repository/product metadata parsers in `mtui-testreport`. The
+//! product strings and repository URL come from the report document —
+//! externally-sourced metadata.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

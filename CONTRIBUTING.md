@@ -93,10 +93,10 @@ so pre-commit is purely a convenience.
   (one integration-test binary per crate), not as a new top-level
   `tests/*.rs`.
 - Mock, don't hit the network/hosts: HTTP via `wiremock`, SSH via a
-  `MockConnection`, `svn`/`osc` via a command-runner trait or a stub on
+  `MockConnection`, subprocesses via a command-runner trait or a stub on
   `PATH`. Gate real hosts/containers behind `#[ignore]` + a CI env flag.
-- Snapshot text contracts (testreport/export rendering, metadata parsing,
-  MCP schemas, lock-file format) with `insta`.
+- Snapshot text contracts (report document goldens, MCP schemas,
+  lock-file format) with `insta`.
 - New/changed code needs >=80% patch coverage.
 
 ## Changelog

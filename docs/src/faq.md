@@ -90,10 +90,10 @@ editor needs a terminal on both stdin and stdout.
 
 ## How do I export results into the testreport?
 
-`export` writes the collected run/update logs (and, for the openQA-sourced
-workflows, openQA data) into the testreport's text format. Its `regression tests:`
-section uses an idempotent `overview_inject` BEGIN/END block, so re-exporting
-updates in place rather than duplicating.
+`export` authors the collected update data (and, for the openQA-sourced
+workflows, openQA data) onto the loaded report document's `testing.*` sections and
+writes the install logs to the report directory. The document stays local until
+`commit` uploads it. Re-exporting updates the same sections in place.
 
 A `Manual` export must run from the session that ran `update`: the before/after
 package versions exist only in that process, so from any other session `export`
@@ -113,21 +113,19 @@ the unverified scaffold anyway.
 ## Do I still need `osc` installed?
 
 No. The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`)
-talks to the OBS/IBS API natively — no `osc` subprocess. `svn` is still used for
-the SVN testreport backend; it is optional and mtui degrades gracefully when it
-is absent.
+talks to the OBS/IBS API natively — no `osc` subprocess.
 
 ## Why does `assign`/`approve` go to Gitea when I expected OBS (or vice versa)?
 
-mtui decides per update, from the loaded template's own metadata, not from the
-RRID: an update whose `metadata.json` carries a `gitea_commit_hash` is
-Gitea-served, otherwise it is OBS-served. This matters because the RRID's shape
+mtui decides per update, from the loaded report document, not from the
+RRID: an update whose document's `workflow` is `gitea` is Gitea-served, otherwise
+it is OBS-served. This matters because the RRID's shape
 cannot answer the question during the SL-Micro 6.0/6.1 cutover — both workflows
 share the `SLFO:1.1` id space, and an update can briefly be served **both**
 ways at once. When that happens mtui always drives the Gitea workflow and
 **leaves that update's OBS review request alone** — `assign`/`unassign`/
 `reject`/`comment`/`approve` never touch it. If an update's OBS request looks
-stuck open, check whether its template carries a Gitea commit hash; if so,
+stuck open, check whether its report document's `workflow` is `gitea`; if so,
 that is expected, not a bug.
 
 ## How do I install packages the update newly introduces?
@@ -207,7 +205,7 @@ mtui.
 
 ## Where are the per-host install logs stored?
 
-Under the loaded template's checkout, in
+Under the loaded report's directory, in
 `template_dir/<RRID>/install_logs/<host>.log` (one file per refhost). The
 `install_logs` sub-directory name is configurable under `[mtui]`; see
 [Configuration](configuration.md).
