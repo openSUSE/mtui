@@ -71,27 +71,6 @@ install -Dm644 dist/man/mtui.1     /usr/share/man/man1/mtui.1
 install -Dm644 dist/man/mtui-mcp.1 /usr/share/man/man1/mtui-mcp.1
 ```
 
-## Vim syntax highlighting
-
-A Vim plugin for editing QAM test reports ships in `dist/vim-plugin/`: filetype
-detection plus syntax highlighting for the testreport/export text format
-(status keywords, section labels, and unfilled `YES/NO`/`PASSED/FAILED`
-placeholders shown as errors so you don't forget to fill them in). Filetype
-detection triggers on any file named `log` whose first line starts with
-`SUMMARY:` (i.e. an exported testreport).
-
-On openSUSE it is packaged as the `mtui-vim-plugin` subpackage, installed into
-the system Vim runtime addon dir. To install manually:
-
-```sh
-install -Dm644 dist/vim-plugin/ftdetect/testreport.vim /usr/share/vim/site/ftdetect/testreport.vim
-install -Dm644 dist/vim-plugin/syntax/testreport.vim   /usr/share/vim/site/syntax/testreport.vim
-```
-
-For a per-user install without root, drop the two files under your Vim runtime
-directory instead (`~/.vim/{ftdetect,syntax}/testreport.vim`, or
-`~/.config/nvim/{ftdetect,syntax}/testreport.vim` for Neovim).
-
 ## Runtime dependencies
 
 One backend shells out to an external tool. It is optional — mtui degrades
@@ -110,12 +89,11 @@ your `oscrc`, located exactly like `osc` itself: `$OSC_CONFIG`, then
 Every release carries `.deb` and `.rpm` packages next to the tarballs, built by
 the `package` job in `.github/workflows/release.yml`. They split the same way the
 spec does — `mtui` recommends `mtui-mcp`, so installing `mtui` alone still gets
-both — with four caveats the OBS build does not have:
+both — with three caveats the OBS build does not have:
 
 - **x86_64 only**, built for `x86_64-unknown-linux-musl`. No aarch64, no macOS.
 - **Same `Name:` as the OBS RPM.** In a repository carrying both, they compete by
   version comparison alone. On openSUSE prefer the OBS package.
-- **No `mtui-vim-plugin`.**
 - **The `.rpm`s own no directories.** cargo-generate-rpm has no `%dir`, so
   erasing them leaves the doc- and licensedirs behind.
 
@@ -131,14 +109,13 @@ covers all four packages, so a partial download needs `--ignore-missing`.
 
 On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
 completions, and man pages into the standard system paths and declares `svn` as a
-recommends. It builds three packages:
+recommends. It builds two packages:
 
 - **`mtui`** — the REPL, its completions and man page. Recommends `mtui-mcp`, so
   a plain `zypper in mtui` still gets both binaries as it did before they were
   split.
 - **`mtui-mcp`** — the MCP server, its completions and man page. Installable on
   its own; it reads the same config.
-- **`mtui-vim-plugin`** — see [above](#vim-syntax-highlighting).
 
 ## Cutting a release (maintainers)
 
@@ -211,7 +188,7 @@ escape hatch, not a default. `update=false` in `_service` pins the checked-in
 
 To build a plain binary tarball locally (e.g. to test the install layout) without
 OBS, use the `xtask package` helper — it assembles the documented tree (both
-binaries, completions, man pages, the Vim plugin, `LICENSE`, `README`) into a
+binaries, completions, man pages, `LICENSE`, `README`) into a
 `mtui-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh

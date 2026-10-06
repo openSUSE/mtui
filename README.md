@@ -65,8 +65,6 @@ authenticated boundary trusted to operate the remaining maintenance tools.
 - Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
   (SVN and Gitea backends).
 - File transfer (`put`/`get`) over SFTP.
-- Vim syntax highlighting for testreport files, packaged separately as
-  `mtui-vim-plugin`.
 
 ## Install
 
