@@ -301,6 +301,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `report_*` and `report_file*` tools. **MCP schema note:** five tools gone.
 - The `[svn] path` config key and the `svn_path` attribute of `config`. An
   `[svn]` table left in `mtui.toml` is ignored, not an error.
+- Packaging: the `mtui` and `mtui-mcp` packages (deb, rpm, OBS) no longer
+  recommend `subversion`.
+- The `mtui-vim-plugin` subpackage and `dist/vim-plugin/` (the text report
+  format it highlighted is gone); upgrading `mtui` obsoletes the subpackage.
+  The release tarball no longer carries a `vim-plugin/` directory.
 
 ### Fixed
 
