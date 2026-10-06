@@ -62,10 +62,6 @@
 # "Fancy" reports base URL.
 # fancy_reports = "https://qam.suse.de/reports"
 
-[svn]
-# SVN base path for testreport checkout.
-# path = "svn+ssh://svn@qam.suse.de/testreports"
-
 [target]
 # Remote scratch directory on target hosts.
 # tempdir = "/tmp"
