@@ -928,6 +928,9 @@ Options:
   -m, --message [<message>...]
           Rejection message (takes the remainder of the command)
 
+      --reviewer <NAME>
+          Name of the reviewer who reviewed this report; recorded on the report document and uploaded, then reject
+
   -h, --help
           Print help
 ```

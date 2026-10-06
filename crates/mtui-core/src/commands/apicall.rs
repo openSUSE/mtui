@@ -11,13 +11,14 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::obs::oscrc;
+use mtui_datasources::obs::{gates_on_report_document, oscrc};
 use mtui_datasources::teregen::{TeregenAuth, TeregenV2};
 use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
 use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::commit::{ReviewAction, record_reviewer};
+use crate::commands::support::{require_update, template_completion, uncommitted_report_guard};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -27,6 +28,19 @@ use crate::session::Session;
 /// metadata and so always resolves `Obs`, whatever its RRID looks like.
 pub(crate) fn is_gitea_workflow(session: &Session) -> bool {
     session.metadata().update_source() == UpdateSource::Git
+}
+
+/// The pre-flight for `approve`/`reject`: wherever the OBS gate reads the
+/// report document, refuse while the document has uncommitted edits.
+pub(crate) fn require_committed_report(
+    session: &Session,
+    rrid: &RequestReviewID,
+    verb: &str,
+) -> Result<(), CommandError> {
+    if is_gitea_workflow(session) || !gates_on_report_document(rrid) {
+        return Ok(());
+    }
+    uncommitted_report_guard(session, &rrid.to_string(), verb)
 }
 
 /// The `-g/--group` values (repeatable), defaulting to an empty slice.
@@ -333,6 +347,12 @@ const REJECT_REASONS: &[&str] = &[
 ];
 
 /// Rejects a review request.
+///
+/// `--reviewer NAME` records the reviewer on the report document and uploads it
+/// with the artifacts *before* the rejection, as `approve -r` does. Without it
+/// nothing is uploaded: on Maintenance/OBS a report with uncommitted edits is
+/// refused with a `commit` hint, because the verdict gate reads the server's
+/// copy.
 pub struct Reject;
 
 #[async_trait]
@@ -365,12 +385,29 @@ impl Command for Reject {
                     .action(ArgAction::Append)
                     .help("Rejection message (takes the remainder of the command)"),
             )
+            .arg(
+                Arg::new("reviewer")
+                    .long("reviewer")
+                    .value_name("NAME")
+                    .help(
+                        "Name of the reviewer who reviewed this report; recorded on the report \
+                         document and uploaded, then reject",
+                    ),
+            )
     }
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        common_complete(session, text, &["-r", "--reason", "-m", "--message"])
+        common_complete(
+            session,
+            text,
+            &["-r", "--reason", "-m", "--message", "--reviewer"],
+        )
     }
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
+        if let Some(reviewer) = args.get_one::<String>("reviewer") {
+            record_reviewer(session, reviewer, ReviewAction::Reject).await?;
+        }
+        require_committed_report(session, &rrid, "reject")?;
         let reason = args
             .get_one::<String>("reason")
             .cloned()
@@ -1022,5 +1059,175 @@ mod tests {
             .filter(|r| r.method == wiremock::http::Method::POST)
             .count();
         assert_eq!(posts, 1, "the forced call alone posts assignreview");
+    }
+
+    #[test]
+    fn reject_reviewer_is_long_only_and_completes() {
+        let cmd = Reject.configure(clap::Command::new("reject").no_binary_name(true));
+        let m = cmd
+            .clone()
+            .try_get_matches_from(["-r", "regression", "--reviewer", "alice"])
+            .unwrap();
+        assert_eq!(
+            m.get_one::<String>("reviewer").map(String::as_str),
+            Some("alice")
+        );
+        assert_eq!(
+            m.get_one::<String>("reason").map(String::as_str),
+            Some("regression")
+        );
+        assert!(cmd.try_get_matches_from(["-r", "alice"]).is_err());
+
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert_eq!(Reject.complete(&session, "--rev", ""), vec!["--reviewer"]);
+    }
+
+    mod commit_before_gate {
+        use wiremock::MockServer;
+
+        use super::*;
+        use crate::commands::approve::Approve;
+        use crate::commands::testkit::NoOscrc;
+        use crate::commands::testkit::teregen::minimal_document;
+
+        const MAINT: &str = "SUSE:Maintenance:1:1";
+
+        fn load_document(session: &mut Session, id: &str, dirty: bool) {
+            let base = session.metadata_mut().base_mut();
+            base.document = Some(minimal_document(id));
+            base.document_dirty = dirty;
+        }
+
+        /// A Maintenance/OBS session whose OBS and teregen bases are two mock
+        /// servers, so a stray request is observable.
+        async fn session_over_mocks(dirty: bool) -> (Session, MockServer, MockServer) {
+            let obs = MockServer::start().await;
+            let teregen = MockServer::start().await;
+            let (mut session, _buf) = session_with_hosts(MAINT, &["h1"], "ok");
+            session.config.obs_api_url = obs.uri();
+            session.config.teregen_api_v2 = teregen.uri();
+            load_document(&mut session, MAINT, dirty);
+            (session, obs, teregen)
+        }
+
+        fn plain_commands() -> [(Box<dyn Command>, Vec<&'static str>, &'static str); 2] {
+            [
+                (Box::new(Reject), vec!["-r", "regression"], "reject"),
+                (Box::new(Approve), vec![], "approve"),
+            ]
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_dirty_document_refuses_plain_approve_and_reject_before_any_request() {
+            let _oscrc = NoOscrc::set();
+            for (cmd, argv, verb) in plain_commands() {
+                let (mut session, obs, teregen) = session_over_mocks(true).await;
+                let err = cmd
+                    .call(&mut session, &matches(&*cmd, &argv))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m)
+                        if m.contains("run `commit`") && m.contains(&format!("{verb} reads"))),
+                    "{verb}: {err:?}"
+                );
+                assert!(obs.received_requests().await.unwrap().is_empty(), "{verb}");
+                assert!(
+                    teregen.received_requests().await.unwrap().is_empty(),
+                    "{verb}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_committed_document_reaches_the_gate() {
+            let _oscrc = NoOscrc::set();
+            for (cmd, argv, verb) in plain_commands() {
+                let (mut session, _obs, _teregen) = session_over_mocks(false).await;
+                let err = cmd
+                    .call(&mut session, &matches(&*cmd, &argv))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m) if m.starts_with(&format!("obs {verb} failed"))),
+                    "{verb}: {err:?}"
+                );
+            }
+        }
+
+        /// The pre-flight refuses only where the OBS gate reads the document;
+        /// each row isolates one of its two conditions.
+        #[test]
+        fn the_pre_flight_applies_only_where_the_gate_reads_the_document() {
+            for (id, source, refused) in [
+                (MAINT, UpdateSource::Obs, true),
+                ("SUSE:PI:1.1:5", UpdateSource::Obs, false),
+                ("SUSE:SLFO:1.2:5", UpdateSource::Obs, false),
+                (MAINT, UpdateSource::Git, false),
+            ] {
+                let (mut session, _buf) = session_with_hosts(id, &["h1"], "ok");
+                session.metadata_mut().base_mut().update_source = source;
+                load_document(&mut session, id, true);
+                let rrid = require_update(&session).unwrap();
+
+                let res = require_committed_report(&session, &rrid, "reject");
+
+                assert_eq!(res.is_err(), refused, "{id} via {source:?}: {res:?}");
+            }
+        }
+
+        /// `--reviewer` records and uploads before the pre-flight looks at the
+        /// dirty flag: the one-shot path must not refuse itself. The missing
+        /// oscrc fails the writer, which is only reached if the record step
+        /// ran first.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn reviewer_records_before_the_pre_flight_runs() {
+            let _oscrc = NoOscrc::set();
+            for (cmd, argv, verb) in [
+                (
+                    Box::new(Reject) as Box<dyn Command>,
+                    vec!["-r", "regression", "--reviewer", "alice"],
+                    "reject",
+                ),
+                (Box::new(Approve), vec!["-r", "alice"], "approve"),
+            ] {
+                let (mut session, obs, teregen) = session_over_mocks(true).await;
+                let err = cmd
+                    .call(&mut session, &matches(&*cmd, &argv))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m) if m.contains("could not read oscrc credentials")),
+                    "{verb}: {err:?}"
+                );
+                assert!(obs.received_requests().await.unwrap().is_empty(), "{verb}");
+                assert!(
+                    teregen.received_requests().await.unwrap().is_empty(),
+                    "{verb}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn reject_reviewer_refuses_a_blank_name_and_a_missing_document() {
+            let (mut session, _buf) = session_with_hosts(MAINT, &["h1"], "ok");
+            let args = matches(&Reject, &["-r", "regression", "--reviewer", "  "]);
+            let err = Reject.call(&mut session, &args).await.unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("non-empty string; not rejecting")),
+                "{err:?}"
+            );
+
+            let args = matches(&Reject, &["-r", "regression", "--reviewer", "alice"]);
+            let err = Reject.call(&mut session, &args).await.unwrap_err();
+            assert!(matches!(err, CommandError::NoDocument), "{err:?}");
+            assert_eq!(session.metadata().base().reviewer, "");
+        }
     }
 }

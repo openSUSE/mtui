@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::{ArtifactStored, TeregenV2};
 use mtui_testreport::{collect_artifacts, upload_current};
-use mtui_types::report_document::ReportDocument;
+use mtui_types::report_document::{ReportDocument, Req};
 
 use super::apicall::teregen_v2_writer;
 use super::support::{complete_with_templates, require_document, stale_hash_gate};
@@ -197,6 +197,78 @@ pub(crate) async fn record_onto_document(
             Err(RecordError::Upload(e))
         }
     }
+}
+
+/// The review action a reviewer is recorded for; only shapes the refusal text.
+#[derive(Clone, Copy)]
+pub(crate) enum ReviewAction {
+    Approve,
+    Reject,
+}
+
+impl ReviewAction {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Reject => "reject",
+        }
+    }
+
+    fn gerund(self) -> &'static str {
+        match self {
+            Self::Approve => "approving",
+            Self::Reject => "rejecting",
+        }
+    }
+}
+
+/// Records the reviewer on the report document and uploads it with the
+/// artifacts to teregen. `Err` aborts the action rather than swallowing the
+/// record/upload failure.
+pub(crate) async fn record_reviewer(
+    session: &mut Session,
+    name: &str,
+    action: ReviewAction,
+) -> Result<(), CommandError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CommandError::Other(format!(
+            "reviewer must be a non-empty string; not {}",
+            action.gerund()
+        )));
+    }
+    require_document(session)?;
+    let client = teregen_v2_writer(session)?;
+    record_reviewer_document(session, &client, name, action).await
+}
+
+/// The document-path half of [`record_reviewer`]: set `people.reviewer.name` on
+/// the document and upload it with the artifacts, as `commit` does. The
+/// in-memory reviewer is set only once the upload succeeded.
+pub(crate) async fn record_reviewer_document(
+    session: &mut Session,
+    client: &TeregenV2,
+    name: &str,
+    action: ReviewAction,
+) -> Result<(), CommandError> {
+    record_onto_document(session, client, &["people.reviewer"], |doc| {
+        doc.people.reviewer.name = Req(Some(name.to_owned()));
+    })
+    .await
+    .map_err(|e| match e {
+        RecordError::Upload(e) => CommandError::Other(format!(
+            "failed to record reviewer on teregen, not {}: {e}",
+            action.gerund()
+        )),
+        RecordError::ArtifactsFailed(n) => CommandError::Other(format!(
+            "{n} artifact upload(s) failed, not {}; the reviewer is already stored on \
+             teregen, re-run {} to retry the artifacts",
+            action.gerund(),
+            action.verb()
+        )),
+    })?;
+    session.metadata_mut().base_mut().reviewer = name.to_owned();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -443,5 +515,133 @@ mod tests {
             matches!(&err, CommandError::Other(m) if m.contains("could not read oscrc credentials")),
             "{err:?}"
         );
+    }
+
+    mod reviewer {
+        use super::*;
+        use crate::commands::support::uncommitted_report_guard;
+        use crate::commands::testkit::teregen::document_put_body;
+
+        const ID: &str = "SUSE:Maintenance:1:1";
+
+        fn stored_document() -> String {
+            let mut doc = minimal_document(ID);
+            doc.people.reviewer.name = Req(Some("alice".to_owned()));
+            serde_json::to_string(&doc).unwrap()
+        }
+
+        /// A dirty, document-loaded session whose report dir holds one artifact.
+        fn dirty_session_with_artifact() -> (Session, tempfile::TempDir) {
+            let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            let tmp = set_bare_report_wd(&mut session);
+            std::fs::create_dir_all(tmp.path().join("install_logs")).unwrap();
+            std::fs::write(tmp.path().join("install_logs/h1.log"), b"log").unwrap();
+            let base = session.metadata_mut().base_mut();
+            base.document = Some(minimal_document(ID));
+            base.document_etag = Some("\"stale\"".to_owned());
+            base.document_dirty = true;
+            (session, tmp)
+        }
+
+        async fn mount_put(server: &MockServer, document: ResponseTemplate, artifact: u16) {
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(document)
+                .mount(server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}/artifacts/h1.log")))
+                .respond_with(ResponseTemplate::new(artifact))
+                .mount(server)
+                .await;
+        }
+
+        fn stored() -> ResponseTemplate {
+            ResponseTemplate::new(202)
+                .set_body_string(stored_document())
+                .insert_header("etag", "\"fresh\"")
+        }
+
+        /// The upload clears the dirty flag, so the pre-flight that follows
+        /// passes on the one-shot path.
+        #[tokio::test]
+        async fn recording_a_reviewer_stores_the_edits_and_satisfies_the_pre_flight() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            mount_put(&server, stored(), 201).await;
+            let (mut session, _tmp) = dirty_session_with_artifact();
+            assert!(uncommitted_report_guard(&session, ID, "reject").is_err());
+            let client = teregen_v2_client(&server, store_file);
+
+            record_reviewer_document(&mut session, &client, "alice", ReviewAction::Reject)
+                .await
+                .unwrap();
+
+            let body = document_put_body(&server, ID).await;
+            assert_eq!(body.pointer("/people/reviewer/name"), Some(&"alice".into()));
+            assert_eq!(session.metadata().base().reviewer, "alice");
+            assert!(uncommitted_report_guard(&session, ID, "reject").is_ok());
+        }
+
+        #[tokio::test]
+        async fn a_failed_upload_names_the_action_and_restores_the_document() {
+            for (action, gerund) in [
+                (ReviewAction::Approve, "not approving"),
+                (ReviewAction::Reject, "not rejecting"),
+            ] {
+                let server = MockServer::start().await;
+                let (_store, store_file) = store_path();
+                mount_auth_success(&server).await;
+                mount_put(
+                    &server,
+                    ResponseTemplate::new(412).set_body_json(serde_json::json!({})),
+                    201,
+                )
+                .await;
+                let (mut session, _tmp) = dirty_session_with_artifact();
+                let before = session.metadata().base().document.clone();
+                let client = teregen_v2_client(&server, store_file);
+
+                let err = record_reviewer_document(&mut session, &client, "alice", action)
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m) if m.contains(gerund)),
+                    "{gerund}: {err:?}"
+                );
+                let base = session.metadata().base();
+                assert_eq!(base.reviewer, "");
+                assert_eq!(base.document, before);
+                assert!(base.document_dirty, "{gerund}: the edits stay uncommitted");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_failed_artifact_tells_the_reviewer_which_command_to_re_run() {
+            for (action, retry) in [
+                (ReviewAction::Approve, "re-run approve"),
+                (ReviewAction::Reject, "re-run reject"),
+            ] {
+                let server = MockServer::start().await;
+                let (_store, store_file) = store_path();
+                mount_auth_success(&server).await;
+                mount_put(&server, stored(), 500).await;
+                let (mut session, _tmp) = dirty_session_with_artifact();
+                let client = teregen_v2_client(&server, store_file);
+
+                let err = record_reviewer_document(&mut session, &client, "alice", action)
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m)
+                        if m.contains("1 artifact") && m.contains(retry)),
+                    "{retry}: {err:?}"
+                );
+                assert_eq!(session.metadata().base().reviewer, "");
+            }
+        }
     }
 }

@@ -23,3 +23,4 @@ pub use client::{NoAuth, ObsAuth, ObsClient};
 pub use errors::ObsError;
 pub use facade::Osc;
 pub use oscrc::{ObsCredentials, read_credentials};
+pub use qam::gates_on_report_document;

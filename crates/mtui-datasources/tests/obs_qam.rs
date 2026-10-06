@@ -1274,6 +1274,7 @@ async fn approve_refused_unless_the_verdict_is_passed() {
             msg.contains(&format!("has verdict {label}, not PASSED")),
             "{msg}"
         );
+        assert!(msg.contains("`commit`"), "names the next step: {msg}");
         assert_eq!(post_count(&api).await, 0, "{label}: nothing is posted");
     }
 }
@@ -1461,6 +1462,7 @@ async fn reject_refused_unless_the_verdict_is_failed() {
             msg.contains(&format!("has verdict {label}, not FAILED")),
             "{msg}"
         );
+        assert!(msg.contains("`commit`"), "names the next step: {msg}");
         assert_eq!(post_count(&api).await, 0, "{label}: nothing is posted");
     }
 }
@@ -1478,7 +1480,12 @@ async fn reject_refused_without_comment() {
 
         let err = reject_with(&api, &teregen).await.unwrap_err();
 
-        assert!(err.to_string().contains("no comment"), "{comment:?}: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("no comment"), "{comment:?}: {msg}");
+        assert!(
+            msg.contains("`commit`"),
+            "{comment:?}: names the next step: {msg}"
+        );
         assert_eq!(post_count(&api).await, 0, "{comment:?}: nothing is posted");
     }
 }

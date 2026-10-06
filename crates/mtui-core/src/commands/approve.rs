@@ -2,15 +2,15 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::teregen::TeregenV2;
 use mtui_datasources::{Slack, is_ack_reaction};
 use mtui_testreport::HashCheck;
-use mtui_types::report_document::Req;
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::{gitea_client, is_gitea_workflow, osc_client, teregen_v2_writer};
-use crate::commands::commit::{RecordError, record_onto_document};
-use crate::commands::support::{require_document, require_update, template_completion};
+use crate::commands::apicall::{
+    gitea_client, is_gitea_workflow, osc_client, require_committed_report,
+};
+use crate::commands::commit::{ReviewAction, record_reviewer};
+use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -19,7 +19,9 @@ use crate::session::Session;
 ///
 /// With `-r/--reviewer` the reviewer is stored on the report document and
 /// uploaded to teregen with the artifacts *before* the approval; either failing
-/// (or no document being loaded) aborts it. On the Gitea path a
+/// (or no document being loaded) aborts it. Without it nothing is uploaded: on
+/// Maintenance/OBS a report with uncommitted edits is refused with a `commit`
+/// hint, because the verdict gate reads the server's copy. On the Gitea path a
 /// checkout-hash mismatch prompts for confirmation in the REPL (default no) and
 /// refuses non-interactively; a missing token or a failed call always refuses.
 /// Unlocks PI reference hosts afterwards.
@@ -86,8 +88,9 @@ impl Command for Approve {
 
         // Record + upload before approving; abort on failure.
         if let Some(reviewer) = args.get_one::<String>("reviewer") {
-            record_reviewer(session, reviewer).await?;
+            record_reviewer(session, reviewer, ReviewAction::Approve).await?;
         }
+        require_committed_report(session, &rrid, "approve")?;
 
         let groups: Vec<String> = args
             .get_many::<String>("group")
@@ -232,46 +235,6 @@ async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
             "Gitea call failed: {e}; cannot verify the PR hash, not approving"
         ))),
     }
-}
-
-/// Records the reviewer on the report document and uploads it with the
-/// artifacts to teregen. `Err` aborts the approval rather than swallowing the
-/// record/upload failure.
-async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(CommandError::Other(
-            "reviewer must be a non-empty string; not approving".to_owned(),
-        ));
-    }
-    require_document(session)?;
-    let client = teregen_v2_writer(session)?;
-    record_reviewer_document(session, &client, name).await
-}
-
-/// The document-path half of [`record_reviewer`]: set `people.reviewer.name` on
-/// the document and upload it with the artifacts, as `commit` does. The
-/// in-memory reviewer is set only once the upload succeeded.
-async fn record_reviewer_document(
-    session: &mut Session,
-    client: &TeregenV2,
-    name: &str,
-) -> Result<(), CommandError> {
-    record_onto_document(session, client, &["people.reviewer"], |doc| {
-        doc.people.reviewer.name = Req(Some(name.to_owned()));
-    })
-    .await
-    .map_err(|e| match e {
-        RecordError::Upload(e) => CommandError::Other(format!(
-            "failed to record reviewer on teregen, not approving: {e}"
-        )),
-        RecordError::ArtifactsFailed(n) => CommandError::Other(format!(
-            "{n} artifact upload(s) failed, not approving; the reviewer is already stored on \
-             teregen, re-run approve to retry the artifacts"
-        )),
-    })?;
-    session.metadata_mut().base_mut().reviewer = name.to_owned();
-    Ok(())
 }
 
 #[cfg(test)]
@@ -782,7 +745,10 @@ mod tests {
         use wiremock::matchers::{method, path as wpath};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        use mtui_types::report_document::Req;
+
         use super::*;
+        use crate::commands::commit::record_reviewer_document;
         use crate::commands::testkit::teregen::{
             document_put_body, minimal_document, mount_auth_success, set_bare_report_wd,
             store_path, teregen_v2_client,
@@ -835,7 +801,7 @@ mod tests {
             let (mut session, tmp) = session_with_artifact();
             let client = teregen_v2_client(&server, store_file);
 
-            record_reviewer_document(&mut session, &client, "alice")
+            record_reviewer_document(&mut session, &client, "alice", ReviewAction::Approve)
                 .await
                 .unwrap();
 
@@ -862,9 +828,10 @@ mod tests {
             let before = session.metadata().base().document.clone();
             let client = teregen_v2_client(&server, store_file);
 
-            let err = record_reviewer_document(&mut session, &client, "alice")
-                .await
-                .unwrap_err();
+            let err =
+                record_reviewer_document(&mut session, &client, "alice", ReviewAction::Approve)
+                    .await
+                    .unwrap_err();
 
             assert!(
                 matches!(&err, CommandError::Other(m) if m.contains("not approving")),
@@ -894,9 +861,10 @@ mod tests {
             let (mut session, _tmp) = session_with_artifact();
             let client = teregen_v2_client(&server, store_file);
 
-            let err = record_reviewer_document(&mut session, &client, "alice")
-                .await
-                .unwrap_err();
+            let err =
+                record_reviewer_document(&mut session, &client, "alice", ReviewAction::Approve)
+                    .await
+                    .unwrap_err();
 
             assert!(
                 matches!(&err, CommandError::Other(m)

@@ -59,6 +59,14 @@ fn skips_maintenance_testreport(rrid: &RequestReviewID) -> bool {
     matches!(rrid.kind, RequestKind::Pi | RequestKind::Slfo)
 }
 
+/// Whether `approve`/`reject` read the verdict from the report document: every
+/// request that has a maintenance testreport. The command layer's pre-flight
+/// shares this predicate so it cannot drift from the gate.
+#[must_use]
+pub fn gates_on_report_document(rrid: &RequestReviewID) -> bool {
+    !skips_maintenance_testreport(rrid)
+}
+
 /// The request id used in OBS paths (`rrid.review_id`).
 fn reqid(rrid: &RequestReviewID) -> String {
     rrid.review_id.to_string()
@@ -410,7 +418,7 @@ pub async fn approve(
             request.reqid
         )));
     }
-    if !skips_maintenance_testreport(rrid) {
+    if gates_on_report_document(rrid) {
         let (verdict, _) = super::preconditions::report_verdict(v2, rrid)
             .await
             .map_err(|cause| {
@@ -420,7 +428,8 @@ pub async fn approve(
             })?;
         if verdict != Some(Verdict::Passed) {
             return Err(ObsError::Op(format!(
-                "report document for {rrid} has verdict {}, not PASSED; refusing to approve",
+                "report document for {rrid} has verdict {}, not PASSED; set it and `commit` the \
+                 report first (refusing to approve)",
                 verdict_label(verdict)
             )));
         }
@@ -484,7 +493,7 @@ pub async fn reject(
         tracing::info!("reject ignores -g/--group (native reject is always by_user)");
     }
     let request = get_request(client, rrid).await?;
-    if !skips_maintenance_testreport(rrid) {
+    if gates_on_report_document(rrid) {
         let (verdict, comment) = super::preconditions::report_verdict(v2, rrid)
             .await
             .map_err(|cause| {
@@ -494,13 +503,15 @@ pub async fn reject(
             })?;
         if verdict != Some(Verdict::Failed) {
             return Err(ObsError::Op(format!(
-                "report document for {rrid} has verdict {}, not FAILED; refusing to reject",
+                "report document for {rrid} has verdict {}, not FAILED; set it and `commit` the \
+                 report first (refusing to reject)",
                 verdict_label(verdict)
             )));
         }
         if comment.is_none_or(|c| c.trim().is_empty()) {
             return Err(ObsError::Op(format!(
-                "report document for {rrid} has no comment; refusing to reject"
+                "report document for {rrid} has no comment; set one and `commit` the report \
+                 first (refusing to reject)"
             )));
         }
         write_reject_reason(client, &request, rrid, reason).await?;

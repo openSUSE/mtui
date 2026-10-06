@@ -177,6 +177,29 @@ pub(crate) fn document_edits_guard(
     }
 }
 
+/// Refuses `verb` (`approve`/`reject`), before any request, while `rrid`'s
+/// document has edits no `commit` has uploaded: the OBS gate reads the server's
+/// copy, so it would act on a verdict nobody else can see.
+///
+/// A report that cannot be read refuses too, as in [`document_edits_guard`].
+pub(crate) fn uncommitted_report_guard(
+    session: &Session,
+    rrid: &str,
+    verb: &str,
+) -> Result<(), CommandError> {
+    match session.document_dirty(rrid) {
+        Some(false) => Ok(()),
+        Some(true) => Err(CommandError::Other(format!(
+            "{rrid} has document edits not yet committed, and {verb} reads the server's copy; \
+             run `commit` first, or pass --reviewer NAME (who reviewed this report) to record \
+             them and upload"
+        ))),
+        None => Err(CommandError::Other(format!(
+            "cannot check {rrid} for uncommitted document edits; retry"
+        ))),
+    }
+}
+
 /// Loaded template RRIDs starting with `text`, for the caller to merge with its
 /// flag candidates so `-T/--template` completes.
 #[must_use]
@@ -793,6 +816,41 @@ mod tests {
         let _held = handle.lock().await;
 
         let err = document_edits_guard(&session, "SUSE:Maintenance:2:2", false).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("retry")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn uncommitted_report_guard_names_the_commit_and_the_reviewer_path() {
+        use crate::commands::testkit::session_with_hosts;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(uncommitted_report_guard(&session, "SUSE:Maintenance:1:1", "reject").is_ok());
+
+        session.metadata_mut().base_mut().document_dirty = true;
+        let err = uncommitted_report_guard(&session, "SUSE:Maintenance:1:1", "reject").unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("reject reads the server's copy")
+                    && m.contains("run `commit`")
+                    && m.contains("--reviewer NAME")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn uncommitted_report_guard_refuses_a_report_it_cannot_read() {
+        use crate::commands::testkit::{fake_report, session_with_hosts};
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        let handle = session.templates.handle("SUSE:Maintenance:2:2").unwrap();
+        let _held = handle.lock().await;
+
+        let err =
+            uncommitted_report_guard(&session, "SUSE:Maintenance:2:2", "approve").unwrap_err();
         assert!(
             matches!(&err, CommandError::Other(m) if m.contains("retry")),
             "{err:?}"
