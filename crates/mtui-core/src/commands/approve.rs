@@ -110,7 +110,7 @@ impl Command for Approve {
             let osc = osc_client(session, &rrid)?;
             osc.approve(&groups)
                 .await
-                .map_err(|e| CommandError::Other(format!("osc approve failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("obs approve failed: {e}")))?;
         }
 
         session.display.println(&format!("approved {rrid}"));
@@ -495,7 +495,7 @@ mod tests {
         // SAFETY: still inside that critical section.
         unsafe { std::env::remove_var("OSC_CONFIG") };
         if let Err(e) = res {
-            assert!(matches!(e, CommandError::Other(m) if m.contains("osc approve failed")));
+            assert!(matches!(e, CommandError::Other(m) if m.contains("obs approve failed")));
         }
     }
 

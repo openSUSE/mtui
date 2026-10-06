@@ -277,6 +277,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   huge rows; `openqa_overview` per-section caps sum to ~600 rows total.
   **MCP schema note:** additive only — `updates` gains `offset`, `list_refhosts`
   gains `limit`/`offset`; no renames/removals.
+- A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
+  `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
+  `gitea <verb> failed` form; the calls never ran `osc`.
 
 ### Deprecated
 
