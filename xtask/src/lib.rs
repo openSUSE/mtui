@@ -244,7 +244,7 @@ pub struct PackageInputs<'a> {
     /// Directory holding the freshly built `mtui` / `mtui-mcp` binaries
     /// (`target/<triple>/release`).
     pub bin_dir: &'a Path,
-    /// The checked-in `dist/` tree (completions + man + vim-plugin).
+    /// The checked-in `dist/` tree (completions + man).
     pub dist_dir: &'a Path,
     /// Repo root, source of `LICENSE` / `README.md`.
     pub root_dir: &'a Path,
@@ -315,7 +315,6 @@ impl PackageArgs {
 ///   mtui  mtui-mcp
 ///   completions/{bash,zsh,fish}/…
 ///   man/*.1
-///   vim-plugin/{ftdetect,syntax}/testreport.vim
 ///   LICENSE  README.md
 /// ```
 ///
@@ -346,11 +345,6 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     )
     .context("copying completions/")?;
     copy_dir_all(&inputs.dist_dir.join("man"), &staging.join("man")).context("copying man/")?;
-    copy_dir_all(
-        &inputs.dist_dir.join("vim-plugin"),
-        &staging.join("vim-plugin"),
-    )
-    .context("copying vim-plugin/")?;
 
     for f in ROOT_FILES {
         let from = inputs.root_dir.join(f);

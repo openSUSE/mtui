@@ -16,9 +16,6 @@
 #
 
 
-# System Vim runtime addon dir for the vim-plugin subpackage (matches upstream mtui).
-%global vimplugin_dir %{_datadir}/vim/site
-
 Name:           mtui
 # Version is filled in by the set_version source service from the git tag.
 Version:        0
@@ -33,6 +30,8 @@ BuildRequires:  cargo
 BuildRequires:  cargo-packaging >= 1.2.0
 BuildRequires:  zstd
 ExclusiveArch:  %{rust_tier1_arches}
+# The vim-plugin subpackage highlighted the retired text report format.
+Obsoletes:      %{name}-vim-plugin < %{version}-%{release}
 # Recommends, not Requires: this package shipped `mtui-mcp` itself until the
 # split, so a plain `zypper in mtui` has to keep providing it — and Requires
 # would defeat the split. Known gap: an upgrade run with --no-recommends (or
@@ -57,15 +56,6 @@ The `mtui-mcp` Model Context Protocol server exposes mtui's maintenance-update
 tooling to MCP clients. It reads the same configuration as the REPL and runs
 without it; the REPL-only commands — `shell` and `edit`, which spawn on the
 controlling TTY — stay unexposed.
-
-%package vim-plugin
-Summary:        VIM plugin with test report syntax
-Supplements:    (mtui and vim)
-BuildArch:      noarch
-
-%description vim-plugin
-This plugin provides syntax highlighting and filetype detection for editing QAM
-test reports (the mtui testreport/export text format).
 
 %prep
 # -a1 extracts vendor.tar.zst, placing .cargo/config + Cargo.lock + vendor/.
@@ -99,12 +89,6 @@ install -Dm644 dist/man/mtui-mcp.1 %{buildroot}%{_mandir}/man1/mtui-mcp.1
 # installed here, so rpm drops a copy in each subpackage's own docdir — both
 # binaries read this same file.
 
-# Vim plugin: filetype detection + testreport syntax (vim-plugin subpackage).
-install -d %{buildroot}%{vimplugin_dir}/ftdetect
-install -d %{buildroot}%{vimplugin_dir}/syntax
-install -pm 0644 dist/vim-plugin/ftdetect/testreport.vim %{buildroot}%{vimplugin_dir}/ftdetect
-install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin_dir}/syntax
-
 %check
 # The full suite needs the SSH integration fixture and network mocks; skip it in
 # the offline build worker and rely on the CI gate for behavioral coverage.
@@ -128,13 +112,5 @@ install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin
 %{_datadir}/zsh/site-functions/_mtui-mcp
 %{_datadir}/fish/vendor_completions.d/mtui-mcp.fish
 %{_mandir}/man1/mtui-mcp.1%{?ext_man}
-
-%files vim-plugin
-%dir %{_datadir}/vim
-%dir %{vimplugin_dir}
-%dir %{vimplugin_dir}/ftdetect
-%dir %{vimplugin_dir}/syntax
-%{vimplugin_dir}/ftdetect/testreport.vim
-%{vimplugin_dir}/syntax/testreport.vim
 
 %changelog
