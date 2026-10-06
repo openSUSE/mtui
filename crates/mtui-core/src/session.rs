@@ -633,7 +633,7 @@ impl Session {
     /// Whether `rrid` is the active template *and* this session currently holds
     /// its per-call handle.
     ///
-    /// Lets guard-unaware callers (the hand-written MCP testreport tools) choose
+    /// Lets guard-unaware callers (the hand-written MCP `report_*` tools) choose
     /// between [`metadata`](Self::metadata) and locking the entry handle.
     #[must_use]
     pub fn active_report_is_guarded(&self, rrid: &str) -> bool {

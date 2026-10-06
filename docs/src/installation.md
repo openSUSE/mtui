@@ -108,8 +108,7 @@ On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
 completions, and man pages into the standard system paths. It builds two packages:
 
 - **`mtui`** — the REPL, its completions and man page. Recommends `mtui-mcp`, so
-  a plain `zypper in mtui` still gets both binaries as it did before they were
-  split.
+  a plain `zypper in mtui` still gets both binaries.
 - **`mtui-mcp`** — the MCP server, its completions and man page. Installable on
   its own; it reads the same config.
 
