@@ -280,6 +280,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
   `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
   `gitea <verb> failed` form; the calls never ran `osc`.
+- `approve`/`reject` on Maintenance requests check the report document's
+  `verdict` (and `comment` for `reject`) on TeReGen v2 instead of the
+  `SUMMARY:`/`comment:` lines of the qam.suse.de text log, which mtui no longer
+  writes. The document is fetched fresh on every call; a missing, stale or
+  unreadable document refuses and names the cause. `assign` still needs the
+  text log to exist.
 
 ### Deprecated
 

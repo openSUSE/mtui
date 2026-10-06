@@ -1,15 +1,18 @@
 //! Integration tests for the native QAM operations (`mtui_datasources::obs::qam`).
 //!
 //! Two `wiremock` servers: the OBS API base behind the `ObsClient` calls, and
-//! the `qam.suse.de` reports host `preconditions` fetches with no OBS auth.
+//! the report host the preconditions read with no OBS auth (the text log for
+//! `assign`, the TeReGen v2 document for `approve`/`reject`).
 //! Pinned query params and bodies are asserted from `received_requests()`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use mtui_datasources::http::{HttpClient, VerifyPolicy};
+use mtui_datasources::obs::ObsError;
 use mtui_datasources::obs::client::{NoAuth, ObsClient};
 use mtui_datasources::obs::qam;
+use mtui_datasources::teregen::TeregenV2;
 use mtui_types::RequestReviewID;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1091,31 +1094,93 @@ async fn unassign_refused_without_assignment() {
 }
 
 // --------------------------------------------------------------------------- //
-// approve                                                                      //
+// approve / reject read the verdict from the report document                  //
 // --------------------------------------------------------------------------- //
-#[tokio::test]
-async fn approve_user_path_prefixed() {
-    let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+
+const DOCUMENT: &str =
+    include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json");
+const DOCUMENT_PATH: &str = "/reports/SUSE:Maintenance:1:56789";
+
+/// The maintenance fixture with `verdict` and the top-level `comment` set.
+fn document(verdict: Option<&str>, comment: Option<&str>) -> String {
+    let mut doc: serde_json::Value = serde_json::from_str(DOCUMENT).unwrap();
+    doc["verdict"] = verdict.into();
+    doc["comment"] = comment.into();
+    doc.to_string()
+}
+
+fn v2_for(server: &MockServer) -> TeregenV2 {
+    TeregenV2::with_client(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
+        &server.uri(),
+    )
+}
+
+async fn mount_document(server: &MockServer, body: String) {
+    Mock::given(method("GET"))
+        .and(path(DOCUMENT_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(server)
+        .await;
+}
+
+async fn mount_document_status(server: &MockServer, status: u16) {
+    Mock::given(method("GET"))
+        .and(path(DOCUMENT_PATH))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(server)
+        .await;
+}
+
+/// The user is assigned (their own accepted group review), so the document
+/// verdict is the only thing left to refuse on.
+async fn mount_assigned_request(api: &MockServer) {
     let reviews = group_review(
         "qam-sle",
         "accepted",
         &[(USER, "2020-01-01T00:00:00", ACCEPT)],
     );
-    mount_get_request(&api, request_xml("review", &reviews)).await;
-    mount_log(&reports, "SUMMARY: PASSED\n").await;
-    mount_post_request(&api, "56789").await;
+    mount_get_request(api, request_xml("review", &reviews)).await;
+}
 
+async fn approve_with(api: &MockServer, teregen: &MockServer) -> Result<(), ObsError> {
     qam::approve(
-        &client_for(&api),
-        &reports.uri(),
+        &client_for(api),
+        &v2_for(teregen),
         "https://qam.suse.de/reports",
         &rrid(),
         USER,
         &[],
     )
     .await
-    .unwrap();
+}
+
+async fn reject_with(api: &MockServer, teregen: &MockServer) -> Result<(), ObsError> {
+    qam::reject(
+        &client_for(api),
+        &v2_for(teregen),
+        "http://unused",
+        &rrid(),
+        USER,
+        &[],
+        "not_fixed",
+        "some message",
+    )
+    .await
+}
+
+// --------------------------------------------------------------------------- //
+// approve                                                                      //
+// --------------------------------------------------------------------------- //
+#[tokio::test]
+async fn approve_user_path_prefixed() {
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    mount_assigned_request(&api).await;
+    mount_document(&teregen, document(Some("PASSED"), None)).await;
+    mount_post_request(&api, "56789").await;
+
+    approve_with(&api, &teregen).await.unwrap();
 
     let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
     assert_eq!(query_val(&q, "newstate"), Some("accepted"));
@@ -1124,30 +1189,39 @@ async fn approve_user_path_prefixed() {
     assert!(body.starts_with("[oscqam] "), "{body}");
 }
 
+/// The verdict is read fresh from the server on every call: one unconditional
+/// document GET, never a conditional one against a cached copy.
+#[tokio::test]
+async fn approve_fetches_the_document_fresh_and_only_the_document() {
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    mount_assigned_request(&api).await;
+    mount_document(&teregen, document(Some("PASSED"), None)).await;
+    mount_post_request(&api, "56789").await;
+
+    approve_with(&api, &teregen).await.unwrap();
+
+    let calls = teregen.received_requests().await.unwrap();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].url.path(), DOCUMENT_PATH);
+    assert!(calls[0].headers.get("if-none-match").is_none());
+}
+
 /// A reviewer assigned after a prior tester approved must be able to approve:
 /// the group review's "reopened" is their assignment record.
 #[tokio::test]
 async fn approve_reassigned_reviewer_after_prior_approval() {
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+    let teregen = MockServer::start().await;
     mount_get_request(
         &api,
         request_xml("review", &reassigned_reviews("prior-tester")),
     )
     .await;
-    mount_log(&reports, "SUMMARY: PASSED\n").await;
+    mount_document(&teregen, document(Some("PASSED"), None)).await;
     mount_post_request(&api, "56789").await;
 
-    qam::approve(
-        &client_for(&api),
-        &reports.uri(),
-        "https://qam.suse.de/reports",
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap();
+    approve_with(&api, &teregen).await.unwrap();
 
     let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
     assert_eq!(query_val(&q, "cmd"), Some("changereviewstate"));
@@ -1158,9 +1232,10 @@ async fn approve_reassigned_reviewer_after_prior_approval() {
 #[tokio::test]
 async fn approve_group_refused() {
     let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
     let err = qam::approve(
         &client_for(&api),
-        "http://unused",
+        &v2_for(&teregen),
         "http://unused",
         &rrid(),
         USER,
@@ -1177,68 +1252,134 @@ async fn approve_group_refused() {
 #[tokio::test]
 async fn approve_refused_when_not_assigned() {
     let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
     mount_get_request(&api, request_xml("review", "")).await;
-    let err = qam::approve(
-        &client_for(&api),
-        "http://unused",
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap_err();
+    let err = approve_with(&api, &teregen).await.unwrap_err();
     assert!(err.to_string().contains("not assigned"), "{err}");
 }
 
 #[tokio::test]
-async fn approve_refused_when_not_passed() {
-    let api = MockServer::start().await;
-    let reports = MockServer::start().await;
-    let reviews = group_review(
-        "qam-sle",
-        "accepted",
-        &[(USER, "2020-01-01T00:00:00", ACCEPT)],
-    );
-    mount_get_request(&api, request_xml("review", &reviews)).await;
-    mount_log(&reports, "SUMMARY: FAILED\n").await;
+async fn approve_refused_unless_the_verdict_is_passed() {
+    for (verdict, label) in [(None, "null"), (Some("FAILED"), "FAILED")] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        mount_assigned_request(&api).await;
+        mount_document(&teregen, document(verdict, None)).await;
+        mount_post_request(&api, "56789").await;
 
-    let err = qam::approve(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("not PASSED"), "{err}");
+        let err = approve_with(&api, &teregen).await.unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("has verdict {label}, not PASSED")),
+            "{msg}"
+        );
+        assert_eq!(post_count(&api).await, 0, "{label}: nothing is posted");
+    }
+}
+
+/// The verdict is the typed enum, not text: a qualified value is not `PASSED`
+/// (the server schema would refuse it too), and nothing is posted.
+#[tokio::test]
+async fn approve_refused_when_the_verdict_is_not_a_known_value() {
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    mount_assigned_request(&api).await;
+    mount_document(&teregen, document(Some("PASSED with notes"), None)).await;
+    mount_post_request(&api, "56789").await;
+
+    let err = approve_with(&api, &teregen).await.unwrap_err();
+
+    assert!(err.to_string().contains("refusing to approve"), "{err}");
+    assert_eq!(post_count(&api).await, 0);
+}
+
+/// Every way the document cannot be read refuses, names the cause, and posts
+/// nothing.
+#[tokio::test]
+async fn approve_refused_when_the_document_cannot_be_read() {
+    for (status, cause) in [
+        (404, "run `regenerate`"),
+        (409, "stale"),
+        (503, "generating"),
+        (500, "500"),
+    ] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        mount_assigned_request(&api).await;
+        mount_document_status(&teregen, status).await;
+        mount_post_request(&api, "56789").await;
+
+        let err = approve_with(&api, &teregen).await.unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot read the report document") && msg.contains(cause),
+            "{status}: {msg}"
+        );
+        assert_eq!(post_count(&api).await, 0, "{status}: nothing is posted");
+    }
 }
 
 #[tokio::test]
-async fn approve_refused_when_summary_has_trailing_qualifier() {
+async fn approve_refused_when_the_document_host_is_unreachable() {
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
-    let reviews = group_review(
-        "qam-sle",
-        "accepted",
-        &[(USER, "2020-01-01T00:00:00", ACCEPT)],
+    mount_assigned_request(&api).await;
+    mount_post_request(&api, "56789").await;
+    let v2 = TeregenV2::with_client(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
+        "http://127.0.0.1:1",
     );
-    mount_get_request(&api, request_xml("review", &reviews)).await;
-    mount_log(&reports, "SUMMARY: PASSED with notes\n").await;
 
-    let err = qam::approve(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("not PASSED"), "{err}");
+    let err = qam::approve(&client_for(&api), &v2, "http://unused", &rrid(), USER, &[])
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("cannot read the report document"),
+        "{err}"
+    );
+    assert_eq!(post_count(&api).await, 0);
+}
+
+/// PI and SLFO carry no maintenance document gate: approve proceeds without a
+/// single call to the report host.
+#[tokio::test]
+async fn approve_skips_the_document_for_pi_and_slfo() {
+    for target in [pi_rrid(), slfo_rrid()] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        let reviews = group_review(
+            "qam-sle",
+            "accepted",
+            &[(USER, "2020-01-01T00:00:00", ACCEPT)],
+        );
+        Mock::given(method("GET"))
+            .and(path("/request/70000"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(request_xml("review", &reviews)),
+            )
+            .mount(&api)
+            .await;
+        mount_post_request(&api, "70000").await;
+
+        qam::approve(
+            &client_for(&api),
+            &v2_for(&teregen),
+            "http://unused",
+            &target,
+            USER,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            teregen.received_requests().await.unwrap().is_empty(),
+            "{target}: the report host must not be contacted"
+        );
+        assert_eq!(post_count(&api).await, 1, "{target}");
+    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1247,9 +1388,9 @@ async fn approve_refused_when_summary_has_trailing_qualifier() {
 #[tokio::test]
 async fn reject_writes_reason_and_declines() {
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+    let teregen = MockServer::start().await;
     mount_get_request(&api, request_xml("review", "")).await;
-    mount_log(&reports, "SUMMARY: FAILED\ncomment: broken\n").await;
+    mount_document(&teregen, document(Some("FAILED"), Some("broken"))).await;
     let attr_path = "/source/SUSE:Maintenance:1/_attribute/MAINT:RejectReason";
     Mock::given(method("GET"))
         .and(path(attr_path))
@@ -1263,18 +1404,7 @@ async fn reject_writes_reason_and_declines() {
         .await;
     mount_post_request(&api, "56789").await;
 
-    qam::reject(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-        "not_fixed",
-        "some message",
-    )
-    .await
-    .unwrap();
+    reject_with(&api, &teregen).await.unwrap();
 
     let attr_body = last_post_body(&api, attr_path).await;
     assert!(attr_body.contains("56789:not_fixed"), "{attr_body}");
@@ -1282,16 +1412,16 @@ async fn reject_writes_reason_and_declines() {
     assert_eq!(query_val(&q, "newstate"), Some("declined"));
     let decline_body = last_post_body(&api, "/request/56789").await;
     assert!(decline_body.starts_with("[oscqam] "), "{decline_body}");
-    // Parity: the -M message is not in the decline comment.
+    // The reviewer's -M message is not part of the decline comment.
     assert!(!decline_body.contains("some message"), "{decline_body}");
 }
 
 #[tokio::test]
 async fn reject_appends_to_existing_reject_reason() {
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+    let teregen = MockServer::start().await;
     mount_get_request(&api, request_xml("review", "")).await;
-    mount_log(&reports, "SUMMARY: FAILED\ncomment: broken\n").await;
+    mount_document(&teregen, document(Some("FAILED"), Some("broken"))).await;
     let attr_path = "/source/SUSE:Maintenance:1/_attribute/MAINT:RejectReason";
     Mock::given(method("GET"))
         .and(path(attr_path))
@@ -1308,18 +1438,7 @@ async fn reject_appends_to_existing_reject_reason() {
         .await;
     mount_post_request(&api, "56789").await;
 
-    qam::reject(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-        "not_fixed",
-        "msg",
-    )
-    .await
-    .unwrap();
+    reject_with(&api, &teregen).await.unwrap();
 
     let posted = last_post_body(&api, attr_path).await;
     assert!(posted.contains("100:regression"), "{posted}"); // pre-existing preserved
@@ -1327,53 +1446,65 @@ async fn reject_appends_to_existing_reject_reason() {
 }
 
 #[tokio::test]
-async fn reject_refused_when_not_failed() {
-    let api = MockServer::start().await;
-    let reports = MockServer::start().await;
-    mount_get_request(&api, request_xml("review", "")).await;
-    mount_log(&reports, "SUMMARY: PASSED\n").await;
+async fn reject_refused_unless_the_verdict_is_failed() {
+    for (verdict, label) in [(None, "null"), (Some("PASSED"), "PASSED")] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        mount_get_request(&api, request_xml("review", "")).await;
+        mount_document(&teregen, document(verdict, Some("a comment"))).await;
+        mount_post_request(&api, "56789").await;
 
-    let err = qam::reject(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-        "not_fixed",
-        "",
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("not FAILED"), "{err}");
+        let err = reject_with(&api, &teregen).await.unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("has verdict {label}, not FAILED")),
+            "{msg}"
+        );
+        assert_eq!(post_count(&api).await, 0, "{label}: nothing is posted");
+    }
 }
 
+/// A `FAILED` verdict needs a reason a reader can act on: a missing, empty or
+/// whitespace-only `comment` refuses before any attribute or decline POST.
 #[tokio::test]
 async fn reject_refused_without_comment() {
-    let api = MockServer::start().await;
-    let reports = MockServer::start().await;
-    mount_get_request(&api, request_xml("review", "")).await;
-    mount_log(&reports, "SUMMARY: FAILED\n").await;
+    for comment in [None, Some(""), Some("  \n")] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        mount_get_request(&api, request_xml("review", "")).await;
+        mount_document(&teregen, document(Some("FAILED"), comment)).await;
+        mount_post_request(&api, "56789").await;
 
-    let err = qam::reject(
-        &client_for(&api),
-        &reports.uri(),
-        "http://unused",
-        &rrid(),
-        USER,
-        &[],
-        "not_fixed",
-        "",
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("no comment"), "{err}");
+        let err = reject_with(&api, &teregen).await.unwrap_err();
+
+        assert!(err.to_string().contains("no comment"), "{comment:?}: {err}");
+        assert_eq!(post_count(&api).await, 0, "{comment:?}: nothing is posted");
+    }
 }
 
 #[tokio::test]
-async fn reject_pi_skips_attribute_and_summary() {
+async fn reject_refused_when_the_document_cannot_be_read() {
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    mount_get_request(&api, request_xml("review", "")).await;
+    mount_document_status(&teregen, 409).await;
+    mount_post_request(&api, "56789").await;
+
+    let err = reject_with(&api, &teregen).await.unwrap_err();
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cannot read the report document") && msg.contains("stale"),
+        "{msg}"
+    );
+    assert_eq!(post_count(&api).await, 0);
+}
+
+#[tokio::test]
+async fn reject_pi_skips_attribute_and_document() {
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/request/70000"))
         .respond_with(ResponseTemplate::new(200).set_body_string(request_xml("review", "")))
@@ -1383,7 +1514,7 @@ async fn reject_pi_skips_attribute_and_summary() {
 
     qam::reject(
         &client_for(&api),
-        &reports.uri(),
+        &v2_for(&teregen),
         "http://unused",
         &pi_rrid(),
         USER,
@@ -1394,16 +1525,16 @@ async fn reject_pi_skips_attribute_and_summary() {
     .await
     .unwrap();
 
-    // Only request GET + decline POST; no testreport, no attribute calls.
+    // Only request GET + decline POST; no document, no attribute calls.
     assert_eq!(api.received_requests().await.unwrap().len(), 2);
-    assert!(reports.received_requests().await.unwrap().is_empty());
+    assert!(teregen.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn reject_ignores_group() {
     // With -g given on a PI request, reject still proceeds by_user (2 calls).
     let api = MockServer::start().await;
-    let reports = MockServer::start().await;
+    let teregen = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/request/70000"))
         .respond_with(ResponseTemplate::new(200).set_body_string(request_xml("review", "")))
@@ -1413,7 +1544,7 @@ async fn reject_ignores_group() {
 
     qam::reject(
         &client_for(&api),
-        &reports.uri(),
+        &v2_for(&teregen),
         "http://unused",
         &pi_rrid(),
         USER,

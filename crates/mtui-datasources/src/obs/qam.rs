@@ -5,8 +5,9 @@
 //! into the `false` its callers expect. The workflow is deliberately
 //! conservative: single-group auto-inference, the ">=1 own assignment"
 //! unassign guard, the refused group-approve, `by_user` reject with the
-//! `MAINT:RejectReason` read-modify-write, the `qam.suse.de` preconditions
-//! (skipped for PI/SLFO), and `assign`'s refusal of a group review that is
+//! `MAINT:RejectReason` read-modify-write, the preconditions (`assign`: the
+//! `qam.suse.de` text log exists; `approve`/`reject`: the report document's
+//! verdict on TeReGen v2 — both skipped for PI/SLFO), and `assign`'s refusal of a group review that is
 //! already approved or held, by someone else or by the caller (#599) — OBS's
 //! `assignreview` checks only that the request is open. The `[oscqam] ` prefix
 //! goes on approve/reject comments only.
@@ -16,6 +17,7 @@
 //! binds them from a resolved `Config`. The TLS posture travels with the
 //! injected client.
 
+use mtui_types::report_document::Verdict;
 use mtui_types::{RequestKind, RequestReviewID};
 
 use crate::obs::client::ObsClient;
@@ -27,7 +29,17 @@ use crate::obs::models::{
     parse_group_directory, parse_reject_reason_values, parse_request, parse_request_collection,
 };
 
+use crate::teregen::document::TeregenV2;
+
 const PREFIX: &str = "[oscqam] ";
+
+fn verdict_label(verdict: Option<Verdict>) -> &'static str {
+    match verdict {
+        Some(Verdict::Passed) => "PASSED",
+        Some(Verdict::Failed) => "FAILED",
+        None => "null",
+    }
+}
 
 /// Whether the request carries no maintenance testreport or `MAINT` attribute,
 /// so the `qam.suse.de` preconditions do not apply. True for **both** PI and
@@ -373,11 +385,11 @@ pub async fn unassign(
 /// # Errors
 ///
 /// Returns [`ObsError::Op`] if groups are given (group-approve refused), the
-/// user is not assigned, or the testreport is not `PASSED` (non-SLFO); or a
-/// transport/API error.
+/// user is not assigned, or the report document's verdict is not `PASSED`
+/// (non-PI/SLFO); or a transport/API error.
 pub async fn approve(
     client: &ObsClient,
-    reports_url: &str,
+    v2: &TeregenV2,
     fancy_reports_url: &str,
     rrid: &RequestReviewID,
     user: &str,
@@ -399,11 +411,17 @@ pub async fn approve(
         )));
     }
     if !skips_maintenance_testreport(rrid) {
-        let log =
-            super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid).await;
-        if log.is_none_or(|log| super::preconditions::summary(&log) != "PASSED") {
+        let (verdict, _) = super::preconditions::report_verdict(v2, rrid)
+            .await
+            .map_err(|cause| {
+                ObsError::Op(format!(
+                    "cannot read the report document for {rrid} ({cause}); refusing to approve"
+                ))
+            })?;
+        if verdict != Some(Verdict::Passed) {
             return Err(ObsError::Op(format!(
-                "testreport for {rrid} is not PASSED; refusing to approve"
+                "report document for {rrid} has verdict {}, not PASSED; refusing to approve",
+                verdict_label(verdict)
             )));
         }
     }
@@ -447,14 +465,14 @@ async fn write_reject_reason(
 ///
 /// # Errors
 ///
-/// Returns [`ObsError::Op`] if the testreport is not `FAILED` or has no comment
-/// (non-SLFO); or a transport/API error.
+/// Returns [`ObsError::Op`] if the report document's verdict is not `FAILED` or
+/// it has no comment (non-PI/SLFO); or a transport/API error.
 // The explicit-params design (no `Config` coupling) puts `reject` one arg past
 // clippy's default threshold.
 #[allow(clippy::too_many_arguments)]
 pub async fn reject(
     client: &ObsClient,
-    reports_url: &str,
+    v2: &TeregenV2,
     fancy_reports_url: &str,
     rrid: &RequestReviewID,
     user: &str,
@@ -467,19 +485,22 @@ pub async fn reject(
     }
     let request = get_request(client, rrid).await?;
     if !skips_maintenance_testreport(rrid) {
-        let log =
-            super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid).await;
-        let log = match log {
-            Some(log) if super::preconditions::summary(&log) == "FAILED" => log,
-            _ => {
-                return Err(ObsError::Op(format!(
-                    "testreport for {rrid} is not FAILED; refusing to reject"
-                )));
-            }
-        };
-        if super::preconditions::comment(&log).is_empty() {
+        let (verdict, comment) = super::preconditions::report_verdict(v2, rrid)
+            .await
+            .map_err(|cause| {
+                ObsError::Op(format!(
+                    "cannot read the report document for {rrid} ({cause}); refusing to reject"
+                ))
+            })?;
+        if verdict != Some(Verdict::Failed) {
             return Err(ObsError::Op(format!(
-                "testreport for {rrid} has no comment; refusing to reject"
+                "report document for {rrid} has verdict {}, not FAILED; refusing to reject",
+                verdict_label(verdict)
+            )));
+        }
+        if comment.is_none_or(|c| c.trim().is_empty()) {
+            return Err(ObsError::Op(format!(
+                "report document for {rrid} has no comment; refusing to reject"
             )));
         }
         write_reject_reason(client, &request, rrid, reason).await?;
