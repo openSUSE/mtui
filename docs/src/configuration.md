@@ -91,12 +91,6 @@ Defaults below are the built-in values.
 | `testreports` | URL | `https://qam.suse.de/testreports` | Testreports base URL. |
 | `fancy_reports` | URL | `https://qam.suse.de/reports` | "Fancy" reports base URL. |
 
-### `[svn]`
-
-| Key | Type | Default | Meaning |
-|-----|------|---------|---------|
-| `path` | string | `svn+ssh://svn@qam.suse.de/testreports` | SVN base path for testreport checkout. |
-
 ### `[target]`
 
 | Key | Type | Default | Meaning |
