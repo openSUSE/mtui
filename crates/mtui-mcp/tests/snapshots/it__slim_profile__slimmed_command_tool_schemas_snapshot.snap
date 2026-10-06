@@ -1082,6 +1082,10 @@ expression: pretty
           ],
           "type": "string"
         },
+        "reviewer": {
+          "description": "Name of the reviewer who reviewed this report; recorded on the report document and uploaded, then reject",
+          "type": "string"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"

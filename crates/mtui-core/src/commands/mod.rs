@@ -407,6 +407,28 @@ pub(crate) mod testkit {
         }
     }
 
+    /// Points `$OSC_CONFIG` at a missing file for its lifetime, so building the
+    /// OBS or teregen client fails offline instead of reading the operator's
+    /// real oscrc. Only valid inside `#[serial(osc_config_env)]`.
+    pub(crate) struct NoOscrc;
+
+    impl NoOscrc {
+        #[allow(unsafe_code)]
+        pub(crate) fn set() -> Self {
+            // SAFETY: callers hold `#[serial(osc_config_env)]`.
+            unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+            Self
+        }
+    }
+
+    impl Drop for NoOscrc {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            // SAFETY: still inside the caller's `#[serial(osc_config_env)]`.
+            unsafe { std::env::remove_var("OSC_CONFIG") };
+        }
+    }
+
     /// A minimal loaded report with a settable RRID and host group.
     pub struct FakeReport {
         base: TestReportBase,

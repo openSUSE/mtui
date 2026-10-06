@@ -169,6 +169,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `request_review` still posts, and warns that recording the marker failed.
 - Declining a stale-hash load keeps `<template_dir>/<RRID>/`; the "Delete
   checked out template" prompt is gone.
+- `approve` and `reject` on a Maintenance request refuse, before contacting OBS
+  or TeReGen, when the report has edits that no `commit` has uploaded, and name
+  `commit` (or `--reviewer`) as the way forward. Their verdict refusals now name
+  `commit` too. `reject` gains `--reviewer NAME` (long form only; `-r` is
+  `--reason`): it records the reviewer on the report document and uploads it,
+  as `approve -r` does, then rejects. **MCP schema note:** additive only — an
+  optional `reviewer` on `reject`.
 - Re-running `export` on a loaded report document keeps the tester's
   `testing.install` and `testing.regression` verdicts and comments instead of
   replacing them. The install checks are still rewritten from the connected
