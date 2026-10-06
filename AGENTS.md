@@ -3,10 +3,10 @@
 ## Mission
 `mtui` (Maintenance Test Update Installer) is the SUSE QE tool for validating
 maintenance updates: load a request by RRID, install/test it on reference hosts
-over SSH, then approve/reject. It drives OBS/IBS and Gitea review workflows,
-`svn`, and openQA/QEM under the hood. It is a memory-safe, async-native Rust
-workspace that ships as two single static binaries (`mtui`, `mtui-mcp`), with no
-runtime interpreter.
+over SSH, then approve/reject. It drives OBS/IBS and Gitea review workflows
+and openQA/QEM; reports load from and upload to TeReGen's v2 API. It is a
+memory-safe, async-native Rust workspace that ships as two single static
+binaries (`mtui`, `mtui-mcp`), with no runtime interpreter.
 
 Preserve the **data-format and workflow contracts** that let mtui interoperate
 with the SUSE maintenance ecosystem (see "Contracts" below); break compatibility
@@ -72,7 +72,7 @@ green:
 - `mtui-mcp` — the MCP server, which **synthesises its tools from the command
   registry**. Adding/renaming/removing a command affects MCP tools automatically.
   Exception: a deny-listed command may be re-served under the same name as a
-  hand-written tool (`edit` → `testreport_*`; `get`/`put` → the in-band
+  hand-written tool (`edit` → the `report_*` document tools; `get`/`put` → the in-band
   transfer tools, #434).
 
 ## Workspace layout
@@ -87,7 +87,7 @@ crates/
   mtui-config/       TOML config + XDG paths
   mtui-hosts/        SSH/SFTP (russh), Target/HostsGroup, locks, arbiter   [async]
   mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
-  mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
+  mtui-testreport/   TestReport lifecycle (TeReGen v2 document ingest/upload), update workflow (actions/checks/export)
   mtui-core/         Command trait + registry + Session + engine + dispatch
   mtui-tui/          report-document editor: schema walker, form model, ratatui screen (no I/O)
   mtui-cli/          reedline REPL library
@@ -202,7 +202,7 @@ next actionable task before working on a subsystem.
   REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `switch`)
   are deny-listed, as are `get`/`put`, which are re-served under the same names
   as hand-written in-band transfer tools (#434) — a deny-listed command may be
-  replaced by a richer hand-written tool (`edit` → the `testreport_*` tools is
+  replaced by a richer hand-written tool (`edit` → the `report_*` tools is
   the same pattern). The deny-list ∩ registry is consistency-tested and drift is
   warned about at boot. Local process execution and terminal launching have no
   entry because they have no command: `lrun` and `terms` were removed by design;
@@ -264,8 +264,8 @@ next actionable task before working on a subsystem.
   location is a legacy grouping, not a live query dimension: rows are
   merged/flattened and de-duplicated at load (`version.minor` may be numeric or
   `spN`).
-- **Testreport / export text format**, incl. the `overview_inject` BEGIN/END
-  idempotent block under `regression tests:`.
+- **Report document schema v1** (`report_document::SCHEMA_JSON`), served by
+  TeReGen; drift from the live schema is checked at load.
 - **Remote lock wire format** — one line `timestamp:user:pid[:comment]` (parsed
   with a 3-way split so the comment keeps embedded colons). Two locks share this
   layout: the operation lock `/var/lock/mtui.lock` (PID-based ownership, guards
@@ -306,11 +306,10 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   (`serial_test`), and tests must not assume per-binary isolation (e.g. no
   asserting on heap-address identity — a freed `Arc` address can be reused).
 - **Mock, don't hit the network/hosts:** HTTP via `wiremock`; SSH via a
-  `MockConnection` implementing the `Connection` trait; `svn` via the
-  `SvnRunner` command-runner trait/stub; OBS/IBS and every other HTTP
-  datasource via `wiremock`.
-- **Snapshot text contracts** (`insta`): testreport/export rendering, metadata
-  parsing, MCP schemas, lock-file format, display output. `insta` prefixes each
+  `MockConnection` implementing the `Connection` trait; OBS/IBS and every
+  other HTTP datasource via `wiremock`.
+- **Snapshot text contracts** (`insta`): report document goldens, MCP
+  schemas, lock-file format, display output. `insta` prefixes each
   `.snap` file with the **test-binary** name, which is now `it` for every crate —
   so snapshot files are `it__<module>__<name>.snap`. A new snapshot test's file
   lands with that prefix automatically; don't hand-name it otherwise.
@@ -391,11 +390,10 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
 5. Update the command reference docs (prefer generating from the registry).
 
 ## Runtime dependencies (subprocess, not crates)
-`svn` (testreport checkout). Declare as a packaging recommends; keep it optional
-and degrade gracefully when absent. The QAM review workflow (`assign`/`unassign`/
-`approve`/`reject`/`comment`) no longer shells out to `osc`/`osc-plugin-qam` — it
-talks to the OBS/IBS API natively (see the native OBS backend and `[obs]`
-config), reading credentials from `oscrc`.
+None. The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`)
+talks to the OBS/IBS API natively, never through an `osc`/`osc-plugin-qam`
+subprocess (see the native OBS backend and `[obs]` config), reading credentials
+from `oscrc`.
 
 ## Further reading
 - `docs/src/architecture.md` — architecture map (crate layout, trait injection,
