@@ -5,12 +5,12 @@
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
 a request by RRID, install and test it on reference hosts over SSH in parallel,
 then approve or reject. It drives the OBS/IBS and Gitea review workflows and
-openQA/QEM under the hood.
+openQA/QEM; reports load from and upload to TeReGen's v2 API.
 
 mtui is memory-safe, async-native, and distributed as two static binaries, while
 preserving the data-format and workflow contracts that keep it interoperable with
 the SUSE maintenance ecosystem: the RRID grammar, the `refhosts.yml` schema, the
-testreport/export text format, and the remote-lock wire format.
+report document schema, and the remote-lock wire format.
 
 ## Two surfaces
 

@@ -179,7 +179,7 @@ output with an `=== <RRID> ===` banner. A host-mutating or remote-write tool
 `put` transfer tools) **never implicitly fans out**: with several templates
 loaded and neither parameter set, the call is refused rather than guessed at —
 the error names the loaded RRIDs and the `template=`/`all_templates=true`
-escape hatches. This is the same rule the `testreport_*` tools use for their own
+escape hatches. This is the same rule the `report_*` tools use for their own
 required-with-several-loaded `template` parameter (below).
 
 A fanned-out call that fails on one template keeps running on the others and
@@ -305,133 +305,16 @@ call with the host named.
   (`["cat","/etc/os-release"]`), and for anything needing a shell — pipes,
   redirection, `;` — ask for one explicitly: `["sh","-c","zypper lr | grep x"]`.
 
-## Testreport editing tools
-
-> **Deprecated.** On a report loaded from a document, use the
-> [`report_*` tools](#report-document-tools) instead. These five tools stay for
-> reports that have no document, and go away with that path.
-
-Five hand-written tools operate on the loaded test report's checkout, replacing
-the REPL's `$EDITOR`-based `edit` flow (which is deny-listed). Each accepts an
-optional **`template="<RRID>"`** selecting which loaded template's checkout to act
-on; with more than one template loaded an unscoped call is refused — the same
-"one template, or refuse" rule described under [Multiple templates: scoping and
-fan-out](#multiple-templates-scoping-and-fan-out) above, pass `template=` to
-resolve it — and with zero or one loaded it may be omitted. All refuse cleanly
-when no test report is loaded.
-
-### `testreport_read` (read-only)
-
-*Deprecated: see [`report_*` tools](#report-document-tools).*
-
-Reads a file from the checkout as UTF-8 (lossy).
-
-- Parameters: `relpath` (optional; defaults to the report's `log` file),
-  `offset` (optional, 1-based first line, default 1), `limit` (optional, max
-  lines), `force` (optional boolean: resend even when unchanged),
-  `template` (optional).
-- `relpath` is resolved **inside** the checkout and may not escape it — `..`
-  traversal, absolute paths, and in-tree symlinks pointing outside are all
-  rejected. Use it to read `build_checks/<pkg>.<arch>.log`,
-  `install_logs/<host>.log`, `source.diff`, `patchinfo.xml`, etc.
-- Returns `{ "path", "line_count", "content", "deduped" }`; when a window is
-  requested (`offset`/`limit`) it additionally returns `offset` and
-  `returned_lines`.
-- An exact re-read (same file, same window, unchanged content) collapses to an
-  `[unchanged since …, N lines; pass force=true to resend, …]` notice with
-  `deduped: true` — including a repeated windowed read — instead of resending
-  the text. `force=true` resends the full content (`deduped: false`) and
-  refreshes the entry, so the next identical read collapses again. Full content
-  always carries `deduped: false`.
-
-### `testreport_logs` (read-only)
-
-*Deprecated: see [`report_*` tools](#report-document-tools).*
-
-Lists the auxiliary log files the `log` file doesn't cover.
-
-- Parameters: `template` (optional).
-- Returns `{ "path", "build_checks": [{"name","size"}], "install_logs":
-  [{"name","size"}] }`. Fetch one with `testreport_read(relpath=…)`.
-
-### `testreport_patch`
-
-*Deprecated: see [`report_*` tools](#report-document-tools).*
-
-Splices an **inclusive, 1-indexed** line range. Atomic write (temp file +
-`fsync` + rename).
-
-- Parameters (required): `start_line`, `end_line`, `replacement`. Plus optional
-  `relpath` and `template`. `end_line == start_line - 1` is a pure insertion
-  before `start_line`; an empty `replacement` deletes the range. A non-empty
-  replacement is normalised to end with exactly one newline.
-- `relpath` targets another checkout file instead of the report's `log` file,
-  with the same traversal guard as `testreport_read` — but the file must
-  already exist; a missing `relpath` refuses.
-- Returns `{ "path", "new_line_count", "replaced_lines", "inserted_lines",
-  "bytes_written" }`.
-
-### `testreport_write`
-
-*Deprecated: see [`report_*` tools](#report-document-tools).*
-
-Full-file overwrite (same atomic write). Use when line drift makes patching
-unreliable.
-
-- Parameters (required): `content`. Plus optional `relpath` and `template`.
-- `relpath` targets another checkout file instead of the report's `log` file,
-  with the same traversal guard as `testreport_read` — and unlike
-  `testreport_patch`, it **may name a not-yet-existing file**. Its parent
-  directory must already exist, though: a `relpath` whose parent is missing
-  refuses rather than silently creating a new directory in the checkout.
-- Returns `{ "path", "bytes_written", "line_count" }`.
-
-### `testreport_fill`
-
-*Deprecated: see [`report_*` tools](#report-document-tools).*
-
-Bulk-fills the unfilled placeholder tokens the report ships with, idempotently
-(never clobbers a hand-filled value). At least one field is required.
-
-- Parameters (all optional; at least one required): `reproducer` (`YES`/`NO`),
-  `status` (one of `FIXED`, `NOT_FIXED`, `HYPOTHETICAL`, `NOT_REPRODUCIBLE`,
-  `NO_ENVIRONMENT`, `TOO_COMPLEX`, `SKIPPED`, `OTHER`), `summary`
-  (`PASSED`/`FAILED`), `template`.
-- Returns `{ "path", "filled": {"summary","reproducer","status"}, "bytes_written",
-  "line_count" }`.
-
-> **Always call `testreport_read` immediately before `testreport_patch`.** Line
-> numbers shift after every patch, so two patches computed against one read will
-> land the second at the wrong offset.
-
-### Worked example
-
-Read the loaded report, replace lines 2–3 with three lines, then re-read to
-confirm:
-
-```text
-> testreport_read()
-{ "path": ".../log", "line_count": 5,
-  "content": "header\nfoo\nbar\nfooter\ntrailer\n" }
-
-> testreport_patch(start_line=2, end_line=3, replacement="X\nY\nZ\n")
-{ "path": ".../log", "new_line_count": 6,
-  "replaced_lines": 2, "inserted_lines": 3, "bytes_written": 34 }
-
-> testreport_read()
-{ "path": ".../log", "line_count": 6,
-  "content": "header\nX\nY\nZ\nfooter\ntrailer\n" }
-```
-
 ## Report document tools
 
 Seven hand-written tools work on the loaded report as a **document**: five read
 and edit it as named sections and issues rather than lines of text, and two list
-and read its files. Only a report loaded from
-a document has one; on any other (SVN-path) report every call refuses, naming
-`testreport_*` as the alternative. Each accepts an optional
-**`template="<RRID>"`** under the same "one template, or refuse" rule as the
-testreport tools.
+and read its files. Each accepts an optional
+**`template="<RRID>"`** selecting which loaded template to act on; with more than
+one template loaded an unscoped call is refused — the same "one template, or
+refuse" rule described under [Multiple templates: scoping and
+fan-out](#multiple-templates-scoping-and-fan-out) — and with zero or one loaded
+it may be omitted. All refuse cleanly when no report is loaded.
 
 The sections are `verdict`, `comment`, `people`, `update`, `install`, `issues`,
 `testing` and `review`; `review` is absent from a PI report. Reads never change
@@ -698,7 +581,6 @@ was told in band (and which the OTLP stream may still hold).
 `config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute
 is a known secret. File-body payloads (`put` `content`/`content_b64`,
-`testreport_write` `content`, `testreport_patch` `replacement`,
 `report_section_write`/`report_issue_write` `value`) never land
 verbatim either: each records `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
@@ -779,7 +661,7 @@ holding — a follow-up call on the same RRID is not left queued behind it. What
 happens next depends on whether the call could be holding a **host** operation
 lock.
 
-A testreport tool, a transfer tool (`get`/`put`) or a parked
+A `report_*` tool, a transfer tool (`get`/`put`) or a parked
 `job_status`/`job_result` wait never dispatches through the engine, so it cannot
 hold `/var/lock/mtui.lock`: the cancel drops the dispatch immediately and the
 tool call resolves to an error rather than a fabricated success.
@@ -810,9 +692,9 @@ recover a stuck call regardless of transport.
 ## Long-running calls: progress heartbeats
 
 Many commands legitimately take minutes (a `run` against a slow refhost, an
-`update`, an SVN `checkout`). To keep MCP clients from timing out, `mtui-mcp`
+`update`, a `checkout`). To keep MCP clients from timing out, `mtui-mcp`
 emits `notifications/progress` while a slow tool runs — for both synthesised
-command tools and the testreport tools — provided the client supplied a
+command tools and the hand-written tools — provided the client supplied a
 `progressToken` on the request. Spec-compliant clients (Claude Desktop, opencode,
 the MCP Inspector, Cursor, …) reset their read deadline on each frame, so a
 ten-minute command still returns cleanly. Clients that ignore progress

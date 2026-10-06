@@ -5,8 +5,8 @@
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
 a request by RRID, install and test it on reference hosts over SSH in parallel,
-then approve or reject. It drives OBS/IBS and Gitea review workflows, `svn`, and
-openQA/QEM under the hood.
+then approve or reject. It drives OBS/IBS and Gitea review workflows and
+openQA/QEM; reports load from and upload to TeReGen's v2 API.
 
 mtui is memory-safe, async-native, and distributed as static binaries, while
 preserving the data-format and workflow contracts that keep it interoperable with
@@ -62,8 +62,8 @@ authenticated boundary trusted to operate the remaining maintenance tools.
   PID-based operation lock (`/var/lock/mtui.lock`) serializing repository
   transactions, and an RRID-based pool claim (`/var/lock/mtui-pool.lock`)
   reserving a host for a template.
-- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
-  (SVN and Gitea backends).
+- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`,
+  backed by TeReGen's v2 report document.
 - File transfer (`put`/`get`) over SFTP.
 
 ## Install
@@ -99,10 +99,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint ga
 
 ## Runtime dependencies
 
-One backend shells out to an external tool (kept optional; degrades gracefully
-when absent):
-
-- `svn` — testreport checkout/commit (SVN backend)
+mtui needs no external programs beyond its own binaries.
 
 The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
 it reads credentials from the user's oscrc — located exactly like `osc` itself

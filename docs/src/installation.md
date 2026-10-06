@@ -73,10 +73,7 @@ install -Dm644 dist/man/mtui-mcp.1 /usr/share/man/man1/mtui-mcp.1
 
 ## Runtime dependencies
 
-One backend shells out to an external tool. It is optional — mtui degrades
-gracefully when it is absent:
-
-- **`svn`** — testreport checkout/commit (the SVN backend).
+mtui needs no external programs beyond its own binaries.
 
 The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`) talks
 to the OBS/IBS API **natively** — no `osc` subprocess. It reads credentials from
@@ -99,8 +96,8 @@ both — with three caveats the OBS build does not have:
 
 Because the binaries are static the packages declare no *mandatory* runtime or
 library dependencies — no libc, and no shell either, since nothing they ship is
-a script. Both are asserted by the release job. They do declare recommends:
-`subversion` on both, plus `mtui-mcp` from `mtui`.
+a script. Both are asserted by the release job. `mtui` declares `mtui-mcp` as a
+recommends.
 
 Verify with `sha256sum --ignore-missing -c mtui-packages.sha256` — one file
 covers all four packages, so a partial download needs `--ignore-missing`.
@@ -108,8 +105,7 @@ covers all four packages, so a partial download needs `--ignore-missing`.
 ## Packaged install (openSUSE)
 
 On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
-completions, and man pages into the standard system paths and declares `svn` as a
-recommends. It builds two packages:
+completions, and man pages into the standard system paths. It builds two packages:
 
 - **`mtui`** — the REPL, its completions and man page. Recommends `mtui-mcp`, so
   a plain `zypper in mtui` still gets both binaries as it did before they were
