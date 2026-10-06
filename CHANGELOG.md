@@ -8,6 +8,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
+  `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
+  `gitea <verb> failed` form; the calls never ran `osc`.
+
 ## [26.3.3] - 2026-09-15
 
 ### Fixed

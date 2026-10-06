@@ -240,7 +240,7 @@ impl Command for Assign {
             let osc = osc_client(session, &rrid)?;
             osc.assign(&groups(args), args.get_flag("force"))
                 .await
-                .map_err(|e| CommandError::Other(format!("osc assign failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("obs assign failed: {e}")))?;
         }
         show_priority_deadline(session, &rrid).await;
         session.display.println(&format!("assigned {rrid}"));
@@ -284,7 +284,7 @@ impl Command for Unassign {
             let osc = osc_client(session, &rrid)?;
             osc.unassign(&groups(args))
                 .await
-                .map_err(|e| CommandError::Other(format!("osc unassign failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("obs unassign failed: {e}")))?;
         }
         session.display.println(&format!("unassigned {rrid}"));
         Ok(())
@@ -363,7 +363,7 @@ impl Command for Reject {
             let osc = osc_client(session, &rrid)?;
             osc.reject(&groups(args), &reason, &message)
                 .await
-                .map_err(|e| CommandError::Other(format!("osc reject failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("obs reject failed: {e}")))?;
         }
         session.display.println(&format!("rejected {rrid}"));
         Ok(())
@@ -429,7 +429,7 @@ impl Command for Comment {
             let osc = osc_client(session, &rrid)?;
             osc.comment(&comment)
                 .await
-                .map_err(|e| CommandError::Other(format!("osc comment failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("obs comment failed: {e}")))?;
         }
         session
             .display
@@ -550,7 +550,7 @@ mod tests {
         unsafe { std::env::remove_var("OSC_CONFIG") };
         let err = res.unwrap_err();
         assert!(
-            matches!(err, CommandError::Other(ref m) if m.contains("osc assign failed")),
+            matches!(err, CommandError::Other(ref m) if m.contains("obs assign failed")),
             "got {err:?}"
         );
     }
@@ -974,7 +974,7 @@ mod tests {
         let err = refused.unwrap_err();
         assert!(
             matches!(&err, CommandError::Other(m) if m.starts_with(
-                "osc assign failed: qam-sle review on request 1 is accepted and bob has an \
+                "obs assign failed: qam-sle review on request 1 is accepted and bob has an \
                  open review"
             )),
             "got {err:?}"
