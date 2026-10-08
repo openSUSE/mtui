@@ -38,8 +38,9 @@ const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "secur
 /// Prints an openQA / QAM Dashboard / build-checks overview for the loaded MU.
 ///
 /// Fetches and prints three sections — single incidents, aggregated updates,
-/// build checks; `--export` also authors the rows onto the report document's
-/// `testing.openqa.extra`, and refuses when no document is loaded.
+/// build checks. The full (not row-limited) result is saved on the report, and
+/// `export` writes it to the document's `testing.openqa.extra`; `--export` does
+/// that at once, and refuses when no document is loaded.
 ///
 /// `--no-fetch` cache reuse is not implemented: it logs and fetches anyway.
 pub struct OpenQAOverview;
@@ -111,7 +112,7 @@ impl Command for OpenQAOverview {
             Arg::new("export")
                 .long("export")
                 .action(ArgAction::SetTrue)
-                .help("Also inject the overview into the loaded testreport's log"),
+                .help("Also author the overview onto the report document (testing.openqa.extra)"),
         )
         .arg(
             Arg::new("no_fetch")
@@ -154,119 +155,39 @@ impl Command for OpenQAOverview {
         }
 
         let no_aggregated = args.get_flag("no_aggregated");
-        let days = args.get_one::<u32>("days").copied().unwrap_or(5);
-        let groups: Vec<String> = args
-            .get_many::<String>("aggregated_groups")
-            .map(|it| it.cloned().collect())
-            .unwrap_or_else(|| vec!["core".to_owned()]);
-
-        let url_openqa = args
-            .get_one::<String>("url_openqa")
-            .cloned()
-            .unwrap_or_else(|| session.config.openqa_instance.clone());
-        let url_dashboard_qam = args
-            .get_one::<String>("url_dashboard_qam")
-            .cloned()
-            .unwrap_or_else(|| derive_dashboard_url(&session.config.qem_dashboard_api));
-        let url_qam = args
-            .get_one::<String>("url_qam")
-            .cloned()
-            .unwrap_or_else(|| derive_qam_url(&session.config.reports_url));
-
-        let http = session
-            .http_client()
-            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
-        let openqa_transport = session
-            .openqa_transport()
-            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
-        let oqa_client = mtui_datasources::openqa::build_openqa_client_with_transport(
-            openqa_transport,
-            &url_openqa,
-        )
-        .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
-
-        // SLFO's maintenance id is not an integer ("1.2"), so fall back to the
-        // review id (the Gitea PR number) there.
-        let incident_id = rrid.maintenance_id.clone();
-        let request_id = rrid.review_id;
-        let product = rrid.kind.as_str().to_owned();
-        let effective_incident_id = if incident_id.parse::<i64>().is_ok() {
-            incident_id.clone()
-        } else {
-            request_id.to_string()
+        let opts = OverviewOpts {
+            no_aggregated,
+            days: args.get_one::<u32>("days").copied().unwrap_or(DEFAULT_DAYS),
+            groups: args
+                .get_many::<String>("aggregated_groups")
+                .map(|it| it.cloned().collect())
+                .unwrap_or_else(default_groups),
+            url_openqa: args.get_one::<String>("url_openqa").cloned(),
+            url_dashboard_qam: args.get_one::<String>("url_dashboard_qam").cloned(),
+            url_qam: args.get_one::<String>("url_qam").cloned(),
+            test_pattern: args.get_one::<String>("test_pattern").cloned(),
         };
+        let params = OverviewParams::resolve(session, rrid, opts)?;
 
         session.display.println(&session.display.blue("OpenQA:"));
         session.display.println(&session.display.blue("#######"));
 
-        let (build, versions) =
-            match oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id).await {
-                Ok(v) => v,
-                Err(e) => {
-                    return Err(CommandError::Other(format!(
-                        "QEM Dashboard query failed: {e}"
-                    )));
-                }
-            };
+        let overview = fetch_overview(params).await?;
+        let oqa::OpenQAOverviewResult {
+            single_incidents,
+            aggregated_updates: aggregated,
+            build_checks,
+            ..
+        } = &overview;
 
-        let max_oqa_parallel = session.config.max_oqa_parallel as usize;
-        let test_pattern = args.get_one::<String>("test_pattern").map(String::as_str);
-
-        let mut packages = session.metadata().get_package_list();
-        if packages.is_empty()
-            && !build.is_empty()
-            && let Some(last) = build.rsplit(':').next()
-        {
-            packages = vec![last.to_owned()];
-        }
-
-        // Independent fetches, so concurrent — but rendered in a fixed order
-        // below, keeping the output byte-identical to a sequential flow.
-        let openqa_versions = versions.as_ref().filter(|v| !v.is_empty());
-        let single_fut = async {
-            match openqa_versions {
-                Some(versions) => {
-                    oqa::single_incidents(&oqa_client, &build, versions, max_oqa_parallel).await
-                }
-                None => Vec::new(),
-            }
-        };
-        let aggregated_fut = async {
-            match openqa_versions {
-                Some(versions) if !no_aggregated => {
-                    oqa::aggregated_updates(
-                        &oqa_client,
-                        &effective_incident_id,
-                        versions,
-                        days,
-                        &groups,
-                        max_oqa_parallel,
-                    )
-                    .await
-                }
-                _ => Vec::new(),
-            }
-        };
-        let build_checks_fut = oqa::build_checks(
-            &http,
-            &product,
-            &incident_id,
-            i64::try_from(request_id).unwrap_or(0),
-            &packages,
-            &url_qam,
-            test_pattern,
-            max_oqa_parallel,
-        );
-        let (single_incidents, aggregated, build_checks) =
-            tokio::join!(single_fut, aggregated_fut, build_checks_fut);
-
-        if openqa_versions.is_some() {
+        // One row per openQA version, so empty means the incident has no builds.
+        if !single_incidents.is_empty() {
             session
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
             // Row budget backstops many-version incidents: head+tail+anomalies.
             let single = crush_slice(
-                &single_incidents,
+                single_incidents,
                 |r: &oqa::VersionResult| {
                     (
                         r.version.as_str(),
@@ -294,7 +215,7 @@ impl Command for OpenQAOverview {
 
             if !no_aggregated {
                 session.display.println("-------");
-                for group in &aggregated {
+                for group in aggregated {
                     session.display.println(&session.display.blue(&format!(
                         "\nAggregated updates - {}",
                         title_case(&group.group)
@@ -352,7 +273,7 @@ impl Command for OpenQAOverview {
             session.display.println("No build checks for this incident");
         } else {
             let checks = crush_slice(
-                &build_checks,
+                build_checks,
                 |e: &oqa::BuildCheckResult| {
                     (e.url.as_str(), e.matches.as_slice(), e.summary.as_str())
                 },
@@ -372,36 +293,201 @@ impl Command for OpenQAOverview {
             }
         }
 
+        session.metadata_mut().openqa_mut().overview = Some(overview.clone());
         if args.get_flag("export") {
-            export_to_testreport(
-                session,
-                &single_incidents,
-                &aggregated,
-                &build_checks,
-                no_aggregated,
-            )?;
+            export_to_testreport(session, &overview)?;
         }
         Ok(())
     }
 }
 
+const DEFAULT_DAYS: u32 = 5;
+
+fn default_groups() -> Vec<String> {
+    vec!["core".to_owned()]
+}
+
+/// What the user chose; unset URLs resolve from the session config.
+pub(crate) struct OverviewOpts {
+    no_aggregated: bool,
+    days: u32,
+    groups: Vec<String>,
+    url_openqa: Option<String>,
+    url_dashboard_qam: Option<String>,
+    url_qam: Option<String>,
+    test_pattern: Option<String>,
+}
+
+impl Default for OverviewOpts {
+    fn default() -> Self {
+        Self {
+            no_aggregated: false,
+            days: DEFAULT_DAYS,
+            groups: default_groups(),
+            url_openqa: None,
+            url_dashboard_qam: None,
+            url_qam: None,
+            test_pattern: None,
+        }
+    }
+}
+
+/// [`fetch_overview`]'s inputs, all owned: `Session` is not `Sync`, so it
+/// cannot be held across the fetch's `.await`s.
+pub(crate) struct OverviewParams {
+    rrid: mtui_types::RequestReviewID,
+    packages: Vec<String>,
+    no_aggregated: bool,
+    days: u32,
+    groups: Vec<String>,
+    test_pattern: Option<String>,
+    url_openqa: String,
+    url_dashboard_qam: String,
+    url_qam: String,
+    max_oqa_parallel: usize,
+    http: mtui_datasources::HttpClient,
+    openqa_transport: reqwest::Client,
+}
+
+impl OverviewParams {
+    pub(crate) fn resolve(
+        session: &Session,
+        rrid: mtui_types::RequestReviewID,
+        opts: OverviewOpts,
+    ) -> Result<Self, CommandError> {
+        let config = &session.config;
+        let http = session
+            .http_client()
+            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+        let openqa_transport = session
+            .openqa_transport()
+            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
+        Ok(Self {
+            rrid,
+            packages: session.metadata().get_package_list(),
+            no_aggregated: opts.no_aggregated,
+            days: opts.days,
+            groups: opts.groups,
+            test_pattern: opts.test_pattern,
+            url_openqa: opts
+                .url_openqa
+                .unwrap_or_else(|| config.openqa_instance.clone()),
+            url_dashboard_qam: opts
+                .url_dashboard_qam
+                .unwrap_or_else(|| derive_dashboard_url(&config.qem_dashboard_api)),
+            url_qam: opts
+                .url_qam
+                .unwrap_or_else(|| derive_qam_url(&config.reports_url)),
+            max_oqa_parallel: config.max_oqa_parallel as usize,
+            http,
+            openqa_transport,
+        })
+    }
+}
+
+/// Fetches the full (not row-limited) overview: dashboard incident info, then
+/// the single-incident, aggregated and build-check sections concurrently.
+pub(crate) async fn fetch_overview(
+    params: OverviewParams,
+) -> Result<oqa::OpenQAOverviewResult, CommandError> {
+    let OverviewParams {
+        rrid,
+        mut packages,
+        no_aggregated,
+        days,
+        groups,
+        test_pattern,
+        url_openqa,
+        url_dashboard_qam,
+        url_qam,
+        max_oqa_parallel,
+        http,
+        openqa_transport,
+    } = params;
+
+    let oqa_client =
+        mtui_datasources::openqa::build_openqa_client_with_transport(openqa_transport, &url_openqa)
+            .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
+
+    // SLFO's maintenance id is not an integer ("1.2"), so fall back to the
+    // review id (the Gitea PR number) there.
+    let incident_id = rrid.maintenance_id.clone();
+    let request_id = rrid.review_id;
+    let product = rrid.kind.as_str().to_owned();
+    let effective_incident_id = if incident_id.parse::<i64>().is_ok() {
+        incident_id.clone()
+    } else {
+        request_id.to_string()
+    };
+
+    let (build, versions) =
+        oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id)
+            .await
+            .map_err(|e| CommandError::Other(format!("QEM Dashboard query failed: {e}")))?;
+
+    if packages.is_empty()
+        && !build.is_empty()
+        && let Some(last) = build.rsplit(':').next()
+    {
+        packages = vec![last.to_owned()];
+    }
+
+    // Independent fetches, so concurrent — but rendered in a fixed order by
+    // the caller, keeping the output byte-identical to a sequential flow.
+    let openqa_versions = versions.as_ref().filter(|v| !v.is_empty());
+    let single_fut = async {
+        match openqa_versions {
+            Some(versions) => {
+                oqa::single_incidents(&oqa_client, &build, versions, max_oqa_parallel).await
+            }
+            None => Vec::new(),
+        }
+    };
+    let aggregated_fut = async {
+        match openqa_versions {
+            Some(versions) if !no_aggregated => {
+                oqa::aggregated_updates(
+                    &oqa_client,
+                    &effective_incident_id,
+                    versions,
+                    days,
+                    &groups,
+                    max_oqa_parallel,
+                )
+                .await
+            }
+            _ => Vec::new(),
+        }
+    };
+    let build_checks_fut = oqa::build_checks(
+        &http,
+        &product,
+        &incident_id,
+        i64::try_from(request_id).unwrap_or(0),
+        &packages,
+        &url_qam,
+        test_pattern.as_deref(),
+        max_oqa_parallel,
+    );
+    let (single_incidents, aggregated_updates, build_checks) =
+        tokio::join!(single_fut, aggregated_fut, build_checks_fut);
+
+    Ok(oqa::OpenQAOverviewResult {
+        single_incidents,
+        aggregated_updates,
+        build_checks,
+        skip_aggregated: no_aggregated,
+    })
+}
+
 /// Authors the overview onto the report document's `testing.openqa.extra`.
 fn export_to_testreport(
     session: &mut Session,
-    single_incidents: &[oqa::VersionResult],
-    aggregated: &[oqa::GroupResult],
-    build_checks: &[oqa::BuildCheckResult],
-    no_aggregated: bool,
+    overview: &oqa::OpenQAOverviewResult,
 ) -> CommandResult {
-    let overview = oqa::OpenQAOverviewResult {
-        single_incidents: single_incidents.to_vec(),
-        aggregated_updates: aggregated.to_vec(),
-        build_checks: build_checks.to_vec(),
-        skip_aggregated: no_aggregated,
-    };
     let base = session.metadata_mut().base_mut();
     let touched =
-        mtui_testreport::author_export(&mut base.document, None, None, &[], Some(&overview), None);
+        mtui_testreport::author_export(&mut base.document, None, None, &[], Some(overview), None);
     base.mark_document_authored(&touched);
     let msg = if touched.is_empty() {
         "nothing to export".to_owned()
@@ -707,6 +793,53 @@ mod tests {
         assert!(session.metadata().base().document_dirty);
     }
 
+    /// The full result stays on the report for `export`, with or without `--export`.
+    #[tokio::test]
+    async fn overview_is_saved_on_the_report() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/incident_settings/.*$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "JobGroups": [], "jobs": []
+            })))
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(session.metadata().openqa().overview.is_none());
+
+        let uri = server.uri();
+        let args = matches(
+            &OpenQAOverview,
+            &[
+                "--url-dashboard-qam",
+                &uri,
+                "--url-openqa",
+                &uri,
+                "--url-qam",
+                &uri,
+            ],
+        );
+        OpenQAOverview.call(&mut session, &args).await.unwrap();
+
+        let saved = session
+            .metadata()
+            .openqa()
+            .overview
+            .clone()
+            .expect("overview saved");
+        assert!(!saved.single_incidents.is_empty());
+        assert!(!saved.skip_aggregated);
+    }
+
     /// `--export` with no document is refused before any fetch: the URLs point
     /// nowhere, so a fetch would fail with a different error.
     #[tokio::test]
@@ -755,6 +888,7 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
         // The header was still printed before the failure.
         assert!(buf.contents().contains("OpenQA:"));
+        assert!(session.metadata().openqa().overview.is_none());
     }
 
     /// The export never reads or creates a `log` file,
@@ -773,7 +907,11 @@ mod tests {
             ..Default::default()
         }];
 
-        export_to_testreport(&mut session, &rows, &[], &[], false).unwrap();
+        let overview = oqa::OpenQAOverviewResult {
+            single_incidents: rows.to_vec(),
+            ..Default::default()
+        };
+        export_to_testreport(&mut session, &overview).unwrap();
 
         assert!(!log.exists());
         let out = buf.contents();
@@ -936,7 +1074,12 @@ mod tests {
         assert!(!crushed.kept.iter().any(|r| r.version == "15-SP060"));
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().document = Some(maintenance_document());
-        export_to_testreport(&mut session, &versions, &[], &[], true).unwrap();
+        let overview = oqa::OpenQAOverviewResult {
+            single_incidents: versions,
+            skip_aggregated: true,
+            ..Default::default()
+        };
+        export_to_testreport(&mut session, &overview).unwrap();
         let written = serde_json::to_string(&session.metadata().base().document).unwrap();
         assert!(written.contains("15-SP060"), "{written}");
         assert!(

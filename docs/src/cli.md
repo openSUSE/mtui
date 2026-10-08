@@ -777,7 +777,7 @@ Options:
           Custom regex to extract test results from build-check logs
 
       --export
-          Also inject the overview into the loaded testreport's log
+          Also author the overview onto the report document (testing.openqa.extra)
 
       --no-fetch
           (deferred) reuse cached overview; currently fetches anyway
