@@ -9,6 +9,7 @@ use mtui_testreport::{
 use mtui_types::Workflow;
 use mtui_types::package::VersionCheck;
 
+use super::openqa_overview::{OverviewOpts, OverviewParams, fetch_overview};
 use super::support::{
     add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_document,
     require_update, select_names, stale_hash_gate, template_completion,
@@ -23,12 +24,18 @@ use crate::session::Session;
 /// package versions and openQA results onto the document in memory (`commit`
 /// uploads it) and writes the install logs. Requires a loaded report document.
 ///
-/// ## openQA enrichment (Manual)
+/// ## openQA enrichment
 ///
 /// `Manual` folds openQA results in via the report's holder (`metadata.openqa`):
 /// an absent "auto" result is lazily built and run from the QEM Dashboard, then
-/// the connected-host results and any `openqa_overview` payload go into
-/// [`ManualExport`]. `Auto`/`Kernel` author from their own openQA results.
+/// the connected-host results go into [`ManualExport`]. `Auto`/`Kernel` author
+/// from their own openQA results.
+///
+/// Every workflow also writes the `openqa_overview` result (single incidents,
+/// aggregated updates, build checks) to `testing.openqa.extra`. It uses the
+/// result saved by the last `openqa_overview` run and fetches one with that
+/// command's defaults when none is saved. A failed fetch prints a warning and
+/// the export continues without those rows.
 ///
 /// A `Manual` export refuses to write at all when *no* selected host has
 /// recorded package versions — the signal that this session never ran `update`
@@ -109,7 +116,7 @@ impl Command for Export {
             return Ok(());
         }
 
-        let (manual_results, manual_overview) = if workflow == Workflow::Manual {
+        let manual_results = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
                 let http = build_http(session)?;
                 let dashboard_api = session.config.qem_dashboard_api.clone();
@@ -165,22 +172,15 @@ impl Command for Export {
                      result was left unverified"
                 ));
             }
-            let overview = session.metadata().openqa().overview.clone();
-            (Some((hosts, results)), overview)
+            Some((hosts, results))
         } else {
-            (None, None)
+            None
         };
 
         require_document(session)?;
-        self.export_document(
-            session,
-            workflow,
-            force,
-            rrid,
-            manual_results,
-            manual_overview,
-        )
-        .await
+        ensure_overview(session, &rrid).await;
+        self.export_document(session, workflow, force, rrid, manual_results)
+            .await
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
@@ -198,14 +198,13 @@ impl Export {
         force: bool,
         rrid: mtui_types::RequestReviewID,
         manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
-        manual_overview: Option<mtui_datasources::OpenQAOverviewResult>,
     ) -> CommandResult {
         let ctx = ExportContext::new(session.config.clone(), force, rrid.clone());
+        let overview = session.metadata().openqa().overview.clone();
         let (touched, written) = match workflow {
             Workflow::Auto => {
                 let http = build_http(session)?;
                 let auto = session.metadata().openqa().auto.clone();
-                let overview = session.metadata().openqa().overview.clone();
                 let touched =
                     author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
                 let written = AutoExport::new(ctx, auto)
@@ -216,7 +215,6 @@ impl Export {
             Workflow::Kernel => {
                 let http = build_http(session)?;
                 let kernel = session.metadata().openqa().kernel.clone();
-                let overview = session.metadata().openqa().overview.clone();
                 let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
                 let written = KernelExport::new(ctx, kernel).write_logs(&http).await;
                 (touched, written)
@@ -228,7 +226,7 @@ impl Export {
                     session,
                     auto.as_ref(),
                     &[],
-                    manual_overview.as_ref(),
+                    overview.as_ref(),
                     Some(&results),
                 );
                 let written = ManualExport::new(ctx, results).write_logs(&hosts, &DenyOverwrite);
@@ -252,6 +250,27 @@ impl Export {
             session.display.println(&line);
         }
         Ok(())
+    }
+}
+
+/// Saves the `openqa_overview` result on the report unless one is already
+/// there. A failed fetch costs the overview rows, never the export.
+async fn ensure_overview(session: &mut Session, rrid: &mtui_types::RequestReviewID) {
+    if session.metadata().openqa().overview.is_some() {
+        return;
+    }
+    let fetched = match OverviewParams::resolve(session, rrid.clone(), OverviewOpts::default()) {
+        Ok(params) => fetch_overview(params).await,
+        Err(e) => Err(e),
+    };
+    match fetched {
+        Ok(overview) => session.metadata_mut().openqa_mut().overview = Some(overview),
+        Err(e) => {
+            tracing::warn!(error = %e, "openQA overview fetch failed during export; continuing without it");
+            session
+                .display
+                .println(&format!("WARNING: openQA overview unavailable: {e}"));
+        }
     }
 }
 
@@ -359,6 +378,12 @@ mod tests {
     use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
     use wiremock::MockServer;
 
+    /// Marks the overview as already fetched, so `export` does not reach the
+    /// production URLs a default test config points at.
+    fn seed_empty_overview(session: &mut Session) {
+        session.metadata_mut().openqa_mut().overview = Some(Default::default());
+    }
+
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Export.name(), "export");
@@ -397,6 +422,7 @@ mod tests {
         base.workflow = Workflow::Auto;
         base.document = Some(minimal_document());
         base.stale_hash_warning = Some("template hash mismatch (stale checkout)".to_owned());
+        seed_empty_overview(&mut session);
 
         let args = matches(&Export, &["--allow-stale"]);
         Export.call(&mut session, &args).await.unwrap();
@@ -461,6 +487,7 @@ mod tests {
         let base = session.metadata_mut().base_mut();
         base.workflow = Workflow::Kernel;
         base.document = Some(minimal_document());
+        seed_empty_overview(&mut session);
 
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
@@ -535,6 +562,7 @@ mod tests {
         let base = session.metadata_mut().base_mut();
         base.workflow = Workflow::Manual;
         base.document = Some(minimal_document());
+        seed_empty_overview(&mut session);
         (session, buf, dir, server)
     }
 
@@ -782,6 +810,7 @@ mod tests {
         let base = session.metadata_mut().base_mut();
         base.workflow = Workflow::Auto;
         base.document = Some(minimal_document());
+        seed_empty_overview(&mut session);
         assert!(session.targets().is_empty());
 
         let args = matches(&Export, &[]);
@@ -927,6 +956,7 @@ mod tests {
         base.path = Some(rrid_dir.join("log"));
         session.metadata_mut().openqa_mut().auto =
             Some(seeded_auto(&format!("{}/install.log", oqa.uri())));
+        seed_empty_overview(&mut session);
 
         let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
@@ -949,6 +979,7 @@ mod tests {
         base.workflow = Workflow::Kernel;
         base.document = Some(minimal_document());
         base.path = Some(dir.path().join("SUSE:Maintenance:1:1").join("log"));
+        seed_empty_overview(&mut session);
 
         let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
@@ -956,6 +987,186 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("no install logs written"), "{out:?}");
         assert!(!dir.path().join("SUSE:Maintenance:1:1/log").exists());
+    }
+
+    /// Dashboard + openQA + QAM mocks that answer one incident build with a
+    /// single openQA version, so an overview fetch yields rows.
+    async fn overview_server() -> MockServer {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/incident_settings/.*$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"version": "15-SP5",
+                 "settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "JobGroups": [], "jobs": []
+            })))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Points every datasource the overview fetch resolves from config at `server`.
+    fn point_overview_config_at(session: &mut Session, server: &MockServer) {
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        session.config.reports_url = format!("{}/testreports", server.uri());
+    }
+
+    fn authored_extra(session: &Session) -> std::collections::BTreeMap<String, serde_json::Value> {
+        session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .and_then(|d| d.testing.openqa.as_ref())
+            .map(|o| o.extra.clone())
+            .unwrap_or_default()
+    }
+
+    /// Regression: `openqa_overview` followed by `export` (no `--export`) left the
+    /// overview out of the document, because nothing saved the result.
+    #[tokio::test]
+    async fn overview_then_export_authors_testing_openqa_extra() {
+        use crate::commands::OpenQAOverview;
+
+        let server = overview_server().await;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+
+        let uri = server.uri();
+        let args = matches(
+            &OpenQAOverview,
+            &[
+                "--url-dashboard-qam",
+                &uri,
+                "--url-openqa",
+                &uri,
+                "--url-qam",
+                &uri,
+            ],
+        );
+        OpenQAOverview.call(&mut session, &args).await.unwrap();
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let extra = authored_extra(&session);
+        assert!(extra.contains_key("single_incidents"), "{extra:?}");
+    }
+
+    /// With nothing saved, `export` fetches the overview itself.
+    #[tokio::test]
+    async fn export_fetches_overview_when_none_saved() {
+        let server = overview_server().await;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        point_overview_config_at(&mut session, &server);
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+        assert!(session.metadata().openqa().overview.is_none());
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(authored_extra(&session).contains_key("single_incidents"));
+        assert!(session.metadata().openqa().overview.is_some());
+    }
+
+    /// A saved overview is exported as-is: the overview endpoints see no request.
+    #[tokio::test]
+    async fn export_reuses_saved_overview() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        point_overview_config_at(&mut session, &server);
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+        session.metadata_mut().openqa_mut().overview =
+            Some(mtui_datasources::OpenQAOverviewResult {
+                single_incidents: vec![mtui_datasources::VersionResult {
+                    version: "15-SP9".to_owned(),
+                    status: "passed".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let rows = authored_extra(&session)["single_incidents"].to_string();
+        assert!(rows.contains("15-SP9"), "{rows}");
+    }
+
+    /// An unreachable dashboard costs the overview rows, never the export.
+    #[tokio::test]
+    async fn export_overview_fetch_failure_still_exports() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let failing = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        let oqa = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/install.log"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("zypper install body\n"))
+            .mount(&oqa)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        point_overview_config_at(&mut session, &failing);
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let base = session.metadata_mut().base_mut();
+        base.workflow = Workflow::Auto;
+        base.document = Some(minimal_document());
+        session.metadata_mut().openqa_mut().auto =
+            Some(seeded_auto(&format!("{}/install.log", oqa.uri())));
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("WARNING: openQA overview unavailable"),
+            "{out}"
+        );
+        assert!(session.metadata().openqa().overview.is_none());
+        let openqa = session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .and_then(|d| d.testing.openqa.clone())
+            .expect("testing.openqa authored");
+        assert!(openqa.install.is_some());
+        assert!(!openqa.extra.contains_key("single_incidents"));
     }
 
     /// With no document loaded nothing is authored: no panic, and `document`

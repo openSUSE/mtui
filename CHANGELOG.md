@@ -325,6 +325,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `export` now writes the `openqa_overview` results (single incidents,
+  aggregated updates, build checks) into `testing.openqa`, fetching them when
+  `openqa_overview` has not run in this session; previously only
+  `openqa_overview --export` did. A failed fetch prints a warning and the export
+  continues without those rows.
 - Session-level MCP tools (`whoami`, `list_templates`,
   `list_refhosts`, `updates`, `config show`) no longer take the active
   template's per-RRID lock: they hold the registry gate shared with no

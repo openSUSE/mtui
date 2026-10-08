@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(export["default"], Value::Bool(false));
         assert_eq!(
             export["description"],
-            "Also inject the overview into the loaded testreport's log"
+            "Also author the overview onto the report document (testing.openqa.extra)"
         );
         assert!(!required(&schema).contains(&"export"));
     }

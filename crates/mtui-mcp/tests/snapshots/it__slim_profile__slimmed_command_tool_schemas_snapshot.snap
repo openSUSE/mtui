@@ -881,7 +881,7 @@ expression: pretty
         },
         "export": {
           "default": false,
-          "description": "Also inject the overview into the loaded testreport's log",
+          "description": "Also author the overview onto the report document (testing.openqa.extra)",
           "type": "boolean"
         },
         "no_aggregated": {
