@@ -127,11 +127,7 @@ impl Refhosts {
         {
             return false;
         }
-        if !attribute.addons.is_empty() && !Self::addons_match(&candidate.addons, &attribute.addons)
-        {
-            return false;
-        }
-        true
+        attribute.addons.is_empty() || Self::addons_match(&candidate.addons, &attribute.addons)
     }
 
     /// Return the refhosts row whose `name` matches, or `None`.
