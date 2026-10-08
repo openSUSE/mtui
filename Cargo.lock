@@ -2631,7 +2631,6 @@ name = "mtui-config"
 version = "26.4.0"
 dependencies = [
  "directories",
- "mtui-types",
  "serde",
  "tempfile",
  "thiserror",
