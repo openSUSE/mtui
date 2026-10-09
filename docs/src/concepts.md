@@ -122,7 +122,12 @@ cooperate rather than clobber one another.
   install/update/prepare/downgrade). Set it explicitly with
   [`lock`](cli.md#lock); it is applied automatically around the flows that need
   it. Enabled locks are removed when the session exits. To make the lock effective
-  for *other* sessions too, give it a comment (`lock -c "<why>"`).
+  for *other* sessions too, give it a comment (`lock -c "<why>"`). Such a
+  reservation is never rewritten or released by `run`, `update`, `install` or
+  `prepare` on the host; only `unlock` removes it. Templates loaded in the same
+  process, and the sessions of one `mtui-mcp` server, hold the operation lock
+  against each other like separate users: a second template's `run` or `update`
+  waits for (or, at `[lock] wait = 0`, refuses on) the first one's hold.
 - **Pool-claim lock** (`/var/lock/mtui-pool.lock`, RRID-based) — taken during
   host-pool selection to reserve a host for a template. List and remove them with
   the `-p`/`--pool` flag on [`list_locks`](cli.md#list_locks) /
@@ -132,8 +137,9 @@ By default, `lock`/`unlock` act on the whole active template's hosts; pass
 `-t <host>` (repeatable) to scope either to a subset. Plain `unlock` releases
 only the operation lock **this session took**: a lock it never took — another
 user's, or a live sibling template's on a refhost shared inside the same
-process — is left alone and reported `skipped`, pointing at `list_locks` or
-`--force` instead. `unlock -f` force-removes a lock held by another user or
+process — is left alone and reported `skipped`. A foreign lock points at
+`list_locks` or `--force`; a sibling's is named as held by this mtui process and
+is released from the template that took it. `unlock -f` force-removes a lock held by another user or
 session regardless of who took it. mtui also reaps a pre-existing lock older
 than `[lock] stale_age` on connect (almost always left over from a crashed
 session); see [Configuration](configuration.md) for `reap_stale`, `stale_age`,

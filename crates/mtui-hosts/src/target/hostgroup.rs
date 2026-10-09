@@ -881,6 +881,11 @@ impl HostsGroup {
     /// [`unlock_force`](Self::unlock_force) /
     /// [`unlock_selected`](Self::unlock_selected). `force` also removes a
     /// foreign-owned lock; every caller but `unlock_force` passes `false`.
+    ///
+    /// Without `force`, a comment-marked hold of this session's own (an
+    /// operator's `lock -c` reservation) is [`Skipped`](LockOutcome::Skipped):
+    /// these are the operation release paths, and only the explicit
+    /// [`unlock_taken`](Self::unlock_taken) may drop a reservation.
     async fn unlock_where<S>(
         &mut self,
         select: S,
@@ -901,6 +906,11 @@ impl HostsGroup {
                 Box::pin(async move {
                     let outcome = if !t.has_operation_lock() {
                         LockOutcome::Skipped("not connected".to_owned())
+                    } else if !force
+                        && t.holds_operation_lock()
+                        && !t.holds_unmarked_operation_lock()
+                    {
+                        LockOutcome::Skipped("reservation kept".to_owned())
                     } else {
                         match t.unlock_reporting(force).await {
                             Ok(()) => LockOutcome::Released,
@@ -3211,7 +3221,7 @@ mod tests {
     #[tokio::test]
     async fn lock_and_unlock_fan_out_over_group() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
-        let locked = g.lock("session").await;
+        let locked = g.lock("").await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
         assert_eq!(locked["h2"], LockOutcome::Acquired);
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
@@ -3467,6 +3477,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unlock_selected_keeps_this_sessions_reservation() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "ok", "", 0, 0));
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+            false,
+        );
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        g.lock_selected("X", &names).await;
+
+        let outcome = g.unlock_selected(&names).await;
+        assert!(
+            matches!(&outcome["h1"], LockOutcome::Skipped(r) if r.contains("reservation kept")),
+            "{outcome:?}"
+        );
+        assert!(
+            conn.file_contents(TARGET_LOCK_PATH).is_some(),
+            "an operation release removed the reservation"
+        );
+        let swept = g.unlock().await;
+        assert!(matches!(&swept["h1"], LockOutcome::Skipped(_)), "{swept:?}");
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_some());
+
+        let released = g.unlock_taken(&names).await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_selected_still_releases_an_operation_hold_beside_a_reservation() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
+        let reserved: BTreeSet<String> = ["h1".to_owned()].into();
+        let plain: BTreeSet<String> = ["h2".to_owned()].into();
+        g.lock_selected("X", &reserved).await;
+        g.lock_selected("", &plain).await;
+
+        let both: BTreeSet<String> = ["h1".to_owned(), "h2".to_owned()].into();
+        let outcome = g.unlock_selected(&both).await;
+        assert_eq!(outcome["h2"], LockOutcome::Released);
+        assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
+        assert!(!g.get_mut("h2").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn unlock_taken_releases_a_comment_marked_hold_from_the_same_session() {
         // `lock -c "reservation"` then a plain `unlock` in the *same* group
         // must still release it: `unlock_taken` checks
@@ -3557,7 +3614,7 @@ mod tests {
             false,
         );
 
-        let outcomes = g.lock("session").await;
+        let outcomes = g.lock("").await;
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
         assert_eq!(outcomes["h2"], contended_by_alice());
         assert!(
@@ -3585,7 +3642,7 @@ mod tests {
 
         let names: std::collections::BTreeSet<String> =
             ["h1".to_owned(), "h2".to_owned()].into_iter().collect();
-        let outcomes = g.lock_selected("session", &names).await;
+        let outcomes = g.lock_selected("", &names).await;
 
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
         assert_eq!(outcomes["h2"], contended_by_alice());
@@ -3645,7 +3702,7 @@ mod tests {
             ],
             false,
         );
-        let _ = g.lock("session").await; // locks h1; h2 stays foreign-locked
+        let _ = g.lock("").await; // locks h1; h2 stays foreign-locked
 
         let outcomes = g.unlock().await;
         assert_eq!(outcomes["h1"], LockOutcome::Released);
@@ -3702,7 +3759,7 @@ mod tests {
             )],
             false,
         );
-        let _ = g.lock("session").await;
+        let _ = g.lock("").await;
 
         let outcomes = OperationGroup::unlock(&mut g).await;
         assert!(
@@ -3879,7 +3936,7 @@ mod tests {
             ],
             false,
         );
-        g.lock("session").await; // locks h1; h2 stays foreign-locked
+        g.lock("").await; // locks h1; h2 stays foreign-locked
         g.unlock().await;
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         // h2's foreign lock is still present (unlock suppressed the failure).

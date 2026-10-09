@@ -3270,23 +3270,6 @@ mod tests {
             .any(|op| matches!(op, MockSftpOp::Remove(p) if p == &PathBuf::from(TARGET_LOCK_PATH)))
     }
 
-    /// Blocks until `mock` records a **non-exclusive** lockfile write — the
-    /// re-stamp `lock()` performs over a lock this process already holds. The
-    /// anti-vacuity anchor when the host was locked before the job started, where
-    /// `await_locked` would be satisfied by the *earlier* exclusive create.
-    async fn await_relocked(mock: &MockConnection, who: &str) {
-        for _ in 0..2000 {
-            if mock.sftp_ops().iter().any(|op| {
-                matches!(op, MockSftpOp::Write { path, exclusive: false }
-                    if path == &PathBuf::from(TARGET_LOCK_PATH))
-            }) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        panic!("{who} never re-stamped the operation lock");
-    }
-
     /// Whether the lockfile is still on `mock`'s (simulated) filesystem.
     fn still_locked(mock: &MockConnection) -> bool {
         mock.file_contents(TARGET_LOCK_PATH).is_some()
@@ -4700,20 +4683,23 @@ mod tests {
         .await;
         let registry = Arc::new(register_all());
 
-        // The real `lock` command: whole-group, carrying a comment.
+        // The real `lock` command, carrying a comment, on one host only: the
+        // other takes the job's operation lock, which the cancel may release.
         sess.run_command(
             &registry,
             "lock",
-            &["-c".to_owned(), "reserved-for-me".to_owned()],
+            &[
+                "-t".to_owned(),
+                "host-reserved".to_owned(),
+                "-c".to_owned(),
+                "reserved-for-me".to_owned(),
+            ],
         )
         .await
         .expect("lock succeeds");
         assert!(still_locked(&reserved), "the reservation was not taken");
-        assert!(still_locked(&alpha), "the reservation was not taken");
+        assert!(!still_locked(&alpha), "host-alpha must start unlocked");
 
-        // The job re-stamps host-alpha's lock with an empty (operation) comment
-        // and hangs. Anchored on the *re-stamp*, since the exclusive create
-        // already happened above.
         let ids = sess
             .start_jobs(
                 Arc::clone(&registry),
@@ -4722,7 +4708,7 @@ mod tests {
             )
             .await
             .expect("start_jobs succeeds");
-        await_relocked(&alpha, "host-alpha").await;
+        await_locked(&alpha, "host-alpha").await;
 
         let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
         assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");

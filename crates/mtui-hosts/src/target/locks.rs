@@ -834,6 +834,14 @@ impl<C: Clock> TargetLock<C> {
                 {
                     return Err(HostError::TargetLocked(self.locked_by_msg().await?));
                 }
+                // An operation re-lock over our own reservation changes
+                // nothing: rewriting it would strip the comment.
+                if rl.comment.is_empty()
+                    && self.held.as_ref().is_some_and(|c| !c.is_empty())
+                    && self.held.as_deref() == Some(self.lock.comment.as_str())
+                {
+                    return Ok(());
+                }
                 if timeout_reconciled {
                     // The line on the host is the one our timed-out create
                     // just wrote: adopt it as-is rather than risking a second
@@ -1839,6 +1847,34 @@ mod tests {
             b.loaded_owner().sibling,
             None,
             "a lock of another user is not the sibling's, whatever the registry says"
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_keeps_an_own_reservation_byte_for_byte() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut lock = tl(conn, FakeClock::new(now()));
+        lock.lock("X").await.unwrap();
+        let reserved = handle.file_contents(TARGET_LOCK_PATH).unwrap();
+
+        lock.lock("").await.unwrap();
+        assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), reserved);
+        assert!(!lock.holds_unmarked(), "it is still a reservation");
+        assert!(lock.holds());
+    }
+
+    #[tokio::test]
+    async fn lock_with_a_comment_still_restamps_an_own_reservation() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut lock = tl(conn, FakeClock::new(now()));
+        lock.lock("X").await.unwrap();
+
+        lock.lock("Y").await.unwrap();
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            format!("1700000000:testuser:{}:Y", std::process::id()).into_bytes()
         );
     }
 
