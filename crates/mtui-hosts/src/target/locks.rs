@@ -44,7 +44,10 @@
 //! * A contended lock surfaces as [`HostError::TargetLocked`] rather than a
 //!   distinct error type.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mtui_config::Config;
@@ -167,6 +170,62 @@ pub struct LockOwner {
     /// Human-readable lock timestamp, or `"unknown"`.
     pub since: String,
 }
+
+/// Which [`TargetLock`] in this process holds each host's operation lock.
+///
+/// Wire ownership is user + PID, so every `TargetLock` in one process (a second
+/// loaded template, a second MCP session) reads another's lock as its own; this
+/// registry, shared by those objects, is the only way to tell them apart. Keyed
+/// by [`Connection::hostname`], so two names for one host are not recognised as
+/// the same. A claim goes away with its `TargetLock`, even when the lockfile
+/// stays on the host.
+#[derive(Clone, Default)]
+pub struct OpLockHolders(Arc<Mutex<HashMap<String, Holder>>>);
+
+struct Holder {
+    id: u64,
+    label: String,
+}
+
+impl OpLockHolders {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Holder>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn claim(&self, host: &str, id: u64, label: &str) {
+        self.map().insert(
+            host.to_owned(),
+            Holder {
+                id,
+                label: label.to_owned(),
+            },
+        );
+    }
+
+    fn release(&self, host: &str, id: u64) {
+        let mut map = self.map();
+        if map.get(host).is_some_and(|h| h.id == id) {
+            map.remove(host);
+        }
+    }
+
+    /// The label of the holder of `host` other than `id`, if there is one.
+    fn sibling(&self, host: &str, id: u64) -> Option<String> {
+        self.map()
+            .get(host)
+            .filter(|h| h.id != id)
+            .map(|h| h.label.clone())
+    }
+
+    /// Whether both handles share one registry.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// Source of [`TargetLock`] identities; only ever compared for equality.
+static NEXT_LOCK_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Which driving surface a contended line renders for.
 ///
@@ -343,6 +402,19 @@ pub struct TargetLock<C: Clock = SystemClock> {
     /// [`POOL_LOCK_PATH`] instead, so the shared lock/unlock/load machinery
     /// touches the correct file.
     path: PathBuf,
+    /// Where this instance records a hold so siblings in the process can see it.
+    holders: OpLockHolders,
+    /// This instance's identity in [`holders`](Self::holders).
+    id: u64,
+    /// How this instance names itself to a sibling that finds it holding the
+    /// lock.
+    label: String,
+}
+
+impl<C: Clock> Drop for TargetLock<C> {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// The default operation-lock path, `/var/lock/mtui.lock` — a cross-process
@@ -392,7 +464,61 @@ impl<C: Clock> TargetLock<C> {
             lock: RemoteLock::default(),
             held: None,
             path,
+            holders: OpLockHolders::default(),
+            id: NEXT_LOCK_ID.fetch_add(1, Ordering::Relaxed),
+            label: String::new(),
         }
+    }
+
+    /// Joins the registry shared with this lock's siblings, carrying a live
+    /// claim across.
+    pub(crate) fn set_holders(&mut self, holders: OpLockHolders) {
+        if self.holders.ptr_eq(&holders) {
+            return;
+        }
+        let held = self.held.is_some();
+        if held {
+            self.release();
+        }
+        self.holders = holders;
+        if held {
+            self.claim();
+        }
+    }
+
+    fn claim(&self) {
+        self.holders
+            .claim(self.connection.hostname(), self.id, &self.label);
+    }
+
+    fn release(&self) {
+        self.holders.release(self.connection.hostname(), self.id);
+    }
+
+    fn mark_held(&mut self, comment: String) {
+        self.held = Some(comment);
+        self.claim();
+    }
+
+    fn mark_released(&mut self) {
+        self.held = None;
+        self.release();
+    }
+
+    /// Whether another [`TargetLock`] sharing this registry holds the host.
+    fn sibling_holds(&self) -> bool {
+        self.holders
+            .sibling(self.connection.hostname(), self.id)
+            .is_some()
+    }
+
+    /// Whether the loaded lock is this instance's to re-stamp or release: ours
+    /// on the wire ([`is_mine`](Self::is_mine)) and not a sibling's hold.
+    ///
+    /// # Errors
+    /// As [`is_mine`](Self::is_mine).
+    pub(crate) fn owned_here(&self) -> Result<bool> {
+        Ok(self.is_mine()? && !self.sibling_holds())
     }
 
     /// Whether **this** instance is holding the lock and stamped it with no
@@ -523,7 +649,7 @@ impl<C: Clock> TargetLock<C> {
     /// # Errors
     /// Propagates an SFTP error from the underlying calls.
     pub async fn try_claim(&mut self, comment: &str) -> Result<bool> {
-        if self.is_locked().await? && !self.is_mine()? && !self.reap_if_stale().await? {
+        if self.is_locked().await? && !self.owned_here()? && !self.reap_if_stale().await? {
             return Ok(false);
         }
         match self.lock(comment).await {
@@ -554,7 +680,7 @@ impl<C: Clock> TargetLock<C> {
             }
             let remaining = (deadline - self.clock.monotonic()).max(0.0);
             self.clock.sleep(poll.min(remaining)).await;
-            if !self.is_locked().await? || self.is_mine()? {
+            if !self.is_locked().await? || self.owned_here()? {
                 return Ok(true);
             }
             if self.clock.monotonic() >= deadline {
@@ -621,7 +747,7 @@ impl<C: Clock> TargetLock<C> {
                 .await
             {
                 Ok(()) => {
-                    self.held = Some(rl.comment.clone());
+                    self.mark_held(rl.comment.clone());
                     self.lock = rl;
                     return Ok(());
                 }
@@ -642,7 +768,7 @@ impl<C: Clock> TargetLock<C> {
                 // Freed between the create and the load — retry the create.
                 continue;
             }
-            if self.is_mine()? {
+            if self.owned_here()? {
                 // The wire's ownership check is PID-based, so it cannot tell
                 // this instance apart from a sibling `TargetLock` in the same
                 // process (a second loaded template, a second MCP session)
@@ -665,14 +791,14 @@ impl<C: Clock> TargetLock<C> {
                     // just wrote: adopt it as-is rather than risking a second
                     // timeout on a redundant re-stamp. The loaded `self.lock`
                     // is authoritative.
-                    self.held = Some(self.lock.comment.clone());
+                    self.mark_held(self.lock.comment.clone());
                     return Ok(());
                 }
                 // Legitimate re-stamp of our own lock (possibly a new comment).
                 self.connection
                     .sftp_write(&path, line.as_bytes(), false)
                     .await?;
-                self.held = Some(rl.comment.clone());
+                self.mark_held(rl.comment.clone());
                 self.lock = rl;
                 return Ok(());
             }
@@ -745,10 +871,10 @@ impl<C: Clock> TargetLock<C> {
         if !self.is_locked().await? {
             // The lockfile is gone (a reboot cleared `/var/lock`, another owner
             // removed it): whatever this instance took, it no longer holds.
-            self.held = None;
+            self.mark_released();
             return Ok(());
         }
-        if !self.is_mine()? && !force {
+        if !self.owned_here()? && !force {
             return Err(HostError::TargetLocked(self.locked_by_msg().await?));
         }
         let path = self.filename();
@@ -766,7 +892,7 @@ impl<C: Clock> TargetLock<C> {
             }
         }
         self.lock = RemoteLock::default();
-        self.held = None;
+        self.mark_released();
         Ok(())
     }
 
@@ -1483,6 +1609,128 @@ mod tests {
             handle.file_contents(TARGET_LOCK_PATH).unwrap(),
             format!("1700000000:testuser:{}:PI assignment", std::process::id()).into_bytes()
         );
+    }
+
+    fn tl_shared(
+        conn: MockConnection,
+        clock: FakeClock,
+        holders: &OpLockHolders,
+    ) -> TargetLock<FakeClock> {
+        let mut lock = tl(conn, clock);
+        lock.set_holders(holders.clone());
+        lock
+    }
+
+    #[tokio::test]
+    async fn lock_refuses_a_sibling_operation_lock() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+
+        let err = b.lock("").await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)), "{err}");
+        assert!(!b.holds(), "the refused sibling must not record a hold");
+        assert!(a.holds());
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn unlock_refuses_a_sibling_hold() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+
+        let err = b.unlock(false).await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)), "{err}");
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_some(),
+            "a sibling's lockfile must survive"
+        );
+        assert!(a.holds());
+    }
+
+    #[tokio::test]
+    async fn force_unlock_still_removes_a_sibling_hold() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+
+        b.unlock(true).await.unwrap();
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn wait_treats_a_sibling_as_busy() {
+        let mut c = cfg();
+        c.lock_wait = 3;
+        c.lock_wait_poll = 1;
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let clock = FakeClock::new(now());
+        let mut b = TargetLock::with_clock(Box::new(conn), &c, clock.clone());
+        b.set_holders(holders);
+        a.lock("").await.unwrap();
+
+        let err = b.lock("").await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)), "{err}");
+        assert_eq!(
+            clock.monotonic(),
+            3.0,
+            "the queue must run out the whole budget once, not re-enter per retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_the_holder_frees_the_host() {
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+        drop(a);
+
+        b.lock("").await.unwrap();
+        assert!(b.holds());
+    }
+
+    #[tokio::test]
+    async fn unlock_frees_the_host_for_a_sibling() {
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+        a.unlock(false).await.unwrap();
+        assert!(
+            holders.map().is_empty(),
+            "a released hold must be deregistered"
+        );
+
+        b.lock("").await.unwrap();
+        assert!(b.holds());
+    }
+
+    #[tokio::test]
+    async fn set_holders_moves_a_live_claim_to_the_new_registry() {
+        let conn = MockConnection::new("h1");
+        let mut a = tl(conn.clone(), FakeClock::new(now()));
+        a.lock("").await.unwrap();
+
+        let shared = OpLockHolders::default();
+        a.set_holders(shared.clone());
+        let mut b = tl_shared(conn, FakeClock::new(now()), &shared);
+        let err = b.lock("").await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)), "{err}");
     }
 
     #[tokio::test]

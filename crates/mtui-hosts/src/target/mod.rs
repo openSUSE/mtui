@@ -50,8 +50,8 @@ pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome};
 pub use locks::{
-    Clock, ContendedSurface, LockOwner, LockRow, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock,
-    TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
+    Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, PoolLock,
+    RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
@@ -132,6 +132,9 @@ pub struct Target {
     /// `None` until connected. Drives [`unlock`](Target::unlock) and the
     /// [`RepoManager`] unknown-cmd force-unlock safeguard.
     lock: Option<TargetLock>,
+    /// The registry [`connect`](Target::connect) hands the operation lock, so
+    /// it can tell the process's other targets' holds from its own.
+    op_lock_holders: OpLockHolders,
     /// The pool-claim lock (`/var/lock/mtui-pool.lock`), built in
     /// [`connect`](Target::connect) / [`with_connection`](Target::with_connection)
     /// from a clone of this target's connection and seeded with [`rrid`](Self::rrid).
@@ -222,6 +225,7 @@ impl Target {
             transactional: false,
             config: config.clone(),
             lock: None,
+            op_lock_holders: OpLockHolders::default(),
             pool_lock: None,
             rrid: String::new(),
             packages: Vec::new(),
@@ -294,6 +298,7 @@ impl Target {
             transactional: false,
             config,
             lock,
+            op_lock_holders: OpLockHolders::default(),
             pool_lock,
             rrid: String::new(),
             packages: Vec::new(),
@@ -456,6 +461,21 @@ impl Target {
     #[must_use]
     pub fn holds_operation_lock(&self) -> bool {
         self.lock.as_ref().is_some_and(TargetLock::holds)
+    }
+
+    /// Joins the registry through which the process's targets see each other's
+    /// operation locks; the session pushes one down onto every target.
+    pub fn set_op_lock_holders(&mut self, holders: OpLockHolders) {
+        if let Some(lock) = self.lock.as_mut() {
+            lock.set_holders(holders.clone());
+        }
+        self.op_lock_holders = holders;
+    }
+
+    /// The registry this target's operation lock shares with its siblings.
+    #[must_use]
+    pub fn op_lock_holders(&self) -> &OpLockHolders {
+        &self.op_lock_holders
     }
 
     /// Whether this target has a built operation lock, i.e. is connected.
@@ -1077,7 +1097,9 @@ impl Target {
             // Build the operation lock over a clone of the live connection.
             // The lock uses this handle for its SFTP-based lock
             // protocol and force-unlock.
-            self.lock = Some(TargetLock::new(conn.clone_box(), &self.config));
+            let mut lock = TargetLock::new(conn.clone_box(), &self.config);
+            lock.set_holders(self.op_lock_holders.clone());
+            self.lock = Some(lock);
             // Pool claims use a separate remote file + RRID-based ownership.
             self.pool_lock = Some(PoolLock::new(
                 conn.clone_box(),

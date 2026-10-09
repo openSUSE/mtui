@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use mtui_config::Config;
 use mtui_core::{HOST_CLOSE_TIMEOUT, Registry};
+use mtui_hosts::OpLockHolders;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -165,6 +166,10 @@ pub struct SessionRegistry {
     live: LiveSet,
     /// Monotonic session-id counter (each mint gets a fresh id).
     next_id: Arc<AtomicU64>,
+    /// Shared by every minted session: they all live in one process, so their
+    /// targets' operation locks all read as ours on the wire and only this
+    /// registry tells one session's hold from another's.
+    op_lock_holders: OpLockHolders,
 }
 
 impl SessionRegistry {
@@ -183,6 +188,7 @@ impl SessionRegistry {
             sweep_parallel,
             live: Arc::new(StdMutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(0)),
+            op_lock_holders: OpLockHolders::default(),
         }
     }
 
@@ -227,7 +233,13 @@ impl SessionRegistry {
     /// serve HTTP, so their audit `transport` agrees with the server's.
     #[must_use]
     pub fn make_session(&self) -> Arc<McpSession> {
-        McpSession::new_with_transport(self.config.clone(), "http")
+        let session = McpSession::new_with_transport(self.config.clone(), "http");
+        session
+            .session()
+            .try_lock()
+            .expect("a session minted a moment ago is uncontended")
+            .set_op_lock_holders(self.op_lock_holders.clone());
+        session
     }
 
     /// Mint a fresh, isolated, cap-checked [`McpServer`] for one MCP session.
@@ -769,6 +781,20 @@ mod tests {
             "close_all must disconnect a live session's hosts on shutdown"
         );
         assert_eq!(reg.live_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn sessions_of_one_registry_share_the_op_lock_holders() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let a = reg.make_session();
+        let b = reg.make_session();
+        let other = reg_with_idle(Duration::from_secs(3600)).make_session();
+
+        let a_holders = a.session().lock().await.op_lock_holders().clone();
+        let b_holders = b.session().lock().await.op_lock_holders().clone();
+        let other_holders = other.session().lock().await.op_lock_holders().clone();
+        assert!(a_holders.ptr_eq(&b_holders));
+        assert!(!a_holders.ptr_eq(&other_holders));
     }
 
     /// Cancelling mid-sweep must preempt a wedged teardown batch rather than

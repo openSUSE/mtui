@@ -325,6 +325,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Templates loaded in one `mtui`/`mtui-mcp` process, and the sessions of one
+  `mtui-mcp` server, no longer share the operation lock on a common refhost: a
+  second template's `run`/`update`/`install`/`prepare` now waits for (or, at the
+  default `lock_wait = 0`, refuses on) the first one's hold instead of
+  re-stamping it, and its abort no longer deletes that lockfile, so their
+  `zypper` transactions are serialised (#670).
 - The install logs `export` downloads from openQA no longer have every line
   break doubled.
 - `export` writes one install log per openQA flavor and rewrites it in place, so
