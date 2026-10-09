@@ -9,8 +9,9 @@
 use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::URLs;
 
-use super::base::{ExportContext, OverwritePrompt};
+use super::base::ExportContext;
 use super::downloader::BytesFetcher;
+use crate::support::fileops::atomic_write_file;
 
 /// The automatic-workflow exporter.
 pub struct AutoExport {
@@ -28,12 +29,10 @@ impl AutoExport {
     }
 
     /// Downloads each passing job's install log, returning the written
-    /// `<distri>_<version>_<arch>.log` filenames.
-    async fn get_logs(
-        &self,
-        fetcher: &dyn BytesFetcher,
-        prompt: &dyn OverwritePrompt,
-    ) -> Vec<String> {
+    /// `<distri>_<version>_<arch>[_<flavor>].log` filenames.
+    ///
+    /// The logs are server-derived, so an existing file is rewritten in place.
+    async fn get_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         let Some(auto) = &self.auto else {
             return Vec::new();
         };
@@ -47,8 +46,7 @@ impl AutoExport {
             return Vec::new();
         }
 
-        // Download concurrently (order-preserving), then write serially: the
-        // write may prompt on overwrite, so it must not run in parallel.
+        // Download concurrently (order-preserving), then write serially.
         let downloads = results.iter().map(|url| self.installog_lines(fetcher, url));
         let all_lines = futures::future::join_all(downloads).await;
 
@@ -57,13 +55,11 @@ impl AutoExport {
             if lines.is_empty() {
                 continue;
             }
-            let fn_name = format!(
-                "{}_{}_{}.log",
-                url.distri.to_lowercase(),
-                url.version,
-                url.arch
-            );
-            self.ctx.writer(&dir.join(&fn_name), &lines, prompt);
+            let fn_name = log_file_name(url);
+            let path = dir.join(&fn_name);
+            if let Err(e) = atomic_write_file(lines.join("\n").as_bytes(), &path) {
+                tracing::error!("Failed to write {}: {e}", path.display());
+            }
             filenames.push(fn_name);
         }
         filenames
@@ -85,12 +81,19 @@ impl AutoExport {
     }
 
     /// Downloads the install logs, returning the written filenames.
-    pub async fn write_logs(
-        &self,
-        fetcher: &dyn BytesFetcher,
-        prompt: &dyn OverwritePrompt,
-    ) -> Vec<String> {
-        self.get_logs(fetcher, prompt).await
+    pub async fn write_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
+        self.get_logs(fetcher).await
+    }
+}
+
+/// `<distri>_<version>_<arch>[_<flavor>].log`; the flavor tells apart the
+/// install jobs (plain, SAP, HA, ...) that share a distri/version/arch.
+fn log_file_name(url: &URLs) -> String {
+    let distri = url.distri.to_lowercase();
+    if url.flavor.is_empty() {
+        format!("{distri}_{}_{}.log", url.version, url.arch)
+    } else {
+        format!("{distri}_{}_{}_{}.log", url.version, url.arch, url.flavor)
     }
 }
 
@@ -123,6 +126,7 @@ mod tests {
             "SLES",
             "x86_64",
             "15-SP5",
+            "",
             "https://oqa/tests/1/file/log.txt",
             result,
         )
@@ -182,12 +186,7 @@ mod tests {
     #[tokio::test]
     async fn get_logs_empty_without_auto() {
         let ex = AutoExport::new(ctx(), None);
-        let out = ex
-            .get_logs(
-                &OkFetcher(b"x".to_vec()),
-                &super::super::base::DenyOverwrite,
-            )
-            .await;
+        let out = ex.get_logs(&OkFetcher(b"x".to_vec())).await;
         assert!(out.is_empty());
     }
 
@@ -206,13 +205,10 @@ mod tests {
         let ex = AutoExport::new(ctx_in(dir.path()), Some(auto));
 
         let out = ex
-            .get_logs(
-                &OkFetcher(b"zypper install log\n".to_vec()),
-                &super::super::base::DenyOverwrite,
-            )
+            .get_logs(&OkFetcher(b"zypper install log\n".to_vec()))
             .await;
 
-        // Filename is `{distri.lower()}_{version}_{arch}.log`.
+        // Without a flavor the name is `{distri.lower()}_{version}_{arch}.log`.
         assert_eq!(out, vec!["sles_15-SP5_x86_64.log".to_string()]);
         let written = std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
         assert_eq!(written, "zypper install log\n");
@@ -240,7 +236,7 @@ mod tests {
     }
 
     fn url_at(distri: &str, arch: &str, version: &str, path: &str) -> URLs {
-        URLs::new(distri, arch, version, path, "passed")
+        URLs::new(distri, arch, version, "", path, "passed")
     }
 
     #[tokio::test]
@@ -267,9 +263,7 @@ mod tests {
             fail: std::collections::HashSet::new(),
         };
 
-        let out = ex
-            .get_logs(&fetcher, &super::super::base::DenyOverwrite)
-            .await;
+        let out = ex.get_logs(&fetcher).await;
 
         // Filenames follow input order.
         assert_eq!(
@@ -289,6 +283,90 @@ mod tests {
         ] {
             assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), expect);
         }
+    }
+
+    fn url_flavored(flavor: &str, path: &str) -> URLs {
+        URLs::new("SLES", "x86_64", "15-SP5", flavor, path, "passed")
+    }
+
+    fn fetcher_for(bodies: &[(&str, &str)]) -> KeyedFetcher {
+        KeyedFetcher {
+            bodies: bodies
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
+                .collect(),
+            fail: std::collections::HashSet::new(),
+        }
+    }
+
+    fn dir_listing(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn get_logs_names_each_flavor_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_flavored("Server-DVD-Incidents-Install", "https://oqa/a/file/log.txt"),
+            url_flavored(
+                "Server-DVD-HA-Incidents-Install",
+                "https://oqa/b/file/log.txt",
+            ),
+            url_flavored("", "https://oqa/c/file/log.txt"),
+        ];
+        let ex = AutoExport::new(ctx_in(dir.path()), Some(seeded_auto(Some(results), vec![])));
+        let fetcher = fetcher_for(&[
+            ("https://oqa/a/file/log.txt", "body-a\n"),
+            ("https://oqa/b/file/log.txt", "body-b\n"),
+            ("https://oqa/c/file/log.txt", "body-c\n"),
+        ]);
+
+        let out = ex.get_logs(&fetcher).await;
+
+        assert_eq!(
+            out,
+            vec![
+                "sles_15-SP5_x86_64_Server-DVD-Incidents-Install.log".to_string(),
+                "sles_15-SP5_x86_64_Server-DVD-HA-Incidents-Install.log".to_string(),
+                "sles_15-SP5_x86_64.log".to_string(),
+            ]
+        );
+        let logs = ex.ctx.install_logs_dir();
+        assert_eq!(dir_listing(&logs).len(), 3);
+        assert_eq!(
+            std::fs::read_to_string(logs.join(&out[1])).unwrap(),
+            "body-b\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_logs_rewrites_in_place_on_repeat_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![url_flavored(
+            "Server-DVD-Incidents-Install",
+            "https://oqa/a/file/log.txt",
+        )];
+        let ex = AutoExport::new(ctx_in(dir.path()), Some(seeded_auto(Some(results), vec![])));
+
+        let first = ex
+            .get_logs(&fetcher_for(&[("https://oqa/a/file/log.txt", "old\n")]))
+            .await;
+        let second = ex
+            .get_logs(&fetcher_for(&[("https://oqa/a/file/log.txt", "new\n")]))
+            .await;
+
+        assert_eq!(first, second);
+        let logs = ex.ctx.install_logs_dir();
+        assert_eq!(dir_listing(&logs), first);
+        assert_eq!(
+            std::fs::read_to_string(logs.join(&first[0])).unwrap(),
+            "new\n"
+        );
     }
 
     #[tokio::test]
@@ -314,9 +392,7 @@ mod tests {
             fail: std::iter::once("https://oqa/b/file/log.txt".to_string()).collect(),
         };
 
-        let out = ex
-            .get_logs(&fetcher, &super::super::base::DenyOverwrite)
-            .await;
+        let out = ex.get_logs(&fetcher).await;
 
         // The failed middle download is skipped; the surrounding logs still pair.
         assert_eq!(
