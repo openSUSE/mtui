@@ -207,9 +207,7 @@ impl Export {
                 let auto = session.metadata().openqa().auto.clone();
                 let touched =
                     author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
-                let written = AutoExport::new(ctx, auto)
-                    .write_logs(&http, &DenyOverwrite)
-                    .await;
+                let written = AutoExport::new(ctx, auto).write_logs(&http).await;
                 (touched, written)
             }
             Workflow::Kernel => {
@@ -450,7 +448,7 @@ mod tests {
         };
         let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid, 1);
         auto.results = Some(vec![mtui_types::URLs::new(
-            "SLES", "x86_64", "15-SP5", log_url, "passed",
+            "SLES", "x86_64", "15-SP5", "", log_url, "passed",
         )]);
         auto.pp = vec!["Results from openQA jobs\n".to_string()];
         auto

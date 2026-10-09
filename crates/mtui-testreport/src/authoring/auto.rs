@@ -40,9 +40,20 @@ pub fn openqa_install_from_auto(auto: Option<&DashboardAutoOpenQA>) -> Option<Op
 /// One `URLs` result as a schema `openqa_install.jobs[]` entry.
 fn openqa_job(result: &URLs) -> OpenqaJob {
     OpenqaJob {
-        scenario: format!("{}_{}_{}", result.distri, result.version, result.arch),
+        scenario: scenario(result),
         result: result.result.clone(),
         job: job_id_from_url(&result.url),
+    }
+}
+
+/// `<distri>_<version>_<arch>[_<flavor>]`; the flavor keeps the install jobs of
+/// one distri/version/arch distinguishable.
+fn scenario(result: &URLs) -> String {
+    let base = format!("{}_{}_{}", result.distri, result.version, result.arch);
+    if result.flavor.is_empty() {
+        base
+    } else {
+        format!("{base}_{}", result.flavor)
     }
 }
 
@@ -70,6 +81,7 @@ mod tests {
             "SLES",
             "x86_64",
             "15-SP5",
+            "",
             "https://oqa/tests/42/file/log.txt",
             result,
         )
@@ -132,6 +144,36 @@ mod tests {
         assert_eq!(job.scenario, "SLES_15-SP5_x86_64");
         assert_eq!(job.result, "passed");
         assert_eq!(job.job, Some(42));
+    }
+
+    fn flavored(flavor: &str, id: u32) -> URLs {
+        URLs::new(
+            "SLES",
+            "x86_64",
+            "15-SP5",
+            flavor,
+            format!("https://oqa/tests/{id}/file/log.txt"),
+            "passed",
+        )
+    }
+
+    #[test]
+    fn scenario_names_the_flavor_when_known() {
+        let auto = seeded_auto(Some(vec![
+            flavored("Server-DVD-Incidents-Install", 1),
+            flavored("Server-DVD-HA-Incidents-Install", 2),
+            flavored("", 3),
+        ]));
+        let install = openqa_install_from_auto(Some(&auto)).unwrap();
+        let scenarios: Vec<&str> = install.jobs.iter().map(|j| j.scenario.as_str()).collect();
+        assert_eq!(
+            scenarios,
+            vec![
+                "SLES_15-SP5_x86_64_Server-DVD-Incidents-Install",
+                "SLES_15-SP5_x86_64_Server-DVD-HA-Incidents-Install",
+                "SLES_15-SP5_x86_64",
+            ]
+        );
     }
 
     #[test]

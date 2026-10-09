@@ -325,6 +325,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `export` writes one install log per openQA flavor and rewrites it in place, so
+  repeated exports no longer add timestamped copies that `commit` uploads. The
+  document's `testing.openqa.install` scenarios now name the flavor too.
 - `export` now writes the `openqa_overview` results (single incidents,
   aggregated updates, build checks) into `testing.openqa`, fetching them when
   `openqa_overview` has not run in this session; previously only

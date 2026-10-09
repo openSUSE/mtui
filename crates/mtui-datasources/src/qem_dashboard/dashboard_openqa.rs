@@ -519,6 +519,7 @@ impl DashboardAutoOpenQA {
                         distri,
                         j.arch.clone(),
                         j.version.clone(),
+                        j.flavor.clone(),
                         url,
                         j.result.clone(),
                     )
@@ -1220,11 +1221,17 @@ mod tests {
                 "test": "qam-incidentinstall",
                 "result": "passed",
                 "id": 2,
-                "settings": {"DISTRI": "sle", "ARCH": "x86_64", "VERSION": "15-SP5"},
+                "settings": {
+                    "DISTRI": "sle",
+                    "ARCH": "x86_64",
+                    "VERSION": "15-SP5",
+                    "FLAVOR": "Server-DVD-HA-Incidents-Install",
+                },
             })),
         ];
         let urls = dashboard.get_logs_url(&jobs).unwrap();
         assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].flavor, "Server-DVD-HA-Incidents-Install");
     }
 
     #[test]

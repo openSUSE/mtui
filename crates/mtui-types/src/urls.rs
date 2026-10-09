@@ -13,6 +13,8 @@ pub struct URLs {
     pub arch: String,
     /// The version (e.g. `15-SP5`).
     pub version: String,
+    /// The openQA job flavor (e.g. `Server-DVD-HA-Incidents-Install`); empty when unknown.
+    pub flavor: String,
     /// The URL of the log artefact.
     pub url: String,
     /// The job result (e.g. `passed`); empty when not set.
@@ -26,6 +28,7 @@ impl URLs {
         distri: impl Into<String>,
         arch: impl Into<String>,
         version: impl Into<String>,
+        flavor: impl Into<String>,
         url: impl Into<String>,
         result: impl Into<String>,
     ) -> Self {
@@ -33,6 +36,7 @@ impl URLs {
             distri: distri.into(),
             arch: arch.into(),
             version: version.into(),
+            flavor: flavor.into(),
             url: url.into(),
             result: result.into(),
         }
@@ -45,17 +49,25 @@ mod tests {
 
     #[test]
     fn new_sets_all_fields() {
-        let u = URLs::new("SLES", "x86_64", "15-SP5", "https://oqa/log", "passed");
+        let u = URLs::new(
+            "SLES",
+            "x86_64",
+            "15-SP5",
+            "Server-DVD-Incidents-Install",
+            "https://oqa/log",
+            "passed",
+        );
         assert_eq!(u.distri, "SLES");
         assert_eq!(u.arch, "x86_64");
         assert_eq!(u.version, "15-SP5");
+        assert_eq!(u.flavor, "Server-DVD-Incidents-Install");
         assert_eq!(u.url, "https://oqa/log");
         assert_eq!(u.result, "passed");
     }
 
     #[test]
     fn empty_result_is_representable() {
-        let u = URLs::new("SLES", "x86_64", "15-SP5", "https://oqa/log", "");
+        let u = URLs::new("SLES", "x86_64", "15-SP5", "", "https://oqa/log", "");
         assert_eq!(u.result, "");
     }
 }
