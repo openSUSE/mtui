@@ -836,10 +836,16 @@ impl HostsGroup {
                     let outcome = if !t.has_operation_lock() {
                         LockOutcome::Skipped("not connected".to_owned())
                     } else if !t.holds_operation_lock() {
-                        LockOutcome::Skipped(
-                            "not locked by this session; check list_locks, or unlock --force"
-                                .to_owned(),
-                        )
+                        LockOutcome::Skipped(match t.sibling_operation_holder() {
+                            Some(label) => format!(
+                                "held by {}; release it there",
+                                super::sibling_holder_name(&label)
+                            ),
+                            None => {
+                                "not locked by this session; check list_locks, or unlock --force"
+                                    .to_owned()
+                            }
+                        })
                     } else {
                         match t.unlock_reporting(false).await {
                             Ok(()) => LockOutcome::Released,
@@ -2067,6 +2073,7 @@ mod tests {
         LockOutcome::Contended(LockOwner {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            ..Default::default()
         })
     }
 
@@ -3423,6 +3430,40 @@ mod tests {
                 "{host} is on its own registry"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn unlock_taken_names_a_sibling_hold_and_does_not_offer_force() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "ok", "", 0, 0));
+        let holders = OpLockHolders::default();
+        let build = |rrid: &str| {
+            let mut g = HostsGroup::new(
+                vec![Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(conn.clone()),
+                )],
+                false,
+            );
+            g.set_op_lock_holders(holders.clone());
+            for t in g.targets_mut() {
+                t.set_rrid(rrid);
+            }
+            g
+        };
+        let mut group_a = build("SUSE:Maintenance:1:1");
+        let mut group_b = build("SUSE:Maintenance:2:2");
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        group_a.lock_selected("", &names).await;
+
+        let outcome = group_b.unlock_taken(&names).await;
+        assert!(
+            matches!(&outcome["h1"], LockOutcome::Skipped(reason)
+                if reason.contains("this mtui process (SUSE:Maintenance:1:1)")
+                    && !reason.contains("--force")),
+            "{outcome:?}"
+        );
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_some());
     }
 
     #[tokio::test]

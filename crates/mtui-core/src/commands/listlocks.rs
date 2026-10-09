@@ -77,6 +77,7 @@ impl Command for ListLocks {
                 locked_by: row.locked_by,
                 time: row.time,
                 comment: row.comment,
+                sibling: row.sibling,
             };
             rows.push((name.clone(), target.system().clone(), status));
         }

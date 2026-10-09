@@ -47,6 +47,9 @@ pub struct LockStatus {
     pub(crate) time: String,
     /// Optional lock comment.
     pub(crate) comment: String,
+    /// The label of the sibling template/session in this process holding the
+    /// lock; takes the place of `me`/`locked_by`.
+    pub(crate) sibling: Option<String>,
 }
 
 /// Whether ANSI color escapes are emitted (`auto`/`always`/`never`); the active
@@ -323,7 +326,11 @@ impl CommandPromptDisplay {
     pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
         let sys = system.to_string();
         if lock.is_locked {
-            let by = if lock.is_mine { "me" } else { &lock.locked_by };
+            let by = match &lock.sibling {
+                Some(label) => mtui_hosts::sibling_holder_name(label),
+                None if lock.is_mine => "me".to_owned(),
+                None => lock.locked_by.clone(),
+            };
             let since = Self::yellow(self, &format!("since {} by {by}", lock.time));
             self.print_eol(&format!("{hostname:20} {sys:20}: {since}"), "");
             if lock.comment.is_empty() {
@@ -941,6 +948,7 @@ mod tests {
             locked_by: "someone".to_owned(),
             time: "now".to_owned(),
             comment: "test comment".to_owned(),
+            ..Default::default()
         };
         d.list_locks("test_host", &system("SLES"), &lock);
         let out = rendered(&buf);
@@ -956,10 +964,32 @@ mod tests {
             is_mine: false,
             locked_by: "alice".to_owned(),
             time: "then".to_owned(),
-            comment: String::new(),
+            ..Default::default()
         };
         d.list_locks("h", &system("SLES"), &lock);
         assert!(rendered(&buf).contains("since then by alice"));
+    }
+
+    #[test]
+    fn list_locks_names_a_sibling_instead_of_me() {
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let held = |sibling: &str| LockStatus {
+            is_locked: true,
+            is_mine: true,
+            locked_by: "testuser".to_owned(),
+            time: "now".to_owned(),
+            sibling: Some(sibling.to_owned()),
+            ..Default::default()
+        };
+        d.list_locks("h", &system("SLES"), &held("SUSE:Maintenance:1:1"));
+        d.list_locks("h", &system("SLES"), &held(""));
+        let out = rendered(&buf);
+        assert!(
+            out.contains("since now by this mtui process (SUSE:Maintenance:1:1)"),
+            "{out}"
+        );
+        assert!(out.contains("since now by this mtui process\n"), "{out}");
+        assert!(!out.contains("by me"), "{out}");
     }
 
     #[test]

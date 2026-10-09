@@ -149,6 +149,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- A lock held by another template or session of the same `mtui`/`mtui-mcp`
+  process is now named as such (`held by this mtui process (<RRID>), another
+  template or session`) in contended `lock`/`run`/`update` reports, in the
+  `unlock` skip line and in `list_locks` (previously `by me`), and no longer
+  suggests `unlock --force` for it (#670).
 - Reports load from TeReGen API v2 (`[teregen] api_v2`) only. No SVN checkout
   is made, and `<template_dir>/<RRID>/` is just a scratch directory for install
   logs and results; an old checkout there is no longer read. A report with no
