@@ -33,10 +33,10 @@ pub use error::{HostError, Result};
 pub use prompter::{Prompter, Reader};
 pub use target::{
     Check, CheckArgs, CheckFailure, Clock, Command, ContendedSurface, Doer, HostArbiter,
-    HostOutput, HostPlan, HostsGroup, InstallOperation, LockOutcome, LockOwner, Operation,
-    OperationGroup, OperationReport, Owner, POOL_LOCK_PATH, PackageQuerier, PlanProvider, PoolLock,
-    RebootFailure, RebootFailureCause, RemoteLock, RepoFailure, RepoManager, RepoOp, SetRepo, Sink,
-    SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner,
-    UninstallOperation, contended_lock_reason, get_arbiter, parse_system, set_test_sink, spinner,
-    suspend,
+    HostOutput, HostPlan, HostsGroup, InstallOperation, LockOutcome, LockOwner, OpLockHolders,
+    Operation, OperationGroup, OperationReport, Owner, POOL_LOCK_PATH, PackageQuerier,
+    PlanProvider, PoolLock, RebootFailure, RebootFailureCause, RemoteLock, RepoFailure,
+    RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH,
+    Target, TargetLock, TtySpinner, UninstallOperation, contended_lock_reason, get_arbiter,
+    parse_system, set_test_sink, spinner, suspend,
 };

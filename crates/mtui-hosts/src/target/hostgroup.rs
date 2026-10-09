@@ -52,7 +52,7 @@ use super::operation::{
     HostCommandMap, HostPlan, OperationGroup, PlanProvider, RebootFailure, RebootFailureCause,
 };
 use super::repo_manager::{RepoOp, SetRepo};
-use super::{LockOwner, LockRow, Target};
+use super::{LockOwner, LockRow, OpLockHolders, Target};
 
 /// The per-host result of a group [`lock`](HostsGroup::lock) /
 /// [`unlock`](HostsGroup::unlock) fan-out.
@@ -140,6 +140,11 @@ pub struct HostsGroup {
     /// never interrupted part-way. The default is a fresh, never-cancelled
     /// token, so an unwired group behaves exactly as before.
     cancel: CancellationToken,
+    /// The registry that lets members tell a sibling group's operation lock
+    /// from their own, pushed down via
+    /// [`set_op_lock_holders`](Self::set_op_lock_holders). `None` leaves each
+    /// member on its own registry.
+    op_lock_holders: Option<OpLockHolders>,
 }
 
 impl HostsGroup {
@@ -160,7 +165,17 @@ impl HostsGroup {
             prompter: None,
             max_parallel: 0,
             cancel: CancellationToken::new(),
+            op_lock_holders: None,
         }
+    }
+
+    /// Installs the registry shared with the process's other groups on every
+    /// member, and on every target added later.
+    pub fn set_op_lock_holders(&mut self, holders: OpLockHolders) {
+        for t in self.data.values_mut() {
+            t.set_op_lock_holders(holders.clone());
+        }
+        self.op_lock_holders = Some(holders);
     }
 
     /// Installs the cooperative cancellation token for this group.
@@ -323,6 +338,7 @@ impl HostsGroup {
         let max_parallel = self.max_parallel;
         let cancel = self.cancel.clone();
         let prompter = self.prompter.clone();
+        let holders = self.op_lock_holders.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         let selected: Vec<Target> = match hosts {
@@ -350,6 +366,7 @@ impl HostsGroup {
         group.max_parallel = max_parallel;
         group.cancel = cancel;
         group.prompter = prompter;
+        group.op_lock_holders = holders;
         Ok(group)
     }
 
@@ -392,6 +409,7 @@ impl HostsGroup {
         let max_parallel = self.max_parallel;
         let cancel = self.cancel.clone();
         let prompter = self.prompter.clone();
+        let holders = self.op_lock_holders.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         if let Some(names) = hosts {
@@ -418,11 +436,13 @@ impl HostsGroup {
         selected.max_parallel = max_parallel;
         selected.cancel = cancel.clone();
         selected.prompter = prompter.clone();
+        selected.op_lock_holders = holders.clone();
         let mut remainder = HostsGroup::new(remainder, is_repl);
         remainder.plan_provider = provider;
         remainder.max_parallel = max_parallel;
         remainder.cancel = cancel;
         remainder.prompter = prompter;
+        remainder.op_lock_holders = holders;
         Ok((selected, remainder))
     }
 
@@ -456,6 +476,9 @@ impl HostsGroup {
     pub fn add(&mut self, mut target: Target) {
         if let Some(prompter) = self.prompter.as_ref() {
             target.set_timeout_prompt(prompter.as_timeout_prompt());
+        }
+        if let Some(holders) = self.op_lock_holders.as_ref() {
+            target.set_op_lock_holders(holders.clone());
         }
         self.data.insert(target.hostname().to_owned(), target);
     }
@@ -1400,7 +1423,7 @@ impl HostsGroup {
                     let foreign = locked
                         && target
                             .lock_mut()
-                            .is_some_and(|l| !l.is_mine().unwrap_or(false));
+                            .is_some_and(|l| !l.owned_here().unwrap_or(false));
                     if foreign {
                         let hostname = target.hostname().to_owned();
                         let lock = target.lock_mut().expect("foreign implies a built lock");
@@ -3324,6 +3347,82 @@ mod tests {
         let released = group_a.unlock_taken(&names).await;
         assert_eq!(released["h1"], LockOutcome::Released);
         assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn update_lock_aborts_on_a_sibling_groups_hold_and_keeps_it() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "ok", "", 0, 0));
+        let holders = OpLockHolders::default();
+        let mut group_a = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+            false,
+        );
+        let mut group_b = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+            false,
+        );
+        group_a.set_op_lock_holders(holders.clone());
+        group_b.set_op_lock_holders(holders);
+
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        group_a.lock_selected("", &names).await;
+
+        let err = group_b
+            .update_lock()
+            .await
+            .expect_err("a sibling's hold must abort the update");
+        assert!(matches!(err, HostError::Update(_)), "{err}");
+        assert!(
+            conn.file_contents(TARGET_LOCK_PATH).is_some(),
+            "the abort rollback removed the sibling's lockfile"
+        );
+        assert!(group_a.get("h1").unwrap().holds_operation_lock());
+    }
+
+    #[tokio::test]
+    async fn a_target_added_later_shares_the_groups_op_lock_holders() {
+        let holders = OpLockHolders::default();
+        let mut g = HostsGroup::new(vec![enabled("h1")], false);
+        g.set_op_lock_holders(holders.clone());
+        g.add(enabled("h2"));
+
+        for host in ["h1", "h2"] {
+            assert!(
+                g.get(host).unwrap().op_lock_holders().ptr_eq(&holders),
+                "{host} is on its own registry"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn select_split_carries_the_op_lock_holders_to_both_halves() {
+        let holders = OpLockHolders::default();
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
+        g.set_op_lock_holders(holders.clone());
+
+        let (mut selected, remainder) = g.select_split(Some(&["h1".to_owned()]), false).unwrap();
+        // The halves are re-merged after an operation; a target moved between
+        // them must not drop off the shared registry.
+        selected.merge(remainder);
+        selected.add(enabled("h3"));
+        for host in ["h1", "h2", "h3"] {
+            assert!(
+                selected
+                    .get(host)
+                    .unwrap()
+                    .op_lock_holders()
+                    .ptr_eq(&holders),
+                "{host} is on its own registry"
+            );
+        }
     }
 
     #[tokio::test]

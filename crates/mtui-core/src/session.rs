@@ -16,7 +16,9 @@ use mtui_config::Config;
 use mtui_datasources::HttpError;
 use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
-use mtui_hosts::{HostArbiter, HostError, HostsGroup, LockOutcome, Owner, Prompter, Target};
+use mtui_hosts::{
+    HostArbiter, HostError, HostsGroup, LockOutcome, OpLockHolders, Owner, Prompter, Target,
+};
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
@@ -146,6 +148,17 @@ pub struct Session {
     /// [`http_client`](Self::http_client) so back-to-back openQA connectors
     /// (`reload_openqa`'s primary + baremetal instances) share one pool.
     openqa_transport: OpenqaTransportCache,
+    /// The registry through which every target in this process sees the
+    /// operation locks its siblings hold.
+    ///
+    /// Wire ownership is per user + PID, so two loaded templates (or two MCP
+    /// sessions) sharing a refhost would otherwise read each other's lock as
+    /// their own. Shared with every [`fork_for_call`](Self::fork_for_call); the
+    /// MCP registry hands one instance to all its sessions via
+    /// [`set_op_lock_holders`](Self::set_op_lock_holders). Pushed onto the
+    /// active group on every [`activate`](Self::activate) and onto each target
+    /// before it connects.
+    op_lock_holders: OpLockHolders,
 }
 
 /// A candidate-order shuffle seam: mutates the slot's candidate list in place
@@ -273,6 +286,7 @@ impl Session {
             cancel: CancellationToken::new(),
             http_client: Arc::new(Mutex::new(None)),
             openqa_transport: Arc::new(Mutex::new(None)),
+            op_lock_holders: OpLockHolders::default(),
             #[cfg(test)]
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -300,6 +314,7 @@ impl Session {
             cancel: CancellationToken::new(),
             http_client: Arc::new(Mutex::new(None)),
             openqa_transport: Arc::new(Mutex::new(None)),
+            op_lock_holders: OpLockHolders::default(),
             #[cfg(test)]
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -362,11 +377,43 @@ impl Session {
             // Shared with the parent, not reset — see the doc comment above.
             http_client: Arc::clone(&self.http_client),
             openqa_transport: Arc::clone(&self.openqa_transport),
+            op_lock_holders: self.op_lock_holders.clone(),
             #[cfg(test)]
             http_builds: Arc::clone(&self.http_builds),
             #[cfg(test)]
             openqa_builds: Arc::clone(&self.openqa_builds),
         }
+    }
+
+    /// The registry through which this session's targets see their siblings'
+    /// operation locks.
+    #[must_use]
+    pub fn op_lock_holders(&self) -> &OpLockHolders {
+        &self.op_lock_holders
+    }
+
+    /// Joins this session to a registry shared with other sessions, and pushes
+    /// it onto the groups it already owns.
+    ///
+    /// An entry locked elsewhere is skipped; the next [`activate`](Self::activate)
+    /// of it installs the registry.
+    pub fn set_op_lock_holders(&mut self, holders: OpLockHolders) {
+        self.null
+            .base_mut()
+            .targets
+            .set_op_lock_holders(holders.clone());
+        for rrid in self.templates.rrids() {
+            let Some(entry) = self.templates.handle(&rrid) else {
+                continue;
+            };
+            if let Ok(mut report) = entry.try_lock() {
+                report
+                    .base_mut()
+                    .targets
+                    .set_op_lock_holders(holders.clone());
+            }
+        }
+        self.op_lock_holders = holders;
     }
 
     /// `true` once cancellation has been requested for this dispatch.
@@ -508,6 +555,10 @@ impl Session {
     #[must_use = "a non-Active activation leaves the dispatch on the null report"]
     pub fn activate(&mut self, rrid: &str) -> Activation {
         self.active_guard = None;
+        self.null
+            .base_mut()
+            .targets
+            .set_op_lock_holders(self.op_lock_holders.clone());
         if rrid.is_empty() {
             self.templates.set_active_none();
             return Activation::Empty;
@@ -524,8 +575,11 @@ impl Session {
         // without opting in, and refreshes it per activation so a group never
         // carries a stale cancelled token from an earlier job.
         let cancel = self.cancel.clone();
+        let holders = self.op_lock_holders.clone();
         if let Some(guard) = self.active_guard.as_mut() {
-            guard.base_mut().targets.set_cancel_token(cancel);
+            let targets = &mut guard.base_mut().targets;
+            targets.set_cancel_token(cancel);
+            targets.set_op_lock_holders(holders);
         }
         if self.active_guard.is_some() {
             Activation::Active
@@ -1049,6 +1103,7 @@ impl Session {
         // `None` (headless / `mtui-mcp`) leaves the timeout an immediate abort.
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
+        let holders = self.op_lock_holders.clone();
         // One inventory for the whole batch, built before the `targets_mut()`
         // borrow so this await does not straddle it. `None` disables the drift
         // check for every host — best-effort, never fatal.
@@ -1065,6 +1120,7 @@ impl Session {
         let lock_comment = &lock_comment;
         let config_ref = &config;
         let pool_claims_ref = &pool_claims;
+        let holders_ref = &holders;
         let connect_futs = hosts.iter().map(|host| {
             Self::connect_one(
                 config_ref,
@@ -1075,6 +1131,7 @@ impl Session {
                 package_meta,
                 store_ref,
                 pool_claims_ref.contains(host),
+                holders_ref,
             )
         });
         // Bound the fan-out to `[connection] max_parallel` so a large fleet caps
@@ -1100,6 +1157,7 @@ impl Session {
         if let Some(prompter) = prompter {
             targets.set_prompter(prompter);
         }
+        targets.set_op_lock_holders(holders.clone());
         for (target, drift_entry) in connected.into_iter().flatten() {
             live.insert(target.hostname().to_owned());
             targets.add(target);
@@ -1172,9 +1230,12 @@ impl Session {
         package_meta: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
         store: Option<&Refhosts>,
         is_pool_claim: bool,
+        holders: &OpLockHolders,
     ) -> Option<(Target, (String, Option<Vec<String>>))> {
         let mut target = Target::new(config, host.clone(), TargetState::Enabled);
         target.set_rrid(rrid.to_owned());
+        // Before connecting, so the load-time autolock is registered too.
+        target.set_op_lock_holders(holders.clone());
         // Before connecting, so `Target::connect` applies it to the transport.
         if let Some(tp) = timeout_prompt.as_ref() {
             target.set_timeout_prompt(tp.clone());
@@ -1265,6 +1326,7 @@ impl Session {
             return Vec::new();
         }
         let store = Self::build_refhosts_store(config).await;
+        let holders = self.op_lock_holders.clone();
 
         let wait = i64::try_from(config.lock_wait).unwrap_or(i64::MAX);
         let poll = i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX);
@@ -1335,6 +1397,7 @@ impl Session {
                     &package_meta,
                     store.as_ref(),
                     true, // backup hosts are always pool claims
+                    &holders,
                 )
                 .await
                 {
@@ -2923,6 +2986,91 @@ mod tests {
             .expect("fork3 rebuilds under new posture");
         let _ = s.http_client().expect("parent sees the rebuilt client");
         assert_eq!(s.http_builds(), 2, "posture change rebuilds exactly once");
+    }
+
+    #[test]
+    fn fork_for_call_shares_the_op_lock_holders() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let s = Session::new(config(), false);
+        let fork = s.fork_for_call(CommandPromptDisplay::with_sink(
+            Box::new(Vec::new()),
+            ColorMode::Never,
+        ));
+        assert!(fork.op_lock_holders().ptr_eq(s.op_lock_holders()));
+        assert!(
+            !Session::new(config(), false)
+                .op_lock_holders()
+                .ptr_eq(s.op_lock_holders()),
+            "unrelated sessions must not share a registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_installs_the_op_lock_holders_on_the_active_groups_targets() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        assert!(s.activate("SUSE:Maintenance:1:1").is_active());
+
+        assert!(
+            s.targets()
+                .get("t1")
+                .unwrap()
+                .op_lock_holders()
+                .ptr_eq(s.op_lock_holders())
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_installs_the_op_lock_holders_on_the_null_groups_targets() {
+        let mut s = Session::new(config(), false);
+        s.targets_mut().add(mock_target("n1"));
+        assert_eq!(s.activate(""), Activation::Empty);
+
+        assert!(
+            s.targets()
+                .get("n1")
+                .unwrap()
+                .op_lock_holders()
+                .ptr_eq(s.op_lock_holders())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_op_lock_holders_reaches_every_group_it_can_lock() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
+        s.targets_mut().add(mock_target("n1"));
+        s.release_active_guard();
+
+        let shared = OpLockHolders::default();
+        s.set_op_lock_holders(shared.clone());
+
+        assert!(s.op_lock_holders().ptr_eq(&shared));
+        assert!(
+            s.targets()
+                .get("n1")
+                .unwrap()
+                .op_lock_holders()
+                .ptr_eq(&shared)
+        );
+        for (rrid, host) in [
+            ("SUSE:Maintenance:1:1", "t1"),
+            ("SUSE:Maintenance:2:2", "t2"),
+        ] {
+            let on_shared = s
+                .with_report(rrid, |r| {
+                    r.base()
+                        .targets
+                        .get(host)
+                        .unwrap()
+                        .op_lock_holders()
+                        .ptr_eq(&shared)
+                })
+                .unwrap();
+            assert!(on_shared, "{host} stayed on its own registry");
+        }
     }
 
     /// `fork_for_call` shares the `openqa_transport` cache slot with the

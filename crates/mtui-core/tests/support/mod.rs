@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mtui_config::Config;
-use mtui_hosts::{HostsGroup, MockConnection, Target};
+use mtui_hosts::{Connection, HostsGroup, MockConnection, Target};
 use mtui_testreport::{HashCheck, TestReport, TestReportBase};
 use mtui_types::SystemProduct;
 use mtui_types::enums::TargetState;
@@ -65,6 +65,20 @@ impl FakeReport {
             })
             .collect();
         base.targets = HostsGroup::new(targets, false);
+        Self {
+            base,
+            rrid: rrid.to_owned(),
+        }
+    }
+
+    /// A report whose single host `conn` is shared with other reports built
+    /// from the same handle — the refhost two loaded templates both attach.
+    #[must_use]
+    pub fn with_shared_connection(rrid: &str, conn: &MockConnection) -> Self {
+        let mut base = TestReportBase::new(Config::default());
+        let host = conn.hostname().to_owned();
+        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn.clone()));
+        base.targets = HostsGroup::new(vec![target], false);
         Self {
             base,
             rrid: rrid.to_owned(),
