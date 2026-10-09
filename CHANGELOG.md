@@ -330,6 +330,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A `lock -c <text>` reservation now survives `run`, `update`, `install` and
+  `prepare` on the host: they no longer rewrite it without its comment or
+  release it when they finish, so only `unlock` (or `unlock --force`) removes it
+  (#651).
 - Templates loaded in one `mtui`/`mtui-mcp` process, and the sessions of one
   `mtui-mcp` server, no longer share the operation lock on a common refhost: a
   second template's `run`/`update`/`install`/`prepare` now waits for (or, at the

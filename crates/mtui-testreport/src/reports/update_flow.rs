@@ -7284,6 +7284,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perform_prepare_leaves_an_operators_reservation_in_place() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.lock("reserved").await;
+        let reserved = handle.file_contents(TARGET_LOCK_PATH).expect("reserved");
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH),
+            Some(reserved),
+            "prepare rewrote or released the reservation"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_leaves_an_operators_reservation_in_place() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("zypper", "", "", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        group.lock("reserved").await;
+        let reserved = handle.file_contents(TARGET_LOCK_PATH).expect("reserved");
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &RecordingRepo::default(),
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(res.is_ok(), "{res:?}");
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH),
+            Some(reserved),
+            "update rewrote or released the reservation"
+        );
+    }
+
+    #[tokio::test]
     async fn perform_update_warns_when_the_operation_lock_does_not_release() {
         // A stranded operation lock does not turn a good update into a failure,
         // but the fan-out's own `LockOutcome` map must still reach a warn.

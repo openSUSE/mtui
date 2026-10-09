@@ -71,6 +71,30 @@ impl FakeReport {
         }
     }
 
+    /// A report with one host per connection handle, so a test can read and
+    /// seed each host's lockfile.
+    #[must_use]
+    pub fn with_connections(rrid: &str, conns: &[MockConnection]) -> Self {
+        let mut base = TestReportBase::new(Config::default());
+        let targets: Vec<Target> = conns
+            .iter()
+            .map(|c| {
+                let mut t = Target::with_connection(
+                    c.hostname().to_owned(),
+                    TargetState::Enabled,
+                    Box::new(c.clone()),
+                );
+                t.set_rrid(rrid);
+                t
+            })
+            .collect();
+        base.targets = HostsGroup::new(targets, false);
+        Self {
+            base,
+            rrid: rrid.to_owned(),
+        }
+    }
+
     /// A report whose single host `conn` is shared with other reports built
     /// from the same handle — the refhost two loaded templates both attach.
     #[must_use]
