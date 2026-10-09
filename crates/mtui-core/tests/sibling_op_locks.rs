@@ -70,3 +70,36 @@ async fn run_on_one_template_succeeds_once_the_sibling_released_the_host() {
         .expect("a free host runs");
     assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
 }
+
+#[tokio::test]
+async fn list_locks_on_one_template_names_the_sibling_that_holds_the_host() {
+    let registry = register_all();
+    let (mut session, buf, _conn) = two_templates_on_one_host();
+    take_operation_lock(&mut session, A).await;
+
+    dispatch_line(&registry, &mut session, &format!("list_locks -T {B}"))
+        .await
+        .expect("list_locks reads the lock");
+
+    let out = buf.contents();
+    assert!(
+        out.contains(&format!("by this mtui process ({A})")),
+        "{out}"
+    );
+    assert!(!out.contains("by me"), "{out}");
+}
+
+#[tokio::test]
+async fn contended_run_names_the_sibling_and_offers_no_force() {
+    let registry = register_all();
+    let (mut session, buf, _conn) = two_templates_on_one_host();
+    take_operation_lock(&mut session, A).await;
+
+    dispatch_line(&registry, &mut session, &format!("run -T {B} -t h1 true"))
+        .await
+        .expect_err("blocked");
+
+    let out = buf.contents();
+    assert!(out.contains(&format!("this mtui process ({A})")), "{out}");
+    assert!(!out.contains("--force"), "{out}");
+}

@@ -139,6 +139,10 @@ pub struct LockRow {
     /// [`Target::lock_status`](crate::Target::lock_status)). Empty when there is
     /// none.
     pub comment: String,
+    /// The label of the sibling [`TargetLock`] in this process that holds the
+    /// lock, when it is one (see [`OpLockHolders`]). Always `None` for a pool
+    /// claim.
+    pub sibling: Option<String>,
 }
 
 /// A single-read view of a lock's on-disk state plus derived ownership.
@@ -156,6 +160,9 @@ pub struct LockSnapshot {
     /// The owning template's RRID, for a [`PoolLock`] claim only; empty for an
     /// operation-lock snapshot or a non-pool comment.
     pub(crate) rrid: String,
+    /// The sibling in this process that holds the lock, as in
+    /// [`LockRow::sibling`].
+    pub(crate) sibling: Option<String>,
 }
 
 /// Who holds a contended lock, for reporting it.
@@ -169,6 +176,21 @@ pub struct LockOwner {
     pub by: String,
     /// Human-readable lock timestamp, or `"unknown"`.
     pub since: String,
+    /// The label of the sibling [`TargetLock`] in this process that holds the
+    /// lock, when it is one: another template or MCP session, not another
+    /// process (see [`OpLockHolders`]).
+    pub sibling: Option<String>,
+}
+
+/// How a sibling holder is named to the operator: `label` is the template's
+/// RRID, empty for one without a template.
+#[must_use]
+pub fn sibling_holder_name(label: &str) -> String {
+    if label.is_empty() {
+        "this mtui process".to_owned()
+    } else {
+        format!("this mtui process ({label})")
+    }
 }
 
 /// Which [`TargetLock`] in this process holds each host's operation lock.
@@ -271,7 +293,10 @@ pub fn contended_lock_reason(
 ) -> String {
     let check = surface.check();
     let scope_note = surface.scope_note();
-    if owner.by.is_empty() {
+    if let Some(label) = &owner.sibling {
+        let holder = sibling_holder_name(label);
+        format!("held by {holder}, another template or session; retry once its operation finishes")
+    } else if owner.by.is_empty() {
         format!("held by an unknown owner, possibly a live mtui; {check}{scope_note}")
     } else if owner.by == session_user {
         format!(
@@ -486,6 +511,14 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
+    /// Names this instance to a sibling that finds it holding the lock.
+    pub(crate) fn set_label(&mut self, label: impl Into<String>) {
+        self.label = label.into();
+        if self.held.is_some() {
+            self.claim();
+        }
+    }
+
     fn claim(&self) {
         self.holders
             .claim(self.connection.hostname(), self.id, &self.label);
@@ -505,11 +538,26 @@ impl<C: Clock> TargetLock<C> {
         self.release();
     }
 
+    /// The label of the other [`TargetLock`] sharing this registry that holds
+    /// the host, if there is one.
+    pub(crate) fn sibling_label(&self) -> Option<String> {
+        self.holders.sibling(self.connection.hostname(), self.id)
+    }
+
+    /// [`sibling_label`](Self::sibling_label), only while the loaded lock is
+    /// ours on the wire: a registry entry says nothing about a lock another
+    /// user or process has since put there.
+    fn loaded_sibling(&self) -> Option<String> {
+        if self.is_mine().unwrap_or(false) {
+            self.sibling_label()
+        } else {
+            None
+        }
+    }
+
     /// Whether another [`TargetLock`] sharing this registry holds the host.
     fn sibling_holds(&self) -> bool {
-        self.holders
-            .sibling(self.connection.hostname(), self.id)
-            .is_some()
+        self.sibling_label().is_some()
     }
 
     /// Whether the loaded lock is this instance's to re-stamp or release: ours
@@ -938,6 +986,7 @@ impl<C: Clock> TargetLock<C> {
         LockOwner {
             by: self.lock.user.clone(),
             since: self.lock.display_time(),
+            sibling: self.loaded_sibling(),
         }
     }
 
@@ -958,6 +1007,7 @@ impl<C: Clock> TargetLock<C> {
             lock: self.lock.clone(),
             is_mine,
             rrid: String::new(),
+            sibling: self.loaded_sibling(),
         })
     }
 }
@@ -1076,6 +1126,7 @@ impl<C: Clock> PoolLock<C> {
             lock,
             is_mine,
             rrid,
+            sibling: None,
         })
     }
 
@@ -1253,6 +1304,7 @@ mod tests {
         let alice = LockOwner {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            ..Default::default()
         };
         let foreign = contended_lock_reason(&alice, "bob", ContendedSurface::Repl);
         let mine = contended_lock_reason(&alice, "alice", ContendedSurface::Repl);
@@ -1300,6 +1352,7 @@ mod tests {
         let alice = LockOwner {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            ..Default::default()
         };
         let foreign = contended_lock_reason(&alice, "bob", ContendedSurface::Mcp);
         let mine = contended_lock_reason(&alice, "alice", ContendedSurface::Mcp);
@@ -1337,6 +1390,7 @@ mod tests {
         let alice = LockOwner {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            ..Default::default()
         };
         let repl = contended_lock_reason(&alice, "bob", ContendedSurface::Repl);
         let mcp = contended_lock_reason(&alice, "bob", ContendedSurface::Mcp);
@@ -1356,6 +1410,37 @@ mod tests {
             "{mcp}"
         );
         assert!(!mcp.contains("clears every selected host"), "{mcp}");
+    }
+
+    #[test]
+    fn contended_lock_reason_names_a_sibling_and_offers_no_force() {
+        let sibling = LockOwner {
+            by: "alice".to_owned(),
+            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            sibling: Some("SUSE:Maintenance:1:1".to_owned()),
+        };
+        let unlabelled = LockOwner {
+            sibling: Some(String::new()),
+            ..sibling.clone()
+        };
+        for surface in [ContendedSurface::Repl, ContendedSurface::Mcp] {
+            let named = contended_lock_reason(&sibling, "alice", surface);
+            assert!(
+                named.contains("this mtui process (SUSE:Maintenance:1:1)"),
+                "{named}"
+            );
+            let bare = contended_lock_reason(&unlabelled, "alice", surface);
+            assert!(
+                bare.contains("this mtui process,") && !bare.contains("()"),
+                "{bare}"
+            );
+            for line in [&named, &bare] {
+                assert!(
+                    !line.contains("--force") && !line.contains("possibly another mtui"),
+                    "{line}"
+                );
+            }
+        }
     }
 
     // --- RemoteLock ---------------------------------------------------------
@@ -1701,6 +1786,60 @@ mod tests {
 
         b.lock("").await.unwrap();
         assert!(b.holds());
+    }
+
+    #[tokio::test]
+    async fn a_refused_sibling_reports_who_holds_the_host() {
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.set_label("SUSE:Maintenance:1:1");
+        a.lock("").await.unwrap();
+
+        b.lock("").await.unwrap_err();
+        assert_eq!(
+            b.loaded_owner().sibling.as_deref(),
+            Some("SUSE:Maintenance:1:1")
+        );
+        let snap = b.snapshot().await.unwrap();
+        assert_eq!(snap.sibling.as_deref(), Some("SUSE:Maintenance:1:1"));
+    }
+
+    #[tokio::test]
+    async fn a_label_set_after_locking_reaches_the_registry() {
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn.clone(), FakeClock::new(now()), &holders);
+        let mut b = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+        a.set_label("SUSE:Maintenance:1:1");
+
+        b.lock("").await.unwrap_err();
+        assert_eq!(
+            b.loaded_owner().sibling.as_deref(),
+            Some("SUSE:Maintenance:1:1")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_holder_itself_and_a_foreign_lock_name_no_sibling() {
+        let conn = MockConnection::new("h1");
+        let holders = OpLockHolders::default();
+        let mut a = tl_shared(conn, FakeClock::new(now()), &holders);
+        a.lock("").await.unwrap();
+        assert_eq!(a.snapshot().await.unwrap().sibling, None);
+        assert_eq!(a.loaded_owner().sibling, None);
+
+        let foreign = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec());
+        let mut b = tl_shared(foreign, FakeClock::new(now()), &holders);
+        b.lock("").await.unwrap_err();
+        assert_eq!(
+            b.loaded_owner().sibling,
+            None,
+            "a lock of another user is not the sibling's, whatever the registry says"
+        );
     }
 
     #[tokio::test]

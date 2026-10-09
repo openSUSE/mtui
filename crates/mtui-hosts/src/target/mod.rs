@@ -52,6 +52,7 @@ pub use hostgroup::{HostsGroup, LockOutcome};
 pub use locks::{
     Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, PoolLock,
     RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
+    sibling_holder_name,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
@@ -478,6 +479,16 @@ impl Target {
         &self.op_lock_holders
     }
 
+    /// The label of the sibling target in this process that holds this host's
+    /// operation lock, if one does.
+    ///
+    /// Purely in-memory, so it can tell a hold that only another template or
+    /// session of this process can release from a foreign one.
+    #[must_use]
+    pub(crate) fn sibling_operation_holder(&self) -> Option<String> {
+        self.lock.as_ref().and_then(TargetLock::sibling_label)
+    }
+
     /// Whether this target has a built operation lock, i.e. is connected.
     ///
     /// No remote I/O: an unconnected target ([`Target::new`], never
@@ -506,6 +517,9 @@ impl Target {
         self.rrid = rrid.into();
         if let Some(pool) = self.pool_lock.as_mut() {
             pool.set_rrid(self.rrid.clone());
+        }
+        if let Some(lock) = self.lock.as_mut() {
+            lock.set_label(self.rrid.clone());
         }
     }
 
@@ -692,6 +706,7 @@ impl Target {
                 // from the `mtui pool <RRID> [<owner>]` stamp), not the raw
                 // comment the operation lock carries.
                 comment: snap.rrid,
+                sibling: None,
             }
         } else {
             let Some(lock) = self.lock.as_mut() else {
@@ -711,6 +726,7 @@ impl Target {
                 locked_by: snap.lock.user,
                 time,
                 comment: snap.lock.comment,
+                sibling: snap.sibling,
             }
         }
     }
@@ -1099,6 +1115,7 @@ impl Target {
             // protocol and force-unlock.
             let mut lock = TargetLock::new(conn.clone_box(), &self.config);
             lock.set_holders(self.op_lock_holders.clone());
+            lock.set_label(self.rrid.clone());
             self.lock = Some(lock);
             // Pool claims use a separate remote file + RRID-based ownership.
             self.pool_lock = Some(PoolLock::new(

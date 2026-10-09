@@ -3968,6 +3968,7 @@ mod tests {
             LockOutcome::Contended(LockOwner {
                 by: "alice".to_owned(),
                 since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+                ..Default::default()
             }),
         )]));
         let clause = summary.clause().expect("a contended host must render");
@@ -4000,6 +4001,7 @@ mod tests {
                 LockOutcome::Contended(LockOwner {
                     by: "alice".to_owned(),
                     since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+                    ..Default::default()
                 }),
             ),
             (
@@ -4007,6 +4009,7 @@ mod tests {
                 LockOutcome::Contended(LockOwner {
                     by: "carol".to_owned(),
                     since: "Wednesday, 15.11.2023 22:13 UTC".to_owned(),
+                    ..Default::default()
                 }),
             ),
         ]));
@@ -4044,6 +4047,7 @@ mod tests {
             LockOutcome::Contended(LockOwner {
                 by: "alice".to_owned(),
                 since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+                ..Default::default()
             }),
         )]));
         let clause = summary.clause().expect("a contended host must render");

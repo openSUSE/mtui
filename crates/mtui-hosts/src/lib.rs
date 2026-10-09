@@ -38,5 +38,5 @@ pub use target::{
     PlanProvider, PoolLock, RebootFailure, RebootFailureCause, RemoteLock, RepoFailure,
     RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH,
     Target, TargetLock, TtySpinner, UninstallOperation, contended_lock_reason, get_arbiter,
-    parse_system, set_test_sink, spinner, suspend,
+    parse_system, set_test_sink, sibling_holder_name, spinner, suspend,
 };

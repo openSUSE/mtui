@@ -77,7 +77,9 @@ impl FakeReport {
     pub fn with_shared_connection(rrid: &str, conn: &MockConnection) -> Self {
         let mut base = TestReportBase::new(Config::default());
         let host = conn.hostname().to_owned();
-        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn.clone()));
+        let mut target =
+            Target::with_connection(host, TargetState::Enabled, Box::new(conn.clone()));
+        target.set_rrid(rrid);
         base.targets = HostsGroup::new(vec![target], false);
         Self {
             base,
