@@ -325,6 +325,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The install logs `export` downloads from openQA no longer have every line
+  break doubled.
 - `export` writes one install log per openQA flavor and rewrites it in place, so
   repeated exports no longer add timestamped copies that `commit` uploads. The
   document's `testing.openqa.install` scenarios now name the flavor too.
