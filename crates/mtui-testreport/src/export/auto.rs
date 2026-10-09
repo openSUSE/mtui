@@ -184,12 +184,12 @@ impl AutoExport {
 
         // Download concurrently (order-preserving), then write serially: the
         // write may prompt on overwrite, so it must not run in parallel.
-        let downloads = results.iter().map(|url| self.installog_lines(fetcher, url));
-        let all_lines = futures::future::join_all(downloads).await;
+        let downloads = results.iter().map(|url| self.installog_text(fetcher, url));
+        let all_texts = futures::future::join_all(downloads).await;
 
         let mut filenames = Vec::new();
-        for (url, lines) in results.iter().zip(all_lines) {
-            if lines.is_empty() {
+        for (url, text) in results.iter().zip(all_texts) {
+            if text.is_empty() {
                 continue;
             }
             let fn_name = format!(
@@ -198,23 +198,21 @@ impl AutoExport {
                 url.version,
                 url.arch
             );
-            self.ctx.writer(&dir.join(&fn_name), &lines, prompt);
+            self.ctx
+                .writer(&dir.join(&fn_name), std::slice::from_ref(&text), prompt);
             filenames.push(fn_name);
         }
         filenames
     }
 
-    /// Downloads one install log and returns its lines (with trailing
-    /// newlines), or an empty vec on failure.
-    async fn installog_lines(&self, fetcher: &dyn BytesFetcher, url: &URLs) -> Vec<String> {
+    /// Downloads one install log and returns its text, or an empty string on
+    /// failure.
+    async fn installog_text(&self, fetcher: &dyn BytesFetcher, url: &URLs) -> String {
         match fetcher.get_bytes(&url.url).await {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                splitlines_keepends(&text)
-            }
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(_) => {
                 tracing::error!("log {} failed to download", url.url);
-                Vec::new()
+                String::new()
             }
         }
     }
@@ -246,24 +244,6 @@ impl AutoExport {
         self.ctx.dedup_lines();
         self.ctx.template.clone()
     }
-}
-
-/// Splits `text` into lines that each keep their trailing `\n`
-/// (Python `splitlines(keepends=True)` for Unix newlines).
-fn splitlines_keepends(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'\n' {
-            out.push(text[start..=i].to_string());
-            start = i + 1;
-        }
-    }
-    if start < text.len() {
-        out.push(text[start..].to_string());
-    }
-    out
 }
 
 #[cfg(test)]
@@ -342,12 +322,6 @@ mod tests {
         assert_eq!(ex.install_status(), "FAILED");
     }
 
-    #[test]
-    fn splitlines_keepends_preserves_newlines() {
-        assert_eq!(splitlines_keepends("a\nb\n"), vec!["a\n", "b\n"]);
-        assert_eq!(splitlines_keepends("a\nb"), vec!["a\n", "b"]);
-    }
-
     struct OkFetcher(Vec<u8>);
 
     #[async_trait]
@@ -358,11 +332,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn installog_lines_splits_downloaded_text() {
+    async fn installog_text_returns_downloaded_text() {
         let ex = AutoExport::new(ctx(), None, None);
         let fetcher = OkFetcher(b"line1\nline2\n".to_vec());
-        let lines = ex.installog_lines(&fetcher, &urls("passed")).await;
-        assert_eq!(lines, vec!["line1\n", "line2\n"]);
+        let text = ex.installog_text(&fetcher, &urls("passed")).await;
+        assert_eq!(text, "line1\nline2\n");
     }
 
     #[test]
@@ -413,6 +387,23 @@ mod tests {
         assert_eq!(out, vec!["sles_15-SP5_x86_64.log".to_string()]);
         let written = std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
         assert_eq!(written, "zypper install log\n");
+    }
+
+    #[tokio::test]
+    async fn get_logs_keeps_the_downloaded_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let auto = seeded_auto(Some(vec![urls("passed")]), vec![]);
+        let ex = AutoExport::new(ctx_in(dir.path(), &[]), Some(auto), None);
+
+        let out = ex
+            .get_logs(
+                &OkFetcher(b"a\nb\n".to_vec()),
+                &super::super::base::DenyOverwrite,
+            )
+            .await;
+
+        let written = std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
+        assert_eq!(written, "a\nb\n");
     }
 
     /// A fetcher returning a distinct body per URL, or an error for URLs in

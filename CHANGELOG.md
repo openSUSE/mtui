@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The install logs `export` downloads from openQA no longer have every line
+  break doubled.
 - A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
   `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
   `gitea <verb> failed` form; the calls never ran `osc`.
