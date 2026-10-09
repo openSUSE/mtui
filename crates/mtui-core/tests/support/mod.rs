@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mtui_config::Config;
-use mtui_hosts::{HostsGroup, MockConnection, Target};
+use mtui_hosts::{Connection, HostsGroup, MockConnection, Target};
 use mtui_testreport::{HashCheck, TestReport, TestReportBase};
 use mtui_types::SystemProduct;
 use mtui_types::enums::TargetState;
@@ -62,6 +62,30 @@ impl FakeReport {
                 let conn = MockConnection::new(*h)
                     .with_response(command, CommandLog::new(command, stdout, "", 0, 0));
                 Target::with_connection(*h, TargetState::Enabled, Box::new(conn))
+            })
+            .collect();
+        base.targets = HostsGroup::new(targets, false);
+        Self {
+            base,
+            rrid: rrid.to_owned(),
+        }
+    }
+
+    /// A report with one host per connection handle, so a test can read and
+    /// seed each host's lockfile.
+    #[must_use]
+    pub fn with_connections(rrid: &str, conns: &[MockConnection]) -> Self {
+        let mut base = TestReportBase::new(Config::default());
+        let targets: Vec<Target> = conns
+            .iter()
+            .map(|c| {
+                let mut t = Target::with_connection(
+                    c.hostname().to_owned(),
+                    TargetState::Enabled,
+                    Box::new(c.clone()),
+                );
+                t.set_rrid(rrid);
+                t
             })
             .collect();
         base.targets = HostsGroup::new(targets, false);

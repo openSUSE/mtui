@@ -121,7 +121,9 @@ cooperate rather than clobber one another.
   install/update/prepare/downgrade). Set it explicitly with
   [`lock`](cli.md#lock); it is applied automatically around the flows that need
   it. Enabled locks are removed when the session exits. To make the lock effective
-  for *other* sessions too, give it a comment (`lock -c "<why>"`).
+  for *other* sessions too, give it a comment (`lock -c "<why>"`). Such a
+  reservation is never rewritten or released by `run`, `update`, `install` or
+  `prepare` on the host; only `unlock` removes it.
 - **Pool-claim lock** (`/var/lock/mtui-pool.lock`, RRID-based) — taken during
   host-pool selection to reserve a host for a template. List and remove them with
   the `-p`/`--pool` flag on [`list_locks`](cli.md#list_locks) /

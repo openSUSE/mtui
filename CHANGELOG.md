@@ -10,6 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A `lock -c <text>` reservation now survives `run`, `update`, `install` and
+  `prepare` on the host: they no longer rewrite it without its comment or
+  release it when they finish, so only `unlock` (or `unlock --force`) removes it
+  (#651).
 - The install logs `export` downloads from openQA no longer have every line
   break doubled.
 - A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
