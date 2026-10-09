@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.4] - 2026-10-10
+
 ### Fixed
 
 - A `lock -c <text>` reservation now survives `run`, `update`, `install` and
