@@ -238,7 +238,7 @@ rmcp = {
 # pick an older release would silently reintroduce the leak.
 ruoqa = "0.3"
 # ssh
-russh = "0.63"
+russh = "0.64"
 russh-sftp = "3"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
