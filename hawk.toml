@@ -3,7 +3,6 @@ package = "mtui-cli"
 bin = "mtui"
 reason = "shipped package repl binary"
 
-
 [[production]]
 package = "mtui-mcp"
 bin = "mtui-mcp"

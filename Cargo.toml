@@ -3,54 +3,18 @@ name = "mtui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 # Doubles as the .deb synopsis for BOTH packages (cargo-deb has no per-variant
 # override), so keep it binary-neutral and under 79 *bytes* — past that cargo-deb
 # word-wraps it and the overflow becomes the first line of the long description.
 description = "Maintenance Test Update Installer for SUSE QE update validation"
+repository.workspace = true
+license.workspace = true
 default-run = "mtui"
 autobins = false
 # Both smoke tests are consolidated into one `tests/it.rs` binary (see
 # `crates/mtui-mcp`'s convention) so the facade's already-linked `cli`/`mcp`
 # deps link once for the test run, not once per file.
 autotests = false
-
-[features]
-default = ["cli", "mcp"]
-cli = ["dep:mtui-cli"]
-# Names the inner feature explicitly so the facade keeps working if
-# mtui-mcp's own default set is ever changed.
-mcp = ["dep:mtui-mcp", "mtui-mcp/mcp"]
-# `?/` so enabling notify does not implicitly turn `cli` back on.
-notify = ["mtui-cli?/notify"]
-
-# Both bins are two-line `main` stubs with nothing worth documenting; `mtui-mcp`
-# also collides on `target/doc/mtui_mcp/` with the `mtui_mcp` library's own
-# rustdoc output, which the bin would otherwise win silently (Cargo only warns).
-[[bin]]
-name = "mtui"
-path = "src/bin/mtui.rs"
-required-features = ["cli"]
-doc = false
-
-[[bin]]
-name = "mtui-mcp"
-path = "src/bin/mtui-mcp.rs"
-required-features = ["mcp"]
-doc = false
-
-[[test]]
-name = "it"
-path = "tests/it.rs"
-
-# ---------------------------------------------------------------------------
-# Distro packaging. One Cargo package, two distro packages: the base table is
-# the `mtui` package, the `mcp` variant is `mtui-mcp`. Both tools take
-# `--variant mcp`. Merge is per key and shallow: a key the variant omits is
-# inherited (`require-sh`), one it sets replaces the base's outright rather than
-# merging into it — so each `assets` list must be complete on its own.
-# ---------------------------------------------------------------------------
 
 [package.metadata.deb]
 name = "mtui"
@@ -75,12 +39,12 @@ recommends = "mtui-mcp"
 # Without this cargo-deb inlines the entire README as the extended description.
 extended-description = "Interactive REPL for validating SUSE maintenance updates: load a request by RRID, install and test it on reference hosts over SSH in parallel, then approve or reject."
 assets = [
-    ["target/release/mtui", "usr/bin/", "755"],
-    ["dist/completions/bash/mtui.bash", "usr/share/bash-completion/completions/mtui", "644"],
-    ["dist/completions/zsh/_mtui", "usr/share/zsh/site-functions/_mtui", "644"],
-    ["dist/completions/fish/mtui.fish", "usr/share/fish/vendor_completions.d/mtui.fish", "644"],
-    ["dist/man/mtui.1", "usr/share/man/man1/mtui.1", "644"],
-    ["dist/mtui.toml.example", "usr/share/doc/mtui/mtui.toml.example", "644"],
+  ["target/release/mtui", "usr/bin/", "755"],
+  ["dist/completions/bash/mtui.bash", "usr/share/bash-completion/completions/mtui", "644"],
+  ["dist/completions/zsh/_mtui", "usr/share/zsh/site-functions/_mtui", "644"],
+  ["dist/completions/fish/mtui.fish", "usr/share/fish/vendor_completions.d/mtui.fish", "644"],
+  ["dist/man/mtui.1", "usr/share/man/man1/mtui.1", "644"],
+  ["dist/mtui.toml.example", "usr/share/doc/mtui/mtui.toml.example", "644"],
 ]
 
 [package.metadata.deb.variants.mcp]
@@ -89,14 +53,14 @@ assets = [
 name = "mtui-mcp"
 extended-description = "Model Context Protocol server exposing mtui's command registry as MCP tools over stdio or HTTP."
 assets = [
-    ["target/release/mtui-mcp", "usr/bin/", "755"],
-    ["dist/completions/bash/mtui-mcp.bash", "usr/share/bash-completion/completions/mtui-mcp", "644"],
-    ["dist/completions/zsh/_mtui-mcp", "usr/share/zsh/site-functions/_mtui-mcp", "644"],
-    ["dist/completions/fish/mtui-mcp.fish", "usr/share/fish/vendor_completions.d/mtui-mcp.fish", "644"],
-    ["dist/man/mtui-mcp.1", "usr/share/man/man1/mtui-mcp.1", "644"],
-    # Both binaries read the same file; ship it in each docdir so the MCP
-    # server is installable on its own.
-    ["dist/mtui.toml.example", "usr/share/doc/mtui-mcp/mtui.toml.example", "644"],
+  ["target/release/mtui-mcp", "usr/bin/", "755"],
+  ["dist/completions/bash/mtui-mcp.bash", "usr/share/bash-completion/completions/mtui-mcp", "644"],
+  ["dist/completions/zsh/_mtui-mcp", "usr/share/zsh/site-functions/_mtui-mcp", "644"],
+  ["dist/completions/fish/mtui-mcp.fish", "usr/share/fish/vendor_completions.d/mtui-mcp.fish", "644"],
+  ["dist/man/mtui-mcp.1", "usr/share/man/man1/mtui-mcp.1", "644"],
+  # Both binaries read the same file; ship it in each docdir so the MCP
+  # server is installable on its own.
+  ["dist/mtui.toml.example", "usr/share/doc/mtui-mcp/mtui.toml.example", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -109,53 +73,41 @@ summary = "Interactive REPL for validating SUSE maintenance updates"
 # constraint. "*" is unversioned.
 recommends = { mtui-mcp = "*" }
 assets = [
-    { source = "target/release/mtui", dest = "/usr/bin/mtui", mode = "755" },
-    { source = "dist/completions/bash/mtui.bash", dest = "/usr/share/bash-completion/completions/mtui", mode = "644" },
-    { source = "dist/completions/zsh/_mtui", dest = "/usr/share/zsh/site-functions/_mtui", mode = "644" },
-    { source = "dist/completions/fish/mtui.fish", dest = "/usr/share/fish/vendor_completions.d/mtui.fish", mode = "644" },
-    { source = "dist/man/mtui.1", dest = "/usr/share/man/man1/mtui.1", mode = "644", doc = true },
-    # No %dir entries: unlike the spec, these rpms do not own the doc- and
-    # licensedirs, so erasing them leaves the dirs behind. cargo-generate-rpm
-    # 0.21.0 cannot express %dir and both ways of trying are worse than the
-    # orphan. `dir = true` parses and clears the source, but the entry still
-    # routes to rpm-rs's with_file(), which stats the now-empty path -> ENOENT,
-    # build fails (the mode is never even reached). `mode = "40755"` on a sourced
-    # asset is the trap: 0.21.0 masks it to a *regular file* at the directory
-    # path, and <= 0.20.0 keeps the S_IFDIR bits in the header while still
-    # writing the source's bytes as the entry's cpio body — rpm consumes no body
-    # for a directory, so the archive desyncs and every file after that entry
-    # becomes unextractable while `rpm -qpl` still lists it. The release job
-    # asserts the payload is walkable, catching both.
-    { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui/mtui.toml.example", mode = "644", doc = true },
-    # cargo-generate-rpm has no %license; a GPL binary shipped standalone off a
-    # release page still has to carry its terms. doc = true is the closest flag.
-    { source = "LICENSE", dest = "/usr/share/licenses/mtui/LICENSE", mode = "644", doc = true },
+  { source = "target/release/mtui", dest = "/usr/bin/mtui", mode = "755" },
+  { source = "dist/completions/bash/mtui.bash", dest = "/usr/share/bash-completion/completions/mtui", mode = "644" },
+  { source = "dist/completions/zsh/_mtui", dest = "/usr/share/zsh/site-functions/_mtui", mode = "644" },
+  { source = "dist/completions/fish/mtui.fish", dest = "/usr/share/fish/vendor_completions.d/mtui.fish", mode = "644" },
+  { source = "dist/man/mtui.1", dest = "/usr/share/man/man1/mtui.1", mode = "644", doc = true },
+  # No %dir entries: unlike the spec, these rpms do not own the doc- and
+  # licensedirs, so erasing them leaves the dirs behind. cargo-generate-rpm
+  # 0.21.0 cannot express %dir and both ways of trying are worse than the
+  # orphan. `dir = true` parses and clears the source, but the entry still
+  # routes to rpm-rs's with_file(), which stats the now-empty path -> ENOENT,
+  # build fails (the mode is never even reached). `mode = "40755"` on a sourced
+  # asset is the trap: 0.21.0 masks it to a *regular file* at the directory
+  # path, and <= 0.20.0 keeps the S_IFDIR bits in the header while still
+  # writing the source's bytes as the entry's cpio body — rpm consumes no body
+  # for a directory, so the archive desyncs and every file after that entry
+  # becomes unextractable while `rpm -qpl` still lists it. The release job
+  # asserts the payload is walkable, catching both.
+  { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui/mtui.toml.example", mode = "644", doc = true },
+  # cargo-generate-rpm has no %license; a GPL binary shipped standalone off a
+  # release page still has to carry its terms. doc = true is the closest flag.
+  { source = "LICENSE", dest = "/usr/share/licenses/mtui/LICENSE", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.variants.mcp]
 name = "mtui-mcp"
 summary = "Model Context Protocol server for mtui"
 assets = [
-    { source = "target/release/mtui-mcp", dest = "/usr/bin/mtui-mcp", mode = "755" },
-    { source = "dist/completions/bash/mtui-mcp.bash", dest = "/usr/share/bash-completion/completions/mtui-mcp", mode = "644" },
-    { source = "dist/completions/zsh/_mtui-mcp", dest = "/usr/share/zsh/site-functions/_mtui-mcp", mode = "644" },
-    { source = "dist/completions/fish/mtui-mcp.fish", dest = "/usr/share/fish/vendor_completions.d/mtui-mcp.fish", mode = "644" },
-    { source = "dist/man/mtui-mcp.1", dest = "/usr/share/man/man1/mtui-mcp.1", mode = "644", doc = true },
-    { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui-mcp/mtui.toml.example", mode = "644", doc = true },
-    { source = "LICENSE", dest = "/usr/share/licenses/mtui-mcp/LICENSE", mode = "644", doc = true },
+  { source = "target/release/mtui-mcp", dest = "/usr/bin/mtui-mcp", mode = "755" },
+  { source = "dist/completions/bash/mtui-mcp.bash", dest = "/usr/share/bash-completion/completions/mtui-mcp", mode = "644" },
+  { source = "dist/completions/zsh/_mtui-mcp", dest = "/usr/share/zsh/site-functions/_mtui-mcp", mode = "644" },
+  { source = "dist/completions/fish/mtui-mcp.fish", dest = "/usr/share/fish/vendor_completions.d/mtui-mcp.fish", mode = "644" },
+  { source = "dist/man/mtui-mcp.1", dest = "/usr/share/man/man1/mtui-mcp.1", mode = "644", doc = true },
+  { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui-mcp/mtui.toml.example", mode = "644", doc = true },
+  { source = "LICENSE", dest = "/usr/share/licenses/mtui-mcp/LICENSE", mode = "644", doc = true },
 ]
-
-[dependencies]
-mtui-cli = { workspace = true, optional = true }
-mtui-mcp = { workspace = true, optional = true }
-tokio.workspace = true
-anyhow.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
-
-[lints]
-workspace = true
 
 [workspace]
 resolver = "3"
@@ -166,37 +118,136 @@ default-members = [".", "crates/*", "xtask"]
 version = "26.4.0"
 edition = "2024"
 rust-version = "1.96"
-license = "GPL-3.0-or-later"   # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
 repository = "https://github.com/openSUSE/mtui"
+license = "GPL-3.0-or-later"  # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
 
 [workspace.dependencies]
-# runtime
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
+anyhow = "1"
+async-trait = "0.1"
+# HTTP host for the mtui-mcp `--transport http` server: mounts rmcp's
+# `StreamableHttpService` (a `tower::Service`) via `Router::fallback_service`
+# and binds it with `axum::serve`. Feature-gated behind `mcp`, so the default
+# `mtui` build never pulls in a web framework.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# JSON-Schema (draft 2019-09) conformance testing for the typed report
+# document (mtui-types, dev-only).
+# boon over jsonschema: +5 transitive crates vs +25, frozen API (6 releases
+# ever) vs 129 versions/56 breaking minors, both 100% draft-2019-09 conformant
+# on this schema. Reached through exactly one test helper so a swap to
+# `jsonschema` (pre-approved if an advisory lands) is a single-file change.
+boon = "0.6"
+# datetime — parse/sort Gitea comment `updated_at` timestamps (RFC3339 with
+# offset), matching upstream `datetime.fromisoformat`. std only, no clock/oldtime
+# baggage; keeps the single-static-binary contract clean.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 # cli
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 # Man-page generation for both binaries. Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
 clap_mangen = { version = "0.3", features = ["env"] }
-reedline = "0.52"
+# perf baselines (mtui-rs-0mop.1): criterion for in-process latency/throughput
+# benches. Dev-only; benches use `harness = false` so they compile only under
+# `cargo bench`, never in the default `cargo test` gate. Startup timing is
+# measured externally with `hyperfine` (documented in
+# plans/perf-baseline-0mop1.md), not a crate dep.
+criterion = { version = "0.8", features = ["async_tokio"] }
 # raw-mode terminal + async input/resize stream for the interactive `shell`
 # TTY bridge (mtui-rs-jww). Pinned to reedline 0.52's `crossterm` major so
 # the two share one copy; `event-stream` enables the async `EventStream` the
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
+directories = "6"
+futures = "0.3"
+# HMAC-SHA1, for the OpenSSH hashed known_hosts test helper (mtui-hosts dev-dep);
+# not used for openQA auth any more (ruoqa owns that).
+hmac = "0.13"
+# stable insertion-ordered map (TemplateRegistry entries) + per-registry id
+indexmap = "2"
+# INI parsing for the native oscrc credential reader (obs backend, G1b).
+# osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
+# not TOML, so this is a configparser-parity reader distinct from the app's TOML
+# config. Parse errors are mapped to a fixed message (never interpolating the
+# parser's Display) so a malformed oscrc's source line — possibly a password —
+# is not leaked.
+ini = { package = "rust-ini", version = "0.21" }
+# dev / test
+insta = "1"
+mtui-cli = { path = "crates/mtui-cli" }
+mtui-config = { path = "crates/mtui-config" }
+mtui-core = { path = "crates/mtui-core" }
+mtui-datasources = { path = "crates/mtui-datasources" }
+mtui-hosts = { path = "crates/mtui-hosts" }
+mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
+mtui-testreport = { path = "crates/mtui-testreport" }
+mtui-tui = { path = "crates/mtui-tui" }
+# internal crates (path deps)
+mtui-types = { path = "crates/mtui-types" }
+# optional desktop notifications (feature `notify`). Pure-Rust
+# freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
+# the single-static-binary / no-Python-runtime contract. Best-effort + headless
+# no-op, so a build without the feature never pulls it.
+notify-rust = "4"
+# terminal styling for the REPL input highlighter; pinned to reedline 0.52's
+# `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
+nu-ansi-term = "0.50"
+# terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
+owo-colors = "4"
+# XML parsing for /etc/products.d/*.prod product files (host system parser).
+quick-xml = "0.42"
+# random shuffle of per-slot pool candidates so load spreads across
+# interchangeable refhosts (upstream `random.shuffle`); test-seamed for
+# determinism.
+rand = "0.10"
 # Full-screen report-document editor (mtui-tui). Only the crossterm backend, on
 # the same `crossterm` major as reedline and the `shell` bridge, so the tree
 # keeps a single copy of it.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 # Multi-line input widget for the editor's free-text fields.
 ratatui-textarea = { version = "0.9", default-features = false, features = ["crossterm"] }
-# terminal styling for the REPL input highlighter; pinned to reedline 0.52's
-# `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
-nu-ansi-term = "0.50"
-# POSIX shell-splitting of a REPL input line into argv (engine line-dispatch),
-# mirroring upstream's `shlex.split` in `Command.parse_args`.
-shlex = "2"
+reedline = "0.52"
+# regex — SMELT testplatform grammar parsing (refhost Attributes::from_testplatform)
+regex = "1"
+# http
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# mcp. `server` for the ServerHandler surface + model types;
+# `transport-io` for the stdio runner; `transport-async-rw` for the
+# in-memory duplex round-trip test. No `macros` — tools are synthesised from the
+# runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
+rmcp = {
+  version = "3",
+  default-features = false,
+  features = [
+    "client",
+    "server",
+    "transport-async-rw",
+    "transport-io",
+    # `--transport http`: the runtime-keyed streamable-HTTP server whose
+    # per-session `service_factory` is our per-client `McpSession` isolation hook.
+    "transport-streamable-http-server",
+  ]
+}
+# The openQA REST API client: signed-request auth (HMAC-SHA1 X-API-Hash),
+# `client.conf`/$OPENQA_CONFIG credential discovery, retries, and redirect
+# restriction, replacing mtui's own hand-rolled implementation. reqwest 0.13.4
+# on both sides so `ClientBuilder::http_client` shares mtui's connection pool.
+# "0.3" is a floor, not a preference: mtui depends on its userinfo redaction
+# in `Error::Request`/`Error::Connection`/`Error::CrossOriginRedirect` Display
+# and in `config::resolve`'s bare-authority stripping
+# (crates/mtui-datasources/src/openqa/client.rs), and a resolver allowed to
+# pick an older release would silently reintroduce the leak.
+ruoqa = "0.3"
+# ssh
+russh = "0.63"
+russh-sftp = "3"
+# rpm version comparison — pure-Rust replacement for upstream's libc
+# `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
+# contract. Verified against every upstream `test_rpm_version` golden vector.
+sandogasa-rpmvercmp = "0.25"
+# HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
+# index (oqa_search build-check overview), replacing upstream's minimal
+# html.parser LogFileLinkParser.
+scraper = "0.27"
 # ser/de + config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -210,137 +261,90 @@ serde_path_to_error = "0.1"
 # serde-saphyr is the maintained, serde-native replacement. It streams and
 # builds no DOM, so rows go through serde_json::Value instead.
 serde-saphyr = "1"
-toml = "1"
-# INI parsing for the native oscrc credential reader (obs backend, G1b).
-# osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
-# not TOML, so this is a configparser-parity reader distinct from the app's TOML
-# config. Parse errors are mapped to a fixed message (never interpolating the
-# parser's Display) so a malformed oscrc's source line — possibly a password —
-# is not leaked.
-ini = { package = "rust-ini", version = "0.21" }
-# XML parsing for /etc/products.d/*.prod product files (host system parser).
-quick-xml = "0.42"
-directories = "6"
-# rpm version comparison — pure-Rust replacement for upstream's libc
-# `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
-# contract. Verified against every upstream `test_rpm_version` golden vector.
-sandogasa-rpmvercmp = "0.25"
-# http
-reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
-# The openQA REST API client: signed-request auth (HMAC-SHA1 X-API-Hash),
-# `client.conf`/$OPENQA_CONFIG credential discovery, retries, and redirect
-# restriction, replacing mtui's own hand-rolled implementation. reqwest 0.13.4
-# on both sides so `ClientBuilder::http_client` shares mtui's connection pool.
-# "0.3" is a floor, not a preference: mtui depends on its userinfo redaction
-# in `Error::Request`/`Error::Connection`/`Error::CrossOriginRedirect` Display
-# and in `config::resolve`'s bare-authority stripping
-# (crates/mtui-datasources/src/openqa/client.rs), and a resolver allowed to
-# pick an older release would silently reintroduce the leak.
-ruoqa = "0.3"
-# HMAC-SHA1, for the OpenSSH hashed known_hosts test helper (mtui-hosts dev-dep);
-# not used for openQA auth any more (ruoqa owns that).
-hmac = "0.13"
-sha1 = "0.11"
-# SHA-256, for the MCP audit record's file-body payload fingerprints (#411):
-# `put` bodies and `report_*` write values never land verbatim.
-sha2 = "0.11"
-# percent-encoding of URL components (Slack/TeReGen/OBS API params, oqa-search
-# build-check log URLs).
-urlencoding = "2"
-# regex — SMELT testplatform grammar parsing (refhost Attributes::from_testplatform)
-regex = "1"
-# HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
-# index (oqa_search build-check overview), replacing upstream's minimal
-# html.parser LogFileLinkParser.
-scraper = "0.27"
-# datetime — parse/sort Gitea comment `updated_at` timestamps (RFC3339 with
-# offset), matching upstream `datetime.fromisoformat`. std only, no clock/oldtime
-# baggage; keeps the single-static-binary contract clean.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-# ssh
-russh = "0.63"
-russh-sftp = "3"
-async-trait = "0.1"
-# mcp. `server` for the ServerHandler surface + model types;
-# `transport-io` for the stdio runner; `transport-async-rw` for the
-# in-memory duplex round-trip test. No `macros` — tools are synthesised from the
-# runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
-rmcp = { version = "3", default-features = false, features = [
-    "server",
-    "client",
-    "transport-io",
-    "transport-async-rw",
-    # `--transport http`: the runtime-keyed streamable-HTTP server whose
-    # per-session `service_factory` is our per-client `McpSession` isolation hook.
-    "transport-streamable-http-server",
-] }
-# HTTP host for the mtui-mcp `--transport http` server: mounts rmcp's
-# `StreamableHttpService` (a `tower::Service`) via `Router::fallback_service`
-# and binds it with `axum::serve`. Feature-gated behind `mcp`, so the default
-# `mtui` build never pulls in a web framework.
-axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
-# CancellationToken for the mtui-mcp http idle-sweeper's cooperative shutdown
-# (bead mtui-rs-odq8). Feature-gated behind `mcp`; also rmcp's own transport dep.
-tokio-util = { version = "0.7", default-features = false }
-# observability + errors
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
-thiserror = "2"
-anyhow = "1"
-# terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
-owo-colors = "4"
-# optional desktop notifications (feature `notify`). Pure-Rust
-# freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
-# the single-static-binary / no-Python-runtime contract. Best-effort + headless
-# no-op, so a build without the feature never pulls it.
-notify-rust = "4"
-# stable insertion-ordered map (TemplateRegistry entries) + per-registry id
-indexmap = "2"
-uuid = { version = "1", features = ["v4"] }
-# random shuffle of per-slot pool candidates so load spreads across
-# interchangeable refhosts (upstream `random.shuffle`); test-seamed for
-# determinism.
-rand = "0.10"
-# dev / test
-insta = "1"
-wiremock = "0.6"
-# JSON-Schema (draft 2019-09) conformance testing for the typed report
-# document (mtui-types, dev-only).
-# boon over jsonschema: +5 transitive crates vs +25, frozen API (6 releases
-# ever) vs 129 versions/56 breaking minors, both 100% draft-2019-09 conformant
-# on this schema. Reached through exactly one test helper so a swap to
-# `jsonschema` (pre-approved if an advisory lands) is a single-file change.
-boon = "0.6"
 # serialises tests that mutate process-global env vars ($OSC_CONFIG, $HOME,
 # $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
 # in parallel threads, so env mutation must not race.
 serial_test = "4"
-# perf baselines (mtui-rs-0mop.1): criterion for in-process latency/throughput
-# benches. Dev-only; benches use `harness = false` so they compile only under
-# `cargo bench`, never in the default `cargo test` gate. Startup timing is
-# measured externally with `hyperfine` (documented in
-# plans/perf-baseline-0mop1.md), not a crate dep.
-criterion = { version = "0.8", features = ["async_tokio"] }
-# internal crates (path deps)
-mtui-types = { path = "crates/mtui-types" }
-mtui-config = { path = "crates/mtui-config" }
-mtui-hosts = { path = "crates/mtui-hosts" }
-mtui-datasources = { path = "crates/mtui-datasources" }
-mtui-testreport = { path = "crates/mtui-testreport" }
-mtui-tui = { path = "crates/mtui-tui" }
-mtui-core = { path = "crates/mtui-core" }
-mtui-cli = { path = "crates/mtui-cli" }
-mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
+sha1 = "0.11"
+# SHA-256, for the MCP audit record's file-body payload fingerprints (#411):
+# `put` bodies and `report_*` write values never land verbatim.
+sha2 = "0.11"
+# POSIX shell-splitting of a REPL input line into argv (engine line-dispatch),
+# mirroring upstream's `shlex.split` in `Command.parse_args`.
+shlex = "2"
+thiserror = "2"
+# runtime
+tokio = { version = "1", features = ["full"] }
+# CancellationToken for the mtui-mcp http idle-sweeper's cooperative shutdown
+# (bead mtui-rs-odq8). Feature-gated behind `mcp`; also rmcp's own transport dep.
+tokio-util = { version = "0.7", default-features = false }
+toml = "1"
+# observability + errors
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+# percent-encoding of URL components (Slack/TeReGen/OBS API params, oqa-search
+# build-check log URLs).
+urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
+wiremock = "0.6"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
 
+# Both bins are two-line `main` stubs with nothing worth documenting; `mtui-mcp`
+# also collides on `target/doc/mtui_mcp/` with the `mtui_mcp` library's own
+# rustdoc output, which the bin would otherwise win silently (Cargo only warns).
+[[bin]]
+doc = false
+name = "mtui"
+path = "src/bin/mtui.rs"
+required-features = ["cli"]
+
+[[bin]]
+doc = false
+name = "mtui-mcp"
+path = "src/bin/mtui-mcp.rs"
+required-features = ["mcp"]
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# ---------------------------------------------------------------------------
+# Distro packaging. One Cargo package, two distro packages: the base table is
+# the `mtui` package, the `mcp` variant is `mtui-mcp`. Both tools take
+# `--variant mcp`. Merge is per key and shallow: a key the variant omits is
+# inherited (`require-sh`), one it sets replaces the base's outright rather than
+# merging into it — so each `assets` list must be complete on its own.
+# ---------------------------------------------------------------------------
+
+[dependencies]
+anyhow.workspace = true
+mtui-cli = { workspace = true, optional = true }
+mtui-mcp = { workspace = true, optional = true }
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+default = ["cli", "mcp"]
+cli = ["dep:mtui-cli"]
+# Names the inner feature explicitly so the facade keeps working if
+# mtui-mcp's own default set is ever changed.
+mcp = ["dep:mtui-mcp", "mtui-mcp/mcp"]
+# `?/` so enabling notify does not implicitly turn `cli` back on.
+notify = ["mtui-cli?/notify"]
+
+[lints]
+workspace = true
+
 [profile.release]
-lto = "thin"
 strip = true
-# One codegen unit trades slower release builds for a smaller/faster binary.
-codegen-units = 1
+lto = "thin"
 # Abort on panic: no unwinding tables, smaller binary. Release-only — the `test`
 # profile keeps unwinding (Cargo forbids `panic = "abort"` there and the suite
 # relies on it).
 panic = "abort"
+# One codegen unit trades slower release builds for a smaller/faster binary.
+codegen-units = 1

@@ -3,15 +3,12 @@ name = "mtui-types"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 # All integration tests are consolidated into one `tests/it.rs` binary (see
 # the crate's own doc comment there and `crates/mtui-testreport`'s Cargo.toml
 # for the same convention), so the crate links once for the whole test run.
 autotests = false
-
-[lints]
-workspace = true
 
 [[test]]
 name = "it"
@@ -20,15 +17,18 @@ path = "tests/it.rs"
 [dependencies]
 sandogasa-rpmvercmp.workspace = true
 serde.workspace = true
-shlex.workspace = true
-serde-saphyr.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
+serde-saphyr.workspace = true
+shlex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-insta.workspace = true
 # dev / test only — see the workspace Cargo.toml comment.
 # Never a dependency of mtui/mtui-mcp.
 boon.workspace = true
+insta.workspace = true
+
+[lints]
+workspace = true
