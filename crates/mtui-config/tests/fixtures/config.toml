@@ -10,16 +10,16 @@ user = "qauser"
 ssl_verify = "warn.example/ca.pem"
 
 [connection]
-connection_timeout = 450          # integer value
-reboot_timeout = 25               # integer value
-max_parallel = 8                  # integer value
-max_oqa_parallel = 4              # integer value
+connection_timeout = 450  # integer value
+reboot_timeout = 25  # integer value
+max_parallel = 8  # integer value
+max_oqa_parallel = 4  # integer value
 ssh_strict_host_key_checking = "warn"
 
 [refhosts]
 resolvers = "https,path"
 https_expiration = 3600
-path = "~/qam/refhosts.yml"       # tilde must expand
+path = "~/qam/refhosts.yml"  # tilde must expand
 
 [url]
 bugzilla = "https://bugzilla.example.com"
@@ -29,26 +29,26 @@ testreports = "https://qam.example.com/testreports"
 path = "svn+ssh://svn@svn.example/testreports"
 
 [lock]
-reap_stale = false                # boolean value
-stale_age = 3600                  # integer value
-pool_stale_age = 7200             # integer value
+reap_stale = false  # boolean value
+stale_age = 3600  # integer value
+pool_stale_age = 7200  # integer value
 wait = 30
 # wait_poll omitted on purpose: it must keep its built-in default (15)
 # pool_reap_stale omitted on purpose: it must keep its built-in default (true)
 
 [slack]
-enabled = true                    # boolean value
+enabled = true  # boolean value
 token = "xoxb-fixture"
 channel = "#qam-review"
-poll_interval = 90                # integer value
+poll_interval = 90  # integer value
 # watch_timeout omitted on purpose: it must keep its default (3600)
 
 [mcp]
-max_output_bytes = 65536          # integer value
-profile = "core"                  # tool-surface profile
-tools_allow = ["whoami"]          # extra tools kept on top of the profile
-tools_deny = ["run"]              # tools removed regardless of profile/allow
+max_output_bytes = 65536  # integer value
+profile = "core"  # tool-surface profile
+tools_allow = ["whoami"]  # extra tools kept on top of the profile
+tools_deny = ["run"]  # tools removed regardless of profile/allow
 
 [obs]
 api_url = "https://api.example.de"
-request_timeout = 90              # integer value
+request_timeout = 90  # integer value

@@ -3,14 +3,11 @@ name = "mtui-testreport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its deps link once, not once per file.
 autotests = false
-
-[lints]
-workspace = true
 
 [[test]]
 name = "it"
@@ -18,39 +15,42 @@ path = "tests/it.rs"
 
 # Perf baseline bench. `harness = false` -> criterion main.
 [[bench]]
+harness = false
 name = "testreport"
 path = "benches/testreport.rs"
-harness = false
 
 [dependencies]
-mtui-types.workspace = true
-mtui-config.workspace = true
-mtui-hosts.workspace = true
-mtui-datasources.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+mtui-config.workspace = true
+mtui-datasources.workspace = true
+mtui-hosts.workspace = true
+mtui-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
-tokio.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-insta.workspace = true
-tempfile = "3"
 # Schema-conformance smoke test for the committed paired fixtures
 # (tests/fixtures/pairs/*/document.json) — mirrors `mtui-types`'
 # `tests/schema_conformance.rs` helper rather than reusing it (that helper
 # lives in another crate's integration-test binary and cannot be imported
 # across the crate boundary); dev-only, never a dependency of `mtui`/`mtui-mcp`.
 boon.workspace = true
+# Perf baseline bench: metadata JSON parse hot path.
+criterion.workspace = true
+insta.workspace = true
+tempfile = "3"
 # `test-util` for `#[tokio::test(start_paused = true)]`: the prepare loop's
 # cancellation checkpoint is a boundary between two awaited fan-outs, and
 # virtual time is the only way to land a cancel *between* two of them without a
 # wall-clock race.
 tokio = { workspace = true, features = ["test-util"] }
-wiremock.workspace = true
-# Perf baseline bench: metadata JSON parse hot path.
-criterion.workspace = true
 # Scoped subscriber to capture WARN output in tests.
 tracing-subscriber.workspace = true
+wiremock.workspace = true
+
+[lints]
+workspace = true

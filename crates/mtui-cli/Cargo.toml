@@ -3,53 +3,59 @@ name = "mtui-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
-
-[lints]
-workspace = true
+license.workspace = true
 
 [dependencies]
-mtui-core.workspace = true
+anyhow.workspace = true
+# dyn-compatible async `BridgeIo` trait for the (offline-testable) shell bridge.
+async-trait.workspace = true
+clap.workspace = true
+# Raw-mode terminal + async EventStream for the `shell` bridge.
+crossterm.workspace = true
+# `StreamExt` for the crossterm `EventStream` in the bridge input pump.
+futures.workspace = true
 mtui-config.workspace = true
+mtui-core.workspace = true
 # Direct dep (previously transitive via mtui-core): the interactive `shell` TTY
 # bridge drives `Target::shell`/`ShellChannel` directly, and enables the
 # `mtui-hosts` `shell` feature so the primitive is compiled into the `mtui`
 # binary under default features.
 mtui-hosts = { workspace = true, features = ["shell"] }
-clap.workspace = true
-anyhow.workspace = true
-reedline.workspace = true
-# Raw-mode terminal + async EventStream for the `shell` bridge.
-crossterm.workspace = true
-# `StreamExt` for the crossterm `EventStream` in the bridge input pump.
-futures.workspace = true
-# dyn-compatible async `BridgeIo` trait for the (offline-testable) shell bridge.
-async-trait.workspace = true
-# shlex-split the `shell` line to route it to the bridge (mirrors the engine).
-shlex.workspace = true
+# `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the
+# startup seeding path (before the REPL loop begins).
+mtui-testreport.workspace = true
+# The report-document editor's form model and screen; this crate owns only the
+# terminal handover around it.
+mtui-tui.workspace = true
+# `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
+mtui-types.workspace = true
+# Optional desktop-notification backend (feature `notify`); a headless no-op
+# without it (see `notification.rs`).
+notify-rust = { workspace = true, optional = true }
 nu-ansi-term.workspace = true
 # Level-token coloring in the custom tracing format layer, matching
 # the escapes `mtui-core`'s display uses for the `error` token.
 owo-colors.workspace = true
-# The report-document editor's form model and screen; this crate owns only the
-# terminal handover around it.
-mtui-tui.workspace = true
 ratatui.workspace = true
-# `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
-mtui-types.workspace = true
-# `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the
-# startup seeding path (before the REPL loop begins).
-mtui-testreport.workspace = true
+reedline.workspace = true
+# shlex-split the `shell` line to route it to the bridge (mirrors the engine).
+shlex.workspace = true
 tokio.workspace = true
 # `CancellationToken`: the REPL installs a fresh one per dispatched line so a
 # mid-command Ctrl-C cancels *that* command's flow (and only it).
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# Optional desktop-notification backend (feature `notify`); a headless no-op
-# without it (see `notification.rs`).
-notify-rust = { workspace = true, optional = true }
+
+[dev-dependencies]
+# One `env` exclusion domain for every test that touches the process-global
+# environment — `$RUST_LOG` in the `startup_filter` tests, `$EDITOR` in the
+# `edit` spawn tests, the `var_os` probe in `notification` — because the whole
+# crate's tests share one process.
+serial_test.workspace = true
+# Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
+tempfile = "3"
 
 [features]
 default = []
@@ -57,11 +63,5 @@ default = []
 # the process is headless (no TTY / no display).
 notify = ["dep:notify-rust"]
 
-[dev-dependencies]
-# Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
-tempfile = "3"
-# One `env` exclusion domain for every test that touches the process-global
-# environment — `$RUST_LOG` in the `startup_filter` tests, `$EDITOR` in the
-# `edit` spawn tests, the `var_os` probe in `notification` — because the whole
-# crate's tests share one process.
-serial_test.workspace = true
+[lints]
+workspace = true

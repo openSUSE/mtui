@@ -6,48 +6,48 @@
 [package]
 name = "mtui-fuzz"
 version = "0.0.0"
-publish = false
 edition = "2024"
 license = "GPL-3.0-or-later"
+publish = false
 
 [package.metadata]
 cargo-fuzz = true
 
 [workspace]
 
-[dependencies]
-libfuzzer-sys = "0.4"
-mtui-types = { path = "../crates/mtui-types" }
-mtui-hosts = { path = "../crates/mtui-hosts" }
-mtui-datasources = { path = "../crates/mtui-datasources" }
-mtui-testreport = { path = "../crates/mtui-testreport" }
-
 [[bin]]
+doc = false
 name = "obs_xml"
 path = "fuzz_targets/obs_xml.rs"
 test = false
-doc = false
 
 [[bin]]
+doc = false
 name = "prod_parse"
 path = "fuzz_targets/prod_parse.rs"
 test = false
-doc = false
 
 [[bin]]
+doc = false
 name = "lockfile"
 path = "fuzz_targets/lockfile.rs"
 test = false
-doc = false
 
 [[bin]]
+doc = false
 name = "id_parse"
 path = "fuzz_targets/id_parse.rs"
 test = false
-doc = false
 
 [[bin]]
+doc = false
 name = "repo_parse"
 path = "fuzz_targets/repo_parse.rs"
 test = false
-doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mtui-datasources = { path = "../crates/mtui-datasources" }
+mtui-hosts = { path = "../crates/mtui-hosts" }
+mtui-testreport = { path = "../crates/mtui-testreport" }
+mtui-types = { path = "../crates/mtui-types" }

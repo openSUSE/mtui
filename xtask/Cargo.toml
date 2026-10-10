@@ -3,8 +3,8 @@ name = "xtask"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 # Dev-only automation crate (the `cargo xtask` pattern). Never published or
 # shipped; it regenerates the checked-in `dist/` completions + man pages.
 publish = false
@@ -17,10 +17,14 @@ path = "src/lib.rs"
 name = "xtask"
 path = "src/main.rs"
 
-[lints]
-workspace = true
-
 [dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap = { workspace = true }
+clap_complete.workspace = true
+clap_mangen.workspace = true
+# `teregen-login`: reads oscrc credentials via `[obs] api_url`.
+mtui-config.workspace = true
 # The two binaries' top-level clap parsers, reached via the auto-derived
 # `CommandFactory` (`Args::command()` / `McpArgs::command()`). `mtui-mcp` is
 # pulled without its `mcp` feature so the MCP server graph (rmcp/axum) stays out
@@ -28,28 +32,24 @@ workspace = true
 # `--workspace` build still unifies the root facade's `mcp` feature onto it,
 # since Cargo features are additive across the resolve graph.
 mtui-core.workspace = true
+mtui-datasources.workspace = true
 mtui-mcp = { workspace = true }
-clap = { workspace = true }
-clap_complete.workspace = true
-clap_mangen.workspace = true
-anyhow.workspace = true
 # `corpus-survey`: reuses mtui's own HTTP client/TLS-verify policy and
 # URL-sanitising error types instead of a second HTTP stack — the cost is
 # pulling tokio's runtime into this crate.
 mtui-types.workspace = true
-mtui-datasources.workspace = true
-# `teregen-login`: reads oscrc credentials via `[obs] api_url`.
-mtui-config.workspace = true
-tokio.workspace = true
-# `schema-check`: compares the live /api/v2/schema against the committed copy
-# by value.
-serde_json.workspace = true
 # `teregen-login`: issues the authenticated GET /schema probe directly
 # (mtui-datasources's HttpClient::inner() is crate-private) and renders the
 # cached token's age.
 reqwest.workspace = true
-chrono.workspace = true
+# `schema-check`: compares the live /api/v2/schema against the committed copy
+# by value.
+serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).
 tempfile = "3"
+
+[lints]
+workspace = true

@@ -3,55 +3,56 @@ name = "mtui-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
-
-[lints]
-workspace = true
+license.workspace = true
 
 [dependencies]
-mtui-types.workspace = true
-mtui-config.workspace = true
-mtui-hosts.workspace = true
-mtui-datasources.workspace = true
-mtui-testreport.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 clap.workspace = true
+futures.workspace = true
+indexmap.workspace = true
+mtui-config.workspace = true
+mtui-datasources.workspace = true
+mtui-hosts.workspace = true
+mtui-testreport.workspace = true
+mtui-types.workspace = true
+owo-colors.workspace = true
+rand.workspace = true
+regex.workspace = true
+# The session-scoped openQA transport (`Session::openqa_transport`) hands out
+# a `reqwest::Client` for injection into `ruoqa::ClientBuilder::http_client`,
+# mirroring `Session::http_client`'s pool-reuse pattern.
+reqwest.workspace = true
+serde_json.workspace = true
 shlex.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 # CancellationToken for the Session cancellation seam (MCP `job_cancel`).
 tokio-util.workspace = true
-futures.workspace = true
 tracing.workspace = true
-owo-colors.workspace = true
-indexmap.workspace = true
-chrono.workspace = true
 uuid.workspace = true
-regex.workspace = true
-serde_json.workspace = true
-rand.workspace = true
-# The session-scoped openQA transport (`Session::openqa_transport`) hands out
-# a `reqwest::Client` for injection into `ruoqa::ClientBuilder::http_client`,
-# mirroring `Session::http_client`'s pool-reuse pattern.
-reqwest.workspace = true
-# `~user` resolution in file-path tab completion (`complete_path`), mirroring
-# Python's `os.path.expanduser` getpwnam lookup. Unix-only `user` feature; the
-# call sites are `#[cfg(unix)]`-gated with an unexpanded fallback elsewhere.
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["user"] }
-# `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`).
-# Already deep in the tree.
-libc = "0.2"
 
 [dev-dependencies]
-mtui-types.workspace = true
 insta.workspace = true
+mtui-types.workspace = true
 serial_test.workspace = true
 tempfile = "3"
-wiremock.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # Captures the fan-out driver's `succeeded` summary field, so the list of
 # templates it names is asserted rather than assumed
 # (`commands::cancellation_seam::succeeded_log`).
 tracing-subscriber.workspace = true
+wiremock.workspace = true
+
+# `~user` resolution in file-path tab completion (`complete_path`), mirroring
+# Python's `os.path.expanduser` getpwnam lookup. Unix-only `user` feature; the
+# call sites are `#[cfg(unix)]`-gated with an unexpanded fallback elsewhere.
+[target."cfg(unix)".dependencies]
+# `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`).
+# Already deep in the tree.
+libc = "0.2"
+nix = { version = "0.31", features = ["user"] }
+
+[lints]
+workspace = true

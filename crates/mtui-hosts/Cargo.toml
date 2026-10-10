@@ -3,14 +3,11 @@ name = "mtui-hosts"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its deps (russh/tokio) link once, not once per file.
 autotests = false
-
-[lints]
-workspace = true
 
 [[test]]
 name = "it"
@@ -19,9 +16,47 @@ path = "tests/it.rs"
 # Perf baseline benches. `harness = false` -> criterion's own
 # main, compiled only under `cargo bench`, never in the default `cargo test` gate.
 [[bench]]
+harness = false
 name = "fanout"
 path = "benches/fanout.rs"
-harness = false
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+mtui-config.workspace = true
+mtui-types.workspace = true
+quick-xml.workspace = true
+russh.workspace = true
+russh-config = "0.58"
+russh-sftp.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+# CancellationToken for the cooperative host-boundary cancellation seam.
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Perf baseline benches: fan-out scaling / SFTP / lock reporting.
+criterion.workspace = true
+data-encoding = "2"
+# Only for the hashed-known_hosts test line; mirrors russh's own matcher
+# (HMAC-SHA1 + BASE64_MIME). Versions match those already resolved via russh.
+hmac.workspace = true
+insta.workspace = true
+# rand 0.10 to match russh 0.62's rand_core 0.10 (ssh-key's CryptoRng bound
+# is tied to that exact rand_core; 0.9 pulls a second, incompatible copy).
+# `rand::rng()` mirrors upstream russh's own key-gen in tests.
+rand = "0.10"
+russh-sftp = { workspace = true }
+# Serialises the spinner tests that install the process-global test sink
+# (`set_test_sink`); in the consolidated `it` binary they run in one process, so
+# their shared global must not race.
+serial_test.workspace = true
+sha1.workspace = true
+# Used only in tests to assert command lines re-split to a single literal token.
+shlex.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [features]
 # Interactive PTY shell primitive. Adds `Connection::shell` /
@@ -31,40 +66,5 @@ harness = false
 # the feature.
 shell = []
 
-[dependencies]
-mtui-types.workspace = true
-mtui-config.workspace = true
-async-trait.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-tokio = { workspace = true }
-# CancellationToken for the cooperative host-boundary cancellation seam.
-tokio-util.workspace = true
-futures.workspace = true
-russh.workspace = true
-russh-sftp.workspace = true
-russh-config = "0.58"
-quick-xml.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
-tempfile = "3"
-# Used only in tests to assert command lines re-split to a single literal token.
-shlex.workspace = true
-insta.workspace = true
-# Serialises the spinner tests that install the process-global test sink
-# (`set_test_sink`); in the consolidated `it` binary they run in one process, so
-# their shared global must not race.
-serial_test.workspace = true
-# rand 0.10 to match russh 0.62's rand_core 0.10 (ssh-key's CryptoRng bound
-# is tied to that exact rand_core; 0.9 pulls a second, incompatible copy).
-# `rand::rng()` mirrors upstream russh's own key-gen in tests.
-rand = "0.10"
-russh-sftp = { workspace = true }
-# Only for the hashed-known_hosts test line; mirrors russh's own matcher
-# (HMAC-SHA1 + BASE64_MIME). Versions match those already resolved via russh.
-hmac.workspace = true
-sha1.workspace = true
-data-encoding = "2"
-# Perf baseline benches: fan-out scaling / SFTP / lock reporting.
-criterion.workspace = true
+[lints]
+workspace = true
