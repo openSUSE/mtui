@@ -330,6 +330,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A command that prints nothing for about 60 seconds no longer loses its SSH
+  session and returns `exit -1`: the link now carries keepalives, so only
+  `connection_timeout` decides when a quiet command is aborted (#683).
 - `mtui-mcp`'s `initialize` and `server/discover` replies now report
   `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
   version (#657).
