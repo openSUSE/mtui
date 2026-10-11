@@ -8,6 +8,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `load_template` given a short RRID (`S:M:…`) now reports the template under
+  its canonical id, in both the success and the failure line (#680).
+
 ## [26.3.5] - 2026-10-27
 
 ### Fixed
