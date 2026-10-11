@@ -144,6 +144,16 @@ impl CaptureBuf {
         self.stderr.extend_from_slice(&data[..take]);
     }
 
+    /// Appends an mtui-authored line to stderr outside the caps, so it is
+    /// never dropped, never latches [`truncated`](Self::truncated), and starts
+    /// on its own line.
+    fn push_note(&mut self, note: &str) {
+        if self.stderr.last().is_some_and(|&b| b != b'\n') {
+            self.stderr.push(b'\n');
+        }
+        self.stderr.extend_from_slice(note.as_bytes());
+    }
+
     /// Returns how many leading bytes of `data` fit under both `stream_room`
     /// and the remaining combined budget, advancing the running total and
     /// latching [`truncated`](Self::truncated) if any byte is dropped.
@@ -1184,6 +1194,7 @@ impl Connection for SshConnection {
 
         let mut capture = CaptureBuf::default();
         let mut exitcode: i16 = NO_EXIT_CODE;
+        let mut saw_close = false;
         let window = self.timeout.as_duration();
         // Non-interactive runs (headless / `mtui-mcp`) have no user to answer
         // the keep-waiting prompt, and a command trickling output forever never
@@ -1260,9 +1271,31 @@ impl Connection for SshConnection {
                         exitcode = i16::try_from(exit_status).unwrap_or(NO_EXIT_CODE);
                     }
                     ChannelMsg::Eof => {}
-                    ChannelMsg::Close => break,
+                    ChannelMsg::Close => {
+                        saw_close = true;
+                        break;
+                    }
                     _ => {}
                 },
+            }
+        }
+
+        if !saw_close {
+            let elapsed = started.elapsed().as_secs_f64();
+            tracing::warn!(
+                host = %self.hostname,
+                command,
+                elapsed,
+                exitcode,
+                "SSH session lost mid-command",
+            );
+            // With an exit status already received the command is finished and
+            // the code is real; only a missing one leaves its fate unknown.
+            if exitcode == NO_EXIT_CODE {
+                capture.push_note(&format!(
+                    "mtui: SSH session to {} lost after {elapsed:.1}s; the command may still be running\n",
+                    self.hostname
+                ));
             }
         }
 
@@ -1886,6 +1919,28 @@ mod tests {
         assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
         assert_eq!(&c.stdout[MAX_STREAM_BYTES - 2..], b"XY");
         assert!(c.truncated);
+    }
+
+    #[test]
+    fn note_starts_on_its_own_line() {
+        let mut c = CaptureBuf::default();
+        c.push_note("note\n");
+        assert_eq!(c.stderr, b"note\n");
+        c.push_stderr(b"partial");
+        c.push_note("note\n");
+        assert_eq!(c.stderr, b"note\npartial\nnote\n");
+        c.push_note("again\n");
+        assert_eq!(c.stderr, b"note\npartial\nnote\nagain\n");
+    }
+
+    #[test]
+    fn note_survives_a_full_stderr_without_latching_truncated() {
+        let mut c = CaptureBuf::default();
+        c.push_stderr(&vec![b'e'; MAX_STREAM_BYTES]);
+        assert!(!c.truncated);
+        c.push_note("note\n");
+        assert!(c.stderr.ends_with(b"\nnote\n"));
+        assert!(!c.truncated);
     }
 
     #[test]
