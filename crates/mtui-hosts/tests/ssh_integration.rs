@@ -145,6 +145,19 @@ impl russh::server::Handler for TestSshSession {
             return Ok(());
         }
 
+        // Writes an unterminated stderr line, then goes silent without an exit
+        // status or Close, as a link dying mid-output does.
+        if command == "partial-stderr-then-silent" {
+            session.extended_data(channel_id, 1, b"partial".to_vec())?;
+            return Ok(());
+        }
+
+        // Reports an exit status, then goes silent without Close.
+        if command == "exit-then-silent" {
+            session.exit_status_request(channel_id, 3)?;
+            return Ok(());
+        }
+
         // Floods stdout past the client's capture cap, then exits cleanly.
         if command == "flood-stdout" {
             let chunk = vec![b'a'; 64 * 1024];
@@ -660,6 +673,45 @@ async fn keepalive_keeps_a_quiet_command_alive() {
         .expect("run must return before the test-level timeout")
         .expect("run");
     assert_eq!(log.exitcode, 0, "stderr: {}", log.stderr);
+    assert!(!log.stderr.contains("lost after"), "stderr: {}", log.stderr);
+}
+
+/// Runs `command` on a link whose inactivity timeout fires with no keepalives
+/// to prevent it, so the session ends without a Close.
+async fn run_on_a_dying_link(command: &str) -> mtui_types::hostlog::CommandLog {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    conn.close().await.expect("close");
+    let mut conn = conn.with_transport_timers(None, Some(Duration::from_secs(1)));
+    conn.reconnect(0, false).await.expect("reconnect");
+    tokio::time::timeout(Duration::from_secs(10), conn.run(command))
+        .await
+        .expect("run must return before the test-level timeout")
+        .expect("run")
+}
+
+#[tokio::test]
+async fn run_reports_a_session_lost_mid_command() {
+    let log = run_on_a_dying_link("partial-stderr-then-silent").await;
+    assert_eq!(log.exitcode, -1);
+    let (output, note) = log
+        .stderr
+        .split_once('\n')
+        .unwrap_or_else(|| panic!("note must start on its own line: {:?}", log.stderr));
+    assert_eq!(output, "partial");
+    assert!(
+        note.starts_with("mtui: SSH session to 127.0.0.1 lost after ")
+            && note.ends_with("s; the command may still be running\n"),
+        "note: {note:?}"
+    );
+    assert!(!log.truncated);
+}
+
+#[tokio::test]
+async fn run_does_not_claim_a_finished_command_may_still_be_running() {
+    let log = run_on_a_dying_link("exit-then-silent").await;
+    assert_eq!(log.exitcode, 3);
+    assert!(!log.stderr.contains("still be running"), "{}", log.stderr);
 }
 
 #[tokio::test]
