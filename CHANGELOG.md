@@ -330,6 +330,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `load_template` given a short RRID (`S:M:…`) now reports the template under
+  its canonical id, in both the success and the failure line (#680).
 - A `lock -c <text>` reservation now survives `run`, `update`, `install` and
   `prepare` on the host: they no longer rewrite it without its comment or
   release it when they finish, so only `unlock` (or `unlock --force`) removes it
