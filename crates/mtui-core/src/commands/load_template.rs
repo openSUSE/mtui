@@ -164,8 +164,8 @@ impl Command for LoadTemplate {
             .await;
         if loaded.is_empty() {
             return Err(CommandError::Other(match reason {
-                Some(why) => format!("could not load template for {rrid}: {why}"),
-                None => format!("could not load template for {rrid}"),
+                Some(why) => format!("could not load template for {update}: {why}"),
+                None => format!("could not load template for {update}"),
             }));
         }
         let connected = session.targets().len();
@@ -179,7 +179,7 @@ impl Command for LoadTemplate {
         }
         session
             .display
-            .println(&format!("loaded {rrid} ({connected} hosts connected)"));
+            .println(&format!("loaded {loaded} ({connected} hosts connected)"));
         Ok(())
     }
 }
@@ -274,6 +274,39 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains(&format!("loaded {rrid}")), "{out:?}");
         assert!(out.contains("hosts connected"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn short_rrid_load_prints_the_canonical_key() {
+        let (mut session, buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        let _teregen = serving(&mut session, "SUSE:Maintenance:1:1", "maintenance").await;
+
+        let args = matches(&LoadTemplate, &["-k", "S:M:1:1"]);
+        LoadTemplate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("loaded SUSE:Maintenance:1:1 ("), "{out:?}");
+        assert!(!out.contains("S:M:"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn short_rrid_failure_names_the_canonical_id() {
+        let (mut session, _buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        let server = MockServer::start().await;
+        session.config.teregen_api_v2 = server.uri();
+
+        let args = matches(&LoadTemplate, &["-k", "S:M:1:1"]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+
+        let CommandError::Other(m) = &err else {
+            panic!("{err:?}");
+        };
+        assert!(m.contains("SUSE:Maintenance:1:1"), "{m}");
+        assert!(!m.contains("S:M:"), "{m}");
     }
 
     /// Through `Command::run`, not `call` — `run` is what restores the
