@@ -214,8 +214,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # `transport-io` for the stdio runner; `transport-async-rw` for the
 # in-memory duplex round-trip test. No `macros` — tools are synthesised from the
 # runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
+# "3.5.1" is a floor: its dispatcher fills `ttlMs`/`cacheScope` on 2026-07-28 list results.
 rmcp = {
-  version = "3",
+  version = "3.5.1",
   default-features = false,
   features = [
     "client",
