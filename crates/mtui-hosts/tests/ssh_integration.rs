@@ -27,6 +27,9 @@ use mtui_hosts::{
 };
 use mtui_types::enums::TargetState;
 
+/// How long the `quiet-then-exit` scripted command stays silent.
+const QUIET_COMMAND_DURATION: Duration = Duration::from_millis(2500);
+
 /// Bytes the `flood-stdout` scripted command emits: comfortably past the
 /// per-stream capture cap so `run` must truncate.
 const FLOOD_BYTES: usize = MAX_STREAM_BYTES + 512 * 1024;
@@ -126,6 +129,19 @@ impl russh::server::Handler for TestSshSession {
         // Never produces output and never exits: the client's no-output timeout
         // is the only thing that can end it.
         if command == "sleep-forever" {
+            return Ok(());
+        }
+
+        // Silent for a while, then exits cleanly. The wait runs in a spawned
+        // task so this session loop stays free to answer keepalives.
+        if command == "quiet-then-exit" {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                tokio::time::sleep(QUIET_COMMAND_DURATION).await;
+                let _ = handle.exit_status_request(channel_id, 0).await;
+                let _ = handle.eof(channel_id).await;
+                let _ = handle.close(channel_id).await;
+            });
             return Ok(());
         }
 
@@ -627,6 +643,23 @@ async fn run_times_out_on_silent_command() {
         matches!(&err, mtui_hosts::HostError::Timeout { command } if command == "sleep-forever"),
         "unexpected error: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn keepalive_keeps_a_quiet_command_alive() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    conn.close().await.expect("close");
+    let mut conn = conn.with_transport_timers(
+        Some(Duration::from_millis(200)),
+        Some(Duration::from_secs(1)),
+    );
+    conn.reconnect(0, false).await.expect("reconnect");
+    let log = tokio::time::timeout(Duration::from_secs(10), conn.run("quiet-then-exit"))
+        .await
+        .expect("run must return before the test-level timeout")
+        .expect("run");
+    assert_eq!(log.exitcode, 0, "stderr: {}", log.stderr);
 }
 
 #[tokio::test]

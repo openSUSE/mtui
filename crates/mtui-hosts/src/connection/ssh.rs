@@ -11,7 +11,9 @@
 //!   connect.
 //! * **`run` timeout.** The per-command timeout bounds the *no-output* window,
 //!   not total runtime, and a command silent for the whole window is aborted
-//!   with [`HostError::Timeout`].
+//!   with [`HostError::Timeout`]. The SSH link itself is kept alive with
+//!   periodic keepalives, so a quiet command is never cut by a transport idle
+//!   limit; only this window decides when it is aborted.
 //! * **`run` bounds (th4o.6) — deliberate DoS hardening.** Output is capped at
 //!   [`MAX_STREAM_BYTES`] per stream / [`MAX_TOTAL_BYTES`] combined, the
 //!   overflow discarded and the [`CommandLog`] flagged `truncated`.
@@ -86,6 +88,33 @@ const COMMAND_DEADLINE_FACTOR: u32 = 12;
 /// The standard SSH port, used when neither `~/.ssh/config` nor the refhost
 /// entry names one.
 const DEFAULT_SSH_PORT: u16 = 22;
+
+/// Keepalive probe interval: a quiet command's link stays busy, so the peer
+/// never sees it idle and the inactivity backstop below never trips.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Dead-peer backstop: a session that receives nothing, keepalive replies
+/// included, for this long is torn down.
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Unanswered keepalives tolerated before the session is declared dead.
+const KEEPALIVE_MAX: usize = 3;
+
+/// Transport liveness timers handed to the russh client config.
+#[derive(Debug, Clone, Copy)]
+struct TransportTimers {
+    keepalive: Option<Duration>,
+    inactivity: Option<Duration>,
+}
+
+impl Default for TransportTimers {
+    fn default() -> Self {
+        Self {
+            keepalive: Some(KEEPALIVE_INTERVAL),
+            inactivity: Some(INACTIVITY_TIMEOUT),
+        }
+    }
+}
 
 /// Accumulates a command's stdout/stderr under fixed per-stream and combined
 /// byte caps, discarding overflow instead of buffering it.
@@ -372,6 +401,9 @@ pub struct SshConnection {
     /// [`invalidate_sftp_if_fatal`](Self::invalidate_sftp_if_fatal), so the next
     /// call re-handshakes rather than reusing a dead session.
     sftp: Option<Arc<RusshSftpSession>>,
+    /// Applied on the next [`establish`], so a connect and every reconnect
+    /// agree on the same liveness behaviour.
+    transport: TransportTimers,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -411,12 +443,14 @@ impl SshConnection {
     ) -> Result<Self> {
         let hostname = hostname.into();
         let resolved = resolve(&hostname, port);
+        let transport = TransportTimers::default();
         let handle = establish(
             &hostname,
             &resolved,
             policy,
             connect_timeout,
             known_hosts.clone(),
+            transport,
         )
         .await?;
         Ok(Self {
@@ -431,6 +465,7 @@ impl SshConnection {
             known_hosts,
             reconnect_backoff_base: Duration::from_secs(10),
             sftp: None,
+            transport,
         })
     }
 
@@ -455,6 +490,23 @@ impl SshConnection {
     #[must_use]
     pub fn with_command_timeout(mut self, timeout: CommandTimeout) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Overrides the keepalive interval and inactivity timeout. They take
+    /// effect on the next (re)connect, so call this before a `close()` +
+    /// [`reconnect`](Connection::reconnect).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_transport_timers(
+        mut self,
+        keepalive: Option<Duration>,
+        inactivity: Option<Duration>,
+    ) -> Self {
+        self.transport = TransportTimers {
+            keepalive,
+            inactivity,
+        };
         self
     }
 
@@ -864,9 +916,12 @@ async fn establish(
     policy: HostKeyPolicy,
     connect_timeout: CommandTimeout,
     known_hosts: Option<PathBuf>,
+    transport: TransportTimers,
 ) -> Result<Handle<ClientHandler>> {
     let config = Arc::new(ClientConfig {
-        inactivity_timeout: Some(Duration::from_secs(60)),
+        inactivity_timeout: transport.inactivity,
+        keepalive_interval: transport.keepalive,
+        keepalive_max: KEEPALIVE_MAX,
         ..ClientConfig::default()
     });
     let handler = ClientHandler {
@@ -1091,6 +1146,7 @@ impl Connection for SshConnection {
             known_hosts: self.known_hosts.clone(),
             reconnect_backoff_base: self.reconnect_backoff_base,
             sftp: None,
+            transport: self.transport,
         })
     }
 
@@ -1267,6 +1323,7 @@ impl Connection for SshConnection {
                 self.policy,
                 self.connect_timeout,
                 self.known_hosts.clone(),
+                self.transport,
             )
             .await
             {
@@ -1754,6 +1811,16 @@ mod tests {
         })
     }
 
+    #[test]
+    fn default_timers_keep_a_quiet_link_alive() {
+        let t = TransportTimers::default();
+        assert!(
+            t.keepalive
+                .is_some_and(|k| t.inactivity.is_none_or(|i| k < i)),
+            "keepalives must fire inside the inactivity backstop: {t:?}"
+        );
+    }
+
     // --- CaptureBuf: bounded output capture (th4o.6). ---
 
     #[test]
@@ -1983,6 +2050,7 @@ mod tests {
             known_hosts: None,
             reconnect_backoff_base: Duration::from_secs(10),
             sftp: None,
+            transport: TransportTimers::default(),
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");
@@ -2016,6 +2084,7 @@ mod tests {
             known_hosts: None,
             reconnect_backoff_base: base,
             sftp: None,
+            transport: TransportTimers::default(),
         }
     }
 
