@@ -479,6 +479,54 @@ async fn tools_list_omits_cache_hints_on_2025_11_25() {
     let _ = server_task.await;
 }
 
+/// #657: `initialize` and `server/discover` identify the server as `mtui-mcp`
+/// at the crate version, not as the rmcp library underneath.
+#[tokio::test]
+async fn server_info_names_mtui_mcp_on_initialize_and_discover() {
+    let info = with_client(|client| async move {
+        let info = client
+            .peer_info()
+            .expect("initialize result")
+            .server_info
+            .clone()
+            .expect("serverInfo");
+        drop(client);
+        info
+    })
+    .await;
+    assert_eq!(info.name, "mtui-mcp");
+    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+
+    let (mut reader, mut write_half, server_task) = spawn_raw_server();
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            }
+        }),
+    )
+    .await;
+    let discover = recv_line(&mut reader).await;
+    let server_info = &discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"];
+    assert_eq!(server_info["name"], "mtui-mcp", "{discover}");
+    assert_eq!(
+        server_info["version"],
+        env!("CARGO_PKG_VERSION"),
+        "{discover}"
+    );
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}
+
 /// A test-only command whose body blocks until its gate is released.
 struct GatedProbe(Arc<tokio::sync::Notify>);
 

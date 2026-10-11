@@ -330,6 +330,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp`'s `initialize` and `server/discover` replies now report
+  `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
+  version (#657).
 - `load_template` given a short RRID (`S:M:…`) now reports the template under
   its canonical id, in both the success and the failure line (#680).
 - `-T/--template`, `unload`, `switch`, `regenerate <RRID>` and the MCP
