@@ -49,6 +49,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use mtui_config::SslVerify;
+use mtui_core::canonical_template_name;
 use tokio::sync::mpsc;
 
 // Batching and lifecycle bounds (documented above).
@@ -1248,10 +1249,13 @@ pub(crate) fn kwarg_otlp_attrs(
             continue;
         };
         match (*key, value) {
-            ("template", serde_json::Value::String(s))
-            | ("job_id", serde_json::Value::String(s)) => {
+            ("template", serde_json::Value::String(s)) => {
+                let capped: String = canonical_template_name(s).chars().take(1024).collect();
+                out.push(str_attr("mtui.template", &capped));
+            }
+            ("job_id", serde_json::Value::String(s)) => {
                 let capped: String = s.chars().take(1024).collect();
-                out.push(str_attr(&format!("mtui.{key}"), &capped));
+                out.push(str_attr("mtui.job_id", &capped));
             }
             ("background", serde_json::Value::Bool(b))
             | ("all_templates", serde_json::Value::Bool(b)) => {
@@ -1603,6 +1607,19 @@ mod tests {
         assert!(
             payload.windows(8).any(|w| w == span),
             "span_id bytes present"
+        );
+    }
+
+    #[test]
+    fn kwarg_template_attr_is_canonical() {
+        let kwargs: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({"template": "S:M:1:1"})).expect("object");
+        let blob: Vec<u8> = kwarg_otlp_attrs("run", &kwargs).concat();
+        let canonical = b"SUSE:Maintenance:1:1";
+        assert!(blob.windows(canonical.len()).any(|w| w == canonical));
+        assert!(
+            !blob.windows(6).any(|w| w == b"S:M:1:"),
+            "short form leaked"
         );
     }
 

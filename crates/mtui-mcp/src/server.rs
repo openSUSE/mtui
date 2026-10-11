@@ -2089,6 +2089,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn audit_scope_names_the_canonical_template() {
+        let (_server, session, _dir, _path) = audited_server();
+        assert_eq!(
+            session.audit_template_scope(Some("S:M:1:1")).await,
+            vec![AUDIT_RRID.to_owned()]
+        );
+    }
+
+    #[tokio::test]
     async fn audit_unset_sink_is_byte_identical() {
         async fn call(
             tool: &str,

@@ -13,6 +13,7 @@ use crate::commands::apicall::teregen_client;
 use crate::commands::support::{document_edits_guard, require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+use crate::template_scope::canonical_template_name;
 
 /// Regenerates a test-report template via the TeReGen API.
 ///
@@ -136,7 +137,7 @@ impl Command for Regenerate {
         // Only the fallback goes through the "load first" guard; an explicit
         // RRID breaks the load/regenerate catch-22.
         let rrid_str = match args.get_one::<String>("rrid") {
-            Some(rrid) => rrid.clone(),
+            Some(rrid) => canonical_template_name(rrid),
             None => require_update(session)?.to_string(),
         };
 
@@ -767,6 +768,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn short_rrid_no_wait_enqueues_the_canonical_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/reports/SUSE:Maintenance:1:1/regenerate"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 9})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = empty_session();
+        session.config = config_for(&server);
+        let args = matches(&Regenerate, &["--no-wait", "S:M:1:1"]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("Regeneration job 9 enqueued for SUSE:Maintenance:1:1"),
+            "{out}"
+        );
+        assert!(!out.contains("S:M:"), "{out}");
+    }
+
     #[test]
     fn accepts_optional_rrid_and_kernel_hint() {
         let cmd = Regenerate.configure(clap::Command::new("regenerate").no_binary_name(true));
@@ -869,6 +893,25 @@ mod tests {
         base.document_dirty = true;
 
         let args = matches(&Regenerate, &[]);
+        let err = Regenerate.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--discard-authored")),
+            "{err:?}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.is_empty(), "{requests:?}");
+    }
+
+    #[tokio::test]
+    async fn short_rrid_cannot_bypass_the_document_edits_guard() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        session.metadata_mut().base_mut().document_dirty = true;
+
+        let args = matches(&Regenerate, &["S:M:1:1"]);
         let err = Regenerate.call(&mut session, &args).await.unwrap_err();
 
         assert!(

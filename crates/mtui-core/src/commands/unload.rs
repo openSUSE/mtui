@@ -7,6 +7,7 @@ use crate::command::{Command, Scope};
 use crate::commands::support::document_edits_guard;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+use crate::template_scope::canonical_template_name;
 
 /// Unloads one loaded template, closing only its host connections.
 ///
@@ -76,10 +77,8 @@ impl Command for Unload {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        let rrid = args
-            .get_one::<String>("rrid")
-            .expect("rrid is required")
-            .clone();
+        let rrid =
+            canonical_template_name(args.get_one::<String>("rrid").expect("rrid is required"));
         if !session.templates.contains(&rrid) {
             return Err(CommandError::TemplateNotLoaded(rrid));
         }
@@ -138,6 +137,31 @@ mod tests {
             "{:?}",
             buf.contents()
         );
+    }
+
+    #[tokio::test]
+    async fn short_rrid_unloads_the_canonical_entry() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        let args = matches(&Unload, &["S:M:2:2"]);
+        Unload.call(&mut session, &args).await.unwrap();
+        assert!(!session.templates.contains("SUSE:Maintenance:2:2"));
+        let out = buf.contents();
+        assert!(out.contains("unloaded SUSE:Maintenance:2:2"), "{out:?}");
+        assert!(!out.contains("S:M:"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn short_rrid_miss_reports_the_canonical_id() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Unload, &["S:M:9:9"]);
+        let err = Unload.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::TemplateNotLoaded(r) if r == "SUSE:Maintenance:9:9"
+        ));
     }
 
     #[tokio::test]

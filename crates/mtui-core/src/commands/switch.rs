@@ -6,6 +6,7 @@ use clap::{Arg, ArgMatches};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+use crate::template_scope::canonical_template_name;
 
 /// Switches the active template — the one plain action commands act on — to
 /// another loaded one.
@@ -62,10 +63,8 @@ impl Command for Switch {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        let rrid = args
-            .get_one::<String>("rrid")
-            .expect("rrid is required")
-            .clone();
+        let rrid =
+            canonical_template_name(args.get_one::<String>("rrid").expect("rrid is required"));
         if session.templates.set_active(&rrid) {
             Ok(())
         } else {
@@ -102,6 +101,31 @@ mod tests {
             session.templates.active_rrid(),
             Some("SUSE:Maintenance:2:2")
         );
+    }
+
+    #[tokio::test]
+    async fn short_rrid_switches_to_the_canonical_entry() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        let args = matches(&Switch, &["S:M:2:2"]);
+        Switch.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:2:2")
+        );
+    }
+
+    #[tokio::test]
+    async fn short_rrid_miss_reports_the_canonical_id() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Switch, &["S:M:9:9"]);
+        let err = Switch.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::TemplateNotLoaded(r) if r == "SUSE:Maintenance:9:9"
+        ));
     }
 
     #[tokio::test]

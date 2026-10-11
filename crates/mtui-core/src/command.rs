@@ -26,7 +26,7 @@ use clap::ArgMatches;
 
 use crate::error::{CommandError, CommandResult};
 use crate::session::{Activation, Session};
-use crate::template_scope::SingleTemplate;
+use crate::template_scope::{SingleTemplate, canonical_template_name};
 
 /// Fan-out scope policy for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -445,6 +445,7 @@ fn resolve_templates(
     args: &ArgMatches,
 ) -> Result<Vec<String>, CommandError> {
     if let Some(rrid) = arg_str(args, "template") {
+        let rrid = canonical_template_name(&rrid);
         if session.templates.contains(&rrid) {
             return Ok(vec![rrid]);
         }
@@ -961,6 +962,30 @@ mod tests {
         async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
             Ok(())
         }
+    }
+
+    fn resolve_named(session: &Session, template: &str) -> Result<Vec<String>, CommandError> {
+        let parser = crate::engine::command_parser(&ExplicitProbe);
+        let args = parser
+            .try_get_matches_from(["-T", template])
+            .expect("argv should parse");
+        resolve_templates("explicit_probe", Scope::Explicit, session, &args)
+    }
+
+    #[test]
+    fn short_template_flag_resolves_to_the_loaded_key() {
+        let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        assert_eq!(resolve_named(&session, "S:M:1:1").unwrap(), vec![RRID]);
+    }
+
+    #[test]
+    fn short_template_flag_not_loaded_reports_the_canonical_id() {
+        let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        let err = resolve_named(&session, "S:M:9:9").unwrap_err();
+        assert!(
+            matches!(&err, CommandError::TemplateNotLoaded(r) if r == "SUSE:Maintenance:9:9"),
+            "{err:?}"
+        );
     }
 
     /// `resolve_command_rrids` swallows [`CommandError::AmbiguousTemplate`]
