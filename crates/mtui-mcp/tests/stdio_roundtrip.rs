@@ -353,6 +353,132 @@ async fn discover_2026_07_28_succeeds_over_stdio_and_the_session_stays_usable() 
     let _ = server_task.await;
 }
 
+/// Serves a fresh [`McpServer`] over a duplex and hands back the raw halves of
+/// the client end.
+fn spawn_raw_server() -> (
+    tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let server_task = tokio::spawn(async move {
+        let server = build_server().await;
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+    let (read_half, write_half) = tokio::io::split(client_io);
+    (
+        tokio::io::BufReader::new(read_half),
+        write_half,
+        server_task,
+    )
+}
+
+/// #657: 2026-07-28 requires `ttlMs` and `cacheScope` on every `tools/list`
+/// result, and Claude Code loads no tools without them. `private` because the
+/// list depends on the per-user `[mcp]` profile and allow/deny lists.
+#[tokio::test]
+async fn tools_list_carries_cache_hints_on_2026_07_28() {
+    let (mut reader, mut write_half, server_task) = spawn_raw_server();
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            }
+        }),
+    )
+    .await;
+
+    let response = recv_line(&mut reader).await;
+    assert!(
+        response.get("error").is_none(),
+        "tools/list failed: {response}"
+    );
+    let result = &response["result"];
+    assert!(
+        result["tools"].as_array().is_some_and(|t| !t.is_empty()),
+        "the list must not be empty: {response}"
+    );
+    assert_eq!(result["ttlMs"], 0, "ttlMs missing or wrong: {response}");
+    assert_eq!(
+        result["cacheScope"], "private",
+        "cacheScope missing or wrong: {response}"
+    );
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}
+
+/// #657: earlier revisions do not define the cache-hint fields, so a client
+/// that negotiated 2025-11-25 must not receive them.
+#[tokio::test]
+async fn tools_list_omits_cache_hints_on_2025_11_25() {
+    let (mut reader, mut write_half, server_task) = spawn_raw_server();
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "stdio-roundtrip", "version": "0" },
+            }
+        }),
+    )
+    .await;
+    let init = recv_line(&mut reader).await;
+    assert_eq!(
+        init["result"]["protocolVersion"], "2025-11-25",
+        "the server must negotiate the requested revision: {init}"
+    );
+    send_line(
+        &mut write_half,
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+
+    let response = recv_line(&mut reader).await;
+    assert!(
+        response.get("error").is_none(),
+        "tools/list failed: {response}"
+    );
+    let result = response["result"].as_object().expect("result object");
+    assert!(
+        result["tools"].as_array().is_some_and(|t| !t.is_empty()),
+        "the list must not be empty: {response}"
+    );
+    assert!(
+        !result.contains_key("ttlMs"),
+        "unexpected ttlMs: {response}"
+    );
+    assert!(
+        !result.contains_key("cacheScope"),
+        "unexpected cacheScope: {response}"
+    );
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}
+
 /// A test-only command whose body blocks until its gate is released.
 struct GatedProbe(Arc<tokio::sync::Notify>);
 
