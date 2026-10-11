@@ -332,6 +332,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `load_template` given a short RRID (`S:M:…`) now reports the template under
   its canonical id, in both the success and the failure line (#680).
+- `-T/--template`, `unload`, `switch`, `regenerate <RRID>` and the MCP
+  `template=` argument accept the short RRID spelling (`S:M:…`, `S:S:…`,
+  `S:P:…`). mtui reports and records the canonical id. A short id passed to
+  `regenerate` can no longer skip the uncommitted-edits guard (#680).
 - A `lock -c <text>` reservation now survives `run`, `update`, `install` and
   `prepare` on the host: they no longer rewrite it without its comment or
   release it when they finish, so only `unlock` (or `unlock --force`) removes it

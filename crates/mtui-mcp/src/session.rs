@@ -55,7 +55,8 @@ use std::time::{Duration, Instant};
 use mtui_config::Config;
 use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
-    Session, addresses_template, dispatch_argv, dispatch_command, resolve_command_rrids,
+    Session, addresses_template, canonical_template_name, dispatch_argv, dispatch_command,
+    resolve_command_rrids,
 };
 use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
@@ -806,7 +807,7 @@ impl McpSession {
     /// named template needs no lock at all.
     pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> Vec<String> {
         if let Some(rrid) = template {
-            return vec![rrid.to_owned()];
+            return vec![canonical_template_name(rrid)];
         }
         let Ok(session) = self.session.try_lock() else {
             return Vec::new();

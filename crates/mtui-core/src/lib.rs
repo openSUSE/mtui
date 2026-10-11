@@ -50,4 +50,4 @@ pub use session::{
     Activation, HOST_CLOSE_TIMEOUT, LogLevel, LogLevelSink, NotifySink, ReportAccess, Session,
 };
 pub use template_registry::{ReportEntry, TemplateRegistry};
-pub use template_scope::{SingleTemplate, ambiguous_template_message};
+pub use template_scope::{SingleTemplate, ambiguous_template_message, canonical_template_name};

@@ -8,6 +8,8 @@
 //! in wording; [`Session::resolve_single_template`] and
 //! [`ambiguous_template_message`] are the one implementation all three consume.
 
+use mtui_types::RequestReviewID;
+
 use crate::session::Session;
 
 /// How many loaded RRIDs [`ambiguous_template_message`] names before
@@ -39,10 +41,11 @@ impl Session {
     #[must_use]
     pub fn resolve_single_template(&self, named: Option<&str>, use_active: bool) -> SingleTemplate {
         if let Some(rrid) = named {
-            return if self.templates.contains(rrid) {
-                SingleTemplate::One(rrid.to_owned())
+            let rrid = canonical_template_name(rrid);
+            return if self.templates.contains(&rrid) {
+                SingleTemplate::One(rrid)
             } else {
-                SingleTemplate::NotLoaded(rrid.to_owned())
+                SingleTemplate::NotLoaded(rrid)
             };
         }
 
@@ -58,6 +61,16 @@ impl Session {
             _ => SingleTemplate::Ambiguous(rrids),
         }
     }
+}
+
+/// The canonical RRID `raw` names, or `raw` unchanged when it is not an RRID.
+///
+/// Every place that reads an RRID from the user calls this first and uses only
+/// the result: the short spelling (`S:M:…`) is a typing convenience and must
+/// never reach output, the registry, an API call or a path.
+#[must_use]
+pub fn canonical_template_name(raw: &str) -> String {
+    RequestReviewID::parse(raw).map_or_else(|_| raw.to_owned(), |r| r.to_string())
 }
 
 /// The single wording for "several loaded, none named".
@@ -108,6 +121,35 @@ mod tests {
         assert_eq!(
             session.resolve_single_template(Some("bogus"), false),
             SingleTemplate::NotLoaded("bogus".to_owned())
+        );
+    }
+
+    #[test]
+    fn canonical_template_name_normalises_short_tokens() {
+        assert_eq!(canonical_template_name("S:M:1:1"), "SUSE:Maintenance:1:1");
+        assert_eq!(canonical_template_name("S:S:1.1:42"), "SUSE:SLFO:1.1:42");
+        assert_eq!(canonical_template_name("S:P:1:2"), "SUSE:PI:1:2");
+        assert_eq!(canonical_template_name("bogus"), "bogus");
+    }
+
+    #[test]
+    fn named_short_rrid_resolves_to_the_loaded_key() {
+        let (mut session, _buf) = empty_session();
+        session.templates.add(fake_report(&rrid(1), &["h1"], "ok"));
+        session.templates.add(fake_report(&rrid(2), &["h2"], "ok"));
+
+        assert_eq!(
+            session.resolve_single_template(Some("S:M:2:2"), false),
+            SingleTemplate::One(rrid(2))
+        );
+    }
+
+    #[test]
+    fn named_short_rrid_not_loaded_reports_canonical() {
+        let (session, _buf) = empty_session();
+        assert_eq!(
+            session.resolve_single_template(Some("S:M:9:9"), false),
+            SingleTemplate::NotLoaded(rrid(9))
         );
     }
 
