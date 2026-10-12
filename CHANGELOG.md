@@ -333,9 +333,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A command that prints nothing for about 60 seconds no longer loses its SSH
   session and returns `exit -1`: the link now carries keepalives, so only
   `connection_timeout` decides when a quiet command is aborted (#683).
-- A command whose SSH session is lost before it reports an exit status now says
-  so in its stderr (`mtui: SSH session to <host> lost after <N.N>s; …`) instead
-  of returning a bare `exit -1` (#683).
+- A command whose SSH session is lost before it reports an exit status or
+  signal now says so in its stderr (`mtui: SSH session to <host> lost after
+  <N.N>s; …`) instead of returning a bare `exit -1` (#683).
 - `mtui-mcp`'s `initialize` and `server/discover` replies now report
   `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
   version (#657).
