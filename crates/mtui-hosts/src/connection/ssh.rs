@@ -1195,6 +1195,7 @@ impl Connection for SshConnection {
         let mut capture = CaptureBuf::default();
         let mut exitcode: i16 = NO_EXIT_CODE;
         let mut saw_close = false;
+        let mut saw_exit = false;
         let window = self.timeout.as_duration();
         // Non-interactive runs (headless / `mtui-mcp`) have no user to answer
         // the keep-waiting prompt, and a command trickling output forever never
@@ -1268,8 +1269,10 @@ impl Connection for SshConnection {
                     ChannelMsg::Data { data } => capture.push_stdout(&data),
                     ChannelMsg::ExtendedData { data, .. } => capture.push_stderr(&data),
                     ChannelMsg::ExitStatus { exit_status } => {
+                        saw_exit = true;
                         exitcode = i16::try_from(exit_status).unwrap_or(NO_EXIT_CODE);
                     }
+                    ChannelMsg::ExitSignal { .. } => saw_exit = true,
                     ChannelMsg::Eof => {}
                     ChannelMsg::Close => {
                         saw_close = true;
@@ -1286,12 +1289,12 @@ impl Connection for SshConnection {
                 host = %self.hostname,
                 command,
                 elapsed,
-                exitcode,
+                saw_exit,
                 "SSH session lost mid-command",
             );
-            // With an exit status already received the command is finished and
-            // the code is real; only a missing one leaves its fate unknown.
-            if exitcode == NO_EXIT_CODE {
+            // A command that already reported an exit status or signal has
+            // finished; only silence leaves its fate unknown.
+            if !saw_exit {
                 capture.push_note(&format!(
                     "mtui: SSH session to {} lost after {elapsed:.1}s; the command may still be running\n",
                     self.hostname
