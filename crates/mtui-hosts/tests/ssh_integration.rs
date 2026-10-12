@@ -158,6 +158,12 @@ impl russh::server::Handler for TestSshSession {
             return Ok(());
         }
 
+        // Reports death by signal, then goes silent without Close.
+        if command == "signal-then-silent" {
+            session.exit_signal_request(channel_id, russh::Sig::KILL, false, "", "")?;
+            return Ok(());
+        }
+
         // Floods stdout past the client's capture cap, then exits cleanly.
         if command == "flood-stdout" {
             let chunk = vec![b'a'; 64 * 1024];
@@ -711,6 +717,12 @@ async fn run_reports_a_session_lost_mid_command() {
 async fn run_does_not_claim_a_finished_command_may_still_be_running() {
     let log = run_on_a_dying_link("exit-then-silent").await;
     assert_eq!(log.exitcode, 3);
+    assert!(!log.stderr.contains("still be running"), "{}", log.stderr);
+}
+
+#[tokio::test]
+async fn run_does_not_claim_a_signalled_command_may_still_be_running() {
+    let log = run_on_a_dying_link("signal-then-silent").await;
     assert!(!log.stderr.contains("still be running"), "{}", log.stderr);
 }
 
