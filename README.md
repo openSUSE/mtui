@@ -108,9 +108,10 @@ configured via the `[obs]` table (`api_url`, `request_timeout`).
 
 ## Documentation
 
-- [`docs/`](docs) — the user guide (mdBook): installation, configuration, the
-  generated command reference, the MCP server, and an FAQ. Build with
-  `mdbook build docs`, or read the Markdown under `docs/src/` directly.
+- [User guide](https://opensuse.github.io/mtui/) — installation, configuration, the
+  generated command reference, the MCP server, and an FAQ.
+- [`docs/`](docs) — the guide's mdBook source. Build with `mdbook build docs`, or
+  read the Markdown under `docs/src/` directly.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
   the definition of done.
 
