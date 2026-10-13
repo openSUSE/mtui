@@ -931,6 +931,9 @@ Options:
       --reviewer <NAME>
           Name of the reviewer who reviewed this report; recorded on the report document and uploaded, then reject
 
+      --allow-stale
+          With --reviewer, upload a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.
+
   -h, --help
           Print help
 ```
@@ -1020,6 +1023,9 @@ Options:
 
   -w, --watch
           After posting, watch the message for reviewer reactions until a verdict or timeout (Ctrl-C / job_cancel stops it). Over MCP, pair this with background=true so the call does not outlive the client timeout
+
+      --allow-stale
+          Request review of a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.
 
   -h, --help
           Print help

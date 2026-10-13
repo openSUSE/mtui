@@ -124,15 +124,17 @@ pub(crate) fn require_document(session: &Session) -> Result<(), CommandError> {
     }
 }
 
-/// Refuses a write (`commit`, `export`) against a template that loaded with a
-/// stale Gitea hash, unless `allow_stale` is set.
+/// Refuses a write (`commit`, `export`, `request_review`, and any recording of
+/// a reviewer or marker onto the document) against a template that loaded with
+/// a stale Gitea hash, unless `allow_stale` is set.
 ///
 /// `load_template --force-continue` only gets a stale template loaded — it
 /// does not repair the recorded mismatch (`TestReportBase::stale_hash_warning`
 /// stays set on the report for as long as it is loaded) — so without a gate
-/// here, `commit`/`export` could publish or overwrite content non-interactively
+/// here, those writes could publish or overwrite content non-interactively
 /// from a template known, at load time, to disagree with the Gitea PR.
-/// `approve`'s own live `check_hash()` re-query is unrelated and unaffected.
+/// `approve`'s own live `check_hash()` re-query replaces this verdict for its
+/// record step: it passes `allow_stale` once that check has passed.
 ///
 /// **Gap, not a guarantee:** this reads a load-time snapshot, not a live
 /// check — a report that loaded clean and only goes stale once the session

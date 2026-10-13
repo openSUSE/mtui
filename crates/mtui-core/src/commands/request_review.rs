@@ -28,7 +28,9 @@ use tokio_util::sync::CancellationToken;
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_v2_writer;
 use crate::commands::commit::{RecordError, record_onto_document};
-use crate::commands::support::{require_document, require_update, template_completion};
+use crate::commands::support::{
+    require_document, require_update, stale_hash_gate, template_completion,
+};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -229,16 +231,17 @@ async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline:
 
 /// Store the marker on the report document and upload it to teregen — the
 /// upload matters because `approve` gates on the marker and the approver may be
-/// on another machine. Mirrors `approve`'s `record_reviewer` including its
+/// on another machine. Mirrors `approve`'s reviewer record including its
 /// ordering: the in-memory field is set only once the write succeeded, so a
 /// caller treating failure as fatal cannot proceed otherwise.
 async fn record_marker(
     session: &mut Session,
     marker: &SlackReviewMarker,
+    allow_stale: bool,
 ) -> Result<(), CommandError> {
     require_document(session)?;
     let client = teregen_v2_writer(session)?;
-    record_marker_document(session, &client, marker).await
+    record_marker_document(session, &client, marker, allow_stale).await
 }
 
 /// The document-path half of [`record_marker`]: set `people.reviewer.slack` on
@@ -248,8 +251,9 @@ async fn record_marker_document(
     session: &mut Session,
     client: &TeregenV2,
     marker: &SlackReviewMarker,
+    allow_stale: bool,
 ) -> Result<(), CommandError> {
-    record_onto_document(session, client, &["people.reviewer"], |doc| {
+    record_onto_document(session, client, &["people.reviewer"], allow_stale, |doc| {
         doc.people.reviewer.slack = Some(SlackRef {
             channel: marker.channel.clone(),
             ts: marker.ts.clone(),
@@ -257,6 +261,7 @@ async fn record_marker_document(
     })
     .await
     .map_err(|e| match e {
+        RecordError::Refused(e) => e,
         RecordError::Upload(e) => {
             CommandError::Other(format!("failed to record the marker on teregen: {e}"))
         }
@@ -312,20 +317,40 @@ impl Command for RequestReview {
                      background=true so the call does not outlive the client timeout",
                 ),
         )
+        .arg(
+            Arg::new("allow_stale")
+                .long("allow-stale")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Request review of a template that loaded with a stale Gitea hash \
+                     (load_template --force-continue); refused otherwise.",
+                ),
+        )
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        let mut out: Vec<String> = ["-c", "--channel", "-m", "--message", "-w", "--watch"]
-            .iter()
-            .filter(|f| f.starts_with(text))
-            .map(|s| (*s).to_owned())
-            .collect();
+        let mut out: Vec<String> = [
+            "-c",
+            "--channel",
+            "-m",
+            "--message",
+            "-w",
+            "--watch",
+            "--allow-stale",
+        ]
+        .iter()
+        .filter(|f| f.starts_with(text))
+        .map(|s| (*s).to_owned())
+        .collect();
         out.extend(template_completion(session, text));
         out
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
+        // Before the post, so a stale-loaded report is refused with nothing
+        // in Slack.
+        stale_hash_gate(session, args.get_flag("allow_stale"))?;
         let slack = slack_client(session)?;
         let channel = resolve_channel(session, args)?;
 
@@ -355,7 +380,7 @@ impl Command for RequestReview {
             channel: posted.channel.clone(),
             ts: posted.ts.clone(),
         };
-        let recorded = match record_marker(session, &marker).await {
+        let recorded = match record_marker(session, &marker, true).await {
             Ok(()) => true,
             Err(e) => {
                 // Failing here would misreport a real, visible message as
@@ -911,9 +936,10 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         use super::*;
+        use crate::commands::testkit::NoOscrc;
         use crate::commands::testkit::teregen::{
             document_put_body, minimal_document, mount_auth_success, set_bare_report_wd,
-            store_path, teregen_v2_client,
+            store_path, teregen_v2_client, write_oscrc,
         };
 
         const ID: &str = "SUSE:Maintenance:1:2";
@@ -950,7 +976,7 @@ mod tests {
             let (mut session, tmp) = document_session();
             let client = teregen_v2_client(&server, store_file);
 
-            record_marker_document(&mut session, &client, &marker())
+            record_marker_document(&mut session, &client, &marker(), false)
                 .await
                 .unwrap();
 
@@ -977,7 +1003,7 @@ mod tests {
             let before = session.metadata().base().document.clone();
             let client = teregen_v2_client(&server, store_file);
 
-            record_marker_document(&mut session, &client, &marker())
+            record_marker_document(&mut session, &client, &marker(), false)
                 .await
                 .unwrap_err();
 
@@ -998,7 +1024,7 @@ mod tests {
 
             // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
             unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
-            let res = record_marker(&mut session, &marker()).await;
+            let res = record_marker(&mut session, &marker(), false).await;
             // SAFETY: still inside that critical section.
             unsafe { std::env::remove_var("OSC_CONFIG") };
 
@@ -1006,6 +1032,93 @@ mod tests {
             assert!(
                 err.to_string().contains("could not read oscrc credentials"),
                 "{err}"
+            );
+        }
+
+        /// `request_review` on a stale-loaded template refuses before anything
+        /// is posted; `--allow-stale` posts and records. Both mounts accept 2xx
+        /// with a call count, so neither a post nor an upload can hide.
+        async fn stale_world(
+            posts: u64,
+            puts: u64,
+        ) -> (Session, MockServer, MockServer, tempfile::TempDir) {
+            let slack = MockServer::start().await;
+            mount(
+                &slack,
+                "auth.test",
+                json!({ "ok": true, "user_id": "UBOT" }),
+            )
+            .await;
+            Mock::given(path("/chat.postMessage"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "ok": true, "channel": CHANNEL, "ts": TS })),
+                )
+                .expect(posts)
+                .mount(&slack)
+                .await;
+            let teregen = MockServer::start().await;
+            mount_auth_success(&teregen).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(serde_json::to_string(&minimal_document(ID)).unwrap()),
+                )
+                .expect(puts)
+                .mount(&teregen)
+                .await;
+
+            let (mut session, _buf) = slack_session(&slack);
+            session.config.obs_api_url = teregen.uri();
+            session.config.teregen_api_v2 = teregen.uri();
+            let tmp = set_bare_report_wd(&mut session);
+            let base = session.metadata_mut().base_mut();
+            base.document = Some(minimal_document(ID));
+            base.document_etag = Some("\"stale\"".to_owned());
+            base.stale_hash_warning = Some("template hash mismatch (stale checkout)".to_owned());
+            (session, slack, teregen, tmp)
+        }
+
+        #[tokio::test]
+        async fn a_stale_loaded_template_posts_and_uploads_nothing() {
+            let (mut session, slack, teregen, _tmp) = stale_world(0, 0).await;
+
+            let err = RequestReview
+                .call(&mut session, &matches(&RequestReview, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("--allow-stale")),
+                "{err:?}"
+            );
+            assert_eq!(session.metadata().base().slack_review, None);
+            slack.verify().await;
+            teregen.verify().await;
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn allow_stale_posts_and_records_the_marker() {
+            let (mut session, slack, teregen, _tmp) = stale_world(1, 1).await;
+            let dir = tempfile::tempdir().unwrap();
+            let args = matches(&RequestReview, &["--allow-stale"]);
+
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            RequestReview.call(&mut session, &args).await.unwrap();
+
+            assert_eq!(session.metadata().base().slack_review, Some(marker()));
+            slack.verify().await;
+            teregen.verify().await;
+        }
+
+        #[test]
+        fn allow_stale_completes() {
+            let (session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            assert_eq!(
+                RequestReview.complete(&session, "--allow", ""),
+                vec!["--allow-stale"]
             );
         }
     }

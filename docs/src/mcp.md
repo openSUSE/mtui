@@ -198,7 +198,13 @@ prompt at the REPL never blocks waiting for input:
 - **`approve`** refuses non-interactively on a Gitea checkout-hash mismatch
   (at the REPL it prompts for confirmation, default no) rather than proceeding;
   a missing Gitea token or a failed Gitea call refuses on every surface, since
-  the check never produced a verdict to confirm.
+  the check never produced a verdict to confirm. The reviewer and document
+  checks, the Slack gate and the backend's own checks (Gitea: hash gate,
+  assignment, already decided; OBS: `-g`, assignment) all run before `reviewer`
+  records or uploads anything, so a refusal from them publishes nothing. The
+  OBS verdict check cannot: it reads the uploaded document. On Gitea the LGTM
+  is refused again if the PR head moves before it is posted, which can happen
+  during the upload, with the reviewer already stored.
 - **`load_template`**'s interactive "Force continue loading template ?"
   fallback — for a stale checkout hash that TeReGen also refuses to
   regenerate (already hand-edited) — is exposed as the `--force-continue`
@@ -206,15 +212,16 @@ prompt at the REPL never blocks waiting for input:
   question's non-interactive default is "no" (openSUSE/mtui#517). A
   force-continued load neither repairs nor bypasses the recorded
   mismatch, so it does not touch `approve`'s refusal above —
-  and `commit`/`export` refuse the same way, unless given their own
-  `--allow-stale`, so a stale-loaded report cannot be published or
-  overwritten non-interactively either. `approve`'s `check_hash()` re-query
-  is live (asks Gitea again, every call); the other three instead read
-  whether *the load itself* saw a mismatch, so a report that loaded clean
-  and only goes stale once the session is already open (a maintainer
-  pushes to the PR while `mtui-mcp` still holds it loaded) passes all
-  three silently — `commit` is the one of the three where that gap is most
-  likely to matter, since it is the publish step.
+  and `commit`, `export`, `reject --reviewer` and `request_review` refuse the
+  same way, unless given their own `--allow-stale`, so a stale-loaded report
+  cannot be published or overwritten non-interactively either. `approve`'s
+  `check_hash()` re-query is live (asks Gitea again, every call) and replaces
+  that load-time verdict for `approve -r`; the others instead read whether
+  *the load itself* saw a mismatch, so a report that loaded clean and only
+  goes stale once the session is already open (a maintainer pushes to the PR
+  while `mtui-mcp` still holds it loaded) passes them silently — `commit` is
+  the one where that gap is most likely to matter, since it is the publish
+  step.
 - A **command timeout** aborts immediately instead of offering the REPL's
   wait/retry prompt.
 - **`comment`** and **`commit`** take their text/message as a required argument
