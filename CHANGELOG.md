@@ -12,6 +12,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `--allow-stale` on `reject` (with `--reviewer`) and on `request_review`, to
   publish a report that loaded with a stale Gitea hash anyway (#685).
+- `approve --accept-head <sha>` answers a Gitea checkout-hash mismatch
+  non-interactively and pins the PR head: the approval goes ahead only if `<sha>`
+  is exactly the head as Gitea reports it now, stale report or not, and
+  otherwise refuses naming that head. Without it a mismatch still prompts at
+  the REPL and refuses over MCP (#668).
 - `edit` with no argument opens a full-screen editor over the loaded report
   document (a form per section, checked against the report schema as you type;
   `Ctrl-S` saves, `q`/`Ctrl-C` quits). Saving marks the document edited but not

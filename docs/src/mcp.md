@@ -196,15 +196,17 @@ MCP sessions run with no interactive prompter installed, so a command that would
 prompt at the REPL never blocks waiting for input:
 
 - **`approve`** refuses non-interactively on a Gitea checkout-hash mismatch
-  (at the REPL it prompts for confirmation, default no) rather than proceeding;
-  a missing Gitea token or a failed Gitea call refuses on every surface, since
-  the check never produced a verdict to confirm. The reviewer and document
-  checks, the Slack gate and the backend's own checks (Gitea: hash gate,
-  assignment, already decided; OBS: `-g`, assignment) all run before `reviewer`
-  records or uploads anything, so a refusal from them publishes nothing. The
-  OBS verdict check cannot: it reads the uploaded document. On Gitea the LGTM
-  is refused again if the PR head moves before it is posted, which can happen
-  during the upload, with the reviewer already stored.
+  (at the REPL it prompts for confirmation, default no) unless `accept_head`
+  names the PR head as Gitea reports it now — the refusal prints that head. The
+  value is a pin, checked even when the report is not stale, and the LGTM is
+  refused again if the head moves before it is posted. A missing Gitea token or
+  a failed Gitea call refuses on every surface, since the check never produced
+  a verdict to confirm. The reviewer and document checks, the Slack gate and the
+  backend's own checks (Gitea: hash gate, assignment, already decided; OBS: `-g`,
+  assignment) all run before `reviewer` records or uploads anything, so a
+  refusal from them publishes nothing. The OBS verdict check cannot: it reads
+  the uploaded document, and a Gitea head that moves during the upload is
+  refused at the LGTM with the reviewer already stored.
 - **`load_template`**'s interactive "Force continue loading template ?"
   fallback — for a stale checkout hash that TeReGen also refuses to
   regenerate (already hand-edited) — is exposed as the `--force-continue`
