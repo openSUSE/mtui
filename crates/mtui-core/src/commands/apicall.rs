@@ -17,7 +17,7 @@ use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
 use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::command::{Command, Scope};
-use crate::commands::commit::{ReviewAction, record_reviewer};
+use crate::commands::commit::{ReviewAction, prepare_reviewer};
 use crate::commands::support::{require_update, template_completion, uncommitted_report_guard};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -346,10 +346,17 @@ const REJECT_REASONS: &[&str] = &[
     "tracking_issue",
 ];
 
+/// The backend client of a review decision, built before anything is uploaded.
+enum Backend {
+    Gitea(Box<Gitea>),
+    Obs(Box<Osc>),
+}
+
 /// Rejects a review request.
 ///
 /// `--reviewer NAME` records the reviewer on the report document and uploads it
-/// with the artifacts *before* the rejection, as `approve -r` does. Without it
+/// with the artifacts *before* the rejection, as `approve -r` does; a template
+/// that loaded with a stale Gitea hash is refused unless `--allow-stale`. Without it
 /// nothing is uploaded: on Maintenance/OBS a report with uncommitted edits is
 /// refused with a `commit` hint, because the verdict gate reads the server's
 /// copy.
@@ -394,20 +401,32 @@ impl Command for Reject {
                          document and uploaded, then reject",
                     ),
             )
+            .arg(
+                Arg::new("allow_stale")
+                    .long("allow-stale")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "With --reviewer, upload a template that loaded with a stale Gitea hash \
+                         (load_template --force-continue); refused otherwise.",
+                    ),
+            )
     }
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
         common_complete(
             session,
             text,
-            &["-r", "--reason", "-m", "--message", "--reviewer"],
+            &[
+                "-r",
+                "--reason",
+                "-m",
+                "--message",
+                "--reviewer",
+                "--allow-stale",
+            ],
         )
     }
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
-        if let Some(reviewer) = args.get_one::<String>("reviewer") {
-            record_reviewer(session, reviewer, ReviewAction::Reject).await?;
-        }
-        require_committed_report(session, &rrid, "reject")?;
         let reason = args
             .get_one::<String>("reason")
             .cloned()
@@ -416,19 +435,47 @@ impl Command for Reject {
             .get_many::<String>("message")
             .map(|it| it.cloned().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
+        let user = user_override(args);
 
-        if is_gitea_workflow(session) {
+        // Everything that can refuse runs before the first upload, so a
+        // refused rejection leaves nothing published; only the OBS verdict
+        // check follows it, as it reads the document the upload stores.
+        let reviewer = args
+            .get_one::<String>("reviewer")
+            .map(|name| prepare_reviewer(session, name, ReviewAction::Reject))
+            .transpose()?;
+        if reviewer.is_none() {
+            require_committed_report(session, &rrid, "reject")?;
+        }
+        let backend = if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             gitea
-                .reject(&reason, user_override(args).as_deref(), &message)
+                .check_decidable(user.as_deref())
                 .await
                 .map_err(|e| CommandError::Other(format!("gitea reject failed: {e}")))?;
+            Backend::Gitea(Box::new(gitea))
         } else {
-            tracing::info!("Reject request {}", rrid.review_id);
-            let osc = osc_client(session, &rrid)?;
-            osc.reject(&groups(args), &reason, &message)
+            Backend::Obs(Box::new(osc_client(session, &rrid)?))
+        };
+
+        if let Some(reviewer) = reviewer {
+            reviewer
+                .record(session, args.get_flag("allow_stale"))
+                .await?;
+            require_committed_report(session, &rrid, "reject")?;
+        }
+
+        match backend {
+            Backend::Gitea(gitea) => gitea
+                .reject(&reason, user.as_deref(), &message)
                 .await
-                .map_err(|e| CommandError::Other(format!("obs reject failed: {e}")))?;
+                .map_err(|e| CommandError::Other(format!("gitea reject failed: {e}")))?,
+            Backend::Obs(osc) => {
+                tracing::info!("Reject request {}", rrid.review_id);
+                osc.reject(&groups(args), &reason, &message)
+                    .await
+                    .map_err(|e| CommandError::Other(format!("obs reject failed: {e}")))?;
+            }
         }
         session.display.println(&format!("rejected {rrid}"));
         Ok(())
@@ -1228,6 +1275,190 @@ mod tests {
             let err = Reject.call(&mut session, &args).await.unwrap_err();
             assert!(matches!(err, CommandError::NoDocument), "{err:?}");
             assert_eq!(session.metadata().base().reviewer, "");
+        }
+    }
+
+    /// `reject --reviewer` publishes the report, so it refuses a stale-loaded
+    /// template unless `--allow-stale`, like `commit`.
+    mod stale_load {
+        use std::str::FromStr;
+
+        use mtui_datasources::assign_marker;
+        use mtui_types::report_document::ReportDocument;
+        use wiremock::matchers::{method, path as wpath, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use super::*;
+        use crate::commands::testkit::NoOscrc;
+        use crate::commands::testkit::teregen::{
+            document_json, mount_auth_success, set_bare_report_wd, write_oscrc,
+        };
+
+        const ID: &str = "SUSE:SLFO:1.2:5";
+
+        /// A Gitea-workflow session that loaded with a stale hash and holds a
+        /// document, with Gitea and teregen on their own mocks.
+        async fn stale_session(
+            gitea: &MockServer,
+            teregen: &MockServer,
+        ) -> (Session, tempfile::TempDir) {
+            Mock::given(method("GET"))
+                .and(path_regex(r"/comments$"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                        "id": 1,
+                        "body": assign_marker("tester", "qam-sle"),
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }])),
+                )
+                .mount(gitea)
+                .await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "requested_reviewers": [], "state": "open", "head": {"sha": "abc"}
+                })))
+                .mount(gitea)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+                .mount(gitea)
+                .await;
+
+            let (mut session, _buf) = session_with_hosts(ID, &["h1"], "ok");
+            session.config.gitea_url = gitea.uri();
+            session.config.gitea_token = "tok".to_owned();
+            session.config.session_user = "tester".to_owned();
+            session.config.obs_api_url = teregen.uri();
+            session.config.teregen_api_v2 = teregen.uri();
+            let tmp = set_bare_report_wd(&mut session);
+            let base = session.metadata_mut().base_mut();
+            base.giteaprapi = Some(gitea.uri());
+            base.update_source = UpdateSource::Git;
+            base.document = Some(ReportDocument::from_str(&document_json(ID, "slfo")).unwrap());
+            base.document_etag = Some("\"stale\"".to_owned());
+            base.stale_hash_warning = Some("template hash mismatch (stale checkout)".to_owned());
+            (session, tmp)
+        }
+
+        async fn teregen_expecting(puts: u64) -> MockServer {
+            let server = MockServer::start().await;
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(document_json(ID, "slfo"))
+                        .insert_header("etag", "\"fresh\""),
+                )
+                .expect(puts)
+                .mount(&server)
+                .await;
+            server
+        }
+
+        fn posts(requests: &[wiremock::Request]) -> usize {
+            requests
+                .iter()
+                .filter(|r| r.method == wiremock::http::Method::POST)
+                .count()
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn reviewer_refuses_a_stale_loaded_report_and_uploads_nothing() {
+            let (gitea, teregen) = (MockServer::start().await, teregen_expecting(0).await);
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+            let args = matches(&Reject, &["-r", "regression", "--reviewer", "alice"]);
+
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            let err = Reject.call(&mut session, &args).await.unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("--allow-stale")),
+                "{err:?}"
+            );
+            assert_eq!(session.metadata().base().reviewer, "");
+            teregen.verify().await;
+            assert_eq!(posts(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn allow_stale_uploads_and_rejects() {
+            let (gitea, teregen) = (MockServer::start().await, teregen_expecting(1).await);
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+            let args = matches(
+                &Reject,
+                &["-r", "regression", "--reviewer", "alice", "--allow-stale"],
+            );
+
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            Reject.call(&mut session, &args).await.unwrap();
+
+            assert_eq!(session.metadata().base().reviewer, "alice");
+            teregen.verify().await;
+            assert_eq!(posts(&gitea.received_requests().await.unwrap()), 1);
+        }
+
+        /// The Gitea client and the assignment check come before the upload.
+        /// `--allow-stale` keeps the stale gate out of the way.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_refusal_from_the_backend_uploads_nothing() {
+            for (what, wants) in [
+                ("token", "could not build Gitea client"),
+                ("user", "assigned different user"),
+            ] {
+                let (gitea, teregen) = (MockServer::start().await, teregen_expecting(0).await);
+                let dir = tempfile::tempdir().unwrap();
+                let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+                match what {
+                    "token" => session.config.gitea_token = String::new(),
+                    _ => session.config.session_user = "someone".to_owned(),
+                }
+                let args = matches(
+                    &Reject,
+                    &["-r", "regression", "--reviewer", "alice", "--allow-stale"],
+                );
+
+                let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+                let err = Reject.call(&mut session, &args).await.unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m) if m.contains(wants)),
+                    "{what}: {err:?}"
+                );
+                assert_eq!(session.metadata().base().reviewer, "", "{what}");
+                teregen.verify().await;
+                assert_eq!(
+                    posts(&gitea.received_requests().await.unwrap()),
+                    0,
+                    "{what}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn without_a_reviewer_nothing_is_uploaded_so_a_stale_load_still_rejects() {
+            let (gitea, teregen) = (MockServer::start().await, teregen_expecting(0).await);
+            let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+            let args = matches(&Reject, &["-r", "regression"]);
+
+            Reject.call(&mut session, &args).await.unwrap();
+
+            teregen.verify().await;
+            assert_eq!(posts(&gitea.received_requests().await.unwrap()), 1);
+        }
+
+        #[test]
+        fn allow_stale_completes() {
+            let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+            assert_eq!(
+                Reject.complete(&session, "--allow", ""),
+                vec!["--allow-stale"]
+            );
         }
     }
 }

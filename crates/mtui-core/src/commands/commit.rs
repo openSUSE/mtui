@@ -159,6 +159,8 @@ pub(crate) async fn upload_and_report(
 
 /// Why [`record_onto_document`] did not finish.
 pub(crate) enum RecordError {
+    /// Refused before the document was touched.
+    Refused(CommandError),
     /// Nothing was stored: the document edit was rolled back.
     Upload(CommandError),
     /// The document was stored, but this many artifacts were not.
@@ -168,14 +170,18 @@ pub(crate) enum RecordError {
 /// Applies `edit` to the loaded document, marks `touched` as authored, then
 /// uploads the document and the artifacts as `commit` does.
 ///
-/// On an [`Upload`](RecordError::Upload) error the document and its dirty flag
-/// are restored, so a refused action leaves nothing half-done.
+/// Refuses a stale-loaded report first unless `allow_stale` is set
+/// ([`stale_hash_gate`]), as [`Refused`](RecordError::Refused). On an
+/// [`Upload`](RecordError::Upload) error the document and its dirty flag are
+/// restored, so a failed action leaves nothing half-done.
 pub(crate) async fn record_onto_document(
     session: &mut Session,
     client: &TeregenV2,
     touched: &[&str],
+    allow_stale: bool,
     edit: impl FnOnce(&mut ReportDocument),
 ) -> Result<(), RecordError> {
+    stale_hash_gate(session, allow_stale).map_err(RecordError::Refused)?;
     let base = session.metadata_mut().base_mut();
     let saved = base.document.clone();
     let was_dirty = base.document_dirty;
@@ -222,14 +228,22 @@ impl ReviewAction {
     }
 }
 
-/// Records the reviewer on the report document and uploads it with the
-/// artifacts to teregen. `Err` aborts the action rather than swallowing the
-/// record/upload failure.
-pub(crate) async fn record_reviewer(
-    session: &mut Session,
+/// A reviewer record whose inputs are checked, so nothing but the upload is
+/// left to fail: build it with [`prepare_reviewer`] before any other check
+/// that might refuse the action, then [`record`](Self::record).
+pub(crate) struct ReviewerRecord {
+    name: String,
+    action: ReviewAction,
+    client: TeregenV2,
+}
+
+/// Checks what recording a reviewer needs and reads no state beyond oscrc: a
+/// non-empty name, a loaded document and a teregen writer.
+pub(crate) fn prepare_reviewer(
+    session: &Session,
     name: &str,
     action: ReviewAction,
-) -> Result<(), CommandError> {
+) -> Result<ReviewerRecord, CommandError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(CommandError::Other(format!(
@@ -238,11 +252,28 @@ pub(crate) async fn record_reviewer(
         )));
     }
     require_document(session)?;
-    let client = teregen_v2_writer(session)?;
-    record_reviewer_document(session, &client, name, action).await
+    Ok(ReviewerRecord {
+        name: name.to_owned(),
+        action,
+        client: teregen_v2_writer(session)?,
+    })
 }
 
-/// The document-path half of [`record_reviewer`]: set `people.reviewer.name` on
+impl ReviewerRecord {
+    /// Records the reviewer on the report document and uploads it with the
+    /// artifacts to teregen. `Err` aborts the action rather than swallowing the
+    /// record/upload failure. A stale-loaded report is refused unless
+    /// `allow_stale`.
+    pub(crate) async fn record(
+        &self,
+        session: &mut Session,
+        allow_stale: bool,
+    ) -> Result<(), CommandError> {
+        record_reviewer_document(session, &self.client, &self.name, self.action, allow_stale).await
+    }
+}
+
+/// The document-path half of [`ReviewerRecord::record`]: set `people.reviewer.name` on
 /// the document and upload it with the artifacts, as `commit` does. The
 /// in-memory reviewer is set only once the upload succeeded.
 pub(crate) async fn record_reviewer_document(
@@ -250,12 +281,14 @@ pub(crate) async fn record_reviewer_document(
     client: &TeregenV2,
     name: &str,
     action: ReviewAction,
+    allow_stale: bool,
 ) -> Result<(), CommandError> {
-    record_onto_document(session, client, &["people.reviewer"], |doc| {
+    record_onto_document(session, client, &["people.reviewer"], allow_stale, |doc| {
         doc.people.reviewer.name = Req(Some(name.to_owned()));
     })
     .await
     .map_err(|e| match e {
+        RecordError::Refused(e) => e,
         RecordError::Upload(e) => CommandError::Other(format!(
             "failed to record reviewer on teregen, not {}: {e}",
             action.gerund()
@@ -574,7 +607,7 @@ mod tests {
             assert!(uncommitted_report_guard(&session, ID, "reject").is_err());
             let client = teregen_v2_client(&server, store_file);
 
-            record_reviewer_document(&mut session, &client, "alice", ReviewAction::Reject)
+            record_reviewer_document(&mut session, &client, "alice", ReviewAction::Reject, false)
                 .await
                 .unwrap();
 
@@ -603,7 +636,7 @@ mod tests {
                 let before = session.metadata().base().document.clone();
                 let client = teregen_v2_client(&server, store_file);
 
-                let err = record_reviewer_document(&mut session, &client, "alice", action)
+                let err = record_reviewer_document(&mut session, &client, "alice", action, false)
                     .await
                     .unwrap_err();
 
@@ -616,6 +649,62 @@ mod tests {
                 assert_eq!(base.document, before);
                 assert!(base.document_dirty, "{gerund}: the edits stay uncommitted");
             }
+        }
+
+        /// A stale-loaded report is refused before the edit is applied, with the
+        /// PUT mount accepting 2xx so an upload could not hide behind a 404.
+        /// Mutation caught: dropping the gate sends the PUT and runs the edit.
+        #[tokio::test]
+        async fn a_stale_loaded_report_is_not_recorded_without_allow_stale() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{ID}")))
+                .respond_with(stored())
+                .expect(0)
+                .mount(&server)
+                .await;
+            let (mut session, _tmp) = dirty_session_with_artifact();
+            session.metadata_mut().base_mut().stale_hash_warning =
+                Some("template hash mismatch (stale checkout)".to_owned());
+            let before = session.metadata().base().document.clone();
+            let client = teregen_v2_client(&server, store_file);
+            let mut edited = false;
+
+            let res = record_onto_document(&mut session, &client, &["people"], false, |_| {
+                edited = true;
+            })
+            .await;
+
+            let Err(RecordError::Refused(CommandError::Other(m))) = res else {
+                panic!("expected a refusal");
+            };
+            assert!(m.contains("--allow-stale"), "{m}");
+            assert!(!edited, "the edit must not run on a refused record");
+            let base = session.metadata().base();
+            assert_eq!(base.document, before);
+            assert!(base.document_dirty);
+            server.verify().await;
+        }
+
+        #[tokio::test]
+        async fn allow_stale_records_a_stale_loaded_report() {
+            let server = MockServer::start().await;
+            let (_store, store_file) = store_path();
+            mount_auth_success(&server).await;
+            mount_put(&server, stored(), 201).await;
+            let (mut session, _tmp) = dirty_session_with_artifact();
+            session.metadata_mut().base_mut().stale_hash_warning =
+                Some("template hash mismatch (stale checkout)".to_owned());
+            let client = teregen_v2_client(&server, store_file);
+
+            record_reviewer_document(&mut session, &client, "alice", ReviewAction::Reject, true)
+                .await
+                .unwrap();
+
+            assert_eq!(session.metadata().base().reviewer, "alice");
+            document_put_body(&server, ID).await;
         }
 
         #[tokio::test]
@@ -631,7 +720,7 @@ mod tests {
                 let (mut session, _tmp) = dirty_session_with_artifact();
                 let client = teregen_v2_client(&server, store_file);
 
-                let err = record_reviewer_document(&mut session, &client, "alice", action)
+                let err = record_reviewer_document(&mut session, &client, "alice", action, false)
                     .await
                     .unwrap_err();
 

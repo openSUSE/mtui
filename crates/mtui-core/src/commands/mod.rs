@@ -398,6 +398,22 @@ pub(crate) mod testkit {
             serde_json::from_slice(&put.body).expect("the PUT body is JSON")
         }
 
+        /// Writes an oscrc under `dir` whose only section is `server`, signing
+        /// with the fixture key, so the teregen writer resolves against a mock.
+        pub(crate) fn write_oscrc(dir: &Path, server: &MockServer) -> PathBuf {
+            let oscrc = dir.join("oscrc");
+            std::fs::write(
+                &oscrc,
+                format!(
+                    "[{}]\nuser = {PRINCIPAL}\nsshkey = {}\n",
+                    server.uri(),
+                    fixture("id_ed25519").display()
+                ),
+            )
+            .unwrap();
+            oscrc
+        }
+
         /// Sets a loaded report's `path` to a fresh, empty working directory, so
         /// `report_wd()`/`collect_artifacts` resolve against an empty directory.
         pub(crate) fn set_bare_report_wd(session: &mut Session) -> tempfile::TempDir {
@@ -417,6 +433,15 @@ pub(crate) mod testkit {
         pub(crate) fn set() -> Self {
             // SAFETY: callers hold `#[serial(osc_config_env)]`.
             unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
+            Self
+        }
+
+        /// Points `$OSC_CONFIG` at `oscrc` instead, for tests that need the
+        /// credentials to resolve.
+        #[allow(unsafe_code)]
+        pub(crate) fn set_to(oscrc: &std::path::Path) -> Self {
+            // SAFETY: callers hold `#[serial(osc_config_env)]`.
+            unsafe { std::env::set_var("OSC_CONFIG", oscrc) };
             Self
         }
     }

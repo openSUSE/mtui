@@ -1053,6 +1053,11 @@ expression: pretty
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
           "type": "boolean"
         },
+        "allow_stale": {
+          "default": false,
+          "description": "With --reviewer, upload a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.",
+          "type": "boolean"
+        },
         "group": {
           "description": "Group to act on (not valid for the Gitea workflow)",
           "items": {
@@ -1180,6 +1185,11 @@ expression: pretty
       "properties": {
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
+          "type": "boolean"
+        },
+        "allow_stale": {
+          "default": false,
+          "description": "Request review of a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.",
           "type": "boolean"
         },
         "background": {

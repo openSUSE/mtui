@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `--allow-stale` on `reject` (with `--reviewer`) and on `request_review`, to
+  publish a report that loaded with a stale Gitea hash anyway (#685).
 - `edit` with no argument opens a full-screen editor over the loaded report
   document (a form per section, checked against the report schema as you type;
   `Ctrl-S` saves, `q`/`Ctrl-C` quits). Saving marks the document edited but not
@@ -330,6 +332,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `approve -r` and `reject --reviewer` no longer publish the report when the
+  action is then refused: the reviewer and document checks, the Slack gate, the
+  backend client, the PR-hash gate and the Gitea and OBS assignment checks now
+  run before the reviewer is recorded and uploaded (#685). Only the OBS verdict
+  check still follows the upload, as it reads the uploaded document.
+- `approve` on Gitea now refuses the LGTM if the PR head moved after the hash
+  check, instead of approving a head nobody looked at (#685).
+- `reject --reviewer` and `request_review` now refuse a report that loaded with
+  a stale Gitea hash (`load_template --force-continue`), as `commit` and
+  `export` already did, instead of publishing it; `request_review` refuses
+  before it posts to Slack (#685).
 - A command that prints nothing for about 60 seconds no longer loses its SSH
   session and returns `exit -1`: the link now carries keepalives, so only
   `connection_timeout` decides when a quiet command is aborted (#683).
