@@ -61,6 +61,10 @@ expression: pretty
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "accept_head": {
+          "description": "Approve only if the PR head is exactly SHA; this is also what lets a head that moved since the report was generated through non-interactively (Gitea only)",
+          "type": "string"
+        },
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
           "type": "boolean"

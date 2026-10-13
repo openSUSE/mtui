@@ -35,8 +35,9 @@ enum Backend {
 /// Without `-r` nothing is uploaded: on Maintenance/OBS a report with
 /// uncommitted edits is refused with a `commit` hint, because the verdict gate
 /// reads the server's copy. On the Gitea path a checkout-hash mismatch prompts
-/// for confirmation in the REPL (default no) and refuses non-interactively; a
-/// missing token or a failed call always refuses.
+/// for confirmation in the REPL (default no) and refuses non-interactively
+/// unless `--accept-head SHA` names the PR head as it is now; a missing token
+/// or a failed call always refuses.
 /// Unlocks PI reference hosts afterwards.
 pub struct Approve;
 
@@ -80,14 +81,32 @@ impl Command for Approve {
                 .value_name("NAME")
                 .help("Record reviewer on the report document, then approve"),
         )
+        .arg(
+            Arg::new("accept_head")
+                .long("accept-head")
+                .value_name("SHA")
+                .help(
+                    "Approve only if the PR head is exactly SHA; this is also what lets a head \
+                     that moved since the report was generated through non-interactively \
+                     (Gitea only)",
+                ),
+        )
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        let mut out: Vec<String> = ["-g", "--group", "-u", "--user", "-r", "--reviewer"]
-            .iter()
-            .filter(|f| f.starts_with(text))
-            .map(|s| (*s).to_owned())
-            .collect();
+        let mut out: Vec<String> = [
+            "-g",
+            "--group",
+            "-u",
+            "--user",
+            "-r",
+            "--reviewer",
+            "--accept-head",
+        ]
+        .iter()
+        .filter(|f| f.starts_with(text))
+        .map(|s| (*s).to_owned())
+        .collect();
         out.extend(template_completion(session, text));
         out
     }
@@ -116,7 +135,11 @@ impl Command for Approve {
         slack_review_gate(session, &rrid).await?;
         let backend = if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
-            let head = hash_gate(session).await?;
+            let head = hash_gate(
+                session,
+                args.get_one::<String>("accept_head").map(String::as_str),
+            )
+            .await?;
             gitea
                 .check_decidable(user.as_deref())
                 .await
@@ -243,21 +266,52 @@ async fn slack_review_gate(
 /// approving, and returns the head the approval is vouched for (`None` when the
 /// report records none to compare), so the LGTM can be refused if it moves.
 ///
-/// A [`HashCheck::Mismatch`] is the only verdict an operator can act on: in the
-/// REPL with a prompter installed it asks (default no), anywhere else it
-/// refuses. [`HashCheck::MissingToken`] and [`HashCheck::Failed`] produced no
-/// verdict at all, so both always refuse.
-async fn hash_gate(session: &mut Session) -> Result<Option<String>, CommandError> {
+/// `accept_head` is a pin: it must equal the PR head as it stands, whether or
+/// not the report is stale, so a head that moved again is never waved through;
+/// a different value refuses and names the current head. A
+/// [`HashCheck::Mismatch`] is the only verdict an operator can otherwise act
+/// on: in the REPL with a prompter installed it asks (default no), anywhere
+/// else it refuses. [`HashCheck::MissingToken`] and [`HashCheck::Failed`]
+/// produced no verdict at all, so both always refuse.
+async fn hash_gate(
+    session: &mut Session,
+    accept_head: Option<&str>,
+) -> Result<Option<String>, CommandError> {
+    let accept_head = accept_head.map(str::trim);
     match session.metadata().check_hash().await {
-        // A match means the live head is the recorded hash.
-        HashCheck::Ok => Ok(session
-            .metadata()
-            .base()
-            .giteacohash
-            .clone()
-            .filter(|h| !h.is_empty())),
+        HashCheck::Ok => {
+            // A match means the live head is the recorded hash.
+            let head = session
+                .metadata()
+                .base()
+                .giteacohash
+                .clone()
+                .filter(|h| !h.is_empty());
+            match (accept_head, head.as_deref()) {
+                (Some(given), Some(head)) if given != head => Err(CommandError::Other(format!(
+                    "PR head is {head}, not {given}; not approving"
+                ))),
+                (Some(_), None) => Err(CommandError::Other(
+                    "the report records no PR hash, so --accept-head cannot be checked; \
+                     not approving"
+                        .to_owned(),
+                )),
+                _ => Ok(head),
+            }
+        }
         HashCheck::Mismatch { expected, actual } => {
             tracing::error!(%expected, %actual, "GiteaPR hash differs from testreport");
+            if let Some(given) = accept_head {
+                if given == actual {
+                    session.display.println(&format!(
+                        "PR head {actual} accepted (testreport has {expected})"
+                    ));
+                    return Ok(Some(actual));
+                }
+                return Err(CommandError::Other(format!(
+                    "PR head is {actual}, not {given}; not approving"
+                )));
+            }
             if session.is_repl
                 && let Some(p) = session.prompter()
             {
@@ -900,6 +954,36 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn accept_head_naming_the_current_head_approves_headless() {
+            let gitea = gitea_approving("new").await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(mismatch(), &gitea.uri(), &teregen);
+            assert!(!session.is_repl, "premise: no prompter to answer for us");
+
+            let args = matches(&Approve, &["--accept-head", "new"]);
+            Approve.call(&mut session, &args).await.unwrap();
+
+            assert_eq!(approvals(&gitea).await, 1);
+        }
+
+        #[tokio::test]
+        async fn accept_head_naming_another_head_refuses_and_names_the_current_one() {
+            let gitea = gitea_approving("new").await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(mismatch(), &gitea.uri(), &teregen);
+
+            let args = matches(&Approve, &["--accept-head", "older"]);
+            let err = Approve.call(&mut session, &args).await.unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.contains("PR head is new, not older")),
+                "{err:?}"
+            );
+            assert_eq!(approvals(&gitea).await, 0);
+        }
+
+        #[tokio::test]
         #[serial_test::serial(osc_config_env)]
         async fn an_unassigned_gitea_pr_publishes_nothing() {
             let gitea = MockServer::start().await;
@@ -997,13 +1081,9 @@ mod tests {
             let gitea = gitea_approving("moved").await;
             let teregen = teregen_expecting(0).await;
             let (mut session, _tmp) = gitea_session(mismatch(), &gitea.uri(), &teregen);
-            session.is_repl = true;
-            session.set_prompter(fixed_prompter("y"));
 
-            let err = Approve
-                .call(&mut session, &matches(&Approve, &[]))
-                .await
-                .unwrap_err();
+            let args = matches(&Approve, &["--accept-head", "new"]);
+            let err = Approve.call(&mut session, &args).await.unwrap_err();
 
             assert!(
                 matches!(&err, CommandError::Other(m)
@@ -1013,9 +1093,77 @@ mod tests {
             assert_eq!(approvals(&gitea).await, 0);
         }
 
+        /// `--accept-head` pins the head even when the report is not stale.
+        #[tokio::test]
+        async fn accept_head_pins_the_head_of_a_matching_report_too() {
+            let gitea = gitea_approving("abc123").await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+            session.metadata_mut().base_mut().giteacohash = Some("abc123".to_owned());
+
+            let other = matches(&Approve, &["--accept-head", "zzz"]);
+            let err = Approve.call(&mut session, &other).await.unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("PR head is abc123, not zzz")),
+                "{err:?}"
+            );
+            assert_eq!(approvals(&gitea).await, 0);
+
+            let same = matches(&Approve, &["--accept-head", "abc123"]);
+            Approve.call(&mut session, &same).await.unwrap();
+            assert_eq!(approvals(&gitea).await, 1);
+        }
+
+        #[tokio::test]
+        async fn accept_head_cannot_be_checked_against_a_report_without_a_hash() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+            assert_eq!(session.metadata().base().giteacohash, None);
+
+            let args = matches(&Approve, &["--accept-head", "abc"]);
+            let err = Approve.call(&mut session, &args).await.unwrap_err();
+
+            assert!(err.to_string().contains("records no PR hash"), "{err}");
+            assert_eq!(approvals(&gitea).await, 0);
+        }
+
+        #[tokio::test]
+        async fn accept_head_is_trimmed_but_never_a_prefix() {
+            let server = MockServer::start().await;
+            let teregen = teregen_expecting(0).await;
+            let verdict = HashCheck::Mismatch {
+                expected: "old".to_owned(),
+                actual: "abcdef0123".to_owned(),
+            };
+            let (mut session, _tmp) = gitea_session(verdict, &server.uri(), &teregen);
+
+            hash_gate(&mut session, Some(" abcdef0123\n"))
+                .await
+                .unwrap();
+            let err = hash_gate(&mut session, Some("abcdef")).await.unwrap_err();
+
+            assert!(err.to_string().contains("not abcdef;"), "{err}");
+        }
+
+        #[tokio::test]
+        async fn accept_head_does_not_override_a_missing_verdict() {
+            let server = MockServer::start().await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(
+                HashCheck::Failed("boom".to_owned()),
+                &server.uri(),
+                &teregen,
+            );
+
+            let err = hash_gate(&mut session, Some("new")).await.unwrap_err();
+
+            assert!(err.to_string().contains("boom"), "{err}");
+        }
+
         #[tokio::test]
         #[serial_test::serial(osc_config_env)]
-        async fn a_confirmed_mismatch_lets_a_stale_loaded_report_be_recorded_then_approved() {
+        async fn accept_head_lets_a_stale_loaded_report_be_recorded_then_approved() {
             let gitea = gitea_approving("new").await;
             let teregen = teregen_expecting(1).await;
             let dir = tempfile::tempdir().unwrap();
@@ -1023,16 +1171,22 @@ mod tests {
             session.metadata_mut().base_mut().stale_hash_warning =
                 Some("template hash mismatch (stale checkout)".to_owned());
 
-            session.is_repl = true;
-            session.set_prompter(fixed_prompter("y"));
-
-            let args = matches(&Approve, &["-r", "alice"]);
+            let args = matches(&Approve, &["-r", "alice", "--accept-head", "new"]);
             let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
             Approve.call(&mut session, &args).await.unwrap();
 
             assert_eq!(session.metadata().base().reviewer, "alice");
             teregen.verify().await;
             assert_eq!(approvals(&gitea).await, 1);
+        }
+
+        #[test]
+        fn accept_head_completes() {
+            let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+            assert_eq!(
+                Approve.complete(&session, "--acc", ""),
+                vec!["--accept-head"]
+            );
         }
 
         #[tokio::test]

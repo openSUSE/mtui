@@ -972,6 +972,9 @@ Options:
   -r, --reviewer <NAME>
           Record reviewer on the report document, then approve
 
+      --accept-head <SHA>
+          Approve only if the PR head is exactly SHA; this is also what lets a head that moved since the report was generated through non-interactively (Gitea only)
+
   -h, --help
           Print help
 ```
