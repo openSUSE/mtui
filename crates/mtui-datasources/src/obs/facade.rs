@@ -132,6 +132,21 @@ impl Osc {
         .await
     }
 
+    /// The checks [`approve`](Self::approve) makes before it reads the report
+    /// document (no groups, the acting user is assigned), with nothing posted.
+    ///
+    /// # Errors
+    ///
+    /// The same [`ObsError`]s as [`approve`](Self::approve), minus the verdict.
+    pub async fn approve_preflight(&self, groups: &[String]) -> Result<(), ObsError> {
+        let rrid = self.rrid.clone();
+        let groups = groups.to_vec();
+        self.run(move |client, user| async move {
+            qam::approve_preflight(&client, &rrid, &user, &groups).await
+        })
+        .await
+    }
+
     /// Approve the review for the acting user (group-approve is refused).
     ///
     /// # Errors

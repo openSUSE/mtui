@@ -388,17 +388,18 @@ pub async fn unassign(
 // approve (user path only)                                                     //
 // --------------------------------------------------------------------------- //
 
-/// Accept the review by user; group-approve is refused (parity).
+/// The checks [`approve`] makes that do not read the report document: no
+/// groups were given, and the user holds an assignment on the request.
+/// Read-only, so a caller can refuse before it publishes anything. The verdict
+/// check is not part of this: it reads the server's copy of the document, which
+/// the caller may be about to change.
 ///
 /// # Errors
 ///
-/// Returns [`ObsError::Op`] if groups are given (group-approve refused), the
-/// user is not assigned, or the report document's verdict is not `PASSED`
-/// (non-PI/SLFO); or a transport/API error.
-pub async fn approve(
+/// Returns [`ObsError::Op`] if groups are given (group-approve refused) or the
+/// user is not assigned; or a transport/API error.
+pub async fn approve_preflight(
     client: &ObsClient,
-    v2: &TeregenV2,
-    fancy_reports_url: &str,
     rrid: &RequestReviewID,
     user: &str,
     groups: &[String],
@@ -418,6 +419,25 @@ pub async fn approve(
             request.reqid
         )));
     }
+    Ok(())
+}
+
+/// Accept the review by user; group-approve is refused (parity).
+///
+/// # Errors
+///
+/// Returns [`ObsError::Op`] if groups are given (group-approve refused), the
+/// user is not assigned, or the report document's verdict is not `PASSED`
+/// (non-PI/SLFO); or a transport/API error.
+pub async fn approve(
+    client: &ObsClient,
+    v2: &TeregenV2,
+    fancy_reports_url: &str,
+    rrid: &RequestReviewID,
+    user: &str,
+    groups: &[String],
+) -> Result<(), ObsError> {
+    approve_preflight(client, rrid, user, groups).await?;
     if gates_on_report_document(rrid) {
         let (verdict, _) = super::preconditions::report_verdict(v2, rrid)
             .await

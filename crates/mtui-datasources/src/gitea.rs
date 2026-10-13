@@ -579,6 +579,38 @@ impl Gitea {
         Ok(!self.has_review().await?)
     }
 
+    /// The checks a decision (approve or reject) needs, without posting
+    /// anything: the PR is assigned to the acting user and not already decided.
+    /// Returns the acting user.
+    async fn require_open(&self, other: Option<&str>) -> Result<String, GiteaError> {
+        let a_user = self.acting_user(other).await;
+        let comments = self.load_sorted_comments().await?;
+        let state = self.assign_state(&comments, &a_user);
+        if state != Assignment::AssignedUser {
+            return Err(GiteaError::AssignInvalid {
+                state,
+                user: a_user,
+            });
+        }
+        if self.is_done_from(&comments).await? {
+            return Err(GiteaError::NoReview(
+                "PR was already approved/rejected".to_string(),
+            ));
+        }
+        Ok(a_user)
+    }
+
+    /// Whether [`approve`](Self::approve) or [`reject`](Self::reject) would
+    /// pass their own checks right now. Read-only, so a caller can refuse
+    /// before it publishes anything on the strength of the decision.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`approve`](Self::approve), minus the post.
+    pub async fn check_decidable(&self, other: Option<&str>) -> Result<(), GiteaError> {
+        self.require_open(other).await.map(|_| ())
+    }
+
     /// Approve the PR by posting an LGTM comment.
     ///
     /// # Errors
@@ -586,19 +618,35 @@ impl Gitea {
     /// [`GiteaError::AssignInvalid`] if the PR is not assigned to the acting
     /// user; [`GiteaError::NoReview`] if it was already approved/rejected.
     pub async fn approve(&self, other: Option<&str>) -> Result<(), GiteaError> {
-        let a_user = self.acting_user(other).await;
-        let comments = self.load_sorted_comments().await?;
-        let state = self.assign_state(&comments, &a_user);
-        if state != Assignment::AssignedUser {
-            return Err(GiteaError::AssignInvalid {
-                state,
-                user: a_user.to_string(),
-            });
-        }
-        if self.is_done_from(&comments).await? {
-            return Err(GiteaError::NoReview(
-                "PR was already approved/rejected".to_string(),
-            ));
+        self.approve_checked(other, None).await
+    }
+
+    /// [`approve`](Self::approve), but only if the PR head is still `head`:
+    /// it is fetched again right before the LGTM, so a push that landed after
+    /// the caller looked is not approved unseen.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`approve`](Self::approve), and [`GiteaError::HeadMoved`] if the
+    /// head is not `head` any more.
+    pub async fn approve_if_head(&self, other: Option<&str>, head: &str) -> Result<(), GiteaError> {
+        self.approve_checked(other, Some(head)).await
+    }
+
+    async fn approve_checked(
+        &self,
+        other: Option<&str>,
+        head: Option<&str>,
+    ) -> Result<(), GiteaError> {
+        let a_user = self.require_open(other).await?;
+        if let Some(expected) = head {
+            let actual = self.get_hash().await?;
+            if actual != expected {
+                return Err(GiteaError::HeadMoved {
+                    expected: expected.to_owned(),
+                    actual,
+                });
+            }
         }
         tracing::info!("Approving PR as {a_user} for group {}", self.group);
         let msg = format!("@{}-review: LGTM", self.group);
@@ -621,20 +669,7 @@ impl Gitea {
         other: Option<&str>,
         message: &str,
     ) -> Result<(), GiteaError> {
-        let a_user = self.acting_user(other).await;
-        let comments = self.load_sorted_comments().await?;
-        let state = self.assign_state(&comments, &a_user);
-        if state != Assignment::AssignedUser {
-            return Err(GiteaError::AssignInvalid {
-                state,
-                user: a_user.to_string(),
-            });
-        }
-        if self.is_done_from(&comments).await? {
-            return Err(GiteaError::NoReview(
-                "PR was already approved/rejected".to_string(),
-            ));
-        }
+        let a_user = self.require_open(other).await?;
         tracing::info!("Rejecting PR as {a_user} for group {}", self.group);
         let mut msg = format!("@{}-review: decline", self.group);
         if !reason.is_empty() {

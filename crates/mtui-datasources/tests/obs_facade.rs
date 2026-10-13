@@ -221,6 +221,59 @@ async fn approve_happy_path_accepts_via_injected_client() {
     osc.approve(&[]).await.unwrap();
 }
 
+/// The pre-report checks of `approve` run on their own and post nothing.
+#[tokio::test]
+async fn approve_preflight_checks_groups_and_assignment_without_posting() {
+    let server = MockServer::start().await;
+    let held = "<request id='70000'><state name='review'/>\
+         <action type='maintenance_release'>\
+         <source project='SUSE:SLFO:1.1' package='p'/></action>\
+         <review state='accepted' by_group='qam-sle'>\
+         <history who='qamuser' when='2020-01-01T00:00:00'>\
+         <description>Review got accepted</description></history></review></request>";
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(held))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<status code='ok'/>"))
+        .mount(&server)
+        .await;
+    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+
+    osc.approve_preflight(&[]).await.unwrap();
+    let err = osc
+        .approve_preflight(&["qam-sle".to_owned()])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("group approval"), "{err}");
+
+    let other = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<request id='70000'><state name='review'/>\
+             <review state='new' by_group='qam-sle'/></request>",
+        ))
+        .mount(&other)
+        .await;
+    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(other.uri()));
+    let err = osc.approve_preflight(&[]).await.unwrap_err();
+    assert!(err.to_string().contains("not assigned"), "{err}");
+
+    for s in [&server, &other] {
+        let posts = s
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == wiremock::http::Method::POST)
+            .count();
+        assert_eq!(posts, 0);
+    }
+}
+
 #[tokio::test]
 async fn reject_happy_path_declines_via_injected_client() {
     // SLFO reject: preconditions + reject-reason attribute are skipped for SLFO,
