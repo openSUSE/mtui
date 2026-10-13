@@ -210,6 +210,15 @@ pub enum GiteaError {
         user: String,
     },
 
+    /// The PR head is not the commit the caller vetted: it moved in between.
+    #[error("PR head moved from {expected} to {actual}")]
+    HeadMoved {
+        /// The head the caller had checked.
+        expected: String,
+        /// The head Gitea reports now.
+        actual: String,
+    },
+
     /// A URL passed for PR-API conversion is not a recognisable Gitea PR URL.
     #[error("not a Gitea PR URL: {0}")]
     InvalidPrUrl(String),

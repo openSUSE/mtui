@@ -290,6 +290,94 @@ async fn approve_when_already_decided_raises() {
     assert!(matches!(err, mtui_datasources::GiteaError::NoReview(_)));
 }
 
+fn posts(requests: &[wiremock::Request]) -> usize {
+    requests
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count()
+}
+
+/// `check_decidable` makes the checks `approve` and `reject` make and posts
+/// nothing. Mutation caught: a POST inside it.
+#[tokio::test]
+async fn check_decidable_refuses_like_approve_and_never_posts() {
+    let assigned = MockServer::start().await;
+    mount_comments(
+        &assigned,
+        json!([comment_json(1, &assign_marker(USER, GROUP), 1)]),
+    )
+    .await;
+    mount_post_comment(&assigned).await;
+    mount_user(&assigned, USER).await;
+    gitea_for(&assigned).check_decidable(None).await.unwrap();
+    assert_eq!(posts(&assigned.received_requests().await.unwrap()), 0);
+
+    let unassigned = MockServer::start().await;
+    mount_comments(&unassigned, json!([])).await;
+    mount_post_comment(&unassigned).await;
+    let err = gitea_for(&unassigned)
+        .check_decidable(None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, GiteaError::AssignInvalid { .. }), "{err:?}");
+
+    let decided = MockServer::start().await;
+    mount_comments(
+        &decided,
+        json!([
+            comment_json(1, &assign_marker(USER, GROUP), 1),
+            comment_json(2, &format!("@{GROUP}-review: LGTM"), 2),
+        ]),
+    )
+    .await;
+    mount_pr_reviewers(&decided, json!([])).await;
+    mount_user(&decided, USER).await;
+    let err = gitea_for(&decided).check_decidable(None).await.unwrap_err();
+    assert!(matches!(err, GiteaError::NoReview(_)), "{err:?}");
+}
+
+async fn mount_head(server: &MockServer, sha: &str) {
+    Mock::given(method("GET"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "head": { "sha": sha } })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn approve_if_head_posts_only_while_the_head_is_the_one_vetted() {
+    let server = MockServer::start().await;
+    mount_comments(
+        &server,
+        json!([comment_json(1, &assign_marker(USER, GROUP), 1)]),
+    )
+    .await;
+    mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
+    mount_head(&server, "abc").await;
+
+    gitea_for(&server)
+        .approve_if_head(None, "abc")
+        .await
+        .unwrap();
+    assert_eq!(posts(&server.received_requests().await.unwrap()), 1);
+
+    let err = gitea_for(&server)
+        .approve_if_head(None, "old")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, GiteaError::HeadMoved { expected, actual }
+            if expected == "old" && actual == "abc"),
+        "{err:?}"
+    );
+    assert_eq!(
+        posts(&server.received_requests().await.unwrap()),
+        1,
+        "the moved head posted nothing"
+    );
+}
+
 #[tokio::test]
 async fn approve_when_not_assigned_raises() {
     let server = MockServer::start().await;
