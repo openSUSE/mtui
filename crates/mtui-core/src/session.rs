@@ -1237,19 +1237,9 @@ impl Session {
                 holders_ref,
             )
         });
-        // Bound the fan-out to `[connection] max_parallel` so a large fleet caps
-        // peak concurrent SSH handshakes/sockets/tasks. The futures borrow
-        // `&config`/`&store` (a spawn-free in-place fan-out) and so do not fit
-        // `buffer_unordered`'s stream bounds — hence chunk-and-`join_all`.
-        // Completion order is irrelevant: results fold into a sorted `BTreeMap`.
         let bound = (config.max_parallel as usize).max(1);
         let connect_futs: Vec<_> = connect_futs.collect();
-        let mut connected = Vec::with_capacity(connect_futs.len());
-        let mut iter = connect_futs.into_iter().peekable();
-        while iter.peek().is_some() {
-            let batch: Vec<_> = iter.by_ref().take(bound).collect();
-            connected.extend(futures::future::join_all(batch).await);
-        }
+        let connected = Self::connect_bounded(connect_futs, bound).await;
 
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         let targets = self.targets_mut();
@@ -1281,6 +1271,26 @@ impl Session {
         // Only now is the `targets_mut()` borrow released.
         self.apply_product_warnings(drift);
         unserved
+    }
+
+    /// Drives `futs` with at most `bound` in flight (a `[connection]
+    /// max_parallel` cap on concurrent SSH handshakes/sockets), refilling a slot
+    /// as soon as any host finishes. Outputs come back in input order, because
+    /// callers fold them order-sensitively (a later duplicate host wins).
+    ///
+    /// Takes a `Vec`, not an iterator: a lazy borrowing iterator held inside
+    /// this future defeats the `Send` check of `Command::call`.
+    async fn connect_bounded<F: Future>(futs: Vec<F>, bound: usize) -> Vec<F::Output> {
+        use futures::StreamExt;
+
+        let mut indexed: Vec<_> = futures::stream::iter(futs)
+            .enumerate()
+            .map(|(idx, fut)| async move { (idx, fut.await) })
+            .buffer_unordered(bound.max(1))
+            .collect()
+            .await;
+        indexed.sort_unstable_by_key(|(idx, _)| *idx);
+        indexed.into_iter().map(|(_, out)| out).collect()
     }
 
     /// Takes the pool claim and/or operation lock on an already-connected
@@ -3778,5 +3788,171 @@ mod tests {
             owner.1, "SUSE:Maintenance:1:1",
             "owner RRID is the report id"
         );
+    }
+
+    /// A stand-in for `connect_one`: records its start and in-flight count, then
+    /// blocks on its gate until the controller releases it.
+    struct WindowProbe {
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        starts: tokio::sync::mpsc::UnboundedSender<usize>,
+    }
+
+    async fn gated_host<T>(
+        idx: usize,
+        probe: Arc<WindowProbe>,
+        gate: tokio::sync::oneshot::Receiver<()>,
+        out: T,
+    ) -> T {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = probe.active.fetch_add(1, SeqCst) + 1;
+        probe.peak.fetch_max(now, SeqCst);
+        let _ = probe.starts.send(idx);
+        let _ = gate.await;
+        probe.active.fetch_sub(1, SeqCst);
+        out
+    }
+
+    type WindowGates = Vec<tokio::sync::oneshot::Sender<()>>;
+    type WindowStarts = tokio::sync::mpsc::UnboundedReceiver<usize>;
+
+    fn window_fixture<T>(
+        outs: Vec<T>,
+    ) -> (
+        Arc<WindowProbe>,
+        WindowStarts,
+        WindowGates,
+        Vec<impl Future<Output = T>>,
+    ) {
+        let (starts_tx, starts_rx) = tokio::sync::mpsc::unbounded_channel();
+        let probe = Arc::new(WindowProbe {
+            active: 0.into(),
+            peak: 0.into(),
+            starts: starts_tx,
+        });
+        let mut gates = Vec::new();
+        let futs = outs
+            .into_iter()
+            .enumerate()
+            .map(|(idx, out)| {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                gates.push(tx);
+                gated_host(idx, probe.clone(), rx, out)
+            })
+            .collect();
+        (probe, starts_rx, gates, futs)
+    }
+
+    /// Waits up to a virtual second for the next start event.
+    async fn next_start(starts: &mut WindowStarts) -> Option<usize> {
+        tokio::time::timeout(Duration::from_secs(1), starts.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// With a slow head host blocked, a free slot is refilled the moment a
+    /// sibling completes rather than waiting for the whole first batch.
+    #[tokio::test(start_paused = true)]
+    async fn connect_window_refills_while_first_host_is_blocked() {
+        let (_probe, mut starts, mut gates, futs) = window_fixture(vec!["A", "B", "C"]);
+        let (gate_c, gate_b, gate_a) = (
+            gates.pop().expect("c"),
+            gates.pop().expect("b"),
+            gates.pop().expect("a"),
+        );
+        let controller = async {
+            let first = (next_start(&mut starts).await, next_start(&mut starts).await);
+            // B is released; A stays blocked while we look for C.
+            let _ = gate_b.send(());
+            let c_started = next_start(&mut starts).await;
+            let _ = gate_a.send(());
+            let _ = gate_c.send(());
+            (first, c_started)
+        };
+        let (out, (first, c_started)) = tokio::join!(Session::connect_bounded(futs, 2), controller);
+
+        assert_eq!(first, (Some(0), Some(1)), "A and B start under bound 2");
+        assert_eq!(
+            c_started,
+            Some(2),
+            "C did not start within 1s of virtual time while A was still blocked"
+        );
+        assert_eq!(out, ["A", "B", "C"]);
+    }
+
+    /// In-flight work never exceeds the bound (0 behaves as 1), each future
+    /// runs exactly once, and a freed slot is refilled at once.
+    #[tokio::test(start_paused = true)]
+    async fn connect_window_never_exceeds_bound() {
+        for (bound, cap) in [(2usize, 2usize), (1, 1), (0, 1)] {
+            let n = 5;
+            let (probe, mut starts, gates, futs) = window_fixture((0..n).collect());
+            let controller = async {
+                let mut seen = Vec::new();
+                let mut problems = Vec::new();
+                for _ in 0..cap {
+                    seen.extend(next_start(&mut starts).await);
+                }
+                if tokio::time::timeout(Duration::from_millis(10), starts.recv())
+                    .await
+                    .is_ok()
+                {
+                    problems.push("a start beyond the bound before any release".to_owned());
+                }
+                for (i, gate) in gates.into_iter().enumerate() {
+                    let _ = gate.send(());
+                    if seen.len() < n {
+                        match next_start(&mut starts).await {
+                            Some(idx) => seen.push(idx),
+                            None => problems.push(format!("no refill after releasing host {i}")),
+                        }
+                    }
+                }
+                (seen, problems)
+            };
+            let (out, (seen, problems)) =
+                tokio::join!(Session::connect_bounded(futs, bound), controller);
+
+            assert!(problems.is_empty(), "bound {bound}: {problems:?}");
+            assert_eq!(
+                seen,
+                (0..n).collect::<Vec<_>>(),
+                "bound {bound}: start order"
+            );
+            assert_eq!(
+                probe.peak.load(std::sync::atomic::Ordering::SeqCst),
+                cap,
+                "bound {bound}: peak in-flight"
+            );
+            assert_eq!(out, (0..n).collect::<Vec<_>>(), "bound {bound}: results");
+        }
+    }
+
+    /// Outputs come back in input order whatever the completion order, so a
+    /// duplicate host key still resolves to the later input.
+    #[tokio::test(start_paused = true)]
+    async fn connect_window_returns_input_order() {
+        let outs = vec![("h", Ok(1)), ("g", Err("down")), ("h", Ok(3))];
+        let (_probe, mut starts, mut gates, futs) = window_fixture(outs.clone());
+        let (gate_c, gate_b, gate_a) = (
+            gates.pop().expect("c"),
+            gates.pop().expect("b"),
+            gates.pop().expect("a"),
+        );
+        let controller = async {
+            for _ in 0..3 {
+                next_start(&mut starts).await;
+            }
+            for gate in [gate_c, gate_b, gate_a] {
+                let _ = gate.send(());
+                tokio::task::yield_now().await;
+            }
+        };
+        let (out, ()) = tokio::join!(Session::connect_bounded(futs, 3), controller);
+
+        assert_eq!(out, outs);
+        let folded: std::collections::HashMap<_, _> = out.into_iter().collect();
+        assert_eq!(folded["h"], Ok(3), "later input wins for a duplicate key");
     }
 }
