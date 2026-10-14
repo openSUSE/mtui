@@ -1163,14 +1163,63 @@ impl<C: Clock> PoolLock<C> {
     /// Claims the pool lock, recording `comment` (the
     /// `mtui pool <RRID> [<owner>]` stamp).
     ///
-    /// Delegates to the inner [`TargetLock::lock`], which writes the pool
-    /// lockfile atomically.
+    /// Creates the pool lockfile atomically. A collision is reconciled by
+    /// **RRID** ownership, never the operation lock's PID check: a claim that is
+    /// already ours ([`is_mine`](Self::is_mine)) is adopted byte-for-byte —
+    /// without a truncating re-stamp, and without refreshing its timestamp — a
+    /// stale foreign claim is reaped and the create retried, and a fresh foreign
+    /// claim is refused untouched. Pool acquisition never waits.
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is claimed by another
-    /// owner, or an SFTP error from the write path.
+    /// owner, or an SFTP error from the read/write path.
     async fn lock(&mut self, comment: &str) -> Result<()> {
-        self.inner.lock(comment).await
+        let rl = RemoteLock {
+            user: self.inner.i_am_user.clone(),
+            timestamp: self.inner.clock.now_unix().to_string(),
+            pid: self.inner.i_am_pid,
+            comment: comment.to_owned(),
+        };
+        let path = self.filename();
+        let line = rl.to_lockfile();
+        // A timed-out create may have landed, so the next load is trusted once;
+        // a second timeout is a real error.
+        let mut timeout_reconciled = false;
+
+        for _ in 0..TargetLock::<C>::RECONCILE_RETRIES {
+            match self
+                .inner
+                .connection
+                .sftp_write(&path, line.as_bytes(), true)
+                .await
+            {
+                Ok(()) => {
+                    self.inner.mark_held(rl.comment.clone());
+                    self.inner.lock = rl;
+                    return Ok(());
+                }
+                Err(HostError::AlreadyExists { .. }) => {}
+                Err(HostError::SftpTimeout { .. }) if !timeout_reconciled => {
+                    timeout_reconciled = true;
+                }
+                Err(e) => return Err(e),
+            }
+
+            self.inner.load().await?;
+            if self.inner.lock.user.is_empty() {
+                continue;
+            }
+            if self.is_mine()? {
+                self.inner.mark_held(self.inner.lock.comment.clone());
+                return Ok(());
+            }
+            if self.reap_if_stale().await? {
+                continue;
+            }
+            return Err(HostError::TargetLocked(self.inner.locked_by_msg().await?));
+        }
+
+        Err(HostError::TargetLocked(self.inner.locked_by_msg().await?))
     }
 
     /// Force-removes the pool claim if it is older than the configured pool
@@ -2674,6 +2723,369 @@ mod tests {
             ..Default::default()
         };
         assert!(p.is_mine().unwrap());
+    }
+
+    const POOL_COMMENT: &str = "mtui pool SUSE:Maintenance:1:2 [new owner]";
+
+    fn pool_line(user: &str, pid: u32, rrid: &str) -> Vec<u8> {
+        format!("{}:{user}:{pid}:mtui pool {rrid} [previous owner]", now()).into_bytes()
+    }
+
+    fn pool_writes(handle: &MockConnection) -> Vec<(PathBuf, bool)> {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                crate::connection::MockSftpOp::Write { path, exclusive } => Some((path, exclusive)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pool_removes(handle: &MockConnection) -> usize {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| matches!(op, crate::connection::MockSftpOp::Remove(_)))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_same_rrid_other_pid() {
+        let other_pid = std::process::id() + 1;
+        assert_ne!(other_pid, std::process::id());
+        let original = pool_line("testuser", other_pid, "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert!(p.snapshot().await.unwrap().is_mine);
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), original);
+        assert_eq!(pool_removes(&handle), 0);
+        assert!(
+            pool_writes(&handle).iter().all(|(_, excl)| *excl),
+            "adoption must not rewrite the claim"
+        );
+    }
+
+    /// Asserts a refused/adopted claim left `original` untouched with no
+    /// removal and no truncating write.
+    fn assert_pool_line_untouched(handle: &MockConnection, original: &[u8]) {
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), original);
+        assert_eq!(pool_removes(handle), 0);
+        assert!(pool_writes(handle).iter().all(|(_, excl)| *excl));
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_same_pid_adopts_identical_bytes() {
+        let original = pool_line("testuser", std::process::id(), "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_refuses_other_rrid_even_with_same_pid() {
+        let original = pool_line("testuser", std::process::id(), "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_refuses_other_user_with_same_rrid() {
+        let original = pool_line("otheruser", std::process::id(), "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_without_session_rrid_matches_on_user_alone() {
+        let original = pool_line("testuser", std::process::id() + 1, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_free_host_is_an_exclusive_create_with_the_stamp() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+        assert_eq!(
+            pool_writes(&handle),
+            vec![(PathBuf::from(POOL_LOCK_PATH), true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_reaps_a_stale_foreign_claim_then_creates_exclusively() {
+        let stale = now() - 200_000;
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes(),
+        );
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        p.lock(POOL_COMMENT).await.unwrap();
+
+        assert_eq!(pool_removes(&handle), 1);
+        assert!(pool_writes(&handle).iter().all(|(_, excl)| *excl));
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_does_not_reap_a_fresh_claim_for_having_a_dead_pid() {
+        let original = pool_line("testuser", 4_000_000_000, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::TargetLocked(_))
+        ));
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    /// Forwards to a [`MockConnection`], planting `foreign` right before the
+    /// first exclusive write and logging every write/remove it forwards.
+    #[derive(Clone)]
+    struct RacingConnection {
+        inner: MockConnection,
+        foreign: Arc<Mutex<Option<Vec<u8>>>>,
+        forwarded_writes: Arc<Mutex<Vec<bool>>>,
+        forwarded_removes: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connection for RacingConnection {
+        fn hostname(&self) -> &str {
+            self.inner.hostname()
+        }
+        fn clone_box(&self) -> Box<dyn Connection> {
+            Box::new(self.clone())
+        }
+        async fn run(&mut self, command: &str) -> Result<mtui_types::hostlog::CommandLog> {
+            self.inner.run(command).await
+        }
+        fn is_active(&self) -> bool {
+            self.inner.is_active()
+        }
+        async fn close(&mut self) -> Result<()> {
+            self.inner.close().await
+        }
+        async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
+            self.inner.reconnect(retry, backoff).await
+        }
+        async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+            self.inner.fire_and_forget(command).await
+        }
+        async fn sftp_put(
+            &mut self,
+            local: &std::path::Path,
+            remote: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_put(local, remote).await
+        }
+        async fn sftp_put_bytes(&mut self, data: &[u8], remote: &std::path::Path) -> Result<()> {
+            self.inner.sftp_put_bytes(data, remote).await
+        }
+        async fn sftp_get(
+            &mut self,
+            remote: &std::path::Path,
+            local: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_get(remote, local).await
+        }
+        async fn sftp_get_folder(
+            &mut self,
+            remote: &std::path::Path,
+            local: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_get_folder(remote, local).await
+        }
+        async fn sftp_listdir(&mut self, path: &std::path::Path) -> Result<Vec<String>> {
+            self.inner.sftp_listdir(path).await
+        }
+        async fn sftp_open(&mut self, path: &std::path::Path) -> Result<Vec<u8>> {
+            self.inner.sftp_open(path).await
+        }
+        async fn sftp_write(
+            &mut self,
+            path: &std::path::Path,
+            data: &[u8],
+            exclusive: bool,
+        ) -> Result<()> {
+            let planted = if exclusive {
+                self.foreign.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(foreign) = planted {
+                self.inner.clone().sftp_write(path, &foreign, false).await?;
+            }
+            self.forwarded_writes.lock().unwrap().push(exclusive);
+            self.inner.sftp_write(path, data, exclusive).await
+        }
+        async fn sftp_append(&mut self, path: &std::path::Path, data: &[u8]) -> Result<()> {
+            self.inner.sftp_append(path, data).await
+        }
+        async fn sftp_remove(&mut self, path: &std::path::Path) -> Result<()> {
+            *self.forwarded_removes.lock().unwrap() += 1;
+            self.inner.sftp_remove(path).await
+        }
+        async fn sftp_rmdir(&mut self, path: &std::path::Path) -> Result<()> {
+            self.inner.sftp_rmdir(path).await
+        }
+        async fn sftp_readlink(&mut self, path: &std::path::Path) -> Result<String> {
+            self.inner.sftp_readlink(path).await
+        }
+        async fn sftp_session(&mut self) -> Result<Box<dyn crate::connection::SftpSession + '_>> {
+            self.inner.sftp_session().await
+        }
+        #[cfg(feature = "shell")]
+        async fn shell(
+            &mut self,
+            cols: u32,
+            rows: u32,
+        ) -> Result<Box<dyn crate::connection::ShellChannel>> {
+            self.inner.shell(cols, rows).await
+        }
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_never_overwrites_a_claim_that_appears_after_the_precheck() {
+        let foreign = pool_line("otheruser", 99, "SUSE:Maintenance:9:9");
+        let inner = MockConnection::new("h1");
+        let handle = inner.clone();
+        let racing = RacingConnection {
+            inner,
+            foreign: Arc::new(Mutex::new(Some(foreign.clone()))),
+            forwarded_writes: Arc::default(),
+            forwarded_removes: Arc::default(),
+        };
+        let writes = racing.forwarded_writes.clone();
+        let removes = racing.forwarded_removes.clone();
+        let mut p = PoolLock::with_clock(
+            Box::new(racing),
+            &cfg(),
+            "SUSE:Maintenance:1:2",
+            FakeClock::new(now()),
+        );
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), foreign);
+        assert_eq!(*writes.lock().unwrap(), vec![true]);
+        assert_eq!(*removes.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_adopts_a_create_whose_reply_timed_out_exactly_once() {
+        let conn = MockConnection::new("h1").with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        p.lock(POOL_COMMENT).await.unwrap();
+
+        assert!(p.snapshot().await.unwrap().is_mine);
+        assert_eq!(
+            handle.sftp_ops()[..2],
+            [
+                crate::connection::MockSftpOp::Write {
+                    path: PathBuf::from(POOL_LOCK_PATH),
+                    exclusive: true,
+                },
+                crate::connection::MockSftpOp::Open(PathBuf::from(POOL_LOCK_PATH)),
+            ]
+        );
+        assert_eq!(pool_writes(&handle).len(), 1);
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_does_not_adopt_a_foreign_claim_after_a_timeout() {
+        let original = pool_line("otheruser", 99, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1")
+            .with_file(POOL_LOCK_PATH, original.clone())
+            .with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::TargetLocked(msg)) if msg.contains("otheruser")
+        ));
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_propagates_an_unreadable_claim() {
+        let conn = MockConnection::new("h1")
+            .with_file(
+                POOL_LOCK_PATH,
+                pool_line("testuser", 1, "SUSE:Maintenance:1:2"),
+            )
+            .with_open_error(POOL_LOCK_PATH);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::Sftp { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_propagates_a_second_create_timeout() {
+        let stale = now() - 200_000;
+        let conn = MockConnection::new("h1")
+            .with_file(
+                POOL_LOCK_PATH,
+                format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes(),
+            )
+            .with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::SftpTimeout { .. })
+        ));
     }
     // --- civil date ---------------------------------------------------------
 

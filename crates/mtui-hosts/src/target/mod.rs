@@ -2715,6 +2715,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pool_claim_reattaches_to_own_claim_from_another_process() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let me = Config::default().session_user;
+        let other_pid = std::process::id() + 1;
+        let own = format!("{now}:{me}:{other_pid}:mtui pool SUSE:Maintenance:1:2 [previous]")
+            .into_bytes();
+        let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, own.clone());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
+                .await
+                .unwrap(),
+            "a claim recording our user and RRID is ours whatever its PID"
+        );
+        assert_eq!(handle.file_contents(crate::POOL_LOCK_PATH).unwrap(), own);
+    }
+
+    #[tokio::test]
     async fn pool_claim_reaps_stale_foreign_claim() {
         // A stale foreign pool claim (orphaned by an uncatchable exit) is reaped
         // on the next claim attempt and the host becomes claimable — the recovery
