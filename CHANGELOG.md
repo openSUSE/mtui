@@ -62,6 +62,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   during the read), and a server that reports none now fails the call naming the
   host rather than being read without a bound. `max_input_bytes = 0` still reads
   everything.
+- An SFTP request that fails with an ordinary status (file not found,
+  permission denied, an exclusive create that lost the race) no longer makes
+  mtui drop its cached SFTP session and replay the request. A create, truncate
+  or append whose reply is lost is likewise no longer replayed on a fresh
+  session: the timeout is returned as it happened, so the lock layer can
+  inspect the host instead of mistaking its own file for another tester's.
+  Read-only requests still retry once on a new session after a session failure.
 
 ## [26.3.5] - 2026-10-27
 
