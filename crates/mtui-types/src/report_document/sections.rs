@@ -185,9 +185,15 @@ impl ReportDocument {
     /// (`review` on a `pi` report).
     #[must_use]
     pub fn section(&self, section: Section) -> Option<Value> {
-        match self.to_value() {
-            Value::Object(mut map) => map.remove(section.as_str()),
-            _ => None,
+        match section {
+            Section::Verdict => Some(serialize_section(&self.verdict)),
+            Section::Comment => Some(serialize_section(&self.comment)),
+            Section::People => Some(serialize_section(&self.people)),
+            Section::Update => Some(serialize_section(&self.update)),
+            Section::Install => Some(serialize_section(&self.install)),
+            Section::Issues => Some(serialize_section(&self.issues)),
+            Section::Testing => Some(serialize_section(&self.testing)),
+            Section::Review => self.review.as_ref().map(serialize_section),
         }
     }
 
@@ -266,6 +272,10 @@ impl ReportDocument {
     }
 }
 
+fn serialize_section<T: Serialize>(field: &T) -> Value {
+    serde_json::to_value(field).expect("report document fields always serialize")
+}
+
 fn check_issue_keys(current: &Value, proposed: &Value) -> Result<(), SectionWriteError> {
     let (Some(current), Some(proposed)) = (current.as_object(), proposed.as_object()) else {
         return Ok(());
@@ -330,6 +340,96 @@ mod tests {
             .filter(|s| !s.is_tester_writable())
             .collect();
         assert_eq!(read_only, [Section::Update, Section::Install]);
+    }
+
+    const ALL_FIXTURES: [(&str, &str); 6] = [
+        ("maintenance_obs", MAINTENANCE_OBS),
+        (
+            "maintenance_addon",
+            include_str!("../../tests/fixtures/document/maintenance_addon.json"),
+        ),
+        (
+            "maintenance_openqa_l3",
+            include_str!("../../tests/fixtures/document/maintenance_openqa_l3.json"),
+        ),
+        (
+            "slfo_gitea",
+            include_str!("../../tests/fixtures/document/slfo_gitea.json"),
+        ),
+        ("maximal", MAXIMAL),
+        ("pi", PI),
+    ];
+
+    // --- section ---
+
+    #[test]
+    fn section_equals_the_key_of_the_serialized_document() {
+        for (name, raw) in ALL_FIXTURES {
+            let doc = doc(raw);
+            let whole = serde_json::to_value(&doc).unwrap();
+            let whole = whole.as_object().unwrap();
+            for section in Section::ALL {
+                let expected = whole.get(section.as_str()).cloned();
+                let got = doc.section(section);
+                assert_eq!(got, expected, "{name}/{section}");
+                assert_eq!(
+                    got.map(|v| serde_json::to_vec(&v).unwrap()),
+                    expected.map(|v| serde_json::to_vec(&v).unwrap()),
+                    "{name}/{section} bytes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reading_a_section_leaves_the_document_untouched() {
+        let doc = doc(MAXIMAL);
+        let before = serde_json::to_vec(&doc).unwrap();
+        for section in Section::ALL {
+            let _ = doc.section(section);
+        }
+        assert_eq!(serde_json::to_vec(&doc).unwrap(), before);
+    }
+
+    #[test]
+    fn unanswered_required_leaves_are_present_sections_holding_null() {
+        let obs = doc(MAINTENANCE_OBS);
+        assert_eq!(obs.section(Section::Verdict), Some(Value::Null));
+        assert_eq!(obs.section(Section::Comment), Some(Value::Null));
+    }
+
+    #[test]
+    fn review_is_absent_on_pi_and_present_on_maintenance() {
+        assert_eq!(doc(PI).section(Section::Review), None);
+        assert!(
+            doc(MAINTENANCE_OBS)
+                .section(Section::Review)
+                .is_some_and(|v| v.is_object())
+        );
+    }
+
+    #[test]
+    fn every_section_selects_its_own_field() {
+        let doc = doc(MAXIMAL);
+        let values: Vec<(Section, Value)> = Section::ALL
+            .into_iter()
+            .map(|s| (s, section_of(&doc, s)))
+            .collect();
+        for (i, (a, va)) in values.iter().enumerate() {
+            for (b, vb) in &values[i + 1..] {
+                assert_ne!(va, vb, "{a} and {b} select the same value");
+            }
+        }
+        assert!(matches!(
+            section_of(&doc, Section::Verdict),
+            Value::String(_)
+        ));
+        assert!(matches!(
+            section_of(&doc, Section::Comment),
+            Value::String(_)
+        ));
+        assert!(section_of(&doc, Section::People).get("reviewer").is_some());
+        assert!(section_of(&doc, Section::Testing).is_object());
     }
 
     // --- null_pointers ---
