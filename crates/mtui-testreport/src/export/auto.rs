@@ -6,11 +6,12 @@
 //! [`HttpClient`](mtui_datasources::http::HttpClient) in production, a mock in
 //! tests), mirroring how the downloader is tested.
 
+use futures::stream::{self, StreamExt};
 use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::URLs;
 
 use super::base::ExportContext;
-use super::downloader::{BytesFetcher, is_safe_component};
+use super::downloader::{BytesFetcher, DOWNLOAD_CONCURRENCY, is_safe_component};
 use crate::support::fileops::atomic_write_file;
 
 /// The automatic-workflow exporter.
@@ -60,14 +61,17 @@ impl AutoExport {
             })
             .collect();
 
-        // Download concurrently (order-preserving), then write serially.
-        let downloads = planned
-            .iter()
-            .map(|(url, _)| self.installog_text(fetcher, url));
-        let all_texts = futures::future::join_all(downloads).await;
+        // `buffered` yields in input order, so writes stay serial and the last
+        // duplicate name wins; only the in-flight window of bodies is retained.
+        // Boxed so a caller proving this future `Send` is not defeated by
+        // higher-ranked lifetime inference over the combinator chain.
+        let mut downloads = stream::iter(planned)
+            .map(|(url, name)| async move { (name, self.installog_text(fetcher, url).await) })
+            .buffered(DOWNLOAD_CONCURRENCY)
+            .boxed();
 
         let mut filenames = Vec::new();
-        for ((_, fn_name), text) in planned.into_iter().zip(all_texts) {
+        while let Some((fn_name, text)) = downloads.next().await {
             if text.is_empty() {
                 continue;
             }
@@ -584,5 +588,242 @@ mod tests {
             std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap(),
             "u\n"
         );
+    }
+
+    /// Completes the second URL before the first, so a duplicate destination
+    /// is written in input order only if the consumer preserves it.
+    struct ReversedPairFetcher {
+        second_done: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl BytesFetcher for ReversedPairFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            if url.contains("/first/") {
+                self.second_done.notified().await;
+                Ok(b"body-first\n".to_vec())
+            } else {
+                self.second_done.notify_one();
+                Ok(b"body-second\n".to_vec())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn get_logs_last_input_wins_for_duplicate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_at("SLES", "x86_64", "15-SP5", "https://oqa/first/file/log.txt"),
+            url_at(
+                "SLES",
+                "x86_64",
+                "15-SP5",
+                "https://oqa/second/file/log.txt",
+            ),
+        ];
+        let ex = AutoExport::new(ctx_in(dir.path()), Some(seeded_auto(Some(results), vec![])));
+        let fetcher = ReversedPairFetcher {
+            second_done: tokio::sync::Notify::new(),
+        };
+
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), ex.get_logs(&fetcher))
+            .await
+            .expect("fetches must overlap");
+
+        assert_eq!(out, vec!["sles_15-SP5_x86_64.log"; 2]);
+        let logs = ex.ctx.install_logs_dir();
+        assert_eq!(dir_listing(&logs), vec!["sles_15-SP5_x86_64.log"]);
+        assert_eq!(
+            std::fs::read_to_string(logs.join(&out[0])).unwrap(),
+            "body-second\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_logs_converts_invalid_utf8_lossily() {
+        let dir = tempfile::tempdir().unwrap();
+        let auto = seeded_auto(Some(vec![urls("passed")]), vec![]);
+        let ex = AutoExport::new(ctx_in(dir.path()), Some(auto));
+
+        let out = ex.get_logs(&OkFetcher(b"ok\xff\xfe\n".to_vec())).await;
+
+        let written = std::fs::read(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
+        assert_eq!(written, "ok\u{FFFD}\u{FFFD}\n".as_bytes());
+    }
+
+    #[tokio::test]
+    async fn get_logs_omits_successful_empty_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_at("SLES", "x86_64", "15-SP5", "https://oqa/a/file/log.txt"),
+            url_at("SLED", "aarch64", "15-SP6", "https://oqa/b/file/log.txt"),
+        ];
+        let ex = AutoExport::new(ctx_in(dir.path()), Some(seeded_auto(Some(results), vec![])));
+        let fetcher = fetcher_for(&[
+            ("https://oqa/a/file/log.txt", ""),
+            ("https://oqa/b/file/log.txt", "body-b\n"),
+        ]);
+
+        let out = ex.get_logs(&fetcher).await;
+
+        assert_eq!(out, vec!["sled_15-SP6_aarch64.log".to_string()]);
+        assert_eq!(
+            dir_listing(&ex.ctx.install_logs_dir()),
+            vec!["sled_15-SP6_aarch64.log"]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_logs_fetches_nothing_when_the_directory_cannot_be_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-directory");
+        std::fs::write(&blocker, "file\n").unwrap();
+        let ex = AutoExport::new(
+            ctx_in(&blocker),
+            Some(seeded_auto(Some(vec![urls("passed")]), vec![])),
+        );
+        let spy = SpyFetcher::new(&[("https://oqa/tests/1/file/log.txt", "x\n")]);
+
+        let out = ex.get_logs(&spy).await;
+
+        assert!(out.is_empty());
+        assert!(spy.seen().is_empty());
+        assert_eq!(std::fs::read_to_string(&blocker).unwrap(), "file\n");
+    }
+
+    const BATCH: usize = 10;
+
+    fn batch_ex(dir: &std::path::Path) -> AutoExport {
+        let results = (0..BATCH)
+            .map(|i| url_flavored(&format!("f{i}"), &format!("https://oqa/{i}/file/log.txt")))
+            .collect();
+        AutoExport::new(ctx_in(dir), Some(seeded_auto(Some(results), vec![])))
+    }
+
+    /// Holds every fetch open until released, counting how many are in flight.
+    struct GatedFetcher {
+        started: std::sync::atomic::AtomicUsize,
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        gate: tokio::sync::Semaphore,
+    }
+
+    impl GatedFetcher {
+        fn new() -> Self {
+            Self {
+                started: 0.into(),
+                active: 0.into(),
+                peak: 0.into(),
+                gate: tokio::sync::Semaphore::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BytesFetcher for GatedFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.started.fetch_add(1, SeqCst);
+            let now = self.active.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(now, SeqCst);
+            self.gate.acquire().await.unwrap().forget();
+            self.active.fetch_sub(1, SeqCst);
+            Ok(format!("body-{url}\n").into_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_pipeline_bounds_in_flight_downloads() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let dir = tempfile::tempdir().unwrap();
+        let ex = batch_ex(dir.path());
+        let fetcher = GatedFetcher::new();
+
+        let control = async {
+            while fetcher.started.load(SeqCst) < 8 {
+                tokio::task::yield_now().await;
+            }
+            for _ in 0..50 {
+                tokio::task::yield_now().await;
+            }
+            let started = fetcher.started.load(SeqCst);
+            fetcher.gate.add_permits(BATCH);
+            started
+        };
+        let (out, started) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(ex.get_logs(&fetcher), control)
+        })
+        .await
+        .expect("fixture stalled");
+
+        assert_eq!(started, 8, "downloads started before any was released");
+        assert_eq!(fetcher.peak.load(SeqCst), 8);
+        assert_eq!(out.len(), BATCH);
+    }
+
+    /// Signals when the ninth request starts and holds it until released.
+    struct NinthFetcher {
+        ninth_started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl BytesFetcher for NinthFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            if url.contains("/8/") {
+                self.ninth_started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(format!("body-{url}\n").into_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_pipeline_publishes_the_first_log_before_later_downloads_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let ex = batch_ex(dir.path());
+        let first = ex.ctx.install_logs_dir().join("sles_15-SP5_x86_64_f0.log");
+        let fetcher = NinthFetcher {
+            ninth_started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        };
+
+        let control = async {
+            fetcher.ninth_started.notified().await;
+            let published = first.exists();
+            fetcher.release.notify_one();
+            published
+        };
+        let (out, published) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(ex.get_logs(&fetcher), control)
+        })
+        .await
+        .expect("fixture stalled");
+
+        assert!(
+            published,
+            "first log was not on disk when the ninth started"
+        );
+        assert_eq!(out.len(), BATCH);
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "body-https://oqa/0/file/log.txt\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_logs_reports_the_name_when_the_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let ex = AutoExport::new(
+            ctx_in(dir.path()),
+            Some(seeded_auto(Some(vec![urls("passed")]), vec![])),
+        );
+        let obstacle = ex.ctx.install_logs_dir().join("sles_15-SP5_x86_64.log");
+        std::fs::create_dir_all(&obstacle).unwrap();
+
+        let out = ex.get_logs(&OkFetcher(b"x\n".to_vec())).await;
+
+        assert_eq!(out, vec!["sles_15-SP5_x86_64.log".to_string()]);
+        assert!(obstacle.is_dir());
     }
 }

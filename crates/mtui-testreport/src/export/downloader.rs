@@ -23,7 +23,7 @@ use mtui_types::Test;
 use crate::support::fileops::atomic_write_file;
 
 /// Max concurrent downloads.
-const DOWNLOAD_CONCURRENCY: usize = 8;
+pub(super) const DOWNLOAD_CONCURRENCY: usize = 8;
 
 /// The download error mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
