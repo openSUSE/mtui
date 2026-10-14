@@ -345,6 +345,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a claim recording the same user and request is adopted whatever PID it
   records, instead of the host being skipped as busy. The existing claim is
   left as it is, so its timestamp is not refreshed.
+- Kernel `export` no longer lets one job's install log or LTP result overwrite
+  another's when both map to the same file name: every such job now keeps its
+  own file, with `-job-<id>` inserted before the extension (for example
+  `h-zypper-x86_64-job-41.log`). File names no job collides on are unchanged,
+  and files from earlier exports are not deleted.
 - Automatic `export` now refuses install-log filenames derived from dashboard
   metadata that contain a path separator or control character (or are an
   absolute path), before fetching or writing anything, so a hostile dashboard

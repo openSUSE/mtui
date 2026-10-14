@@ -13,6 +13,7 @@
 //! an [`HttpClient`](mtui_datasources::http::HttpClient)-backed fetcher while
 //! tests inject a mock.
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -212,6 +213,69 @@ fn plan(
     }
 }
 
+/// One planned download: the test, its remote URL and its local destination.
+struct Job {
+    test: Test,
+    remote: String,
+    local: PathBuf,
+}
+
+/// `local` with `-job-<id>` (and `-<n>` once `n > 1`) inserted before the
+/// extension.
+fn with_job_suffix(local: &Path, id: i64, n: u32) -> PathBuf {
+    let mut name = local.file_stem().unwrap_or_default().to_os_string();
+    name.push(format!("-job-{id}"));
+    if n > 1 {
+        name.push(format!("-{n}"));
+    }
+    if let Some(ext) = local.extension() {
+        name.push(".");
+        name.push(ext);
+    }
+    local.with_file_name(name)
+}
+
+/// Gives every distinct download its own local path.
+///
+/// Jobs that would write the same path get a job-ID suffix; a path claimed by
+/// only one job is left alone. Names are assigned in `(test_id, remote)` order
+/// over the whole batch, so they depend on the set of jobs, never on input or
+/// completion order. An identical `(remote, local)` pair is one download.
+fn resolve_collisions(jobs: Vec<Job>) -> Vec<Job> {
+    let mut seen = HashSet::new();
+    let mut jobs: Vec<Job> = jobs
+        .into_iter()
+        .filter(|j| seen.insert((j.remote.clone(), j.local.clone())))
+        .collect();
+
+    let mut groups: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    for (i, job) in jobs.iter().enumerate() {
+        groups.entry(job.local.clone()).or_default().push(i);
+    }
+    // Every legacy path is reserved up front so a suffixed name can never take
+    // the destination of a job that did not collide.
+    let mut taken: HashSet<PathBuf> = groups.keys().cloned().collect();
+
+    for mut members in groups.into_values().filter(|m| m.len() > 1) {
+        members.sort_by(|&a, &b| {
+            (jobs[a].test.test_id, &jobs[a].remote).cmp(&(jobs[b].test.test_id, &jobs[b].remote))
+        });
+        for i in members {
+            let id = jobs[i].test.test_id;
+            let mut n = 1;
+            let unique = loop {
+                let candidate = with_job_suffix(&jobs[i].local, id, n);
+                if taken.insert(candidate.clone()) {
+                    break candidate;
+                }
+                n += 1;
+            };
+            jobs[i].local = unique;
+        }
+    }
+    jobs
+}
+
 /// Downloads one log: fetch + atomic write.
 ///
 /// Under [`ErrorMode::Full`] a fetch failure returns [`ResultsMissingError`] and
@@ -282,25 +346,33 @@ pub async fn download_logs(
     // The `Test` is cloned into each job so the download future owns its data:
     // a borrow across the async block defeats higher-ranked-lifetime inference
     // when the batch is awaited inside a spawned/boxed future.
-    let jobs: Vec<(Test, String, PathBuf)> = connectors
-        .iter()
-        .flat_map(|(host, tests)| {
-            tests.iter().filter_map(move |test| {
-                plan(host, test, resultsdir, installlogsdir)
-                    .map(|(remote, local)| (test.clone(), remote, local))
+    let jobs = resolve_collisions(
+        connectors
+            .iter()
+            .flat_map(|(host, tests)| {
+                tests.iter().filter_map(move |test| {
+                    plan(host, test, resultsdir, installlogsdir).map(|(remote, local)| Job {
+                        test: test.clone(),
+                        remote,
+                        local,
+                    })
+                })
             })
-        })
-        .collect();
+            .collect(),
+    );
 
     let total = jobs.len();
-    let results: Vec<Result<(), DownloadError>> =
-        stream::iter(jobs)
-            .map(|(test, remote, local)| async move {
-                subdl(fetcher, &remote, &local, &test, mode).await
-            })
-            .buffer_unordered(DOWNLOAD_CONCURRENCY)
-            .collect()
-            .await;
+    let results: Vec<Result<(), DownloadError>> = stream::iter(jobs)
+        .map(
+            |Job {
+                 test,
+                 remote,
+                 local,
+             }| async move { subdl(fetcher, &remote, &local, &test, mode).await },
+        )
+        .buffer_unordered(DOWNLOAD_CONCURRENCY)
+        .collect()
+        .await;
 
     let failures: Vec<DownloadError> = results.into_iter().filter_map(Result::err).collect();
     if !failures.is_empty() {
@@ -489,6 +561,376 @@ mod tests {
         assert_eq!(missing.test, "install_kernel");
         assert_eq!(missing.arch, "x86_64");
         assert!(missing.to_string().contains("missing results.json file"));
+    }
+
+    fn job(name: &str, arch: &str, id: i64) -> Test {
+        Test::new(name, "passed", id, arch, std::collections::BTreeMap::new())
+    }
+
+    /// Answers every URL with the URL itself, so a file's body names the remote
+    /// it came from.
+    struct EchoFetcher;
+
+    #[async_trait]
+    impl BytesFetcher for EchoFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            Ok(url.as_bytes().to_vec())
+        }
+    }
+
+    fn sorted_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.map(|e| e.unwrap().file_name().into_string().unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_install_jobs_keep_both_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+        let connectors = vec![(
+            "http://h".to_string(),
+            vec![
+                job("install_kernel", "x86_64", 41),
+                job("install_kernel", "x86_64", 42),
+            ],
+        )];
+
+        download_logs(&EchoFetcher, &connectors, &res, &inst, ErrorMode::Full)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sorted_names(&inst),
+            ["h-zypper-x86_64-job-41.log", "h-zypper-x86_64-job-42.log"]
+        );
+        for id in [41, 42] {
+            assert_eq!(
+                std::fs::read_to_string(inst.join(format!("h-zypper-x86_64-job-{id}.log")))
+                    .unwrap(),
+                format!("http://h/tests/{id}/file/update_kernel-zypper.log")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_ltp_jobs_keep_both_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+        let connectors = vec![(
+            "http://h".to_string(),
+            vec![job("ltp", "x86_64", 41), job("ltp", "x86_64", 42)],
+        )];
+
+        download_logs(&EchoFetcher, &connectors, &res, &inst, ErrorMode::Full)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sorted_names(&res),
+            ["h-x86_64-ltp-job-41.json", "h-x86_64-ltp-job-42.json"]
+        );
+        for id in [41, 42] {
+            assert_eq!(
+                std::fs::read_to_string(res.join(format!("h-x86_64-ltp-job-{id}.json"))).unwrap(),
+                format!("http://h/tests/{id}/file/result_array.json")
+            );
+        }
+    }
+
+    fn planned(host: &str, test: &Test) -> Job {
+        let (remote, local) = plan(host, test, Path::new("/res"), Path::new("/inst")).unwrap();
+        Job {
+            test: test.clone(),
+            remote,
+            local,
+        }
+    }
+
+    fn mapping(jobs: &[Job]) -> BTreeMap<String, PathBuf> {
+        jobs.iter()
+            .map(|j| (j.remote.clone(), j.local.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn kernel_export_collision_resolver_suffixes_only_colliding_paths() {
+        let jobs = vec![
+            planned("http://h", &job("install_kernel", "x86_64", 41)),
+            planned("http://h", &job("install_kernel", "x86_64", 42)),
+            planned("http://h", &job("install_kernel", "aarch64", 43)),
+            planned("http://h", &job("ltp", "x86_64", 44)),
+            planned("http://h", &job("ltp", "x86_64", 45)),
+            planned("http://h", &job("ltp_other", "x86_64", 46)),
+        ];
+
+        let got = mapping(&resolve_collisions(jobs));
+
+        let expected: BTreeMap<String, PathBuf> = [
+            (41, "/inst/h-zypper-x86_64-job-41.log"),
+            (42, "/inst/h-zypper-x86_64-job-42.log"),
+            (43, "/inst/h-zypper-aarch64.log"),
+            (44, "/res/h-x86_64-ltp-job-44.json"),
+            (45, "/res/h-x86_64-ltp-job-45.json"),
+            (46, "/res/h-x86_64-ltp_other.json"),
+        ]
+        .into_iter()
+        .map(|(id, path)| {
+            let kind = if path.contains("zypper") {
+                "update_kernel-zypper.log"
+            } else {
+                "result_array.json"
+            };
+            (
+                format!("http://h/tests/{id}/file/{kind}"),
+                PathBuf::from(path),
+            )
+        })
+        .collect();
+        assert_eq!(got, expected);
+        let unique: HashSet<_> = got.values().collect();
+        assert_eq!(unique.len(), got.len());
+    }
+
+    #[test]
+    fn kernel_export_collision_resolver_ignores_input_order() {
+        let jobs = || {
+            vec![
+                planned("http://h", &job("install_kernel", "x86_64", 42)),
+                planned("https://a.example/h", &job("install_kernel", "x86_64", 41)),
+                planned("https://b.example/h", &job("install_kernel", "x86_64", 41)),
+                planned("http://h", &job("install_kernel", "x86_64", 41)),
+            ]
+        };
+        let forward = mapping(&resolve_collisions(jobs()));
+        let mut reversed = jobs();
+        reversed.reverse();
+        let backward = mapping(&resolve_collisions(reversed));
+
+        assert_eq!(forward, backward);
+        let unique: HashSet<_> = forward.values().collect();
+        assert_eq!(unique.len(), 4);
+    }
+
+    #[test]
+    fn kernel_export_collision_same_id_from_two_sources_gets_distinct_names() {
+        let jobs = vec![
+            planned("https://b.example/h", &job("install_kernel", "x86_64", 41)),
+            planned("https://a.example/h", &job("install_kernel", "x86_64", 41)),
+        ];
+
+        let got = mapping(&resolve_collisions(jobs));
+
+        assert_eq!(
+            got["https://a.example/h/tests/41/file/update_kernel-zypper.log"],
+            Path::new("/inst/h-zypper-x86_64-job-41.log")
+        );
+        assert_eq!(
+            got["https://b.example/h/tests/41/file/update_kernel-zypper.log"],
+            Path::new("/inst/h-zypper-x86_64-job-41-2.log")
+        );
+    }
+
+    #[test]
+    fn kernel_export_collision_generated_name_never_takes_a_singleton_path() {
+        // The singleton's legacy name equals job 41's would-be suffixed name.
+        let singleton = planned("http://h", &job("install_kernel", "x86_64-job-41", 7));
+        assert_eq!(
+            singleton.local,
+            Path::new("/inst/h-zypper-x86_64-job-41.log")
+        );
+        let jobs = vec![
+            planned("http://h", &job("install_kernel", "x86_64", 41)),
+            planned("http://h", &job("install_kernel", "x86_64", 42)),
+            singleton,
+        ];
+
+        let got = mapping(&resolve_collisions(jobs));
+
+        assert_eq!(
+            got["http://h/tests/7/file/update_kernel-zypper.log"],
+            Path::new("/inst/h-zypper-x86_64-job-41.log")
+        );
+        assert_eq!(
+            got["http://h/tests/41/file/update_kernel-zypper.log"],
+            Path::new("/inst/h-zypper-x86_64-job-41-2.log")
+        );
+        assert_eq!(
+            got["http://h/tests/42/file/update_kernel-zypper.log"],
+            Path::new("/inst/h-zypper-x86_64-job-42.log")
+        );
+        let unique: HashSet<_> = got.values().collect();
+        assert_eq!(unique.len(), 3);
+        for path in got.values() {
+            assert!(is_safe_component(
+                path.file_name().unwrap().to_str().unwrap()
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_identical_duplicate_is_fetched_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+        let fetcher = OkFetcher {
+            seen: Mutex::new(Vec::new()),
+        };
+        let connectors = vec![
+            (
+                "http://h".to_string(),
+                vec![job("install_kernel", "x86_64", 41)],
+            ),
+            (
+                "http://h".to_string(),
+                vec![job("install_kernel", "x86_64", 41)],
+            ),
+        ];
+
+        download_logs(&fetcher, &connectors, &res, &inst, ErrorMode::Full)
+            .await
+            .unwrap();
+
+        assert_eq!(fetcher.seen.lock().unwrap().len(), 1);
+        assert_eq!(sorted_names(&inst), ["h-zypper-x86_64.log"]);
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_non_colliding_jobs_keep_legacy_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+        let connectors = vec![
+            (
+                "http://h1".to_string(),
+                vec![
+                    job("install_kernel", "x86_64", 41),
+                    job("ltp", "x86_64", 42),
+                ],
+            ),
+            (
+                "http://h2".to_string(),
+                vec![
+                    job("install_kernel", "x86_64", 43),
+                    job("noop", "x86_64", 44),
+                ],
+            ),
+        ];
+
+        download_logs(&EchoFetcher, &connectors, &res, &inst, ErrorMode::Full)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sorted_names(&inst),
+            ["h1-zypper-x86_64.log", "h2-zypper-x86_64.log"]
+        );
+        assert_eq!(sorted_names(&res), ["h1-x86_64-ltp.json"]);
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_names_ignore_completion_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::sync::Semaphore;
+
+        /// Holds each fetch until the test releases that URL.
+        struct GatedFetcher {
+            gates: BTreeMap<String, Semaphore>,
+            done: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl BytesFetcher for GatedFetcher {
+            async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+                self.gates[url].acquire().await.unwrap().forget();
+                self.done.fetch_add(1, Ordering::SeqCst);
+                Ok(url.as_bytes().to_vec())
+            }
+        }
+
+        let urls = [
+            "http://h/tests/41/file/update_kernel-zypper.log".to_string(),
+            "http://h/tests/42/file/update_kernel-zypper.log".to_string(),
+        ];
+        let mut outcomes = Vec::new();
+        for release_order in [[0, 1], [1, 0]] {
+            let dir = tempfile::tempdir().unwrap();
+            let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+            let fetcher = GatedFetcher {
+                gates: urls
+                    .iter()
+                    .map(|u| (u.clone(), Semaphore::new(0)))
+                    .collect(),
+                done: AtomicUsize::new(0),
+            };
+            let connectors = vec![(
+                "http://h".to_string(),
+                vec![
+                    job("install_kernel", "x86_64", 41),
+                    job("install_kernel", "x86_64", 42),
+                ],
+            )];
+            let driver = async {
+                for (finished, idx) in release_order.into_iter().enumerate() {
+                    fetcher.gates[&urls[idx]].add_permits(1);
+                    while fetcher.done.load(Ordering::SeqCst) <= finished {
+                        tokio::task::yield_now().await;
+                    }
+                }
+            };
+
+            let (out, ()) = tokio::join!(
+                download_logs(&fetcher, &connectors, &res, &inst, ErrorMode::Full),
+                driver
+            );
+            out.unwrap();
+
+            outcomes.push(
+                sorted_names(&inst)
+                    .into_iter()
+                    .map(|n| {
+                        let body = std::fs::read_to_string(inst.join(&n)).unwrap();
+                        (n, body)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        assert_eq!(outcomes[0], outcomes[1]);
+        assert_eq!(
+            outcomes[0],
+            [
+                ("h-zypper-x86_64-job-41.log".to_string(), urls[0].clone()),
+                ("h-zypper-x86_64-job-42.log".to_string(), urls[1].clone()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn kernel_export_collision_reexport_overwrites_same_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = (dir.path().join("results"), dir.path().join("install"));
+        let connectors = vec![(
+            "http://h".to_string(),
+            vec![
+                job("install_kernel", "x86_64", 41),
+                job("install_kernel", "x86_64", 42),
+            ],
+        )];
+
+        for _ in 0..2 {
+            download_logs(&EchoFetcher, &connectors, &res, &inst, ErrorMode::Full)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            sorted_names(&inst),
+            ["h-zypper-x86_64-job-41.log", "h-zypper-x86_64-job-42.log"]
+        );
     }
 
     /// A download that succeeds but cannot be persisted: point the install-logs

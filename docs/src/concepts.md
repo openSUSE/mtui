@@ -174,3 +174,14 @@ has decided each review group (one line per group). This is informational only
 and never blocks the action — its absence can also mean the lookup simply
 failed, and the server caches the state for a few minutes, so a line may lag by
 up to ~5 minutes.
+
+### Kernel export file names
+
+A kernel [`export`](cli.md#export) saves each openQA job's install log as
+`<host>-zypper-<arch>.log` and each LTP result as
+`<host>-<arch>-<test>.json`. When several jobs of one export would write the
+same file, each keeps its own file with the job ID inserted before the
+extension (`<host>-zypper-<arch>-job-<id>.log`); a name only one job claims
+never changes. Files from an earlier export are not deleted, so a plain
+`<host>-zypper-<arch>.log` written before this naming existed can remain next to
+the job-ID files.
