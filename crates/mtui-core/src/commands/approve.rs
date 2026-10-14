@@ -383,6 +383,69 @@ mod tests {
         assert_eq!(out, vec!["-r"]);
     }
 
+    fn approve_complete(text: &str, line: &str) -> Vec<String> {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        Approve.complete(&session, text, line)
+    }
+
+    #[test]
+    fn completion_menu_is_own_flags_in_declaration_order_without_templates_or_hosts() {
+        assert_eq!(
+            approve_complete("-", "approve -"),
+            [
+                "-g",
+                "--group",
+                "-u",
+                "--user",
+                "-r",
+                "--reviewer",
+                "--accept-head"
+            ]
+        );
+        assert_eq!(
+            approve_complete("--", "approve --"),
+            ["--group", "--user", "--reviewer", "--accept-head"]
+        );
+        assert_eq!(
+            approve_complete("", "approve "),
+            [
+                "-g",
+                "--group",
+                "-u",
+                "--user",
+                "-r",
+                "--reviewer",
+                "--accept-head",
+                "SUSE:Maintenance:1:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_does_not_suppress_flags_already_on_the_line() {
+        assert_eq!(
+            approve_complete("-", "approve -g a -g b -u me -r x --accept-head sha -"),
+            [
+                "-g",
+                "--group",
+                "-u",
+                "--user",
+                "-r",
+                "--reviewer",
+                "--accept-head"
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_offers_loaded_rrids_by_prefix_only() {
+        assert_eq!(
+            approve_complete("SUSE", "approve SUSE"),
+            ["SUSE:Maintenance:1:1"]
+        );
+        assert!(approve_complete("h", "approve h").is_empty());
+    }
+
     #[test]
     fn message_mentions_rrid_matches_whole_tokens_only() {
         const ID: &str = "SUSE:Maintenance:1:1";

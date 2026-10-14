@@ -129,6 +129,103 @@ mod tests {
         assert!(out.contains(&"h1".to_owned()), "{out:?}");
     }
 
+    fn prepare_complete(text: &str, line: &str) -> Vec<String> {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
+        Prepare.complete(&session, text, line)
+    }
+
+    #[test]
+    fn complete_menu_order_offers_installed_before_force() {
+        assert_eq!(
+            prepare_complete("", "prepare "),
+            [
+                "-t",
+                "--target",
+                "-i",
+                "--installed",
+                "-f",
+                "--force",
+                "-u",
+                "--update",
+                "-T",
+                "--template",
+                "--all-templates",
+                "SUSE:Maintenance:1:1",
+                "h1",
+                "h2",
+            ]
+        );
+        assert_eq!(
+            prepare_complete("--", "prepare --"),
+            [
+                "--target",
+                "--installed",
+                "--force",
+                "--update",
+                "--template",
+                "--all-templates"
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_drops_used_flags_including_bundled_shorts() {
+        assert_eq!(
+            prepare_complete("-", "prepare -if -"),
+            [
+                "-t",
+                "--target",
+                "-u",
+                "--update",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
+        );
+        assert_eq!(
+            prepare_complete("-", "prepare --installed -u -"),
+            [
+                "-t",
+                "--target",
+                "-f",
+                "--force",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_ignores_the_spelling_of_the_command_word() {
+        assert_eq!(
+            prepare_complete("-", "prep -t h1 -"),
+            [
+                "-i",
+                "--installed",
+                "-f",
+                "--force",
+                "-u",
+                "--update",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_exact_flag_short_circuits_and_prefixes_reach_dynamic_names() {
+        assert_eq!(prepare_complete("-u", "prepare "), ["-u"]);
+        assert_eq!(prepare_complete("--force", "prepare "), ["--force"]);
+        assert_eq!(
+            prepare_complete("SUSE", "prepare SUSE"),
+            ["SUSE:Maintenance:1:1"]
+        );
+        assert_eq!(prepare_complete("h", "prepare h"), ["h1", "h2"]);
+        assert_eq!(prepare_complete("h1", "prepare h1"), ["h1"]);
+    }
+
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Prepare.name(), "prepare");

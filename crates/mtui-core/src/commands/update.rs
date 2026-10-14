@@ -128,6 +128,82 @@ mod tests {
         assert!(out.contains(&"h1".to_owned()), "{out:?}");
     }
 
+    fn update_complete(text: &str, line: &str) -> Vec<String> {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
+        Update.complete(&session, text, line)
+    }
+
+    #[test]
+    fn complete_menu_order_is_target_own_flags_templates_rrids_hosts() {
+        assert_eq!(
+            update_complete("", "update "),
+            [
+                "-t",
+                "--target",
+                "--noprepare",
+                "--newpackage",
+                "-T",
+                "--template",
+                "--all-templates",
+                "SUSE:Maintenance:1:1",
+                "h1",
+                "h2",
+            ]
+        );
+        assert_eq!(
+            update_complete("--", "update --"),
+            [
+                "--target",
+                "--noprepare",
+                "--newpackage",
+                "--template",
+                "--all-templates"
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_drops_a_used_flag_under_either_spelling() {
+        assert_eq!(
+            update_complete("-", "update -t h1 --noprepare -"),
+            ["--newpackage", "-T", "--template", "--all-templates"]
+        );
+        assert_eq!(
+            update_complete("-", "update --target h1 --newpackage -"),
+            ["--noprepare", "-T", "--template", "--all-templates"]
+        );
+    }
+
+    #[test]
+    fn complete_ignores_the_spelling_of_the_command_word() {
+        assert_eq!(
+            update_complete("-", "upd --noprepare -"),
+            [
+                "-t",
+                "--target",
+                "--newpackage",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_exact_flag_short_circuits_and_prefixes_reach_dynamic_names() {
+        assert_eq!(update_complete("-t", "update "), ["-t"]);
+        assert_eq!(
+            update_complete("--all-templates", "update "),
+            ["--all-templates"]
+        );
+        assert_eq!(
+            update_complete("SUSE", "update SUSE"),
+            ["SUSE:Maintenance:1:1"]
+        );
+        assert_eq!(update_complete("h", "update h"), ["h1", "h2"]);
+        assert_eq!(update_complete("h1", "update h1"), ["h1"]);
+    }
+
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Update.name(), "update");

@@ -301,6 +301,61 @@ mod tests {
         assert!(!after.contains(&"-t".to_owned()) && !after.contains(&"--target".to_owned()));
     }
 
+    fn run_complete(text: &str, line: &str) -> Vec<String> {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
+        Run.complete(&session, text, line)
+    }
+
+    #[test]
+    fn complete_menu_order_is_target_templates_rrids_hosts() {
+        assert_eq!(
+            run_complete("", "run "),
+            [
+                "-t",
+                "--target",
+                "-T",
+                "--template",
+                "--all-templates",
+                "SUSE:Maintenance:1:1",
+                "h1",
+                "h2",
+            ]
+        );
+        assert_eq!(
+            run_complete("--", "run --"),
+            ["--target", "--template", "--all-templates"]
+        );
+    }
+
+    #[test]
+    fn complete_drops_a_used_flag_under_either_spelling() {
+        assert_eq!(
+            run_complete("-", "run --target h1 -"),
+            ["-T", "--template", "--all-templates"]
+        );
+        assert_eq!(
+            run_complete("-", "run -T SUSE:Maintenance:1:1 -"),
+            ["-t", "--target", "--all-templates"]
+        );
+    }
+
+    #[test]
+    fn complete_ignores_the_spelling_of_the_command_word() {
+        assert_eq!(
+            run_complete("-", "r --all-templates -"),
+            ["-t", "--target", "-T", "--template"]
+        );
+    }
+
+    #[test]
+    fn complete_exact_flag_short_circuits_and_prefixes_reach_dynamic_names() {
+        assert_eq!(run_complete("-T", "run "), ["-T"]);
+        assert_eq!(run_complete("--target", "run "), ["--target"]);
+        assert_eq!(run_complete("SUSE", "run SUSE"), ["SUSE:Maintenance:1:1"]);
+        assert_eq!(run_complete("h", "run h"), ["h1", "h2"]);
+        assert_eq!(run_complete("h1", "run h1"), ["h1"]);
+    }
+
     #[test]
     fn complete_on_empty_session_does_not_panic() {
         let (session, _buf) = empty_session();
