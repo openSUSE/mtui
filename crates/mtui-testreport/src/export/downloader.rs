@@ -130,7 +130,7 @@ fn host_tail(host: &str) -> &str {
 /// overwrite arbitrary files. Mirrors
 /// `mtui_hosts::connection::ssh::validate_sftp_component`, ported rather than
 /// shared because `mtui-testreport` must not depend on the lower `mtui-hosts`.
-fn is_safe_component(s: &str) -> bool {
+pub(super) fn is_safe_component(s: &str) -> bool {
     // `\` is rejected regardless of host OS: the *local* side may be Windows.
     if s.is_empty()
         || s == "."

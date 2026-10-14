@@ -13,7 +13,7 @@ use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::URLs;
 
 use super::base::{ExportContext, OverwritePrompt};
-use super::downloader::BytesFetcher;
+use super::downloader::{BytesFetcher, is_safe_component};
 
 /// The automatic-workflow exporter.
 pub struct AutoExport {
@@ -182,22 +182,37 @@ impl AutoExport {
             return Vec::new();
         }
 
+        // The name is dashboard-derived: refuse it before any fetch or write.
+        let planned: Vec<(&URLs, String)> = results
+            .iter()
+            .filter_map(|url| {
+                let name = format!(
+                    "{}_{}_{}.log",
+                    url.distri.to_lowercase(),
+                    url.version,
+                    url.arch
+                );
+                if is_safe_component(&name) {
+                    Some((url, name))
+                } else {
+                    tracing::error!("Refusing unsafe install log filename {name:?}");
+                    None
+                }
+            })
+            .collect();
+
         // Download concurrently (order-preserving), then write serially: the
         // write may prompt on overwrite, so it must not run in parallel.
-        let downloads = results.iter().map(|url| self.installog_text(fetcher, url));
+        let downloads = planned
+            .iter()
+            .map(|(url, _)| self.installog_text(fetcher, url));
         let all_texts = futures::future::join_all(downloads).await;
 
         let mut filenames = Vec::new();
-        for (url, text) in results.iter().zip(all_texts) {
+        for ((_, fn_name), text) in planned.into_iter().zip(all_texts) {
             if text.is_empty() {
                 continue;
             }
-            let fn_name = format!(
-                "{}_{}_{}.log",
-                url.distri.to_lowercase(),
-                url.version,
-                url.arch
-            );
             self.ctx
                 .writer(&dir.join(&fn_name), std::slice::from_ref(&text), prompt);
             filenames.push(fn_name);
@@ -525,6 +540,176 @@ mod tests {
             "body-c\n"
         );
         assert!(!dir.join("sled_15-SP6_aarch64.log").exists());
+    }
+
+    /// Records every requested URL; serves `bodies`, and answers an error for
+    /// anything else so an unfixed unsafe entry cannot write outside the test.
+    struct SpyFetcher {
+        seen: std::sync::Mutex<Vec<String>>,
+        bodies: std::collections::HashMap<String, Vec<u8>>,
+    }
+
+    impl SpyFetcher {
+        fn new(bodies: &[(&str, &str)]) -> Self {
+            Self {
+                seen: std::sync::Mutex::default(),
+                bodies: bodies
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
+                    .collect(),
+            }
+        }
+
+        fn seen(&self) -> Vec<String> {
+            let mut urls = self.seen.lock().unwrap().clone();
+            urls.sort();
+            urls
+        }
+    }
+
+    #[async_trait]
+    impl BytesFetcher for SpyFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            self.seen.lock().unwrap().push(url.to_string());
+            self.bodies
+                .get(url)
+                .cloned()
+                .ok_or_else(|| format!("no body for {url}"))
+        }
+    }
+
+    fn dir_listing(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn get_logs_refuses_unsafe_names_before_fetching() {
+        let hostile = [
+            ("/outside/owned", "x86_64", "15-SP5"),
+            ("SLES", "x86_64", "15/SP5"),
+            ("SLES", "x86_64", "15\\SP5"),
+            ("SLES", "x86/64", "15-SP5"),
+            ("SLES", "x86\\64", "15-SP5"),
+            ("SL\nES", "x86_64", "15-SP5"),
+            ("SLES", "x86_64", "15\u{7}SP5"),
+            ("SLES", "x86\u{0}64", "15-SP5"),
+            ("SLES", "x86_64", "15-SP5\r"),
+        ];
+        for (distri, arch, version) in hostile {
+            let dir = tempfile::tempdir().unwrap();
+            let results = vec![url_at(
+                distri,
+                arch,
+                version,
+                "https://oqa/evil/file/log.txt",
+            )];
+            let ex = AutoExport::new(
+                ctx_in(dir.path(), &[]),
+                Some(seeded_auto(Some(results), vec![])),
+                None,
+            );
+            let spy = SpyFetcher::new(&[("https://oqa/evil/file/log.txt", "owned\n")]);
+
+            let out = ex.get_logs(&spy, &super::super::base::DenyOverwrite).await;
+
+            assert!(out.is_empty(), "{distri:?}/{arch:?}/{version:?}");
+            assert!(
+                spy.seen().is_empty(),
+                "fetched for {distri:?}/{arch:?}/{version:?}"
+            );
+            assert!(dir_listing(&ex.ctx.install_logs_dir()).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn get_logs_never_writes_outside_the_install_logs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![url_at(
+            "../sentinel",
+            "x86_64",
+            "15-SP5",
+            "https://oqa/evil/file/log.txt",
+        )];
+        let ex = AutoExport::new(
+            ctx_in(dir.path(), &[]),
+            Some(seeded_auto(Some(results), vec![])),
+            None,
+        );
+        let logs = ex.ctx.install_logs_dir();
+        std::fs::create_dir_all(&logs).unwrap();
+        let sentinel = logs.parent().unwrap().join("sentinel_15-SP5_x86_64.log");
+        std::fs::write(&sentinel, "keep\n").unwrap();
+        let spy = SpyFetcher::new(&[("https://oqa/evil/file/log.txt", "owned\n")]);
+
+        let out = ex.get_logs(&spy, &super::super::base::DenyOverwrite).await;
+
+        assert!(out.is_empty());
+        assert!(spy.seen().is_empty());
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep\n");
+    }
+
+    #[tokio::test]
+    async fn get_logs_skips_only_the_unsafe_entry_in_a_mixed_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_at("SLES", "x86_64", "15-SP5", "https://oqa/a/file/log.txt"),
+            url_at(
+                "../escape",
+                "x86_64",
+                "15-SP5",
+                "https://oqa/b/file/log.txt",
+            ),
+            url_at("SLED", "aarch64", "15-SP6", "https://oqa/c/file/log.txt"),
+        ];
+        let ex = AutoExport::new(
+            ctx_in(dir.path(), &[]),
+            Some(seeded_auto(Some(results), vec![])),
+            None,
+        );
+        let spy = SpyFetcher::new(&[
+            ("https://oqa/a/file/log.txt", "body-a\n"),
+            ("https://oqa/b/file/log.txt", "body-b\n"),
+            ("https://oqa/c/file/log.txt", "body-c\n"),
+        ]);
+
+        let out = ex.get_logs(&spy, &super::super::base::DenyOverwrite).await;
+
+        assert_eq!(
+            out,
+            vec![
+                "sles_15-SP5_x86_64.log".to_string(),
+                "sled_15-SP6_aarch64.log".to_string(),
+            ]
+        );
+        assert_eq!(
+            spy.seen(),
+            vec![
+                "https://oqa/a/file/log.txt".to_string(),
+                "https://oqa/c/file/log.txt".to_string(),
+            ]
+        );
+        let logs = ex.ctx.install_logs_dir();
+        let mut written = out.clone();
+        written.sort();
+        assert_eq!(dir_listing(&logs), written);
+        assert_eq!(
+            std::fs::read_to_string(logs.join(&out[0])).unwrap(),
+            "body-a\n"
+        );
+        assert!(
+            !logs
+                .parent()
+                .unwrap()
+                .join("escape_15-SP5_x86_64.log")
+                .exists()
+        );
     }
 
     #[tokio::test]
