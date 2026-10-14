@@ -254,8 +254,6 @@ pub struct DashboardAutoOpenQA {
     pub pp: Vec<String>,
     /// The install-log URLs, or `None` when the install jobs did not all pass.
     pub results: Option<Vec<URLs>>,
-    /// The normalized jobs (populated by [`run`](Self::run)).
-    jobs: Vec<NormalizedJob>,
     /// Upper bound on concurrent per-setting job fetches (clamped to `>=1`).
     max_parallel: usize,
 }
@@ -281,7 +279,6 @@ impl DashboardAutoOpenQA {
             incident_number: incident.incident_number.clone(),
             pp: Vec::new(),
             results: None,
-            jobs: Vec::new(),
             max_parallel,
         }
     }
@@ -313,21 +310,14 @@ impl DashboardAutoOpenQA {
         &mut self,
         per_fetch: std::time::Duration,
     ) -> Result<&mut Self, QemDashboardError> {
-        self.jobs = self.load_jobs(per_fetch).await?;
-        self.results = if Self::has_passed_install_jobs(&self.jobs) {
-            self.get_logs_url(&self.jobs)
+        let jobs = self.load_jobs(per_fetch).await?;
+        self.results = if Self::has_passed_install_jobs(&jobs) {
+            self.get_logs_url(&jobs)
         } else {
             None
         };
-        self.pp = Self::pretty_print(&self.host, &self.jobs);
+        self.pp = Self::pretty_print(&self.host, &jobs);
         Ok(self)
-    }
-
-    /// Test seam: the loaded-and-normalized job test names, so integration
-    /// tests can assert ordering / timeout-skip without reaching into `jobs`.
-    #[cfg(test)]
-    fn job_test_names(&self) -> Vec<String> {
-        self.jobs.iter().map(|j| j.test.clone()).collect()
     }
 
     /// Whether the provider produced any renderable output.
@@ -1207,7 +1197,6 @@ mod tests {
             incident_number: "12358".to_string(),
             pp: Vec::new(),
             results: None,
-            jobs: Vec::new(),
             max_parallel: 1,
         }
     }
@@ -1369,9 +1358,12 @@ mod tests {
             incident_number: "12358".to_string(),
             pp: Vec::new(),
             results: None,
-            jobs: Vec::new(),
             max_parallel: 4,
         }
+    }
+
+    fn test_names(jobs: &[NormalizedJob]) -> Vec<String> {
+        jobs.iter().map(|j| j.test.clone()).collect()
     }
 
     #[tokio::test]
@@ -1426,15 +1418,15 @@ mod tests {
                 .await;
         }
 
-        let mut dashboard = dashboard_against(&server);
-        dashboard.run().await.unwrap();
+        let dashboard = dashboard_against(&server);
+        let jobs = dashboard.load_jobs(FUTURE_TIMEOUT).await.unwrap();
 
         let expected: Vec<String> = incident_ids
             .iter()
             .map(|sid| format!("qam-incident-{sid}"))
             .chain(update_ids.iter().map(|sid| format!("mau-update-{sid}")))
             .collect();
-        assert_eq!(dashboard.job_test_names(), expected);
+        assert_eq!(test_names(&jobs), expected);
         // `.expect(1)` on each mock asserts exactly-once on server drop.
     }
 
@@ -1471,13 +1463,11 @@ mod tests {
             .await;
 
         let mut dashboard = dashboard_against(&server);
+        let jobs = dashboard.load_jobs(FUTURE_TIMEOUT).await.unwrap();
         dashboard.run().await.unwrap();
 
         // Only the current run survives.
-        assert_eq!(
-            dashboard.job_test_names(),
-            vec!["qam-incidentinstall".to_string()]
-        );
+        assert_eq!(test_names(&jobs), vec!["qam-incidentinstall".to_string()]);
         // The stale failed run no longer poisons the verdict.
         let results = dashboard.results.expect("install verdict should be Some");
         assert_eq!(results.len(), 1);
@@ -1531,7 +1521,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut dashboard = dashboard_against(&server);
+        let dashboard = dashboard_against(&server);
         // One settings endpoint answered, so the batch is Ok despite the single
         // per-setting jobs timeout (warn-and-skip). `per_fetch` bounds *every*
         // fetch in the run, not just the hanging one, so it must stay far above
@@ -1539,12 +1529,9 @@ mod tests {
         // the race. A tight budget here made the four fast requests flaky
         // (#539). 2s is headroom, not a measured floor: 500ms already clears
         // the worst starvation in that issue.
-        dashboard
-            .run_with_timeout(Duration::from_secs(2))
-            .await
-            .unwrap();
+        let jobs = dashboard.load_jobs(Duration::from_secs(2)).await.unwrap();
 
-        let names = dashboard.job_test_names();
+        let names = test_names(&jobs);
         assert!(names.contains(&"qam-11".to_string()));
         assert!(names.contains(&"qam-13".to_string()));
         assert!(!names.contains(&"should-not-appear".to_string()));
@@ -1609,9 +1596,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut dashboard = dashboard_against(&server);
-        dashboard.run().await.unwrap();
-        assert_eq!(dashboard.job_test_names(), vec!["mau-update-2".to_string()]);
+        let dashboard = dashboard_against(&server);
+        let jobs = dashboard.load_jobs(FUTURE_TIMEOUT).await.unwrap();
+        assert_eq!(test_names(&jobs), vec!["mau-update-2".to_string()]);
     }
 
     #[tokio::test]
@@ -1655,15 +1642,15 @@ mod tests {
                 .await;
         }
 
-        let mut dashboard = dashboard_against(&server);
+        let dashboard = dashboard_against(&server);
         let start = std::time::Instant::now();
-        dashboard.run().await.unwrap();
+        let jobs = dashboard.load_jobs(FUTURE_TIMEOUT).await.unwrap();
         let elapsed = start.elapsed();
 
         // Order follows submission (incident settings in listed order), NOT
         // completion order — proves the index re-sort after buffer_unordered.
         assert_eq!(
-            dashboard.job_test_names(),
+            test_names(&jobs),
             vec![
                 "qam-11".to_string(),
                 "qam-12".to_string(),
