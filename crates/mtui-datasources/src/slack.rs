@@ -337,6 +337,7 @@ impl Slack {
         let data = self.request(Method::POST, "auth.test", &[], None).await?;
         data.get("user_id")
             .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
             .map(str::to_owned)
             .ok_or_else(|| SlackError::FailedCall("auth.test - missing user_id".to_owned()))
     }
