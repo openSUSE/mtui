@@ -19,6 +19,7 @@ pub mod system;
 pub mod test;
 pub mod update_source;
 pub mod updateid;
+pub mod url_redaction;
 pub mod urls;
 pub mod version;
 
@@ -39,5 +40,6 @@ pub use system::{System, SystemProduct, UnknownSystemError};
 pub use test::Test;
 pub use update_source::UpdateSource;
 pub use updateid::UpdateID;
+pub use url_redaction::{sanitize_url, sanitize_urls_in_text};
 pub use urls::URLs;
 pub use version::{Version, VersionField};
