@@ -469,11 +469,16 @@ struct Files {
 
 impl Files {
     async fn new(server: &MockServer) -> Self {
+        Self::with_input_cap(server, Config::default().mcp_max_input_bytes).await
+    }
+
+    async fn with_input_cap(server: &MockServer, cap: usize) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("report");
         std::fs::create_dir_all(&dir).unwrap();
         let mut config = Config::default();
         config.teregen_api_v2 = server.uri();
+        config.mcp_max_input_bytes = cap;
         let session = McpSession::new(config);
         {
             let mut guard = session.session().lock().await;
@@ -657,6 +662,74 @@ async fn a_file_read_pages_by_line_window() {
         .await
     };
     assert_eq!(root_file["content"], "ok\n");
+}
+
+#[tokio::test]
+async fn a_file_read_stops_at_the_source_cap_mid_line() {
+    let server = MockServer::start().await;
+    let f = Files::with_input_cap(&server, 4).await;
+    f.write("checkers.log", "ab\ncd\nef\n");
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let whole = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "checkers.log"}),
+    )
+    .await;
+    let content = whole["content"].as_str().unwrap();
+    assert!(
+        content.starts_with("ab\nc\n…[source read stopped at 4 bytes"),
+        "{content}"
+    );
+    assert_eq!(whole["total_lines"], 2);
+    assert!(whole.get("offset").is_none());
+
+    let skipped = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "checkers.log", "offset": 3, "limit": 1}),
+    )
+    .await;
+    assert!(
+        skipped["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("\n…[source read stopped")
+    );
+    assert_eq!(skipped["total_lines"], 2);
+    assert_eq!(skipped["returned_lines"], 0);
+    assert_eq!(skipped["offset"], 3);
+
+    let empty_window = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "checkers.log", "limit": 0}),
+    )
+    .await;
+    assert_eq!(empty_window["returned_lines"], 0);
+    assert_eq!(empty_window["total_lines"], 2);
+}
+
+#[tokio::test]
+async fn a_file_read_within_the_source_cap_carries_no_notice() {
+    let server = MockServer::start().await;
+    let f = Files::with_input_cap(&server, 6).await;
+    f.write("checkers.log", "ab\ncd\n");
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "checkers.log"}),
+    )
+    .await;
+
+    assert_eq!(out["content"], "ab\ncd\n");
+    assert_eq!(out["total_lines"], 2);
 }
 
 #[tokio::test]

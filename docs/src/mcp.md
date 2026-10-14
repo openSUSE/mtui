@@ -412,7 +412,10 @@ Reads one of those files as text.
   `limit` (maximum lines), `template`.
 - Returns `{ "id", "path", "total_lines", "content" }`; a windowed read also
   carries `offset` and `returned_lines`. `content` is bounded by
-  `[mcp] max_output_bytes`, and the read stops at `[mcp] max_input_bytes`.
+  `[mcp] max_output_bytes`, and the read stops at `[mcp] max_input_bytes`
+  (`0` disables the cap), cutting a line that crosses it. A capped read ends
+  with a notice, and `total_lines` then counts only the lines read up to the
+  cap; the size of the unread rest is unknown.
 - Refuses a path that escapes the report directory (`..`, an absolute path, a
   symlink out), one outside the readable set, and a missing file. A file the
   server lists but the report directory lacks is refused with a distinct
