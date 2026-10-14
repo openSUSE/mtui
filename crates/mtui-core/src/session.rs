@@ -181,6 +181,103 @@ fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
+/// Why a single host could not be attached to its slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HostFailure {
+    Unreachable,
+    /// Another process holds the remote pool claim; the claiming RRID when it
+    /// could be read back.
+    ClaimedBy(Option<String>),
+}
+
+impl HostFailure {
+    fn render(&self) -> String {
+        match self {
+            Self::Unreachable => "unreachable".to_owned(),
+            Self::ClaimedBy(Some(rrid)) => format!("claimed by {rrid}"),
+            Self::ClaimedBy(None) => "claimed remotely".to_owned(),
+        }
+    }
+}
+
+/// A test-target slot, or a testplatform, that `add_host` left without a host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Unserved {
+    NoRefhost {
+        tp: String,
+    },
+    InventoryUnavailable,
+    /// Every candidate is claimed in-process; `(host, claiming RRID)`.
+    Busy {
+        slot: String,
+        holders: Vec<(String, String)>,
+    },
+    Unconnectable {
+        slot: String,
+        failures: Vec<(String, HostFailure)>,
+    },
+    BudgetSpent {
+        slot: String,
+        tried: Vec<String>,
+    },
+}
+
+impl Unserved {
+    /// The one-line, human-facing reason.
+    pub(crate) fn render(&self) -> String {
+        match self {
+            Self::NoRefhost { tp } => format!("testplatform \"{tp}\": no matching refhost"),
+            Self::InventoryUnavailable => {
+                "refhosts inventory unavailable; no testplatform host resolved".to_owned()
+            }
+            Self::Busy { slot, holders } => {
+                let by = holders
+                    .iter()
+                    .map(|(h, r)| format!("{h} by {r}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "unserved slot {}: all {} candidates claimed ({by})",
+                    slot_label(slot),
+                    holders.len()
+                )
+            }
+            Self::Unconnectable { slot, failures } => {
+                let why = failures
+                    .iter()
+                    .map(|(h, f)| format!("{h}: {}", f.render()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "unserved slot {}: no candidate connected ({why})",
+                    slot_label(slot)
+                )
+            }
+            Self::BudgetSpent { slot, tried } => format!(
+                "unserved slot {}: backup retry budget exhausted (tried {})",
+                slot_label(slot),
+                tried.join(", ")
+            ),
+        }
+    }
+}
+
+/// A [`slot_key`] for display: `product version arch[ +addon…]`.
+fn slot_label(key: &str) -> String {
+    let mut parts = key.splitn(4, '|');
+    let (Some(product), Some(version), Some(arch), Some(addons)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return key.to_owned();
+    };
+    let mut label = format!("{product} {version} {arch}");
+    for addon in addons.split(',').filter(|a| !a.is_empty()) {
+        label.push_str(" +");
+        label.push_str(addon);
+    }
+    label
+}
+
 /// The outcome of [`Session::activate`].
 ///
 /// Only [`Active`](Self::Active) installs the per-call guard; the other three
@@ -1062,9 +1159,10 @@ impl Session {
 
         // Testplatform hosts go through pool selection (one host per requested
         // slot) when the arbiter + owner are wired — the default.
-        let wanted = self
+        let (wanted, _unserved) = self
             .resolve_and_record_pool(&config, ref_hosts, testplatforms, arbiter, owner, shuffle)
-            .await
+            .await;
+        let wanted = wanted
             .into_iter()
             .filter(|h| !already.contains(h))
             .collect();
@@ -1090,7 +1188,9 @@ impl Session {
     /// ([`verify_target_products`](Self::verify_target_products)) — surfaced,
     /// recorded in `product_warnings` and WARN-logged, but never dropping the
     /// host, and skipped entirely if the inventory is unavailable.
-    async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
+    ///
+    /// Returns the slots the backup step tried and could not serve.
+    async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) -> Vec<Unserved> {
         let config = self.config.clone();
         // Everything below is snapshotted before the connect loop: a `base()` or
         // `&Prompter` borrow held across the connect `.await` would make this
@@ -1156,23 +1256,33 @@ impl Session {
             targets.set_prompter(prompter);
         }
         targets.set_op_lock_holders(holders.clone());
-        for (target, drift_entry) in connected.into_iter().flatten() {
-            targets.add(target);
-            drift.push(drift_entry);
+        let mut failures: std::collections::HashMap<String, HostFailure> =
+            std::collections::HashMap::new();
+        for result in connected {
+            match result {
+                Ok((target, drift_entry)) => {
+                    targets.add(target);
+                    drift.push(drift_entry);
+                }
+                Err((host, failure)) => {
+                    failures.insert(host, failure);
+                }
+            }
         }
 
-        let backup_drift = self
-            .connect_pool_backups(&config, rrid, &hosts, timeout_prompt.clone())
+        let (backup_drift, unserved) = self
+            .connect_pool_backups(&config, rrid, &hosts, failures, timeout_prompt.clone())
             .await;
         drift.extend(backup_drift);
 
         // Only now is the `targets_mut()` borrow released.
         self.apply_product_warnings(drift);
+        unserved
     }
 
     /// Takes the pool claim and/or operation lock on an already-connected
-    /// `target`. Returns `false` when a pool claim was required but lost the
-    /// remote race, meaning the caller should drop the host.
+    /// `target`. Fails when a pool claim was required but lost the remote race,
+    /// meaning the caller should drop the host.
     ///
     /// The two branches are sequential, not mutually exclusive: a non-empty
     /// `lock_comment` (a loaded Product Increment) takes the operation lock
@@ -1187,7 +1297,7 @@ impl Session {
         rrid: &str,
         lock_comment: &str,
         is_pool_claim: bool,
-    ) -> bool {
+    ) -> Result<(), HostFailure> {
         if is_pool_claim {
             // Losing the remote race means another process holds this host —
             // drop it so a sibling in the slot can be tried (the in-process
@@ -1197,21 +1307,23 @@ impl Session {
                 Ok(true) => {}
                 Ok(false) => {
                     warn!(host = %host, "claimed in-process but busy remotely; skipping");
-                    return false;
+                    return Err(HostFailure::ClaimedBy(
+                        target.pool_claim_rrid().await.ok().flatten(),
+                    ));
                 }
                 Err(e) => {
                     warn!(host = %host, error = %e, "pool claim failed remotely; skipping");
-                    return false;
+                    return Err(HostFailure::Unreachable);
                 }
             }
         }
         Self::autolock_target(target, lock_comment).await;
-        true
+        Ok(())
     }
 
     /// Connects a single host, autolocks + package-seeds + drift-verifies it,
-    /// and returns the live [`Target`] plus its drift entry, or `None` on
-    /// failure.
+    /// and returns the live [`Target`] plus its drift entry, or the host with
+    /// the reason it was dropped.
     ///
     /// One path shared by the concurrent initial batch and the sequential
     /// backup-refhost fallback
@@ -1228,7 +1340,7 @@ impl Session {
         store: Option<&Refhosts>,
         is_pool_claim: bool,
         holders: &OpLockHolders,
-    ) -> Option<(Target, (String, Option<Vec<String>>))> {
+    ) -> Result<(Target, (String, Option<Vec<String>>)), (String, HostFailure)> {
         let mut target = Target::new(config, host.clone(), TargetState::Enabled);
         target.set_rrid(rrid.to_owned());
         // Before connecting, so the load-time autolock is registered too.
@@ -1239,7 +1351,7 @@ impl Session {
         }
         match target.connect().await {
             Ok(()) => {
-                if !Self::lock_connected_target(
+                if let Err(failure) = Self::lock_connected_target(
                     &mut target,
                     &host,
                     rrid,
@@ -1248,7 +1360,7 @@ impl Session {
                 )
                 .await
                 {
-                    return None;
+                    return Err((host, failure));
                 }
                 // Seed the tracked packages with their metadata `required`
                 // versions and query the current ones, so `list_packages` /
@@ -1272,11 +1384,11 @@ impl Session {
                     target.query_versions().await;
                 }
                 let drift = Self::verify_target_products(store, &target);
-                Some((target, (host, drift)))
+                Ok((target, (host, drift)))
             }
             Err(e) => {
                 warn!(host = %host, "connect failed, skipping: {e}");
-                None
+                Err((host, HostFailure::Unreachable))
             }
         }
     }
@@ -1300,13 +1412,17 @@ impl Session {
     /// report with many dead slots could wedge a caller for
     /// `slots * siblings * connect_timeout`. Once spent, remaining slots and
     /// siblings are abandoned with a `warn!`.
+    ///
+    /// `primary_failures` carries why each of `attempted_initial` was dropped.
+    /// Every retried slot that ends without a host is returned as [`Unserved`].
     async fn connect_pool_backups(
         &mut self,
         config: &Config,
         rrid: &str,
         attempted_initial: &[String],
+        primary_failures: std::collections::HashMap<String, HostFailure>,
         timeout_prompt: Option<mtui_hosts::TimeoutPrompt>,
-    ) -> Vec<(String, Option<Vec<String>>)> {
+    ) -> (Vec<(String, Option<Vec<String>>)>, Vec<Unserved>) {
         // Snapshot pool state + selection identity before any await.
         let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
             let base = self.metadata().base();
@@ -1319,10 +1435,10 @@ impl Session {
             )
         };
         let (Some(arbiter), Some(owner)) = (arbiter, owner) else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         if slot_candidates.is_empty() {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let store = Self::build_refhosts_store(config).await;
         let holders = self.op_lock_holders.clone();
@@ -1345,6 +1461,7 @@ impl Session {
         let mut attempted: std::collections::HashSet<String> =
             attempted_initial.iter().cloned().collect();
         let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
+        let mut unserved: Vec<Unserved> = Vec::new();
 
         // Bounds the phase regardless of report size, at the cost of a late slot
         // being starved when earlier slots burn the budget — logged per slot,
@@ -1352,17 +1469,27 @@ impl Session {
         let started = Instant::now();
         let budget = Duration::from_secs(4 * config.connect_timeout);
 
-        for (slot, candidates) in slot_candidates {
-            if started.elapsed() >= budget {
-                warn!(
-                    slot = %slot,
-                    "backup-refhost retry budget exhausted; giving up on remaining slots"
-                );
-                break;
-            }
+        let mut slots: Vec<_> = slot_candidates.into_iter().collect();
+        slots.sort();
+        for (slot, candidates) in slots {
             if candidates.iter().any(|c| attached.contains(c))
                 || !candidates.iter().any(|c| failed.contains(c))
             {
+                continue;
+            }
+            let mut slot_failures: Vec<(String, HostFailure)> = candidates
+                .iter()
+                .filter_map(|c| primary_failures.get(c).map(|f| (c.clone(), f.clone())))
+                .collect();
+            if started.elapsed() >= budget {
+                warn!(
+                    slot = %slot,
+                    "backup-refhost retry budget exhausted; giving up on this slot"
+                );
+                unserved.push(Unserved::BudgetSpent {
+                    slot,
+                    tried: slot_failures.into_iter().map(|(h, _)| h).collect(),
+                });
                 continue;
             }
             // Drop dead primary claim(s) so a sibling can be tried and the
@@ -1383,15 +1510,21 @@ impl Session {
                 .cloned()
                 .collect();
             let mut connected = false;
+            let mut budget_spent = false;
             while !remaining.is_empty() {
                 if started.elapsed() >= budget {
                     warn!(
                         slot = %slot,
                         "backup-refhost retry budget exhausted; giving up on this slot's remaining siblings"
                     );
+                    budget_spent = true;
                     break;
                 }
                 let Some(chosen) = arbiter.acquire_any(&remaining, &owner, wait, poll).await else {
+                    for c in &remaining {
+                        let by = arbiter.owner_of(c).map(|o| o.1);
+                        slot_failures.push((c.clone(), HostFailure::ClaimedBy(by)));
+                    }
                     break;
                 };
                 attempted.insert(chosen.clone());
@@ -1414,13 +1547,14 @@ impl Session {
                 )
                 .await
                 {
-                    Some((target, drift_entry)) => {
+                    Ok((target, drift_entry)) => {
                         self.targets_mut().add(target);
                         new_drift.push(drift_entry);
                         connected = true;
                         break;
                     }
-                    None => {
+                    Err((host, failure)) => {
+                        slot_failures.push((host, failure));
                         // Free the claim for the next candidate.
                         let base = self.metadata_mut().base_mut();
                         base.pool_claims.remove(&chosen);
@@ -1434,9 +1568,20 @@ impl Session {
                     candidates = candidates.len(),
                     "no connectable pool host for slot (all candidates tried)"
                 );
+                unserved.push(if budget_spent {
+                    Unserved::BudgetSpent {
+                        slot,
+                        tried: slot_failures.into_iter().map(|(h, _)| h).collect(),
+                    }
+                } else {
+                    Unserved::Unconnectable {
+                        slot,
+                        failures: slot_failures,
+                    }
+                });
             }
         }
-        new_drift
+        (new_drift, unserved)
     }
 
     /// Compares a freshly connected `target`'s detected products against its
@@ -1529,7 +1674,9 @@ impl Session {
     ///
     /// The `add_host`-without-`-t` path: one candidate per matching slot per
     /// testplatform, deduplicated against the group, then connected.
-    pub(crate) async fn add_testplatform_hosts(&mut self) {
+    ///
+    /// Returns every slot or testplatform that ended without a host.
+    pub(crate) async fn add_testplatform_hosts(&mut self) -> Vec<Unserved> {
         let config = self.config.clone();
         let shuffle = self.shuffle;
         let (already, testplatforms, arbiter, owner) = {
@@ -1543,7 +1690,7 @@ impl Session {
         };
         // Same pool-selection path as autoconnect. `ref_hosts` is empty here:
         // `add_host` without `-t` draws purely from the testplatforms.
-        let mut wanted = self
+        let (mut wanted, mut unserved) = self
             .resolve_and_record_pool(&config, Vec::new(), testplatforms, arbiter, owner, shuffle)
             .await;
         wanted.retain(|h| !already.contains(h));
@@ -1551,7 +1698,8 @@ impl Session {
         wanted.dedup();
 
         let rrid = self.metadata().id();
-        self.connect_and_add_hosts(wanted, &rrid).await;
+        unserved.extend(self.connect_and_add_hosts(wanted, &rrid).await);
+        unserved
     }
 
     /// Connects+adds the explicitly-named `hosts` to the active report's group.
@@ -1657,10 +1805,11 @@ impl Session {
     /// holds a host for is skipped; otherwise one free host is claimed through
     /// the arbiter, waiting up to `[lock] wait` seconds when all are busy.
     ///
-    /// Returns `(chosen_hosts, slot_candidates)` — this batch's `pool_claims`
-    /// and the per-slot ordered candidate lists, keyed as
-    /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates)
-    /// — for the caller to write onto the active report before connecting.
+    /// Returns `(chosen_hosts, slot_candidates, unserved)` — this batch's
+    /// `pool_claims`, the per-slot ordered candidate lists, keyed as
+    /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates),
+    /// and the testplatforms and slots that yielded no host — for the caller to
+    /// write onto the active report before connecting.
     ///
     /// Static (plain data, `&'static` arbiter) so the caller's connect future
     /// stays `Send`.
@@ -1672,16 +1821,22 @@ impl Session {
         wait: i64,
         poll: i64,
         shuffle: ShuffleFn,
-    ) -> (Vec<String>, std::collections::HashMap<String, Vec<String>>) {
+    ) -> (
+        Vec<String>,
+        std::collections::HashMap<String, Vec<String>>,
+        Vec<Unserved>,
+    ) {
         use std::collections::HashMap;
         let mut chosen: Vec<String> = Vec::new();
         let mut slot_candidates: HashMap<String, Vec<String>> = HashMap::new();
+        let mut unserved: Vec<Unserved> = Vec::new();
 
         for tp in testplatforms {
             let attrs = Attributes::from_testplatform(tp);
             let pairs = store.search_pool_by_query(&attrs);
             if pairs.is_empty() {
                 info!("autoconnect: nothing found for testplatform {tp:?}");
+                unserved.push(Unserved::NoRefhost { tp: tp.clone() });
                 continue;
             }
             // IndexMap keeps insertion order, so grouping is O(pairs) and
@@ -1705,20 +1860,27 @@ impl Session {
                 }
                 match arbiter.acquire_any(&candidates, owner, wait, poll).await {
                     Some(host) => chosen.push(host),
-                    None => warn!(
-                        slot = %slot,
-                        candidates = candidates.len(),
-                        "no free pool host for slot (all candidates busy)"
-                    ),
+                    None => {
+                        warn!(
+                            slot = %slot,
+                            candidates = candidates.len(),
+                            "no free pool host for slot (all candidates busy)"
+                        );
+                        let holders = candidates
+                            .iter()
+                            .filter_map(|c| arbiter.owner_of(c).map(|o| (c.clone(), o.1)))
+                            .collect();
+                        unserved.push(Unserved::Busy { slot, holders });
+                    }
                 }
             }
         }
-        (chosen, slot_candidates)
+        (chosen, slot_candidates, unserved)
     }
 
     /// Combines `ref_hosts` with pool-selected testplatform hosts, records the
     /// pool claims + slot candidates on the active report, and returns the
-    /// deduplicated host list to connect.
+    /// deduplicated host list to connect plus what pool selection left unserved.
     ///
     /// Shared by [`autoconnect_active`](Self::autoconnect_active) and
     /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). Each
@@ -1738,13 +1900,14 @@ impl Session {
         arbiter: Option<&'static HostArbiter>,
         owner: Option<Owner>,
         shuffle: ShuffleFn,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<Unserved>) {
         let mut wanted = ref_hosts;
+        let mut unserved = Vec::new();
 
         let tp_hosts = match (arbiter, owner) {
             (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
                 if let Some(store) = Self::build_refhosts_store(config).await {
-                    let (chosen, slot_candidates) = Self::pool_select(
+                    let (chosen, slot_candidates, not_served) = Self::pool_select(
                         &store,
                         &testplatforms,
                         arbiter,
@@ -1761,8 +1924,10 @@ impl Session {
                         base.pool_claims.insert(host.clone());
                     }
                     base.slot_candidates.extend(slot_candidates);
+                    unserved = not_served;
                     chosen
                 } else {
+                    unserved.push(Unserved::InventoryUnavailable);
                     Vec::new()
                 }
             }
@@ -1778,7 +1943,7 @@ impl Session {
                 wanted.push(host);
             }
         }
-        wanted
+        (wanted, unserved)
     }
 
     /// Requests that the interactive REPL loop exit after the current dispatch.
@@ -2544,10 +2709,34 @@ mod tests {
             true, // is_pool_claim
         )
         .await;
-        assert!(ok, "a free host must be claimable");
+        assert_eq!(ok, Ok(()), "a free host must be claimable");
         assert!(
             t.is_locked().await.expect("is_locked"),
             "a pool-claimed host must also hold the PI operation lock"
+        );
+    }
+
+    /// Losing the remote claim race names the RRID that holds it.
+    #[tokio::test]
+    async fn lock_connected_target_names_the_remote_claimant() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let foreign =
+            format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+        let conn = MockConnection::new("h1").with_file(mtui_hosts::POOL_LOCK_PATH, foreign);
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_rrid("SUSE:Maintenance:1:1");
+
+        let res =
+            Session::lock_connected_target(&mut t, "h1", "SUSE:Maintenance:1:1", "", true).await;
+
+        assert_eq!(
+            res,
+            Err(HostFailure::ClaimedBy(Some(
+                "SUSE:Maintenance:9:9".to_owned()
+            )))
         );
     }
 
@@ -2728,7 +2917,7 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,ppc64le]".to_owned()];
 
-        let (chosen, slot_candidates) =
+        let (chosen, slot_candidates, _) =
             Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
 
         assert_eq!(
@@ -2762,7 +2951,7 @@ mod tests {
         assert!(arbiter.try_acquire("x86-a", &owner));
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
 
-        let (chosen, _) =
+        let (chosen, _, _) =
             Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
 
         assert!(
@@ -2784,12 +2973,37 @@ mod tests {
         assert!(arbiter.try_acquire("x86-b", &other));
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
 
-        let (chosen, slot_candidates) =
+        let (chosen, slot_candidates, unserved) =
             Session::pool_select(&store, &tps, arbiter, &mine, 0, 0, no_shuffle).await;
 
         assert!(chosen.is_empty(), "all candidates busy → no claim");
         // Candidates are still recorded (for backup once one frees up).
         assert_eq!(slot_candidates.len(), 1);
+        let slot = slot_candidates.keys().next().unwrap().clone();
+        assert_eq!(
+            unserved,
+            vec![Unserved::Busy {
+                slot,
+                holders: vec![
+                    ("x86-a".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
+                    ("x86-b".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
+                ],
+            }]
+        );
+    }
+
+    /// A testplatform no refhost matches is named, not just logged.
+    #[tokio::test]
+    async fn pool_select_names_testplatform_without_refhost() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64")]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=12,minor=5);arch=[x86_64]".to_owned()];
+
+        let (chosen, slot_candidates, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert!(chosen.is_empty() && slot_candidates.is_empty());
+        assert_eq!(unserved, vec![Unserved::NoRefhost { tp: tps[0].clone() }]);
     }
 
     /// Hosts are claimed in the order their slots first appear in the
@@ -2809,7 +3023,7 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[ppc64le,x86_64]".to_owned()];
 
-        let (chosen, slot_candidates) =
+        let (chosen, slot_candidates, _) =
             Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
 
         assert_eq!(
@@ -2831,7 +3045,7 @@ mod tests {
         // Matches fixture hosts a wired arbiter/owner would otherwise resolve.
         let testplatforms = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
 
-        let wanted = s
+        let (wanted, _) = s
             .resolve_and_record_pool(
                 &config,
                 ref_hosts.clone(),
@@ -2848,12 +3062,76 @@ mod tests {
         );
     }
 
+    /// An unavailable inventory is reported rather than looking like "nothing
+    /// matched".
+    #[tokio::test]
+    async fn resolve_and_record_pool_reports_unavailable_inventory() {
+        let mut config = Config::default();
+        config.refhosts_resolvers = "path".to_owned();
+        config.refhosts_path = "/nonexistent/refhosts.yml".into();
+        let mut s = Session::new(config.clone(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+
+        let (wanted, unserved) = s
+            .resolve_and_record_pool(
+                &config,
+                Vec::new(),
+                vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()],
+                Some(test_arbiter()),
+                Some(owner),
+                no_shuffle,
+            )
+            .await;
+
+        assert!(wanted.is_empty());
+        assert_eq!(unserved, vec![Unserved::InventoryUnavailable]);
+    }
+
+    /// Every reason renders as one line, the slot key as `product version arch
+    /// +addon`.
+    #[test]
+    fn unserved_reasons_render_one_line_each() {
+        let slot = "sles|15.5|aarch64|ha,we".to_owned();
+        let reasons = [
+            Unserved::NoRefhost {
+                tp: "base=sles(major=15,minor=5);arch=[s390x]".to_owned(),
+            },
+            Unserved::InventoryUnavailable,
+            Unserved::Busy {
+                slot: slot.clone(),
+                holders: vec![
+                    ("h1".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
+                    ("h2".to_owned(), "SUSE:Maintenance:3:3".to_owned()),
+                ],
+            },
+            Unserved::Unconnectable {
+                slot: slot.clone(),
+                failures: vec![
+                    ("h3".to_owned(), HostFailure::Unreachable),
+                    (
+                        "h4".to_owned(),
+                        HostFailure::ClaimedBy(Some("SUSE:Maintenance:9:9".to_owned())),
+                    ),
+                    ("h5".to_owned(), HostFailure::ClaimedBy(None)),
+                ],
+            },
+            Unserved::BudgetSpent {
+                slot: "sles|15.5|x86_64|".to_owned(),
+                tried: vec!["h6".to_owned(), "h7".to_owned()],
+            },
+        ];
+        let out: Vec<String> = reasons.iter().map(Unserved::render).collect();
+        assert!(out.iter().all(|l| !l.contains('\n')));
+        insta::assert_snapshot!(out.join("\n"));
+    }
+
     /// Once the shared budget is spent, the remaining slots are abandoned rather
     /// than every sibling of every slot walked. Each candidate is a black-hole
     /// listener (bound, never `accept()`ed) costing a full `connect_timeout = 1s`
     /// to fail. The first of each of the 3 slots is the failed primary, so the 6
     /// siblings would take ~6s while the `4 * connect_timeout` budget must cut
-    /// it off around 4s.
+    /// the walk off after about 4.
     #[tokio::test]
     async fn connect_pool_backups_stops_once_budget_is_spent() {
         let mut config = config_with_path_refhosts();
@@ -2879,20 +3157,51 @@ mod tests {
         let claims: Vec<&str> = primaries.iter().map(String::as_str).collect();
         wire_pool(&mut s, arbiter, &owner, &slots, &claims);
 
-        let started = Instant::now();
-        let drift = tokio::time::timeout(
-            Duration::from_secs(7),
-            s.connect_pool_backups(&config, rrid, &primaries, None),
+        let failures = primaries
+            .iter()
+            .map(|p| (p.clone(), HostFailure::Unreachable))
+            .collect();
+        let (drift, unserved) = tokio::time::timeout(
+            Duration::from_secs(30),
+            s.connect_pool_backups(&config, rrid, &primaries, failures, None),
         )
         .await
         .expect("must not hang past the outer test wrapper");
 
         assert!(drift.is_empty(), "no black hole ever connects: {drift:?}");
+        let mut named: Vec<&str> = unserved
+            .iter()
+            .map(|u| match u {
+                Unserved::Unconnectable { slot, .. } | Unserved::BudgetSpent { slot, .. } => {
+                    slot.as_str()
+                }
+                other => panic!("unexpected reason {other:?}"),
+            })
+            .collect();
+        named.sort_unstable();
+        assert_eq!(
+            named,
+            ["slot-0", "slot-1", "slot-2"],
+            "every abandoned slot is named exactly once"
+        );
         assert!(
-            started.elapsed() < Duration::from_secs(6),
-            "shared budget must cut the walk short of trying all 6 siblings \
-             (~6s naive), took {:?}",
-            started.elapsed()
+            unserved
+                .iter()
+                .any(|u| matches!(u, Unserved::BudgetSpent { .. })),
+            "the slots the budget cut off must say so: {unserved:?}"
+        );
+        let tried: usize = unserved
+            .iter()
+            .map(|u| match u {
+                Unserved::Unconnectable { failures, .. } => failures.len(),
+                Unserved::BudgetSpent { tried, .. } => tried.len(),
+                _ => 0,
+            })
+            .sum();
+        assert!(
+            tried < 9,
+            "shared budget must stop the walk short of all 6 siblings, tried {} of them",
+            tried - 3
         );
         drop(listeners);
     }
@@ -3038,9 +3347,19 @@ mod tests {
             &[&primary],
         );
 
-        s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
 
         assert!(was_dialled(&sibling), "the sibling was never tried");
+        assert_eq!(
+            unserved,
+            vec![Unserved::Unconnectable {
+                slot: "slot".to_owned(),
+                failures: vec![
+                    (primary.clone(), HostFailure::Unreachable),
+                    (sibling_addr.clone(), HostFailure::Unreachable),
+                ],
+            }]
+        );
         assert!(s.targets().is_empty());
         assert_eq!(arbiter.owner_of(&primary), None);
         assert_eq!(arbiter.owner_of(&sibling_addr), None);
