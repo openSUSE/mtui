@@ -346,6 +346,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   absolute path), before fetching or writing anything, so a hostile dashboard
   entry can no longer overwrite files outside the install-logs directory. The
   remaining logs are still exported.
+- The Slack review gate on `approve` now requires the recorded message to name
+  this exact request: a message for `SUSE:Maintenance:1:10` no longer counts as
+  a review request for `SUSE:Maintenance:1:1`.
 - A repeated `add_host` no longer replaces a host a test-target slot already
   has (losing its command log and `update` record) or re-takes its pool claim,
   and `add_host -t` no longer attaches reference hosts nobody named (#678).
