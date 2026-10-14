@@ -41,6 +41,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   could return far more than the budget. The read now stops at the cap, cutting
   that line, and `line_count` counts the lines read so far; the notice says the
   remaining size is unknown.
+- A template can reattach to its own pool claim on a host after mtui restarts:
+  a claim recording the same user and request is adopted whatever PID it
+  records, instead of the host being skipped as busy. The existing claim is
+  left as it is, so its timestamp is not refreshed.
 
 ## [26.3.5] - 2026-10-27
 
