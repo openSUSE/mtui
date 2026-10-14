@@ -318,6 +318,28 @@ async fn auth_test_returns_the_bot_user_id() {
 }
 
 #[tokio::test]
+async fn auth_test_rejects_a_missing_or_blank_user_id() {
+    for (case, body) in [
+        ("missing", json!({ "ok": true })),
+        ("non-string", json!({ "ok": true, "user_id": 7 })),
+        ("null", json!({ "ok": true, "user_id": null })),
+        ("empty", json!({ "ok": true, "user_id": "" })),
+        ("blank", json!({ "ok": true, "user_id": " \t" })),
+    ] {
+        let server = MockServer::start().await;
+        mount(&server, "auth.test", body).await;
+
+        match slack_for(&server).auth_test().await {
+            Err(SlackError::FailedCall(msg)) => {
+                assert!(msg.contains("user_id"), "{case}: {msg}");
+                assert!(!msg.contains("xoxb"), "{case}: {msg}");
+            }
+            other => panic!("{case}: expected FailedCall, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn invalid_auth_surfaces_slacks_own_code() {
     let server = MockServer::start().await;
     mount(

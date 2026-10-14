@@ -238,14 +238,19 @@ async fn slack_review_gate(
         )));
     }
 
-    let bot = slack.auth_test().await.ok();
+    // Without the bot's ID its own reaction cannot be told from a human's.
+    let bot = slack.auth_test().await.map_err(|e| {
+        CommandError::Other(format!(
+            "could not verify the Slack bot identity for {rrid}, not approving: {e}"
+        ))
+    })?;
     let acked: Vec<String> = message
         .reactions
         .iter()
         .filter(|r| is_ack_reaction(&r.name))
         .flat_map(|r| r.users.clone())
         // The bot acking its own request would approve nothing.
-        .filter(|u| bot.as_deref() != Some(u.as_str()))
+        .filter(|u| *u != bot)
         .collect();
 
     if acked.is_empty() {
@@ -431,7 +436,7 @@ mod tests {
         (session, buf)
     }
 
-    async fn mount_message(
+    async fn mount_reactions(
         server: &wiremock::MockServer,
         text: &str,
         reactions: serde_json::Value,
@@ -445,13 +450,29 @@ mod tests {
             })))
             .mount(server)
             .await;
+    }
+
+    async fn mount_auth(server: &wiremock::MockServer, response: wiremock::ResponseTemplate) {
+        use wiremock::Mock;
+        use wiremock::matchers::path;
         Mock::given(path("/auth.test"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "UBOT" })),
-            )
+            .respond_with(response)
             .mount(server)
             .await;
+    }
+
+    async fn mount_message(
+        server: &wiremock::MockServer,
+        text: &str,
+        reactions: serde_json::Value,
+    ) {
+        mount_reactions(server, text, reactions).await;
+        mount_auth(
+            server,
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "ok": true, "user_id": "UBOT" })),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -566,6 +587,58 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("acknowledged by U1"), "{out}");
         assert!(!out.contains("UBOT"), "{out}");
+    }
+
+    /// Without a bot ID there is no telling the bot's reaction from a human's,
+    /// so no acknowledgement can be trusted, whoever left it.
+    #[tokio::test]
+    async fn slack_gate_refuses_when_bot_identity_cannot_be_established() {
+        use wiremock::ResponseTemplate;
+        let bad_auth = [
+            ("http 503", ResponseTemplate::new(503)),
+            (
+                "invalid_auth",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": false, "error": "invalid_auth" })),
+            ),
+            (
+                "missing user_id",
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            ),
+            (
+                "empty user_id",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "" })),
+            ),
+            (
+                "blank user_id",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "  " })),
+            ),
+        ];
+        for (case, auth) in bad_auth {
+            for user in ["UBOT", "U1"] {
+                let server = wiremock::MockServer::start().await;
+                mount_reactions(
+                    &server,
+                    "Please review SUSE:Maintenance:1:1",
+                    serde_json::json!([{ "name": "+1", "users": [user] }]),
+                )
+                .await;
+                mount_auth(&server, auth.clone()).await;
+                let (mut session, buf) =
+                    gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+                let rrid = require_update(&session).unwrap();
+
+                let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+
+                let msg = err.to_string();
+                assert!(msg.contains("bot identity"), "{case}/{user}: {msg}");
+                assert!(msg.contains("not approving"), "{case}/{user}: {msg}");
+                assert!(!msg.contains("xoxb"), "{case}/{user}: {msg}");
+                assert!(!buf.contents().contains("acknowledged"), "{case}/{user}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1118,13 +1191,19 @@ mod tests {
             }
         }
 
-        /// Gate the session on a Slack review request whose message reads `text`,
-        /// acknowledged by a human.
-        async fn enable_slack(session: &mut Session, slack: &MockServer, text: &str) {
-            mount_message(
+        /// Gate the session on a Slack review request whose message reads `text`
+        /// and carries a `+1` from each of `users`. `/auth.test` is left to the
+        /// caller.
+        async fn enable_slack(
+            session: &mut Session,
+            slack: &MockServer,
+            text: &str,
+            users: &[&str],
+        ) {
+            mount_reactions(
                 slack,
                 text,
-                serde_json::json!([{ "name": "+1", "users": ["U1"] }]),
+                serde_json::json!([{ "name": "+1", "users": users }]),
             )
             .await;
             session.config.slack_enabled = true;
@@ -1136,6 +1215,11 @@ mod tests {
                     channel: "C1".to_owned(),
                     ts: "1.0".to_owned(),
                 });
+        }
+
+        fn bot_is(id: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "ok": true, "user_id": id }))
         }
 
         /// The review request is for another request whose RRID merely starts
@@ -1153,7 +1237,8 @@ mod tests {
                 let slack = MockServer::start().await;
                 let dir = tempfile::tempdir().unwrap();
                 let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
-                enable_slack(&mut session, &slack, text).await;
+                enable_slack(&mut session, &slack, text, &["U1"]).await;
+                mount_auth(&slack, bot_is("UBOT")).await;
                 let args = matches(&Approve, &["-r", "alice"]);
 
                 let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
@@ -1172,6 +1257,53 @@ mod tests {
                     assert_eq!(session.metadata().base().reviewer, "");
                     assert!(!session.metadata().base().document_dirty);
                     assert_eq!(approvals(&gitea).await, 0);
+                    assert!(gitea.received_requests().await.unwrap().is_empty());
+                }
+                teregen.verify().await;
+            }
+        }
+
+        /// A bot-only `+1` approves nothing once the bot's identity cannot be
+        /// checked. The healthy `auth.test` with a human `+1` is the control
+        /// that proves the same fixture can approve.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn an_unverifiable_slack_bot_identity_publishes_and_approves_nothing() {
+            for (auth, users, approves) in [
+                (ResponseTemplate::new(503), ["UBOT"], false),
+                (bot_is(" "), ["UBOT"], false),
+                (bot_is("UBOT"), ["U1"], true),
+            ] {
+                let gitea = gitea_approving("new").await;
+                let teregen = teregen_expecting(u64::from(approves)).await;
+                let slack = MockServer::start().await;
+                let dir = tempfile::tempdir().unwrap();
+                let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+                enable_slack(
+                    &mut session,
+                    &slack,
+                    "Please review SUSE:SLFO:1.2:5",
+                    &users,
+                )
+                .await;
+                mount_auth(&slack, auth).await;
+                let args = matches(&Approve, &["-r", "alice"]);
+
+                let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+                let res = Approve.call(&mut session, &args).await;
+
+                if approves {
+                    res.unwrap();
+                    assert_eq!(session.metadata().base().reviewer, "alice");
+                    assert_eq!(approvals(&gitea).await, 1);
+                } else {
+                    let err = res.unwrap_err();
+                    assert!(
+                        matches!(&err, CommandError::Other(m) if m.contains("bot identity")),
+                        "{err:?}"
+                    );
+                    assert_eq!(session.metadata().base().reviewer, "");
+                    assert!(!session.metadata().base().document_dirty);
                     assert!(gitea.received_requests().await.unwrap().is_empty());
                 }
                 teregen.verify().await;
