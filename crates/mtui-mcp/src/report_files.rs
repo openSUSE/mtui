@@ -5,7 +5,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use crate::session::McpCommandError;
-use crate::slim::truncation_notice;
 
 fn refuse(msg: impl Into<String>) -> McpCommandError {
     McpCommandError {
@@ -86,26 +85,37 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// Outcome of a streamed, bounded read of a checkout file.
 pub(crate) struct StreamRead {
-    /// Lines read (the whole file's total unless `truncated`, in which case the
-    /// lines observed up to `max_bytes`). Matches the `splitlines` convention.
+    /// Lines observed: the file's total, or — when `max_bytes` cut the read —
+    /// the lines within the prefix that was read. Matches the `splitlines`
+    /// convention.
     pub(crate) line_count: usize,
     /// The requested content: the whole (byte-capped) file for a non-windowed
     /// read, or just the `[offset, offset+limit)` window otherwise.
     pub(crate) content: String,
     /// Lines in the returned window (windowed reads only; `None` for whole-file).
     pub(crate) returned_lines: Option<usize>,
+    #[cfg(test)]
+    peak_line_bytes: usize,
+}
+
+fn source_cap_notice(cap: usize) -> String {
+    format!(
+        "\n…[source read stopped at {cap} bytes; total_lines counts the lines read, \
+         the remaining size is unknown — raise [mcp] max_input_bytes to read further]"
+    )
 }
 
 /// Stream `path` line-by-line, buffering only what the request needs.
 ///
 /// Blocking; call inside [`spawn_blocking`](tokio::task::spawn_blocking). Reads
-/// at most `max_bytes` source bytes (`0` = unbounded), counting every line for
-/// `line_count` while buffering only the requested content, so a huge file costs
-/// O(1) memory beyond the window. `window` is `None` for a whole-file read or
-/// `Some((offset_1based, limit))` for a windowed one. Decoding is UTF-8-lossy per
-/// line; splitting on the `\n` byte cannot split a codepoint. Also returns the
-/// canonical path for the dedup key (lexical fallback, never an error), so the
-/// read and the key stat share one worker hop.
+/// at most `max_bytes` source bytes (`0` = unbounded) — a line crossing the cap
+/// is cut there — counting every line for `line_count` while buffering only the
+/// requested content, so a huge file costs O(1) memory beyond the window.
+/// `window` is `None` for a whole-file read or `Some((offset_1based, limit))`
+/// for a windowed one. Decoding is UTF-8-lossy per line (a cap inside a
+/// codepoint yields a replacement character); splitting on the `\n` byte cannot
+/// split a codepoint. Also returns the canonical path for the dedup key (lexical
+/// fallback, never an error), so the read and the key stat share one worker hop.
 pub(crate) fn stream_read(
     path: &Path,
     max_bytes: usize,
@@ -113,66 +123,107 @@ pub(crate) fn stream_read(
 ) -> Result<(StreamRead, PathBuf), McpCommandError> {
     let file = std::fs::File::open(path)
         .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
-    let mut reader = BufReader::new(file);
+    let read = stream_read_from(BufReader::new(file), max_bytes, window)
+        .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
+    Ok((
+        read,
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+    ))
+}
 
-    let mut line_count = 0usize;
-    let mut read_bytes = 0usize;
-    let mut truncated = false;
-    let mut content = String::new();
-    let mut returned = 0usize;
+fn stream_read_from<R: BufRead>(
+    mut reader: R,
+    max_bytes: usize,
+    window: Option<(usize, Option<usize>)>,
+) -> std::io::Result<StreamRead> {
     // Window bounds as 0-based half-open [start, end) over line indices.
     let (start, end) = match window {
         Some((offset, limit)) => {
             let start = offset - 1;
-            let end = limit.map(|n| start.saturating_add(n));
-            (start, end)
+            (start, limit.map(|n| start.saturating_add(n)))
         }
         None => (0, None),
     };
+    let selected = |idx: usize| idx >= start && end.is_none_or(|e| idx < e);
 
-    let mut buf: Vec<u8> = Vec::new();
+    let mut remaining = (max_bytes != 0).then_some(max_bytes);
+    let mut line_count = 0usize;
+    let mut returned = 0usize;
+    let mut content = String::new();
+    // Bytes of the current line, kept only while it is inside the window.
+    let mut line: Vec<u8> = Vec::new();
+    let mut mid_line = false;
+    let mut truncated = false;
+    #[cfg(test)]
+    let mut peak_line_bytes = 0usize;
+
     loop {
-        buf.clear();
-        let n = reader
-            .read_until(b'\n', &mut buf)
-            .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
-        if n == 0 {
-            break; // EOF
-        }
-        let idx = line_count;
-        line_count += 1;
-        read_bytes += n;
-
-        let keep = match window {
-            None => true,
-            Some(_) => idx >= start && end.is_none_or(|e| idx < e),
+        let avail = match reader.fill_buf() {
+            Ok(buf) => buf,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
         };
-        if keep {
-            content.push_str(&String::from_utf8_lossy(&buf));
-            returned += 1;
+        if avail.is_empty() {
+            break;
         }
-
-        if max_bytes != 0 && read_bytes >= max_bytes {
-            // Byte cap reached: stop before EOF. `line_count` now reflects lines
-            // observed up to the cap, not the (unknown) file total.
+        let take = remaining.map_or(avail.len(), |r| avail.len().min(r));
+        if take == 0 {
             truncated = true;
             break;
         }
+        let mut chunk = &avail[..take];
+        while !chunk.is_empty() {
+            let keep = selected(line_count);
+            if let Some(nl) = chunk.iter().position(|&b| b == b'\n') {
+                if keep {
+                    line.extend_from_slice(&chunk[..=nl]);
+                    #[cfg(test)]
+                    {
+                        peak_line_bytes = peak_line_bytes.max(line.len());
+                    }
+                    content.push_str(&String::from_utf8_lossy(&line));
+                    returned += 1;
+                    line.clear();
+                }
+                line_count += 1;
+                mid_line = false;
+                chunk = &chunk[nl + 1..];
+            } else {
+                if keep {
+                    line.extend_from_slice(chunk);
+                    #[cfg(test)]
+                    {
+                        peak_line_bytes = peak_line_bytes.max(line.len());
+                    }
+                }
+                mid_line = true;
+                chunk = &[];
+            }
+        }
+        reader.consume(take);
+        if let Some(r) = remaining.as_mut() {
+            *r -= take;
+        }
     }
 
+    if mid_line {
+        if selected(line_count) {
+            content.push_str(&String::from_utf8_lossy(&line));
+            returned += 1;
+        }
+        line_count += 1;
+    }
     if truncated {
-        let dropped = read_bytes.saturating_sub(max_bytes);
-        content.push_str(&truncation_notice(dropped, max_bytes));
+        content.push_str(&source_cap_notice(max_bytes));
     }
 
-    Ok((
-        StreamRead {
-            line_count,
-            content,
-            returned_lines: window.map(|_| returned),
-        },
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
-    ))
+    Ok(StreamRead {
+        line_count,
+        content,
+        returned_lines: window.map(|_| returned),
+        #[cfg(test)]
+        peak_line_bytes,
+    })
 }
 
 /// The loose file readable and listed beside the directory roots.
@@ -334,5 +385,175 @@ mod tests {
 
         let resolved = safe_template_file(&base, "link/file").expect("in-tree symlink is allowed");
         assert!(resolved.ends_with("file"), "{resolved:?}");
+    }
+
+    const NOTICE_MARK: &str = "\n…[";
+
+    fn read(bytes: &[u8], cap: usize, window: Option<(usize, Option<usize>)>) -> StreamRead {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f.log");
+        std::fs::write(&path, bytes).unwrap();
+        stream_read(&path, cap, window).unwrap().0
+    }
+
+    fn split_notice(content: &str) -> (&str, bool) {
+        match content.find(NOTICE_MARK) {
+            Some(i) => (&content[..i], true),
+            None => (content, false),
+        }
+    }
+
+    /// Hands out at most `chunk` bytes per `fill_buf`, so scanner behaviour at
+    /// buffer boundaries is observable, and counts what was actually consumed.
+    struct Chunked {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+
+    impl Chunked {
+        fn new(data: &[u8], chunk: usize) -> Self {
+            Self {
+                data: data.to_vec(),
+                pos: 0,
+                chunk,
+            }
+        }
+    }
+
+    impl std::io::Read for Chunked {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = {
+                let buf = self.fill_buf()?;
+                let n = buf.len().min(out.len());
+                out[..n].copy_from_slice(&buf[..n]);
+                n
+            };
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl BufRead for Chunked {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            let end = self.data.len().min(self.pos + self.chunk);
+            Ok(&self.data[self.pos..end])
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.pos += amt;
+        }
+    }
+
+    #[test]
+    fn a_giant_line_is_cut_at_the_source_cap() {
+        let body = vec![b'x'; 1 << 20];
+        let r = read(&body, 16, None);
+        let (source, noticed) = split_notice(&r.content);
+        assert_eq!(source, "x".repeat(16));
+        assert!(noticed);
+        assert_eq!(r.line_count, 1);
+        assert_eq!(r.returned_lines, None);
+        assert_eq!(
+            r.content,
+            format!("{}{}", "x".repeat(16), source_cap_notice(16))
+        );
+    }
+
+    #[test]
+    fn the_source_cap_notice_is_pinned() {
+        assert_eq!(
+            source_cap_notice(10),
+            "\n…[source read stopped at 10 bytes; total_lines counts the lines read, \
+             the remaining size is unknown — raise [mcp] max_input_bytes to read further]"
+        );
+    }
+
+    #[test]
+    fn a_capped_read_consumes_no_more_than_the_cap() {
+        let body = vec![b'x'; 1 << 20];
+        let mut reader = Chunked::new(&body, 7);
+        let r = stream_read_from(&mut reader, 16, None).unwrap();
+        assert_eq!(reader.pos, 16);
+        assert!(r.peak_line_bytes <= 16, "{}", r.peak_line_bytes);
+    }
+
+    #[test]
+    fn a_skipped_line_is_never_buffered_even_without_a_cap() {
+        let mut body = vec![b'x'; 1 << 20];
+        body.extend_from_slice(b"\ny\n");
+        let r = stream_read_from(Chunked::new(&body, 64), 0, Some((2, Some(1)))).unwrap();
+        assert_eq!(r.content, "y\n");
+        assert_eq!(r.line_count, 2);
+        assert_eq!(r.peak_line_bytes, 2);
+    }
+
+    #[test]
+    fn a_multibyte_char_split_across_buffers_decodes_whole() {
+        for chunk in 1..=5 {
+            let r = stream_read_from(Chunked::new("A€B\n".as_bytes(), chunk), 0, None).unwrap();
+            assert_eq!(r.content, "A€B\n", "chunk {chunk}");
+            assert_eq!(r.line_count, 1);
+        }
+    }
+
+    #[test]
+    fn a_skipped_giant_line_is_not_returned() {
+        let mut body = vec![b'x'; 1 << 20];
+        body.extend_from_slice(b"\ny\n");
+        let r = read(&body, 16, Some((2, Some(1))));
+        let (source, noticed) = split_notice(&r.content);
+        assert_eq!(source, "");
+        assert!(noticed);
+        assert_eq!(r.line_count, 1);
+        assert_eq!(r.returned_lines, Some(0));
+    }
+
+    #[test]
+    fn the_cap_boundary_counts_lines_and_marks_truncation() {
+        type Row = (&'static [u8], usize, &'static str, usize, bool);
+        let rows: [Row; 5] = [
+            (b"", 16, "", 0, false),
+            (b"ab\ncd", 3, "ab\n", 1, true),
+            (b"ab\ncd", 4, "ab\nc", 2, true),
+            (b"ab\n", 3, "ab\n", 1, false),
+            (b"ab", 16, "ab", 1, false),
+        ];
+        for (bytes, cap, source, lines, truncated) in rows {
+            for chunk in [1, 2, 3, 64] {
+                let r = stream_read_from(Chunked::new(bytes, chunk), cap, None).unwrap();
+                let (got, noticed) = split_notice(&r.content);
+                assert_eq!(got, source, "{bytes:?} cap {cap} chunk {chunk}");
+                assert_eq!(r.line_count, lines, "{bytes:?} cap {cap} chunk {chunk}");
+                assert_eq!(noticed, truncated, "{bytes:?} cap {cap} chunk {chunk}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_cap_reads_everything_and_still_counts_past_the_window() {
+        let r = read(b"a\nb\nc\n", 0, Some((2, Some(1))));
+        assert_eq!(r.content, "b\n");
+        assert_eq!(r.line_count, 3);
+        assert_eq!(r.returned_lines, Some(1));
+    }
+
+    #[test]
+    fn a_zero_limit_returns_nothing_but_counts_the_prefix() {
+        let r = read(b"a\nb\n", 3, Some((2, Some(0))));
+        let (source, noticed) = split_notice(&r.content);
+        assert_eq!(source, "");
+        assert!(noticed);
+        assert_eq!(r.line_count, 2);
+        assert_eq!(r.returned_lines, Some(0));
+    }
+
+    #[test]
+    fn a_cap_inside_a_multibyte_char_decodes_the_prefix_lossily() {
+        let r = read("A€B\n".as_bytes(), 2, None);
+        let (source, noticed) = split_notice(&r.content);
+        assert_eq!(source, "A\u{FFFD}");
+        assert!(noticed);
+        assert_eq!(r.line_count, 1);
     }
 }
