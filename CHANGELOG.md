@@ -21,6 +21,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   version (#657).
 - `load_template` given a short RRID (`S:M:…`) now reports the template under
   its canonical id, in both the success and the failure line (#680).
+- A repeated `add_host` no longer replaces a host a test-target slot already
+  has (losing its command log and `update` record) or re-takes its pool claim,
+  and `add_host -t` no longer attaches reference hosts nobody named (#678).
 
 ## [26.3.5] - 2026-10-27
 
