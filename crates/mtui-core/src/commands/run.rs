@@ -1,15 +1,22 @@
 //! The `run` command.
 
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 use mtui_hosts::{ContendedSurface, LockOutcome, contended_lock_reason};
 
-use super::support::{add_hosts_arg, complete_fanout, page_output, per_host, select_names};
+use super::support::{
+    CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, page_output, per_host,
+    select_names,
+};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+
+static FLAGS: LazyLock<CompletionFlags> =
+    LazyLock::new(|| completion_flags(&Run, &["hosts", "template", "all_templates"]));
 
 /// Runs a command on a specified host or on all enabled targets.
 ///
@@ -49,7 +56,7 @@ impl Command for Run {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        complete_fanout(session, &[], Vec::new(), line, text)
+        complete_fanout_flags(session, &FLAGS, line, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {

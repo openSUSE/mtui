@@ -13,6 +13,7 @@ use mtui_datasources::{HttpClient, OpenQAError, QemDashboardClient};
 use mtui_hosts::HostsGroup;
 use mtui_types::{RequestReviewID, UpdateSource};
 
+use crate::command::Command;
 use crate::error::CommandError;
 use crate::session::Session;
 
@@ -332,6 +333,80 @@ pub(crate) fn complete_fanout(
     complete_choices(&groups, candidates, line, text)
 }
 
+/// Flag spellings as synonym groups, one per Clap argument.
+pub(crate) type CompletionFlags = Vec<Vec<String>>;
+
+/// The spellings of the flags `ids` name in `command`'s parser, one synonym
+/// group per ID in the order given, so the menu keeps its established order
+/// rather than Clap's declaration order. Each group is the short spelling, the
+/// long one, then their visible aliases.
+///
+/// Built once per command (a `LazyLock` at the call site), never per keystroke.
+///
+/// # Panics
+///
+/// When an ID is not an argument of the parser, or names one that has no
+/// offered spelling (a positional, or a hidden flag).
+#[must_use]
+pub(crate) fn completion_flags(command: &dyn Command, ids: &[&str]) -> CompletionFlags {
+    let parser = crate::engine::command_parser(command);
+    ids.iter()
+        .map(|id| {
+            let arg = parser
+                .get_arguments()
+                .find(|a| a.get_id() == id)
+                .unwrap_or_else(|| panic!("`{}` has no argument `{id}`", command.name()));
+            let shorts = arg
+                .get_short_and_visible_aliases()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| format!("-{c}"));
+            let longs = arg
+                .get_long_and_visible_aliases()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|l| format!("--{l}"));
+            let group: Vec<String> = shorts.chain(longs).collect();
+            assert!(
+                !arg.is_hide_set() && !group.is_empty(),
+                "`{}` argument `{id}` has no offered flag spelling",
+                command.name()
+            );
+            group
+        })
+        .collect()
+}
+
+/// [`complete_choices`] over cached [`CompletionFlags`].
+#[must_use]
+pub(crate) fn complete_flag_groups(
+    flags: &CompletionFlags,
+    extra: Vec<String>,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    let owned: Vec<Vec<&str>> = flags
+        .iter()
+        .map(|group| group.iter().map(String::as_str).collect())
+        .collect();
+    let groups: Vec<&[&str]> = owned.iter().map(Vec::as_slice).collect();
+    complete_choices(&groups, extra, line, text)
+}
+
+/// [`complete_fanout`] over cached [`CompletionFlags`], which carry the
+/// `-t/--target` and template groups themselves.
+#[must_use]
+pub(crate) fn complete_fanout_flags(
+    session: &Session,
+    flags: &CompletionFlags,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    let mut extra = session.templates.rrids();
+    extra.extend(session.targets().names());
+    complete_flag_groups(flags, extra, line, text)
+}
+
 /// File-path variant of [`complete_choices`].
 ///
 /// Directory entries under the directory part of `text` (basename-prefix
@@ -624,6 +699,112 @@ mod tests {
             "host1",
         );
         assert_eq!(out, vec!["host1"]);
+    }
+
+    struct Synth(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl Command for Synth {
+        fn name(&self) -> &'static str {
+            "synth"
+        }
+        fn scope(&self) -> crate::command::Scope {
+            crate::command::Scope::Single
+        }
+        fn configure(&self, cmd: clap::Command) -> clap::Command {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            cmd.arg(
+                Arg::new("alpha")
+                    .short('a')
+                    .long("alpha")
+                    .visible_short_alias('A')
+                    .visible_alias("first")
+                    .alias("secret"),
+            )
+            .arg(Arg::new("beta").long("beta"))
+            .arg(Arg::new("quiet").short('q').action(ArgAction::SetTrue))
+            .arg(Arg::new("hidden").long("hidden").hide(true))
+            .arg(Arg::new("pos"))
+        }
+        async fn call(&self, _: &mut Session, _: &ArgMatches) -> Result<(), CommandError> {
+            Ok(())
+        }
+    }
+
+    fn synth() -> Synth {
+        Synth(std::sync::Arc::default())
+    }
+
+    #[test]
+    fn completion_flags_group_visible_spellings_in_the_order_given() {
+        assert_eq!(
+            completion_flags(&synth(), &["beta", "alpha", "quiet"]),
+            vec![
+                vec!["--beta"],
+                vec!["-a", "-A", "--alpha", "--first"],
+                vec!["-q"],
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "has no argument `nope`")]
+    fn completion_flags_rejects_an_unknown_id() {
+        let _ = completion_flags(&synth(), &["nope"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "argument `hidden` has no offered flag spelling")]
+    fn completion_flags_rejects_a_hidden_flag() {
+        let _ = completion_flags(&synth(), &["hidden"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "argument `pos` has no offered flag spelling")]
+    fn completion_flags_rejects_a_positional() {
+        let _ = completion_flags(&synth(), &["pos"]);
+    }
+
+    #[test]
+    fn complete_flag_groups_drops_a_whole_group_whichever_alias_was_typed() {
+        let flags = completion_flags(&synth(), &["alpha", "beta"]);
+        for line in ["synth --alpha ", "synth -A ", "synth --first "] {
+            assert_eq!(complete_flag_groups(&flags, vec![], line, "-"), ["--beta"]);
+        }
+    }
+
+    #[test]
+    fn complete_flag_groups_expands_bundled_shorts_and_keeps_first_seen_order() {
+        let flags = completion_flags(&synth(), &["alpha", "beta", "quiet"]);
+        assert_eq!(
+            complete_flag_groups(&flags, vec![], "synth -aq ", "-"),
+            ["--beta"]
+        );
+        assert_eq!(
+            complete_flag_groups(
+                &flags,
+                vec!["--beta".to_owned(), "h".to_owned()],
+                "synth ",
+                ""
+            ),
+            ["-a", "-A", "--alpha", "--first", "--beta", "-q", "h"]
+        );
+        assert_eq!(
+            complete_flag_groups(&flags, vec!["-a".to_owned()], "synth ", "-a"),
+            ["-a"]
+        );
+    }
+
+    #[test]
+    fn cached_flags_build_the_parser_once_however_often_completion_runs() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let flags = std::sync::LazyLock::new(|| {
+            completion_flags(&Synth(calls.clone()), &["alpha", "beta", "quiet"])
+        });
+        for _ in 0..5 {
+            let _ = complete_flag_groups(&flags, vec![], "synth ", "-");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
