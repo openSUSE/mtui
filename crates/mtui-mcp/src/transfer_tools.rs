@@ -14,10 +14,9 @@
 //!
 //! Content encoding: UTF-8 payloads travel as `content`, anything else as
 //! `content_b64`. Downloads are capped twice — per host at
-//! `[mcp] max_input_bytes` (applied *after* the transfer, which buffers the whole
-//! remote file per host, so point `get` at logs and configs, not images), then at
-//! an equal share of `[mcp] max_output_bytes` on the wire — with an explicit
-//! `truncated` flag and the full remote `size`, never a silent clip.
+//! `[mcp] max_input_bytes` (enforced while reading, so a host never buffers more
+//! than the cap), then at an equal share of `[mcp] max_output_bytes` on the wire —
+//! with an explicit `truncated` flag and the remote `size`, never a silent clip.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -294,6 +293,8 @@ async fn transfer_get(
         ));
     }
 
+    let max_input = session.max_input_bytes();
+
     // Exclusive gate for fan-out parity with the synthesised commands.
     let _lock = session.exclusive_lock().await;
     let mut guard = session.session().lock().await;
@@ -325,8 +326,12 @@ async fn transfer_get(
             }
         }
         let map = match hosts {
-            Some(ref names) => targets.sftp_read_selected(Path::new(remote), names).await,
-            None => targets.sftp_read(Path::new(remote)).await,
+            Some(ref names) => {
+                targets
+                    .sftp_read_capped_selected(Path::new(remote), names, max_input)
+                    .await
+            }
+            None => targets.sftp_read_capped(Path::new(remote), max_input).await,
         };
         restore_active(&mut guard, prev);
         drop(guard);
@@ -369,9 +374,9 @@ async fn transfer_get(
         )));
     }
 
-    // Source cap first, then an equal per-host share of the wire budget. Cap the
-    // content string BEFORE embedding it in JSON, never the serialised JSON.
-    let max_input = session.max_input_bytes();
+    // The source cap was applied while reading; now an equal per-host share of
+    // the wire budget. Cap the content string BEFORE embedding it in JSON, never
+    // the serialised JSON.
     let wire_budget = session.max_output_bytes();
     let share = if wire_budget == 0 {
         0 // 0 disables the wire cap, matching cap_output's contract.
@@ -381,14 +386,10 @@ async fn transfer_get(
 
     let mut hosts_json = Map::new();
     for (host, res) in &outcome {
-        let bytes = res.as_ref().expect("failures already returned above");
-        let size = bytes.len();
-        let mut source_capped = bytes.as_slice();
-        let mut truncated = false;
-        if max_input > 0 && source_capped.len() > max_input {
-            source_capped = &source_capped[..max_input];
-            truncated = true;
-        }
+        let read = res.as_ref().expect("failures already returned above");
+        let size = read.size;
+        let source_capped = read.bytes.as_slice();
+        let mut truncated = read.truncated;
         // A mid-codepoint source-cap cut must not reclassify a text file as
         // binary: `error_len() == None` is only an incomplete final sequence, so
         // trim to the last whole codepoint and stay textual. A genuinely binary
@@ -681,6 +682,183 @@ mod tests {
         assert_eq!(entry["size"], 8, "size is the full remote length");
         assert_eq!(entry["truncated"], true, "the clip must be explicit");
         assert_eq!(entry["content"], "abcd");
+    }
+
+    /// The source budget must bound the remote read itself: a capped `get`
+    /// never falls back to the whole-file `Open`, whichever fan-out branch ran.
+    async fn assert_capped_get_avoids_whole_file_read(kwargs: Value) {
+        let m1 = MockConnection::new("h1").with_file("/f", b"abcdefghij".to_vec());
+        let h1 = m1.clone();
+        let (session, tmp) = session_with(|c| c.mcp_max_input_bytes = 4);
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+
+        let v = call(&session, "get", kwargs).await.unwrap();
+
+        let entry = &v["hosts"]["h1"];
+        assert_eq!(entry["size"], 10);
+        assert_eq!(entry["truncated"], true);
+        assert_eq!(entry["content"], "abcd");
+        let ops = h1.sftp_ops();
+        assert!(
+            !ops.iter().any(|op| matches!(op, MockSftpOp::Open(_))),
+            "a capped get must not read the whole file: {ops:?}"
+        );
+        assert_eq!(
+            ops,
+            [MockSftpOp::ReadCapped {
+                path: "/f".into(),
+                max_bytes: 4
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_all_hosts_source_cap_never_reads_whole_file() {
+        assert_capped_get_avoids_whole_file_read(json!({ "remote": "/f" })).await;
+    }
+
+    #[tokio::test]
+    async fn get_selected_hosts_source_cap_never_reads_whole_file() {
+        assert_capped_get_avoids_whole_file_read(json!({ "remote": "/f", "hosts": ["h1"] })).await;
+    }
+
+    /// One host, one file, one `get` under the given source/wire budgets.
+    async fn get_one(
+        file: &[u8],
+        max_input: usize,
+        size_attr: Option<Option<u64>>,
+    ) -> Result<Value, McpCommandError> {
+        let mut conn = MockConnection::new("h1").with_file("/f", file.to_vec());
+        if let Some(attr) = size_attr {
+            conn = conn.with_size_attr("/f", attr);
+        }
+        let (session, tmp) = session_with(|c| c.mcp_max_input_bytes = max_input);
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", conn)]).await;
+        call(&session, "get", json!({ "remote": "/f" })).await
+    }
+
+    #[tokio::test]
+    async fn get_source_cap_reports_truncation_only_when_bytes_were_omitted() {
+        for (file, size, truncated, content) in [
+            (&b""[..], 0, false, ""),
+            (b"abcd", 4, false, "abcd"),
+            (b"abcde", 5, true, "abcd"),
+        ] {
+            let v = get_one(file, 4, None).await.unwrap();
+            let e = &v["hosts"]["h1"];
+            assert_eq!(e["size"], size, "{file:?}");
+            assert_eq!(e["truncated"], truncated, "{file:?}");
+            assert_eq!(e["content"], content, "{file:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_zero_source_cap_is_unlimited() {
+        let v = get_one(b"abcdefghij", 0, None).await.unwrap();
+
+        let e = &v["hosts"]["h1"];
+        assert_eq!(e["size"], 10);
+        assert_eq!(e["truncated"], false);
+        assert_eq!(e["content"], "abcdefghij");
+    }
+
+    #[tokio::test]
+    async fn get_source_cap_inside_codepoint_trims_text_and_reports_full_size() {
+        let v = get_one("A€B".as_bytes(), 2, None).await.unwrap();
+
+        let e = &v["hosts"]["h1"];
+        assert_eq!(e["size"], 5);
+        assert_eq!(e["truncated"], true);
+        assert_eq!(e["content"], "A");
+        assert!(e.get("content_b64").is_none(), "must stay text: {e}");
+    }
+
+    #[tokio::test]
+    async fn get_source_cap_on_binary_returns_the_prefix_as_b64() {
+        let v = get_one(&[0xff, 0, 1, 2, 3], 3, None).await.unwrap();
+
+        let e = &v["hosts"]["h1"];
+        assert_eq!(e["size"], 5);
+        assert_eq!(e["truncated"], true);
+        assert_eq!(e["content_b64"], "/wAB");
+        assert!(e.get("content").is_none(), "binary must not be text: {e}");
+    }
+
+    #[tokio::test]
+    async fn get_source_cap_reports_the_server_size_not_the_prefix_length() {
+        let v = get_one(b"abcde", 4, Some(Some(100))).await.unwrap();
+
+        let e = &v["hosts"]["h1"];
+        assert_eq!(e["size"], 100);
+        assert_eq!(e["truncated"], true);
+        assert_eq!(e["content"], "abcd");
+    }
+
+    #[tokio::test]
+    async fn get_source_cap_without_size_attr_fails_attributed_and_never_reads_whole_file() {
+        let m1 = MockConnection::new("h1")
+            .with_file("/f", b"abcde".to_vec())
+            .with_size_attr("/f", None);
+        let h1 = m1.clone();
+        let (session, tmp) = session_with(|c| c.mcp_max_input_bytes = 4);
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+
+        let err = call(&session, "get", json!({ "remote": "/f" }))
+            .await
+            .unwrap_err();
+
+        assert!(err.stderr.contains("download failed on"), "{}", err.stderr);
+        assert!(
+            err.stderr.contains("h1 (") && err.stderr.contains("no size"),
+            "{}",
+            err.stderr
+        );
+        assert!(
+            !h1.sftp_ops()
+                .iter()
+                .any(|op| matches!(op, MockSftpOp::Open(_))),
+            "must not fall back to a whole-file read"
+        );
+    }
+
+    /// The source budget is per host and the wire budget an equal share, so the
+    /// two layers compose: 8 retained bytes each, 3 on the wire each.
+    #[tokio::test]
+    async fn get_source_and_wire_budgets_compose_per_host() {
+        let (session, tmp) = session_with(|c| {
+            c.mcp_max_input_bytes = 8;
+            c.mcp_max_output_bytes = 6;
+        });
+        load_with_targets(
+            &session,
+            &tmp,
+            RRID,
+            vec![
+                enabled(
+                    "h1",
+                    MockConnection::new("h1").with_file("/f", vec![b'a'; 20]),
+                ),
+                enabled(
+                    "h2",
+                    MockConnection::new("h2").with_file("/f", vec![b'b'; 20]),
+                ),
+            ],
+        )
+        .await;
+
+        let v = call(&session, "get", json!({ "remote": "/f" }))
+            .await
+            .unwrap();
+
+        for (host, content) in [("h1", "aaa"), ("h2", "bbb")] {
+            let e = &v["hosts"][host];
+            assert_eq!(e["size"], 20, "{host}");
+            assert_eq!(e["truncated"], true, "{host}");
+            assert_eq!(
+                e["content"], content,
+                "{host}: equal share of the wire budget"
+            );
+        }
     }
 
     #[tokio::test]
