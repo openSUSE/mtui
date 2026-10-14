@@ -155,7 +155,7 @@ async fn slack_review_gate(
 
     // A message that does not name this RRID is not this update's review,
     // whatever the template claims.
-    if !message.text.contains(&rrid.to_string()) {
+    if !message_mentions_rrid(&message.text, &rrid.to_string()) {
         return Err(CommandError::Other(format!(
             "the recorded Slack message does not mention {rrid}, not approving; \
              re-run `request_review`"
@@ -184,6 +184,20 @@ async fn slack_review_gate(
         acked.join(", ")
     ));
     Ok(())
+}
+
+/// Whether `text` names `rrid` as a whole whitespace-delimited token.
+///
+/// A substring test would take `SUSE:Maintenance:1:1` for a mention inside
+/// `SUSE:Maintenance:1:10`. Only presentation punctuation is trimmed from a
+/// token's edges; `:`, `_`, `-`, letters and digits never are, so a longer RRID
+/// cannot reduce to this one.
+fn message_mentions_rrid(text: &str, rrid: &str) -> bool {
+    const EDGE: &[char] = &[
+        '<', '>', '[', ']', '(', ')', '*', '`', '\'', '"', ',', ';', '.', '!', '?',
+    ];
+    text.split_whitespace()
+        .any(|token| token.trim_matches(EDGE) == rrid)
 }
 
 /// Verifies the checked-out template's hash against the Gitea PR head before
@@ -280,6 +294,38 @@ mod tests {
         assert_eq!(out, vec!["-r"]);
     }
 
+    #[test]
+    fn message_mentions_rrid_matches_whole_tokens_only() {
+        const ID: &str = "SUSE:Maintenance:1:1";
+        for text in [
+            "Please review SUSE:Maintenance:1:1",
+            "Please review SUSE:Maintenance:1:1 (recommended)",
+            "Please review (SUSE:Maintenance:1:1)",
+            "Please review *SUSE:Maintenance:1:1*",
+            "Please review `SUSE:Maintenance:1:1`.",
+            "Please review <SUSE:Maintenance:1:1>!",
+            "SUSE:Maintenance:1:1",
+            "Please review SUSE:Maintenance:9:9 and SUSE:Maintenance:1:1",
+            "Please review SUSE:Maintenance:1:1\nnote: other SUSE:Maintenance:1:10",
+            "Please\u{a0}review\u{2003}SUSE:Maintenance:1:1",
+        ] {
+            assert!(message_mentions_rrid(text, ID), "{text:?}");
+        }
+        for text in [
+            "",
+            "Please review SUSE:Maintenance:1:10",
+            "Please review SUSE:Maintenance:1:1:2",
+            "Please review SUSE:Maintenance:1:1_extra",
+            "Please review SUSE:Maintenance:1:1-extra",
+            "Please review SUSE:Maintenance:1:1.0",
+            "Please review preSUSE:Maintenance:1:1",
+            "Please review xSUSE:Maintenance:1:1",
+            "Please review SUSE:Maintenance:9:9",
+        ] {
+            assert!(!message_mentions_rrid(text, ID), "{text:?}");
+        }
+    }
+
     /// Enable the Slack gate against a mock server, with a marker recorded.
     fn gated_session(
         server: &wiremock::MockServer,
@@ -354,6 +400,24 @@ mod tests {
         mount_message(
             &server,
             "Please review SUSE:Maintenance:9:9",
+            serde_json::json!([{ "name": "+1", "users": ["U1"] }]),
+        )
+        .await;
+        let (mut session, _buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        assert!(err.to_string().contains("does not mention"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn slack_gate_refuses_a_prefix_collision() {
+        // `…:1:1` is a string prefix of `…:1:10`, a different request.
+        let server = wiremock::MockServer::start().await;
+        mount_message(
+            &server,
+            "Please review SUSE:Maintenance:1:10",
             serde_json::json!([{ "name": "+1", "users": ["U1"] }]),
         )
         .await;
