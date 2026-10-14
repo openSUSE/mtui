@@ -127,3 +127,100 @@ fn reporepoparse_drops_products_with_no_matching_repo() {
     );
     assert!(repos.is_empty());
 }
+
+mod credential_redaction {
+    use std::cell::RefCell;
+    use std::fmt::Write as _;
+    use std::sync::OnceLock;
+
+    use mtui_testreport::{reporepoparse, slrepoparse};
+    use mtui_types::SystemProduct;
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::Registry;
+
+    thread_local! {
+        static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    struct CaptureLayer;
+
+    struct FieldVisitor(String);
+
+    impl Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            let _ = write!(self.0, " {}={value:?}", field.name());
+        }
+    }
+
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            SINK.with(|s| {
+                if let Some(buf) = s.borrow_mut().as_mut() {
+                    let mut v = FieldVisitor(String::new());
+                    event.record(&mut v);
+                    buf.push(v.0);
+                }
+            });
+        }
+    }
+
+    /// Every event `f` emits on this thread, all fields included. The
+    /// subscriber is global and only the sink is thread-local, so a callsite
+    /// first reached from another thread cannot be cached as disabled.
+    fn capture_events(f: impl FnOnce()) -> String {
+        static ONCE: OnceLock<()> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        f();
+        SINK.with(|s| s.borrow_mut().take())
+            .unwrap_or_default()
+            .join("\n")
+    }
+
+    #[test]
+    fn dropping_an_invalid_credential_url_logs_it_masked() {
+        let products = vec!["SLES 15 (x86_64)".to_string()];
+        let mut repos = None;
+
+        let events = capture_events(|| {
+            repos = Some(slrepoparse(
+                "https://audituser:MTUI_SECRET_CANARY@repo.example/x;reboot",
+                &products,
+            ));
+        });
+
+        assert!(repos.expect("ran").is_empty(), "the unsafe URL is dropped");
+        assert!(
+            events.contains("skipping invalid repository URL"),
+            "the drop event was not captured; the secrecy assertions would be vacuous"
+        );
+        assert!(
+            !events.contains("MTUI_SECRET_CANARY") && !events.contains("audituser"),
+            "the drop event leaked repository credentials"
+        );
+        assert!(events.contains("https://***@repo.example/"));
+    }
+
+    #[test]
+    fn valid_credential_url_stays_exact_in_the_operational_map() {
+        let raw = "https://audituser:MTUI_SECRET_CANARY@repo.example/SLES-15-x86_64/";
+        let mut repos = None;
+
+        let events = capture_events(|| {
+            repos = Some(reporepoparse(
+                &[raw.to_string()],
+                &["SLES 15 (x86_64)".to_string()],
+            ));
+        });
+
+        let repos = repos.expect("ran");
+        assert_eq!(repos[&SystemProduct::new("SLES", "15", "x86_64")], raw);
+        assert!(
+            !events.contains("MTUI_SECRET_CANARY"),
+            "a valid URL's parsing leaked repository credentials"
+        );
+    }
+}

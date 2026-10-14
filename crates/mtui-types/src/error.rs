@@ -59,14 +59,14 @@ pub enum RepoUrlParseError {
     /// The URL began with `-`, so it would be read as a command option.
     #[error("repo url: option-like (leading '-'): {url:?}")]
     OptionLike {
-        /// The offending URL.
+        /// The offending URL, with any userinfo masked.
         url: String,
     },
 
     /// The URL had no `scheme://` prefix.
     #[error("repo url: missing scheme: {url:?}")]
     MissingScheme {
-        /// The offending URL.
+        /// The offending URL, with any userinfo masked.
         url: String,
     },
 
@@ -82,7 +82,7 @@ pub enum RepoUrlParseError {
     IllegalChar {
         /// The disallowed character.
         ch: char,
-        /// The offending URL.
+        /// The offending URL, with any userinfo masked.
         url: String,
     },
 }

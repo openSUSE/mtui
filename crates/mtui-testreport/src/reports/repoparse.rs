@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use mtui_types::{RepoUrl, SystemProduct};
+use mtui_types::{RepoUrl, SystemProduct, sanitize_url};
 use tracing::error;
 
 use crate::products::normalize_16;
@@ -45,7 +45,7 @@ pub(crate) fn validated_url(url: String) -> Option<String> {
     match RepoUrl::parse(&url) {
         Ok(_) => Some(url),
         Err(e) => {
-            error!(%url, error = %e, "skipping invalid repository URL");
+            error!(url = %sanitize_url(&url), error = %e, "skipping invalid repository URL");
             None
         }
     }
