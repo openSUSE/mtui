@@ -8,6 +8,8 @@
 
 use std::ops::Deref;
 
+use crate::url_redaction::sanitize_urls_in_text;
+
 /// A single command-execution log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommandLog {
@@ -71,6 +73,22 @@ impl CommandLog {
     pub fn with_flags(mut self, truncated: bool, timed_out: bool) -> Self {
         self.truncated = truncated;
         self.timed_out = timed_out;
+        self
+    }
+
+    /// Masks the userinfo of every `scheme://` URL in the command and both
+    /// output streams, leaving the exit code, runtime and flags untouched.
+    ///
+    /// A log is stored, displayed and exported, so it must not carry the
+    /// credentials a repository URL may embed even though the command that ran
+    /// did.
+    #[must_use]
+    pub fn with_urls_masked(mut self) -> Self {
+        for field in [&mut self.command, &mut self.stdout, &mut self.stderr] {
+            if field.contains("://") {
+                *field = sanitize_urls_in_text(field);
+            }
+        }
         self
     }
 }
@@ -161,6 +179,32 @@ mod tests {
         assert!(c.timed_out);
         assert_eq!(c.stdout, "x");
         assert_eq!(c.exitcode, 0);
+    }
+
+    #[test]
+    fn with_urls_masked_masks_text_fields_only() {
+        let c = CommandLog::new(
+            "zypper rr 'https://u:p@h/r'",
+            "removed https://u:p@h/r\n",
+            "failed https://a:b@j/q and https://c@k\n",
+            4,
+            9,
+        )
+        .with_flags(true, true)
+        .with_urls_masked();
+        assert_eq!(c.command, "zypper rr 'https://***@h/r'");
+        assert_eq!(c.stdout, "removed https://***@h/r\n");
+        assert_eq!(c.stderr, "failed https://***@j/q and https://***@k\n");
+        assert_eq!(
+            (c.exitcode, c.runtime, c.truncated, c.timed_out),
+            (4, 9, true, true)
+        );
+    }
+
+    #[test]
+    fn with_urls_masked_leaves_url_free_text_alone() {
+        let c = CommandLog::new("ls", "a@b: x\n", "", 0, 0);
+        assert_eq!(c.clone().with_urls_masked(), c);
     }
 
     #[test]

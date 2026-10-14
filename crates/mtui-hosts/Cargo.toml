@@ -68,3 +68,5 @@ sha1.workspace = true
 data-encoding = "2"
 # Perf baseline benches: fan-out scaling / SFTP / lock reporting.
 criterion.workspace = true
+# Captures tracing events (every field) in the repository-redaction tests.
+tracing-subscriber.workspace = true
