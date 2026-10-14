@@ -46,6 +46,15 @@ struct FakeFs {
     dirs: HashMap<String, Vec<String>>,
     /// link path -> target
     links: HashMap<String, String>,
+    /// path -> size attribute `fstat` reports instead of the stored length;
+    /// `None` omits the attribute.
+    size_attrs: HashMap<String, Option<u64>>,
+    /// `(offset, len)` of every `read` request received.
+    reads: Vec<(u64, u32)>,
+    /// Total bytes served by `read`.
+    read_bytes: usize,
+    /// Paths whose `read` requests fail with a generic status.
+    failing_reads: std::collections::HashSet<String>,
 }
 
 type SharedFs = Arc<Mutex<FakeFs>>;
@@ -415,13 +424,18 @@ impl russh_sftp::server::Handler for SftpHandler {
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
-        let fs = self.fs.lock().await;
+        let mut fs = self.fs.lock().await;
+        fs.reads.push((offset, len));
+        if fs.failing_reads.contains(&handle) {
+            return Err(StatusCode::Failure);
+        }
         let contents = fs.files.get(&handle).cloned().unwrap_or_default();
         let start = offset as usize;
         if start >= contents.len() {
             return Err(StatusCode::Eof);
         }
         let end = (start + len as usize).min(contents.len());
+        fs.read_bytes += end - start;
         Ok(Data {
             id,
             data: contents[start..end].to_vec(),
@@ -515,6 +529,27 @@ impl russh_sftp::server::Handler for SftpHandler {
         path: String,
     ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
         self.stat(id, path).await
+    }
+
+    async fn fstat(
+        &mut self,
+        id: u32,
+        handle: String,
+    ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
+        let fs = self.fs.lock().await;
+        let contents = fs.files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
+        let size = fs
+            .size_attrs
+            .get(&handle)
+            .copied()
+            .unwrap_or(Some(contents.len() as u64));
+        Ok(russh_sftp::protocol::Attrs {
+            id,
+            attrs: FileAttributes {
+                size,
+                ..FileAttributes::default()
+            },
+        })
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
@@ -870,6 +905,179 @@ async fn sftp_open_reads_remote_bytes() {
         .await
         .expect("open");
     assert_eq!(bytes, b"SLES\n");
+}
+
+/// A budgeted read keeps and transfers only a bounded prefix of a large file:
+/// the fixture counts what the server actually served.
+#[tokio::test]
+async fn sftp_read_capped_bounds_retention_and_transfer() {
+    const FILE_LEN: usize = 8 * 1024 * 1024;
+    let fs = SharedFs::default();
+    let content: Vec<u8> = (0..FILE_LEN).map(|i| (i % 251) as u8).collect();
+    fs.lock()
+        .await
+        .files
+        .insert("/big.bin".to_owned(), content.clone());
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/big.bin"), 32)
+        .await
+        .expect("capped read");
+
+    assert_eq!(got.bytes, content[..32]);
+    assert_eq!(got.size, FILE_LEN as u64);
+    assert!(got.truncated);
+    let served = fs.lock().await.read_bytes;
+    assert!(
+        served <= 256 * 1024,
+        "a 32-byte budget must not pull the file across the link: served {served} of {FILE_LEN}"
+    );
+}
+
+#[tokio::test]
+async fn sftp_read_capped_reports_truncation_at_every_boundary() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        for (name, bytes) in [
+            ("/empty", &b""[..]),
+            ("/short", b"ab"),
+            ("/equal", b"abcd"),
+            ("/long", b"abcde"),
+        ] {
+            g.files.insert(name.to_owned(), bytes.to_vec());
+        }
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    for (name, bytes, size, truncated) in [
+        ("/empty", &b""[..], 0, false),
+        ("/short", b"ab", 2, false),
+        ("/equal", b"abcd", 4, false),
+        ("/long", b"abcd", 5, true),
+    ] {
+        let got = conn
+            .sftp_read_capped(std::path::Path::new(name), 4)
+            .await
+            .expect("capped read");
+        assert_eq!(
+            (got.bytes.as_slice(), got.size, got.truncated),
+            (bytes, size, truncated),
+            "{name}"
+        );
+    }
+}
+
+/// `size` is the server's handle metadata, not the length of what was kept.
+#[tokio::test]
+async fn sftp_read_capped_reports_the_server_size_snapshot() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.size_attrs.insert("/f".to_owned(), Some(100));
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 4)
+        .await
+        .expect("capped read");
+
+    assert_eq!(got.bytes, b"abcd");
+    assert_eq!(got.size, 100);
+    assert!(got.truncated);
+}
+
+/// Without a size the budget cannot be reported honestly: fail, and read nothing.
+#[tokio::test]
+async fn sftp_read_capped_without_size_attr_fails_before_reading() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.size_attrs.insert("/f".to_owned(), None);
+    }
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 4)
+        .await
+        .expect_err("a budgeted read needs a size");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::Sftp { .. }),
+        "expected Sftp, got {err:?}"
+    );
+    assert!(
+        fs.lock().await.reads.is_empty(),
+        "no read may be issued once the size is unknown"
+    );
+}
+
+#[tokio::test]
+async fn sftp_read_capped_zero_budget_reads_the_whole_file() {
+    let fs = SharedFs::default();
+    let content = vec![b'x'; 300 * 1024];
+    fs.lock()
+        .await
+        .files
+        .insert("/f".to_owned(), content.clone());
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 0)
+        .await
+        .expect("unlimited read");
+
+    assert_eq!(got.bytes, content);
+    assert_eq!(got.size, content.len() as u64);
+    assert!(!got.truncated);
+}
+
+#[tokio::test]
+async fn sftp_read_capped_read_failure_is_an_sftp_error_in_both_modes() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.failing_reads.insert("/f".to_owned());
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    for max_bytes in [0, 4] {
+        let err = conn
+            .sftp_read_capped(std::path::Path::new("/f"), max_bytes)
+            .await
+            .expect_err("a failing read must not look like an empty file");
+        assert!(
+            matches!(err, mtui_hosts::HostError::Sftp { .. }),
+            "max_bytes={max_bytes}: expected Sftp, got {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sftp_read_capped_missing_file_is_not_found() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_read_capped(std::path::Path::new("/nope"), 4)
+        .await
+        .expect_err("missing file");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "expected SftpNotFound, got {err:?}"
+    );
 }
 
 #[tokio::test]
