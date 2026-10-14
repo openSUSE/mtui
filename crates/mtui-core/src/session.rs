@@ -188,6 +188,8 @@ pub(crate) enum HostFailure {
     /// Another process holds the remote pool claim; the claiming RRID when it
     /// could be read back.
     ClaimedBy(Option<String>),
+    /// The host connected but writing its remote pool claim failed.
+    ClaimFailed,
 }
 
 impl HostFailure {
@@ -196,6 +198,7 @@ impl HostFailure {
             Self::Unreachable => "unreachable".to_owned(),
             Self::ClaimedBy(Some(rrid)) => format!("claimed by {rrid}"),
             Self::ClaimedBy(None) => "claimed remotely".to_owned(),
+            Self::ClaimFailed => "pool claim failed".to_owned(),
         }
     }
 }
@@ -1313,7 +1316,7 @@ impl Session {
                 }
                 Err(e) => {
                     warn!(host = %host, error = %e, "pool claim failed remotely; skipping");
-                    return Err(HostFailure::Unreachable);
+                    return Err(HostFailure::ClaimFailed);
                 }
             }
         }
@@ -1446,7 +1449,7 @@ impl Session {
         let wait = i64::try_from(config.lock_wait).unwrap_or(i64::MAX);
         let poll = i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX);
 
-        let attached: std::collections::HashSet<String> =
+        let mut attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
         // Pool-claimed hosts this call tried and lost. Must never include a
         // claim taken outside this call's pool selection.
@@ -1458,6 +1461,15 @@ impl Session {
                 .cloned()
                 .collect()
         };
+        // A dead claim must not outlive this call, whether or not its slot is
+        // retried: a held host is skipped by every later pool selection.
+        {
+            let base = self.metadata_mut().base_mut();
+            for h in &failed {
+                base.pool_claims.remove(h);
+                arbiter.release(h, &owner);
+            }
+        }
         let mut attempted: std::collections::HashSet<String> =
             attempted_initial.iter().cloned().collect();
         let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
@@ -1492,18 +1504,6 @@ impl Session {
                 });
                 continue;
             }
-            // Drop dead primary claim(s) so a sibling can be tried and the
-            // exhausted-pool wait reflects real availability.
-            {
-                let base = self.metadata_mut().base_mut();
-                for c in &candidates {
-                    if base.pool_claims.contains(c) && !attached.contains(c) {
-                        base.pool_claims.remove(c);
-                        arbiter.release(c, &owner);
-                    }
-                }
-            }
-
             let mut remaining: Vec<String> = candidates
                 .iter()
                 .filter(|c| !attempted.contains(*c))
@@ -1548,6 +1548,7 @@ impl Session {
                 .await
                 {
                     Ok((target, drift_entry)) => {
+                        attached.insert(chosen.clone());
                         self.targets_mut().add(target);
                         new_drift.push(drift_entry);
                         connected = true;
@@ -3114,6 +3115,7 @@ mod tests {
                         HostFailure::ClaimedBy(Some("SUSE:Maintenance:9:9".to_owned())),
                     ),
                     ("h5".to_owned(), HostFailure::ClaimedBy(None)),
+                    ("h8".to_owned(), HostFailure::ClaimFailed),
                 ],
             },
             Unserved::BudgetSpent {
@@ -3364,6 +3366,182 @@ mod tests {
         assert_eq!(arbiter.owner_of(&primary), None);
         assert_eq!(arbiter.owner_of(&sibling_addr), None);
         assert!(s.metadata().base().pool_claims.is_empty());
+    }
+
+    /// A session over the active report with the pool seam wired, for the
+    /// failed-primary tests below.
+    fn pool_session(
+        connect_timeout: u64,
+        lock_wait: u64,
+    ) -> (Session, &'static HostArbiter, Owner, &'static str) {
+        let mut config = config_with_path_refhosts();
+        config.connect_timeout = connect_timeout;
+        config.lock_wait = lock_wait;
+        let mut s = Session::new(config, false);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, &[], &[]);
+        (s, test_arbiter(), ("reg".to_owned(), rrid.to_owned()), rrid)
+    }
+
+    /// A failed primary's claim is released even when the retry budget is
+    /// already spent at its slot, or the slot would stay "held" and every later
+    /// `add_host` would skip it silently.
+    #[tokio::test]
+    async fn failed_primary_claim_is_released_when_budget_is_spent_at_slot_start() {
+        let (mut s, arbiter, owner, rrid) = pool_session(0, 0);
+        let primary = closed_addr();
+        let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[primary.clone(), listener_addr(&sibling)])],
+            &[&primary],
+        );
+
+        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+
+        assert_eq!(
+            unserved,
+            vec![Unserved::BudgetSpent {
+                slot: "slot".to_owned(),
+                tried: vec![primary.clone()],
+            }]
+        );
+        assert_eq!(arbiter.owner_of(&primary), None);
+        assert!(s.metadata().base().pool_claims.is_empty());
+        assert!(!was_dialled(&sibling));
+    }
+
+    /// A slot another candidate already serves is left alone, but its dead
+    /// primary must not keep a pool host pinned.
+    #[tokio::test]
+    async fn failed_primary_claim_is_released_when_slot_is_already_served() {
+        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let primary = closed_addr();
+        let spare = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[(
+                "slot",
+                &[primary.clone(), "mock-b".to_owned(), listener_addr(&spare)],
+            )],
+            &[&primary],
+        );
+        s.targets_mut().add(mock_target("mock-b"));
+
+        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+
+        assert!(unserved.is_empty(), "a served slot reports nothing");
+        assert_eq!(arbiter.owner_of(&primary), None);
+        assert!(!s.metadata().base().pool_claims.contains(&primary));
+        assert!(!was_dialled(&spare), "a served slot must not be backed up");
+    }
+
+    /// A named host that happens to be a slot candidate is not a pool claim, so
+    /// its failure does not back the slot up.
+    #[tokio::test]
+    async fn named_slot_candidate_failure_does_not_back_up() {
+        let (mut s, arbiter, owner, _) = pool_session(1, 0);
+        let named = closed_addr();
+        let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[named.clone(), listener_addr(&sibling)])],
+            &[],
+        );
+
+        s.add_named_hosts(vec![named]).await;
+
+        assert!(!was_dialled(&sibling));
+    }
+
+    /// A budget that runs out between siblings is reported as such, not as
+    /// every candidate being unconnectable.
+    #[tokio::test]
+    async fn budget_cut_inside_a_slots_sibling_walk_is_budget_spent() {
+        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let primary = closed_addr();
+        // Black holes: each sibling costs a full `connect_timeout`, so the
+        // fifth cannot start inside the 4s budget.
+        let holes: Vec<std::net::TcpListener> = (0..5)
+            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("bind"))
+            .collect();
+        let mut cands = vec![primary.clone()];
+        cands.extend(holes.iter().map(listener_addr));
+        wire_pool(&mut s, arbiter, &owner, &[("slot", &cands)], &[&primary]);
+
+        let unserved = s.connect_and_add_hosts(vec![primary], rrid).await;
+
+        assert!(
+            matches!(unserved.as_slice(), [Unserved::BudgetSpent { slot, .. }] if slot == "slot"),
+            "{unserved:?}"
+        );
+        drop(holes);
+    }
+
+    /// Siblings the backup walk finds claimed by another RRID are named with it.
+    #[tokio::test]
+    async fn backup_names_the_claimant_of_a_busy_sibling() {
+        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let primary = closed_addr();
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("busy-host", &other));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[primary.clone(), "busy-host".to_owned()])],
+            &[&primary],
+        );
+
+        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+
+        assert_eq!(
+            unserved,
+            vec![Unserved::Unconnectable {
+                slot: "slot".to_owned(),
+                failures: vec![
+                    (primary, HostFailure::Unreachable),
+                    (
+                        "busy-host".to_owned(),
+                        HostFailure::ClaimedBy(Some("SUSE:Maintenance:2:2".to_owned()))
+                    ),
+                ],
+            }]
+        );
+    }
+
+    /// Unserved slots come back in slot-key order, whatever order the map
+    /// yields them in.
+    #[tokio::test]
+    async fn unserved_slots_are_reported_in_sorted_order() {
+        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let names: Vec<String> = (0..8).map(|i| format!("slot-{i}")).collect();
+        let cands: Vec<[String; 2]> = (0..8).map(|_| [closed_addr(), closed_addr()]).collect();
+        let slots: Vec<(&str, &[String])> = names
+            .iter()
+            .zip(&cands)
+            .map(|(n, c)| (n.as_str(), c.as_slice()))
+            .collect();
+        let primaries: Vec<String> = cands.iter().map(|c| c[0].clone()).collect();
+        let claims: Vec<&str> = primaries.iter().map(String::as_str).collect();
+        wire_pool(&mut s, arbiter, &owner, &slots, &claims);
+
+        let unserved = s.connect_and_add_hosts(primaries, rrid).await;
+
+        let got: Vec<&str> = unserved
+            .iter()
+            .map(|u| match u {
+                Unserved::Unconnectable { slot, .. } => slot.as_str(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(got, names.iter().map(String::as_str).collect::<Vec<_>>());
     }
 
     /// `check_cancelled` is `Ok` until the token fires, then reports

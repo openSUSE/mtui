@@ -5,5 +5,5 @@ expression: "out.join(\"\\n\")"
 testplatform "base=sles(major=15,minor=5);arch=[s390x]": no matching refhost
 refhosts inventory unavailable; no testplatform host resolved
 unserved slot sles 15.5 aarch64 +ha +we: all 2 candidates claimed (h1 by SUSE:Maintenance:2:2, h2 by SUSE:Maintenance:3:3)
-unserved slot sles 15.5 aarch64 +ha +we: no candidate connected (h3: unreachable; h4: claimed by SUSE:Maintenance:9:9; h5: claimed remotely)
+unserved slot sles 15.5 aarch64 +ha +we: no candidate connected (h3: unreachable; h4: claimed by SUSE:Maintenance:9:9; h5: claimed remotely; h8: pool claim failed)
 unserved slot sles 15.5 x86_64: backup retry budget exhausted (tried h6, h7)
