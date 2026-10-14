@@ -1,8 +1,7 @@
 //! The kernel openQA connector.
 //!
-//! `KernelOpenQA` filters jobs to the kernel flavor, parses each into a
-//! [`Test`], and renders a result matrix restricted to LTP (`ltp_`-prefixed)
-//! tests.
+//! `KernelOpenQA` parses the kernel-flavor jobs into [`Test`]s and renders a
+//! result matrix restricted to LTP (`ltp_`-prefixed) tests.
 
 use std::collections::BTreeMap;
 
@@ -80,17 +79,18 @@ impl KernelOpenQA {
     /// valid-but-empty response is `Ok` with no results.
     pub async fn run(mut self) -> Result<Self, OpenQAError> {
         let jobs = self.base.try_get_jobs().await?;
-        let filtered = Self::filter_jobs(Some(&jobs));
-        self.results = Self::parse_jobs(filtered.as_deref());
+        self.results = Self::parse_jobs(Some(&jobs));
         self.pp = self.pretty_print();
         Ok(self)
     }
 
-    /// Keep only kernel-flavor jobs.
+    /// Parse kernel jobs into [`Test`] objects.
     ///
-    /// Jobs whose `FLAVOR` (lowercased, split on `-`) has a `kernel` segment.
+    /// One [`Test`] per non-cloned job whose `FLAVOR` (lowercased, split on `-`)
+    /// has a `kernel` segment, dropping [`EXCLUDED_MODULES`] from each module
+    /// map and skipping any result in [`EXCLUDED_RESULTS`].
     #[must_use]
-    fn filter_jobs(jobs: Option<&[Job]>) -> Option<Vec<Job>> {
+    fn parse_jobs(jobs: Option<&[Job]>) -> Option<Vec<Test>> {
         let jobs = jobs?;
         Some(
             jobs.iter()
@@ -100,20 +100,6 @@ impl KernelOpenQA {
                         .split('-')
                         .any(|seg| seg == "kernel")
                 })
-                .cloned()
-                .collect(),
-        )
-    }
-
-    /// Parse kernel jobs into [`Test`] objects.
-    ///
-    /// One [`Test`] per non-cloned job, dropping [`EXCLUDED_MODULES`] from each
-    /// module map and skipping any result in [`EXCLUDED_RESULTS`].
-    #[must_use]
-    fn parse_jobs(jobs: Option<&[Job]>) -> Option<Vec<Test>> {
-        let jobs = jobs?;
-        Some(
-            jobs.iter()
                 .filter(|j| j.clone_id.is_none())
                 .filter(|j| !EXCLUDED_RESULTS.contains(&j.result))
                 .map(|j| {
@@ -238,40 +224,6 @@ mod tests {
         }
     }
 
-    // filter_jobs
-
-    #[test]
-    fn filter_jobs_none_is_none() {
-        assert!(KernelOpenQA::filter_jobs(None).is_none());
-    }
-
-    #[test]
-    fn filter_jobs_keeps_only_kernel_flavor() {
-        let jobs = vec![
-            job(
-                1,
-                "t",
-                "passed",
-                "SLES-15-SP5-Kernel-x86_64",
-                "x86_64",
-                None,
-                &[],
-            ),
-            job(
-                2,
-                "t",
-                "passed",
-                "SLES-15-SP5-Server-x86_64",
-                "x86_64",
-                None,
-                &[],
-            ),
-        ];
-        let out = KernelOpenQA::filter_jobs(Some(&jobs)).unwrap();
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].id, 1);
-    }
-
     // parse_jobs
 
     #[test]
@@ -304,6 +256,174 @@ mod tests {
         assert!(out[0].modules.contains_key("real_mod"));
         assert!(!out[0].modules.contains_key("boot_ltp"));
         assert!(!out[0].modules.contains_key("shutdown_ltp"));
+    }
+
+    // flavor filtering and result projection
+
+    fn mods(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(n, r)| ((*n).to_string(), (*r).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn parse_jobs_absent_is_none_and_present_empty_is_some_empty() {
+        assert!(KernelOpenQA::parse_jobs(None).is_none());
+        assert_eq!(KernelOpenQA::parse_jobs(Some(&[])), Some(Vec::new()));
+    }
+
+    #[test]
+    fn parse_jobs_all_non_kernel_is_some_empty() {
+        let jobs = vec![job(
+            1,
+            "ltp_a",
+            "passed",
+            "SLES-15-SP5-Server-x86_64",
+            "x86_64",
+            None,
+            &[("real", "passed")],
+        )];
+        assert_eq!(KernelOpenQA::parse_jobs(Some(&jobs)), Some(Vec::new()));
+    }
+
+    #[test]
+    fn parse_jobs_all_excluded_kernel_jobs_is_some_empty() {
+        let mut jobs: Vec<Job> = [
+            "skipped",
+            "user_cancelled",
+            "incomplete",
+            "user_restarted",
+            "obsoleted",
+        ]
+        .iter()
+        .zip(1..)
+        .map(|(r, id)| job(id, "ltp_a", r, "Kernel", "x86_64", None, &[]))
+        .collect();
+        jobs.push(job(9, "ltp_a", "passed", "Kernel", "x86_64", Some(1), &[]));
+        assert_eq!(KernelOpenQA::parse_jobs(Some(&jobs)), Some(Vec::new()));
+    }
+
+    #[test]
+    fn parse_jobs_flavor_matches_exact_hyphen_segment_only() {
+        let flavors = [
+            ("", false),
+            ("Kernel", true),
+            ("SLES-15-SP5-Kernel-x86_64", true),
+            ("kernel-default", true),
+            ("superkernel", false),
+            ("kernelish", false),
+            ("Server-Kernels", false),
+        ];
+        let jobs: Vec<Job> = flavors
+            .iter()
+            .zip(1..)
+            .map(|((f, _), id)| job(id, "ltp_a", "passed", f, "x86_64", None, &[("m", "passed")]))
+            .collect();
+        let expected: Vec<Test> = flavors
+            .iter()
+            .zip(1..)
+            .filter(|((_, keep), _)| *keep)
+            .map(|(_, id)| Test::new("ltp_a", "passed", id, "x86_64", mods(&[("m", "passed")])))
+            .collect();
+        assert_eq!(KernelOpenQA::parse_jobs(Some(&jobs)), Some(expected));
+    }
+
+    #[test]
+    fn parse_jobs_keeps_fetch_order_not_sorted_order() {
+        let jobs = vec![
+            job(30, "ltp_z", "passed", "Kernel", "x86_64", None, &[]),
+            job(10, "ltp_m", "failed", "Kernel", "aarch64", None, &[]),
+            job(20, "ltp_a", "passed", "Kernel", "s390x", None, &[]),
+        ];
+        let got = KernelOpenQA::parse_jobs(Some(&jobs)).unwrap();
+        let ids: Vec<i64> = got.iter().map(|t| t.test_id).collect();
+        assert_eq!(ids, [30, 10, 20]);
+        let names: Vec<&str> = got.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["ltp_z", "ltp_m", "ltp_a"]);
+    }
+
+    #[test]
+    fn parse_jobs_exact_projection_over_mixed_jobs() {
+        let jobs = vec![
+            job(
+                1,
+                "ltp_a",
+                "failed",
+                "SLES-Kernel",
+                "x86_64",
+                None,
+                &[
+                    ("boot_ltp", "failed"),
+                    ("dup", "passed"),
+                    ("dup", "failed"),
+                    ("shutdown_ltp", "passed"),
+                ],
+            ),
+            job(
+                2,
+                "ltp_b",
+                "passed",
+                "SLES-Server",
+                "x86_64",
+                None,
+                &[("real", "passed")],
+            ),
+            job(3, "ltp_c", "passed", "SLES-Kernel", "x86_64", Some(1), &[]),
+            job(
+                4,
+                "ltp_d",
+                "softfailed",
+                "SLES-Kernel",
+                "ppc64le",
+                None,
+                &[("x", "softfailed")],
+            ),
+            job(5, "ltp_e", "skipped", "SLES-Kernel", "x86_64", None, &[]),
+        ];
+        assert_eq!(
+            KernelOpenQA::parse_jobs(Some(&jobs)),
+            Some(vec![
+                Test::new("ltp_a", "failed", 1, "x86_64", mods(&[("dup", "failed")])),
+                Test::new(
+                    "ltp_d",
+                    "softfailed",
+                    4,
+                    "ppc64le",
+                    mods(&[("x", "softfailed")])
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_jobs_renders_only_ltp_sorted_independent_of_result_order() {
+        let jobs = vec![
+            job(1, "ltp_zzz", "passed", "Kernel", "x86_64", None, &[]),
+            job(
+                2,
+                "other",
+                "passed",
+                "Kernel",
+                "x86_64",
+                None,
+                &[("m", "passed")],
+            ),
+            job(
+                3,
+                "ltp_aaa",
+                "failed",
+                "Kernel",
+                "x86_64",
+                None,
+                &[("bad", "failed")],
+            ),
+        ];
+        let tests = KernelOpenQA::parse_jobs(Some(&jobs)).unwrap();
+        let matrix = KernelOpenQA::result_matrix(&tests);
+        assert_eq!(matrix.len(), 2);
+        assert!(matrix[0].contains("ltp_aaa") && matrix[0].contains("bad: ..."));
+        assert!(matrix[1].contains("ltp_zzz"));
     }
 
     // result_matrix / pretty_print
