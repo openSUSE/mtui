@@ -36,6 +36,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bot is (`auth.test` failed, or returned no or a blank user ID), instead of
   carrying on without excluding the bot's own `+1`; `request_review` likewise
   rejects a blank bot user ID.
+- `testreport_read` now honours `[mcp] max_input_bytes` mid-line: a file with a
+  line longer than the cap used to be read whole before the cap applied, so it
+  could return far more than the budget. The read now stops at the cap, cutting
+  that line, and `line_count` counts the lines read so far; the notice says the
+  remaining size is unknown.
 
 ## [26.3.5] - 2026-10-27
 

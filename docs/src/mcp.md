@@ -308,6 +308,10 @@ Reads a file from the checkout as UTF-8 (lossy).
   `install_logs/<host>.log`, `source.diff`, `patchinfo.xml`, etc.
 - Returns `{ "path", "line_count", "content" }`; when a window is requested
   (`offset`/`limit`) it additionally returns `offset` and `returned_lines`.
+- The read stops at `[mcp] max_input_bytes` (`0` disables the cap), cutting a
+  line that crosses it. A capped read ends with a notice, and `line_count` then
+  counts only the lines read up to the cap; the size of the unread rest is
+  unknown.
 
 ### `testreport_logs` (read-only)
 
