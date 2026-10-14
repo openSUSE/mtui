@@ -341,6 +341,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Automatic `export` now refuses install-log filenames derived from dashboard
+  metadata that contain a path separator or control character (or are an
+  absolute path), before fetching or writing anything, so a hostile dashboard
+  entry can no longer overwrite files outside the install-logs directory. The
+  remaining logs are still exported.
 - A repeated `add_host` no longer replaces a host a test-target slot already
   has (losing its command log and `update` record) or re-takes its pool claim,
   and `add_host -t` no longer attaches reference hosts nobody named (#678).
