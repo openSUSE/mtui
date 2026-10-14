@@ -1,13 +1,29 @@
 //! The `prepare` command.
 
+use std::sync::LazyLock;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use super::perform::{PerformOp, drive};
-use super::support::{add_hosts_arg, complete_fanout};
+use super::support::{CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+
+static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
+    completion_flags(
+        &Prepare,
+        &[
+            "hosts",
+            "installed",
+            "force",
+            "update",
+            "template",
+            "all_templates",
+        ],
+    )
+});
 
 /// Installs missing packages and updates existing packages.
 ///
@@ -60,17 +76,7 @@ impl Command for Prepare {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        complete_fanout(
-            session,
-            &[
-                &["-i", "--installed"],
-                &["-f", "--force"],
-                &["-u", "--update"],
-            ],
-            Vec::new(),
-            line,
-            text,
-        )
+        complete_fanout_flags(session, &FLAGS, line, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {

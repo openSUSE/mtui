@@ -1,5 +1,7 @@
 //! The `approve` command — approve the loaded update via OSC or Gitea.
 
+use std::sync::LazyLock;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{Gitea, GiteaError, Osc, Slack, is_ack_reaction};
@@ -10,9 +12,14 @@ use crate::commands::apicall::{
     gitea_client, is_gitea_workflow, osc_client, require_committed_report,
 };
 use crate::commands::commit::{ReviewAction, prepare_reviewer};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{
+    CompletionFlags, completion_flags, require_update, template_completion,
+};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+
+static FLAGS: LazyLock<CompletionFlags> =
+    LazyLock::new(|| completion_flags(&Approve, &["group", "user", "reviewer", "accept_head"]));
 
 /// The backend client, built before anything is uploaded.
 enum Backend {
@@ -94,19 +101,12 @@ impl Command for Approve {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        let mut out: Vec<String> = [
-            "-g",
-            "--group",
-            "-u",
-            "--user",
-            "-r",
-            "--reviewer",
-            "--accept-head",
-        ]
-        .iter()
-        .filter(|f| f.starts_with(text))
-        .map(|s| (*s).to_owned())
-        .collect();
+        let mut out: Vec<String> = FLAGS
+            .iter()
+            .flatten()
+            .filter(|f| f.starts_with(text))
+            .cloned()
+            .collect();
         out.extend(template_completion(session, text));
         out
     }
