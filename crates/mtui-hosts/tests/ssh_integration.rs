@@ -55,6 +55,11 @@ type SharedFs = Arc<Mutex<FakeFs>>;
 /// sleeping, so a retry right behind a timed-out request is not also delayed.
 type SharedDelay = Arc<Mutex<Duration>>;
 
+/// Every `exec` request the server received, verbatim: what the client really
+/// sent, independent of what it chose to log.
+static EXEC_LOG: LazyLock<std::sync::Mutex<Vec<String>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
 /// Counts `subsystem_request(name == "sftp")` calls server-side, so a test can
 /// assert exactly how many SFTP handshakes a sequence of client verbs caused.
 type SharedSubsystemCount = Arc<AtomicUsize>;
@@ -125,10 +130,14 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8_lossy(data).to_string();
+        EXEC_LOG
+            .lock()
+            .expect("exec log lock")
+            .push(command.clone());
 
         // Never produces output and never exits: the client's no-output timeout
         // is the only thing that can end it.
-        if command == "sleep-forever" {
+        if command == "sleep-forever" || command.starts_with("sleep-forever ") {
             return Ok(());
         }
 
@@ -147,7 +156,9 @@ impl russh::server::Handler for TestSshSession {
 
         // Writes an unterminated stderr line, then goes silent without an exit
         // status or Close, as a link dying mid-output does.
-        if command == "partial-stderr-then-silent" {
+        if command == "partial-stderr-then-silent"
+            || command.starts_with("partial-stderr-then-silent ")
+        {
             session.extended_data(channel_id, 1, b"partial".to_vec())?;
             return Ok(());
         }
@@ -165,7 +176,7 @@ impl russh::server::Handler for TestSshSession {
         }
 
         // Floods stdout past the client's capture cap, then exits cleanly.
-        if command == "flood-stdout" {
+        if command == "flood-stdout" || command.starts_with("flood-stdout ") {
             let chunk = vec![b'a'; 64 * 1024];
             let mut sent = 0;
             while sent < FLOOD_BYTES {
@@ -185,6 +196,24 @@ impl russh::server::Handler for TestSshSession {
                 session.data(channel_id, b".".to_vec())?;
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+        }
+
+        // Like `trickle-forever`, but the output is pushed from a spawned task
+        // so it is actually delivered while the command runs. `flood-async`
+        // never pauses, so the client always has a message ready.
+        if command.starts_with("trickle-async ") || command.starts_with("flood-async ") {
+            let pause = command
+                .starts_with("trickle-async ")
+                .then_some(Duration::from_millis(20));
+            let handle = session.handle();
+            tokio::spawn(async move {
+                while handle.data(channel_id, b".".to_vec()).await.is_ok() {
+                    if let Some(pause) = pause {
+                        tokio::time::sleep(pause).await;
+                    }
+                }
+            });
+            return Ok(());
         }
 
         let (stdout, stderr, code) = scripted_command(&command);
@@ -1399,4 +1428,178 @@ async fn sftp_transparently_rehandshakes_after_a_stale_cached_sessions_first_req
         2,
         "the timed-out cached session must be invalidated and re-handshaked exactly once"
     );
+}
+
+// ----------------------------------------------------------------------------
+// Repository URL credentials: executed verbatim, never logged or stored.
+// ----------------------------------------------------------------------------
+
+fn server_received(command: &str) -> bool {
+    EXEC_LOG
+        .lock()
+        .expect("exec log lock")
+        .iter()
+        .any(|c| c == command)
+}
+
+#[tokio::test]
+async fn run_sends_credentials_verbatim_but_stores_and_logs_them_masked() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let command = format!("zypper ar x {URL} x");
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(conn.run(&command).await.expect("run"));
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(
+        server_received(&command),
+        "the server must receive the exact credential-bearing command"
+    );
+    // The scripted server echoes the command back on stdout, so the output
+    // really did carry the credentials before being stored.
+    assert_no_credentials("log command", &log.command);
+    assert_no_credentials("log stdout", &log.stdout);
+    assert!(
+        log.stdout
+            .starts_with("ran: zypper ar x https://***@repo.example/")
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_eq!(log.exitcode, 0);
+}
+
+#[tokio::test]
+async fn run_timeout_error_and_log_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::new(Duration::from_millis(300))).await;
+    let command = format!("sleep-forever {URL}");
+
+    let mut err = None;
+    let events = capture_events(|| async {
+        err = Some(conn.run(&command).await.expect_err("should time out"));
+    })
+    .await;
+    let err = err.expect("ran");
+
+    assert!(
+        events.contains("command timed out with no output"),
+        "the timeout warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Timeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_no_credentials("timeout error display", &err.to_string());
+    assert_no_credentials("timeout error debug", &format!("{err:?}"));
+    assert!(
+        server_received(&command),
+        "the server must still receive the exact command"
+    );
+}
+
+#[tokio::test]
+async fn run_absolute_deadline_error_and_log_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    // `trickle-async` ends at the deadline-bounded wait; `flood-async` at the
+    // deadline check ahead of each message.
+    for verb in ["trickle-async", "flood-async"] {
+        let port = start_server(SharedFs::default()).await;
+        let mut conn = connect(port, CommandTimeout::from_secs(5))
+            .await
+            .with_command_timeout(CommandTimeout::new(Duration::from_millis(150)));
+        let command = format!("{verb} {URL}");
+
+        let mut err = None;
+        let events = capture_events(|| async {
+            err = Some(
+                conn.run(&command)
+                    .await
+                    .expect_err("should hit the deadline"),
+            );
+        })
+        .await;
+        let err = err.expect("ran");
+
+        assert!(
+            events.contains("command exceeded absolute deadline"),
+            "the deadline warning was not captured; the secrecy assertions would be vacuous"
+        );
+        assert_no_credentials("tracing events", &events);
+        assert_no_credentials("timeout error", &format!("{err} {err:?}"));
+    }
+}
+
+#[tokio::test]
+async fn run_session_loss_diagnostics_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(run_on_a_dying_link(&format!("partial-stderr-then-silent {URL}")).await);
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(
+        events.contains("SSH session lost mid-command"),
+        "the session-loss warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_no_credentials("log command", &log.command);
+    assert_no_credentials("log stderr", &log.stderr);
+}
+
+#[tokio::test]
+async fn run_truncation_warning_masks_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(conn.run(&format!("flood-stdout {URL}")).await.expect("run"));
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(log.truncated);
+    assert!(
+        events.contains("command output exceeded capture caps"),
+        "the truncation warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_no_credentials("log command", &log.command);
+}
+
+#[tokio::test]
+async fn target_over_ssh_stores_timeout_and_output_masked() {
+    use crate::repository_redaction::{URL, assert_no_credentials};
+
+    let port = start_server(SharedFs::default()).await;
+    let conn = connect(port, CommandTimeout::new(Duration::from_millis(300))).await;
+    let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+    let mut group = HostsGroup::new(vec![target], false);
+
+    group.run(format!("sleep-forever {URL}").as_str()).await;
+    group.run(format!("zypper rr {URL}").as_str()).await;
+
+    let t = group.get("h1").expect("member present");
+    assert_eq!(t.out().len(), 2);
+    for entry in t.out().iter() {
+        assert_no_credentials("stored command", &entry.command);
+        assert_no_credentials("stored stdout", &entry.stdout);
+        assert_no_credentials("stored stderr", &entry.stderr);
+    }
+    assert_eq!(t.out()[0].exitcode, -1, "the timeout is still recorded");
+    assert_eq!(t.lastexit(), Some(0));
 }

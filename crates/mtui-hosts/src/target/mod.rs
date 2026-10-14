@@ -72,6 +72,7 @@ use mtui_types::enums::TargetState;
 use mtui_types::hostlog::{CommandLog, HostLog};
 use mtui_types::package::{Package, VersionCheck};
 use mtui_types::system::{System, SystemProduct};
+use mtui_types::url_redaction::sanitize_urls_in_text;
 
 #[cfg(feature = "shell")]
 use crate::connection::ShellChannel;
@@ -1197,28 +1198,34 @@ impl Target {
     async fn run(&mut self, command: &str) {
         match self.state {
             TargetState::Enabled => {
-                tracing::debug!(host = %self.hostname, %command, "running");
+                // The command may embed repository credentials: it runs as
+                // given, but only this masked copy is logged or stored.
+                let shown = sanitize_urls_in_text(command);
+                tracing::debug!(host = %self.hostname, command = %shown, "running");
                 let log = match self.connection.as_mut() {
                     Some(conn) => match conn.run(command).await {
-                        Ok(log) => log,
+                        Ok(log) => log.with_urls_masked(),
                         Err(HostError::Timeout { .. }) => {
-                            tracing::error!(host = %self.hostname, %command, "command timed out");
-                            CommandLog::new(command, "", "", -1, 0)
+                            tracing::error!(
+                                host = %self.hostname, command = %shown, "command timed out"
+                            );
+                            CommandLog::new(shown, "", "", -1, 0)
                         }
                         Err(e) => {
                             tracing::error!(
-                                host = %self.hostname, %command, error = %e,
+                                host = %self.hostname, command = %shown,
+                                error = %sanitize_urls_in_text(&e.to_string()),
                                 "failed to run command"
                             );
-                            CommandLog::new(command, "", "", -1, 0)
+                            CommandLog::new(shown, "", "", -1, 0)
                         }
                     },
                     None => {
                         tracing::error!(
-                            host = %self.hostname, %command,
+                            host = %self.hostname, command = %shown,
                             "run on unconnected target"
                         );
-                        CommandLog::new(command, "", "", -1, 0)
+                        CommandLog::new(shown, "", "", -1, 0)
                     }
                 };
                 self.out.push(log);
@@ -1646,6 +1653,121 @@ mod tests {
         t.run("echo hi").await;
 
         assert_eq!(t.lastexit(), Some(-1));
+    }
+
+    mod credential_masking {
+        use std::cell::RefCell;
+        use std::fmt::Write as _;
+        use std::sync::OnceLock;
+
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        use super::*;
+
+        const URL: &str = "https://audituser:MTUI_SECRET_CANARY@repo.example/r/";
+
+        thread_local! {
+            static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        }
+
+        struct CaptureLayer;
+
+        struct FieldVisitor(String);
+
+        impl Visit for FieldVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                let _ = write!(self.0, " {}={value:?}", field.name());
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut v = FieldVisitor(String::new());
+                        event.record(&mut v);
+                        buf.push(v.0);
+                    }
+                });
+            }
+        }
+
+        /// Every event emitted by `f` on this thread, all fields included. The
+        /// subscriber is global and only the sink is thread-local, so a
+        /// callsite first reached from another thread cannot be cached as
+        /// disabled.
+        async fn capture_events(f: impl std::future::Future<Output = ()>) -> String {
+            static ONCE: OnceLock<()> = OnceLock::new();
+            ONCE.get_or_init(|| {
+                let _ =
+                    tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+            });
+            SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+            f.await;
+            SINK.with(|s| s.borrow_mut().take())
+                .unwrap_or_default()
+                .join("\n")
+        }
+
+        fn assert_masked(what: &str, text: &str) {
+            assert!(
+                !text.contains("MTUI_SECRET_CANARY") && !text.contains("audituser"),
+                "{what} leaked repository credentials"
+            );
+        }
+
+        #[tokio::test]
+        async fn timed_out_command_is_logged_and_stored_masked() {
+            let cmd = format!("zypper rr {URL}");
+            let conn = MockConnection::new("h1").with_timeout(cmd.clone());
+            let handle = conn.clone();
+            let mut t = enabled_with(conn);
+
+            let events = capture_events(async { t.run(&cmd).await }).await;
+
+            assert!(
+                events.contains("command timed out"),
+                "the timeout event was not captured; the secrecy assertions would be vacuous"
+            );
+            assert_masked("tracing events", &events);
+            assert_masked("stored command", t.lastin());
+            assert!(t.lastin().starts_with("zypper rr https://***@repo.example"));
+            assert_eq!(t.lastexit(), Some(-1));
+            assert_eq!(handle.commands(), [cmd], "the host still got the real URL");
+        }
+
+        #[tokio::test]
+        async fn unconnected_run_is_logged_and_stored_masked() {
+            let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+
+            let events = capture_events(async { t.run(&format!("zypper rr {URL}")).await }).await;
+
+            assert!(
+                events.contains("run on unconnected target"),
+                "the event was not captured; the secrecy assertions would be vacuous"
+            );
+            assert_masked("tracing events", &events);
+            assert_masked("stored command", t.lastin());
+            assert_eq!(t.lastexit(), Some(-1));
+        }
+
+        #[tokio::test]
+        async fn output_without_urls_is_stored_untouched() {
+            let conn = MockConnection::new("h1").with_response(
+                "ls",
+                CommandLog::new("ls", "user@host: ok\n", "warn: a@b\n", 2, 1),
+            );
+            let mut t = enabled_with(conn);
+
+            t.run("ls").await;
+
+            assert_eq!(
+                (t.lastin(), t.lastout(), t.lasterr(), t.lastexit()),
+                ("ls", "user@host: ok\n", "warn: a@b\n", Some(2))
+            );
+        }
     }
 
     // --- last* accessors ----------------------------------------------------

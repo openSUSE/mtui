@@ -57,6 +57,8 @@ sha1.workspace = true
 shlex.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+# Captures tracing events (every field) in the repository-redaction tests.
+tracing-subscriber.workspace = true
 
 [features]
 # Interactive PTY shell primitive. Adds `Connection::shell` /
