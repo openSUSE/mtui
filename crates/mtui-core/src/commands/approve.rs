@@ -162,14 +162,19 @@ async fn slack_review_gate(
         )));
     }
 
-    let bot = slack.auth_test().await.ok();
+    // Without the bot's ID its own reaction cannot be told from a human's.
+    let bot = slack.auth_test().await.map_err(|e| {
+        CommandError::Other(format!(
+            "could not verify the Slack bot identity for {rrid}, not approving: {e}"
+        ))
+    })?;
     let acked: Vec<String> = message
         .reactions
         .iter()
         .filter(|r| is_ack_reaction(&r.name))
         .flat_map(|r| r.users.clone())
         // The bot acking its own request would approve nothing.
-        .filter(|u| bot.as_deref() != Some(u.as_str()))
+        .filter(|u| *u != bot)
         .collect();
 
     if acked.is_empty() {
@@ -347,7 +352,7 @@ mod tests {
         (session, buf)
     }
 
-    async fn mount_message(
+    async fn mount_reactions(
         server: &wiremock::MockServer,
         text: &str,
         reactions: serde_json::Value,
@@ -361,13 +366,29 @@ mod tests {
             })))
             .mount(server)
             .await;
+    }
+
+    async fn mount_auth(server: &wiremock::MockServer, response: wiremock::ResponseTemplate) {
+        use wiremock::Mock;
+        use wiremock::matchers::path;
         Mock::given(path("/auth.test"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "UBOT" })),
-            )
+            .respond_with(response)
             .mount(server)
             .await;
+    }
+
+    async fn mount_message(
+        server: &wiremock::MockServer,
+        text: &str,
+        reactions: serde_json::Value,
+    ) {
+        mount_reactions(server, text, reactions).await;
+        mount_auth(
+            server,
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "ok": true, "user_id": "UBOT" })),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -482,6 +503,58 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("acknowledged by U1"), "{out}");
         assert!(!out.contains("UBOT"), "{out}");
+    }
+
+    /// Without a bot ID there is no telling the bot's reaction from a human's,
+    /// so no acknowledgement can be trusted, whoever left it.
+    #[tokio::test]
+    async fn slack_gate_refuses_when_bot_identity_cannot_be_established() {
+        use wiremock::ResponseTemplate;
+        let bad_auth = [
+            ("http 503", ResponseTemplate::new(503)),
+            (
+                "invalid_auth",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": false, "error": "invalid_auth" })),
+            ),
+            (
+                "missing user_id",
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            ),
+            (
+                "empty user_id",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "" })),
+            ),
+            (
+                "blank user_id",
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "  " })),
+            ),
+        ];
+        for (case, auth) in bad_auth {
+            for user in ["UBOT", "U1"] {
+                let server = wiremock::MockServer::start().await;
+                mount_reactions(
+                    &server,
+                    "Please review SUSE:Maintenance:1:1",
+                    serde_json::json!([{ "name": "+1", "users": [user] }]),
+                )
+                .await;
+                mount_auth(&server, auth.clone()).await;
+                let (mut session, buf) =
+                    gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+                let rrid = require_update(&session).unwrap();
+
+                let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+
+                let msg = err.to_string();
+                assert!(msg.contains("bot identity"), "{case}/{user}: {msg}");
+                assert!(msg.contains("not approving"), "{case}/{user}: {msg}");
+                assert!(!msg.contains("xoxb"), "{case}/{user}: {msg}");
+                assert!(!buf.contents().contains("acknowledged"), "{case}/{user}");
+            }
+        }
     }
 
     #[tokio::test]
