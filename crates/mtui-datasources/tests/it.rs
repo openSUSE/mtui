@@ -36,6 +36,8 @@ mod oqa_search;
 mod qem_dashboard;
 #[path = "refhost.rs"]
 mod refhost;
+#[path = "refhosts_benchmark.rs"]
+mod refhosts_benchmark;
 #[path = "slack.rs"]
 mod slack;
 #[path = "teregen_artifacts.rs"]
