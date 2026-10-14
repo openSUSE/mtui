@@ -376,6 +376,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   could return far more than the budget. The read now stops at the cap, cutting
   that line, and `total_lines` counts the lines read so far; the notice says the
   remaining size is unknown.
+- The MCP `get` tool now applies `[mcp] max_input_bytes` while reading each
+  remote file, instead of downloading the whole file per host and clipping it
+  afterwards, so a large file can no longer exhaust memory before the cap
+  applies. With a cap set, `size` is the file size the server reports when the
+  file is opened (it can differ from the returned bytes if the file changes
+  during the read), and a server that reports none now fails the call naming the
+  host rather than being read without a bound. `max_input_bytes = 0` still reads
+  everything.
 - A repeated `add_host` no longer replaces a host a test-target slot already
   has (losing its command log and `update` record) or re-takes its pool claim,
   and `add_host -t` no longer attaches reference hosts nobody named (#678).

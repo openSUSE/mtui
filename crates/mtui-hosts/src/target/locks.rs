@@ -2942,6 +2942,13 @@ mod tests {
         async fn sftp_open(&mut self, path: &std::path::Path) -> Result<Vec<u8>> {
             self.inner.sftp_open(path).await
         }
+        async fn sftp_read_capped(
+            &mut self,
+            path: &std::path::Path,
+            max_bytes: usize,
+        ) -> Result<crate::connection::SftpRead> {
+            self.inner.sftp_read_capped(path, max_bytes).await
+        }
         async fn sftp_write(
             &mut self,
             path: &std::path::Path,

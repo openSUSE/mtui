@@ -76,7 +76,7 @@ use mtui_types::url_redaction::sanitize_urls_in_text;
 
 #[cfg(feature = "shell")]
 use crate::connection::ShellChannel;
-use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
+use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SftpRead, SshConnection};
 use crate::error::{HostError, Result};
 
 /// A single reference host and its execution state.
@@ -1464,6 +1464,34 @@ impl Target {
         }
     }
 
+    /// Like [`sftp_read`](Self::sftp_read), but retaining at most `max_bytes`
+    /// (`0` = unlimited) and reporting the file size and whether it was cut.
+    pub async fn sftp_read_capped(
+        &mut self,
+        remote: &Path,
+        max_bytes: usize,
+    ) -> Option<std::result::Result<SftpRead, String>> {
+        match self.state {
+            TargetState::Enabled => {
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "sftp_read on unconnected target");
+                    return Some(Err("not connected".into()));
+                };
+                match conn.sftp_read_capped(remote, max_bytes).await {
+                    Ok(read) => Some(Ok(read)),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, remote = %remote.display(), error = %e,
+                            "failed to read"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                }
+            }
+            TargetState::Disabled => None,
+        }
+    }
+
     /// Opens an interactive PTY shell on the host, gated by [`TargetState`].
     ///
     /// On an [`Enabled`](TargetState::Enabled)
@@ -1946,6 +1974,84 @@ mod tests {
         let _ = t.sftp_read(Path::new("/remote/f")).await;
 
         assert_eq!(t.last_download(), None);
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_enabled_returns_outcome() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"abcdefgh".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        assert_eq!(
+            got,
+            Some(Ok(SftpRead {
+                bytes: b"abc".to_vec(),
+                size: 8,
+                truncated: true
+            }))
+        );
+        assert_eq!(
+            handle.sftp_ops(),
+            [MockSftpOp::ReadCapped {
+                path: PathBuf::from("/remote/f"),
+                max_bytes: 3
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_disabled_is_none_and_untouched() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"abc".to_vec());
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
+
+        assert_eq!(t.sftp_read_capped(Path::new("/remote/f"), 3).await, None);
+        assert!(
+            handle.sftp_ops().is_empty(),
+            "disabled host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_unconnected_is_some_err() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        let Some(Err(reason)) = got else {
+            panic!("expected Some(Err), got {got:?}");
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_failure_is_attributed_error() {
+        let conn = MockConnection::new("h1")
+            .with_file("/remote/f", b"abcdef".to_vec())
+            .with_size_attr("/remote/f", None);
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        let Some(Err(reason)) = got else {
+            panic!("expected Some(Err), got {got:?}");
+        };
+        assert!(reason.contains("no size"), "reason was {reason:?}");
+    }
+
+    /// Like `sftp_read`, a capped read must not write `last_download`; a
+    /// preseeded outcome from an earlier command has to survive it.
+    #[tokio::test]
+    async fn sftp_read_capped_does_not_touch_last_download() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"h1-bytes".to_vec());
+        let mut t = enabled_with(conn);
+        t.last_download = Some(Err("earlier failure".into()));
+
+        let _ = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        assert_eq!(t.last_download(), Some(&Err("earlier failure".to_owned())));
     }
 
     #[tokio::test]
