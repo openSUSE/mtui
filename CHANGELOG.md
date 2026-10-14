@@ -54,6 +54,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Output that merely echoes such a URL (a zypper error line) is masked the same
   way. Only a `scheme://…@` authority is recognised: a password printed on its
   own, or carried in a URL path or query, is not.
+- The MCP `get` tool now applies `[mcp] max_input_bytes` while reading each
+  remote file, instead of downloading the whole file per host and clipping it
+  afterwards, so a large file can no longer exhaust memory before the cap
+  applies. With a cap set, `size` is the file size the server reports when the
+  file is opened (it can differ from the returned bytes if the file changes
+  during the read), and a server that reports none now fails the call naming the
+  host rather than being read without a bound. `max_input_bytes = 0` still reads
+  everything.
 
 ## [26.3.5] - 2026-10-27
 

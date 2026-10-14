@@ -53,7 +53,7 @@ use tokio::time::{Duration, timeout};
 use super::ShellChannel;
 use super::sftp_session::SftpSession;
 use super::timeout::{CommandTimeout, HostKeyPolicy};
-use super::{Connection, DEFAULT_USER};
+use super::{Connection, DEFAULT_USER, SftpRead};
 use crate::error::{HostError, Result};
 
 /// Number of reconnect+retry attempts before giving up.
@@ -1593,6 +1593,69 @@ impl Connection for SshConnection {
             )
             .await?;
         Ok(data)
+    }
+
+    async fn sftp_read_capped(&mut self, path: &Path, max_bytes: usize) -> Result<SftpRead> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let open_path = path.to_string_lossy().to_string();
+        let (_sftp, mut file) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let open_path = open_path.clone();
+                    async move { sftp.open(open_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+
+        let read = if max_bytes == 0 {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .await
+                .map_err(|e| self.sftp_verb_err(e))?;
+            SftpRead {
+                size: bytes.len() as u64,
+                bytes,
+                truncated: false,
+            }
+        } else {
+            // The size is reported, never used to size an allocation.
+            let size = file
+                .metadata()
+                .await
+                .map_err(|e| self.sftp_verb_err_at(e, path))?
+                .size
+                .ok_or_else(|| {
+                    self.sftp_err(format!(
+                        "server reported no size for {}; refusing an unbounded read",
+                        path.display()
+                    ))
+                })?;
+            let cap = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            let mut bytes = Vec::new();
+            (&mut file)
+                .take(cap)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| self.sftp_verb_err(e))?;
+            let truncated = if bytes.len() as u64 == cap {
+                let mut probe = [0u8; 1];
+                file.read(&mut probe)
+                    .await
+                    .map_err(|e| self.sftp_verb_err(e))?
+                    > 0
+            } else {
+                false
+            };
+            SftpRead {
+                bytes,
+                size,
+                truncated,
+            }
+        };
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
+        Ok(read)
     }
 
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
