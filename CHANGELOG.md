@@ -341,6 +341,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A template can reattach to its own pool claim on a host after mtui restarts:
+  a claim recording the same user and request is adopted whatever PID it
+  records, instead of the host being skipped as busy. The existing claim is
+  left as it is, so its timestamp is not refreshed.
 - Automatic `export` now refuses install-log filenames derived from dashboard
   metadata that contain a path separator or control character (or are an
   absolute path), before fetching or writing anything, so a hostile dashboard
