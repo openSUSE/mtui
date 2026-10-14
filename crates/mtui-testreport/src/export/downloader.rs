@@ -14,6 +14,7 @@
 //! tests inject a mock.
 
 use std::collections::{BTreeMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -276,6 +277,24 @@ fn resolve_collisions(jobs: Vec<Job>) -> Vec<Job> {
     jobs
 }
 
+/// Runs a blocking filesystem job off the async worker, mapping a join failure
+/// to an [`io::Error`].
+///
+/// The spawned job runs to completion even if this future is dropped, so
+/// callers await it rather than abandon it.
+async fn run_file_write(job: impl FnOnce() -> io::Result<()> + Send + 'static) -> io::Result<()> {
+    match tokio::task::spawn_blocking(job).await {
+        Ok(result) => result,
+        Err(join) => Err(io::Error::other(format!("write task failed: {join}"))),
+    }
+}
+
+/// Atomically writes a downloaded log to `destination` off the async worker, so
+/// a slow filesystem (a network mount) cannot block a Tokio thread.
+pub(super) async fn persist_download(data: Vec<u8>, destination: PathBuf) -> io::Result<()> {
+    run_file_write(move || atomic_write_file(&data, &destination)).await
+}
+
 /// Downloads one log: fetch + atomic write.
 ///
 /// Under [`ErrorMode::Full`] a fetch failure returns [`ResultsMissingError`] and
@@ -291,15 +310,9 @@ async fn subdl(
     tracing::info!("Downloading log {remote}");
     match fetcher.get_bytes(remote).await {
         Ok(data) => {
-            // Off the async worker: a slow filesystem (network mount) must not
-            // block a Tokio thread mid-fan-out.
-            let local_owned = local.to_path_buf();
-            let write =
-                tokio::task::spawn_blocking(move || atomic_write_file(&data, &local_owned)).await;
-            let err = match write {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(e)) => e,
-                Err(join) => std::io::Error::other(format!("write task failed: {join}")),
+            let err = match persist_download(data, local.to_path_buf()).await {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
             };
             tracing::error!("Failed to write {}: {err}", local.display());
             match mode {
@@ -387,7 +400,7 @@ pub async fn download_logs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     fn test(name: &str) -> Test {
         test_arch(name, "x86_64")
@@ -978,5 +991,71 @@ mod tests {
         // Fetch happened, write failed, but tolerant mode still returns Ok.
         assert_eq!(fetcher.seen.lock().unwrap().len(), 1);
         assert!(out.is_ok());
+    }
+
+    #[tokio::test]
+    async fn file_write_job_runs_off_the_runtime_worker() {
+        let worker = std::thread::current().id();
+
+        let ran_on = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&ran_on);
+        run_file_write(move || {
+            *slot.lock().unwrap() = Some(std::thread::current().id());
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let ran_on = ran_on.lock().unwrap().expect("job ran");
+        assert_ne!(ran_on, worker);
+    }
+
+    #[tokio::test]
+    async fn file_write_job_failure_is_returned_unchanged() {
+        let err = run_file_write(|| Err(io::Error::new(io::ErrorKind::PermissionDenied, "nope")))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "nope");
+    }
+
+    #[tokio::test]
+    async fn file_write_job_panic_maps_to_a_write_task_error() {
+        let err = run_file_write(|| panic!("boom")).await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(
+            err.to_string().starts_with("write task failed:"),
+            "got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_download_creates_parents_and_replaces_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("nested").join("log.txt");
+
+        persist_download(b"first\n".to_vec(), dest.clone())
+            .await
+            .unwrap();
+        persist_download(b"second\n".to_vec(), dest.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"second\n");
+        assert_eq!(sorted_names(dest.parent().unwrap()), ["log.txt"]);
+    }
+
+    #[tokio::test]
+    async fn persist_download_reports_an_unwritable_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, _) = unwritable_dirs(dir.path());
+
+        persist_download(b"x".to_vec(), res.join("log.txt"))
+            .await
+            .unwrap_err();
+
+        assert!(!res.exists());
     }
 }

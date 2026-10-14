@@ -11,8 +11,7 @@ use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::URLs;
 
 use super::base::ExportContext;
-use super::downloader::{BytesFetcher, DOWNLOAD_CONCURRENCY, is_safe_component};
-use crate::support::fileops::atomic_write_file;
+use super::downloader::{BytesFetcher, DOWNLOAD_CONCURRENCY, is_safe_component, persist_download};
 
 /// The automatic-workflow exporter.
 pub struct AutoExport {
@@ -42,7 +41,7 @@ impl AutoExport {
         };
 
         let dir = self.ctx.install_logs_dir();
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::error!("Failed to create {}: {e}", dir.display());
             return Vec::new();
         }
@@ -76,7 +75,7 @@ impl AutoExport {
                 continue;
             }
             let path = dir.join(&fn_name);
-            if let Err(e) = atomic_write_file(text.as_bytes(), &path) {
+            if let Err(e) = persist_download(text.into_bytes(), path.clone()).await {
                 tracing::error!("Failed to write {}: {e}", path.display());
             }
             filenames.push(fn_name);
