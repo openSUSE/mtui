@@ -3,8 +3,10 @@
 //! Measurement-only, fully offline, over the pure/deterministic hot paths:
 //! - `refhosts/parse`: `load_refhosts` (YAML parse + location-flatten + dedup)
 //!   over synthetic documents of growing size.
-//! - `refhosts/search`: `Refhosts::search` over a large host set — the
-//!   O(attrs × hosts) scan.
+//! - `refhosts/search/{case}/{n}`: `Refhosts::search` over a large host set —
+//!   the O(attrs × hosts) scan — for miss, sparse-hit, mixed, dense-hit and
+//!   duplicate-query workloads. Throughput counts candidate checks
+//!   (`n × queries`).
 //! - `http/client_new`: constructing an `HttpClient`, i.e. a fresh
 //!   `reqwest::Client` with a new connection pool + TLS config each time — the
 //!   baseline for reusing one client across commands.
@@ -27,26 +29,13 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "support/refhosts.rs"]
+mod support;
+
+use support::{search_cases, synthetic_refhosts_yaml};
+
 /// Host-count points swept for the refhosts parse/search benches.
 const HOST_COUNTS: &[usize] = &[16, 128, 1024];
-
-/// Builds a legacy location-grouped refhosts.yml string with `n` hosts spread
-/// across a few location groups (so the flatten/dedup path is exercised).
-fn synthetic_refhosts_yaml(n: usize) -> String {
-    let mut s = String::from("group_a:\n");
-    for i in 0..n {
-        if i == n / 2 {
-            s.push_str("group_b:\n");
-        }
-        let major = 12 + (i % 4);
-        let minor = i % 6;
-        s.push_str(&format!(
-            "  - name: host-{i:05}\n    arch: {arch}\n    product:\n      name: sles\n      version:\n        major: {major}\n        minor: {minor}\n",
-            arch = if i % 2 == 0 { "x86_64" } else { "aarch64" },
-        ));
-    }
-    s
-}
 
 fn bench_refhosts_parse(c: &mut Criterion) {
     let mut g = c.benchmark_group("refhosts/parse");
@@ -63,18 +52,31 @@ fn bench_refhosts_parse(c: &mut Criterion) {
     g.finish();
 }
 
+/// Times each case in [`search_cases`] at every host count. Expectations are
+/// asserted before timing, so a drifted fixture fails the bench instead of
+/// quietly measuring a different workload.
 fn bench_refhosts_search(c: &mut Criterion) {
     let mut g = c.benchmark_group("refhosts/search");
     for &n in HOST_COUNTS {
         let yaml = synthetic_refhosts_yaml(n);
         let hosts = load_refhosts(&yaml).expect("synthetic yaml parses");
         let rh = Refhosts::from_hosts(hosts);
-        let attrs: Vec<Attributes> =
-            Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
-        g.throughput(criterion::Throughput::Elements(n as u64));
-        g.bench_with_input(BenchmarkId::from_parameter(n), &rh, |b, rh| {
-            b.iter(|| black_box(rh.search(black_box(attrs.as_slice()))));
-        });
+        assert_eq!(rh.hosts().len(), n);
+        for case in search_cases(n) {
+            assert!(!case.attrs.is_empty(), "{} has no queries", case.label);
+            assert_eq!(
+                rh.search(&case.attrs),
+                case.expected,
+                "{} at n={n}",
+                case.label
+            );
+            g.throughput(criterion::Throughput::Elements(
+                (n * case.attrs.len()) as u64,
+            ));
+            g.bench_with_input(BenchmarkId::new(case.label, n), &case.attrs, |b, attrs| {
+                b.iter(|| black_box(rh.search(black_box(attrs.as_slice()))));
+            });
+        }
     }
     g.finish();
 }
