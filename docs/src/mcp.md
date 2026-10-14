@@ -298,6 +298,12 @@ call with the host named.
   count is of degradations only; a check's own recognised sections (the
   vendor-support notice, extra rpm output) ride in the same diagnostics and are
   routine on a healthy update, so they leave the confirmation bare.
+- `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
+  resolved/connected`) with one line per test-target slot or testplatform it
+  left without a host and why: no matching refhost, every candidate claimed by
+  another RRID, no candidate connected (unreachable or claimed remotely), the
+  retry budget spent, or the refhosts inventory unavailable. The call still
+  returns `Ok` in that case, so these lines are the signal to check.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.

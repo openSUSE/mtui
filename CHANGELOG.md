@@ -156,6 +156,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Bare `add_host` now reports each test-target slot it left without a host and
+  why: no matching refhost, every candidate claimed by another RRID, no
+  candidate connected (unreachable or claimed remotely), retry budget spent, or
+  refhosts inventory unavailable. It still returns success (#684).
 - A lock held by another template or session of the same `mtui`/`mtui-mcp`
   process is now named as such (`held by this mtui process (<RRID>), another
   template or session`) in contended `lock`/`run`/`update` reports, in the

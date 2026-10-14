@@ -79,7 +79,8 @@ command out across all of them.
   spreading load across interchangeable refhosts.
 - If the chosen host fails to connect, mtui automatically **tries another
   candidate** from the same slot; only when *every* candidate for a slot is
-  unreachable is a single warning logged and that slot left unconnected.
+  unreachable or claimed does `add_host` name the slot and why in its result and
+  leave that slot unconnected.
 - Under fan-out, each test-target slot draws a **distinct** free host from the
   shared pool, arbitrated in-process so two templates never collide on the same
   host. When every candidate for a slot is busy, the claim **queues** on the

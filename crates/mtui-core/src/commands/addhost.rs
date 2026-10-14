@@ -84,7 +84,7 @@ impl Command for AddHost {
             session.targets().names().into_iter().collect();
 
         if hosts.is_empty() {
-            session.add_testplatform_hosts().await;
+            let unserved = session.add_testplatform_hosts().await;
             let mut added: Vec<String> = session
                 .targets()
                 .names()
@@ -100,6 +100,11 @@ impl Command for AddHost {
                 session
                     .display
                     .println(&format!("added {}", added.join(", ")));
+            }
+            for reason in &unserved {
+                session
+                    .display
+                    .println(&session.display.yellow(&reason.render()));
             }
             Ok(())
         } else {
@@ -273,6 +278,18 @@ mod tests {
         assert!(
             buf.contents()
                 .contains("no reference hosts resolved/connected"),
+            "{:?}",
+            buf.contents()
+        );
+        // And says why: every candidate of the slot was dialled and refused.
+        assert!(
+            buf.contents()
+                .contains("unserved slot sles 15-5 x86_64: no candidate connected ("),
+            "{:?}",
+            buf.contents()
+        );
+        assert!(
+            buf.contents().contains(": unreachable"),
             "{:?}",
             buf.contents()
         );
