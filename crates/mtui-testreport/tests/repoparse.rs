@@ -195,3 +195,57 @@ fn obsrepoparse_missing_project_xml_yields_empty_map() {
     let repos = obsrepoparse("https://example.com", tmp.path());
     assert!(repos.is_empty());
 }
+
+mod credential_redaction {
+    use mtui_testreport::{reporepoparse, slrepoparse};
+    use mtui_types::SystemProduct;
+
+    /// Every event `f` emits on this thread, all fields included.
+    fn capture_events(f: impl FnOnce()) -> String {
+        crate::log_capture::capture_logs(f).1
+    }
+
+    #[test]
+    fn dropping_an_invalid_credential_url_logs_it_masked() {
+        let products = vec!["SLES 15 (x86_64)".to_string()];
+        let mut repos = None;
+
+        let events = capture_events(|| {
+            repos = Some(slrepoparse(
+                "https://audituser:MTUI_SECRET_CANARY@repo.example/x;reboot",
+                &products,
+            ));
+        });
+
+        assert!(repos.expect("ran").is_empty(), "the unsafe URL is dropped");
+        assert!(
+            events.contains("skipping invalid repository URL"),
+            "the drop event was not captured; the secrecy assertions would be vacuous"
+        );
+        assert!(
+            !events.contains("MTUI_SECRET_CANARY") && !events.contains("audituser"),
+            "the drop event leaked repository credentials"
+        );
+        assert!(events.contains("https://***@repo.example/"));
+    }
+
+    #[test]
+    fn valid_credential_url_stays_exact_in_the_operational_map() {
+        let raw = "https://audituser:MTUI_SECRET_CANARY@repo.example/SLES-15-x86_64/";
+        let mut repos = None;
+
+        let events = capture_events(|| {
+            repos = Some(reporepoparse(
+                &[raw.to_string()],
+                &["SLES 15 (x86_64)".to_string()],
+            ));
+        });
+
+        let repos = repos.expect("ran");
+        assert_eq!(repos[&SystemProduct::new("SLES", "15", "x86_64")], raw);
+        assert!(
+            !events.contains("MTUI_SECRET_CANARY"),
+            "a valid URL's parsing leaked repository credentials"
+        );
+    }
+}
