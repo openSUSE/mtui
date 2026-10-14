@@ -337,6 +337,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A repeated `add_host` no longer replaces a host a test-target slot already
+  has (losing its command log and `update` record) or re-takes its pool claim,
+  and `add_host -t` no longer attaches reference hosts nobody named (#678).
 - `approve -r` and `reject --reviewer` no longer publish the report when the
   action is then refused: the reviewer and document checks, the Slack gate, the
   backend client, the PR-hash gate and the Gitea and OBS assignment checks now

@@ -1149,8 +1149,6 @@ impl Session {
         }
 
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
-        // Which slots the pool-backup step below still needs a live host for.
-        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
         let targets = self.targets_mut();
         // A group built by a later `load_update` would otherwise start without a
         // prompter, so its command-timeout prompt would never fire.
@@ -1159,13 +1157,12 @@ impl Session {
         }
         targets.set_op_lock_holders(holders.clone());
         for (target, drift_entry) in connected.into_iter().flatten() {
-            live.insert(target.hostname().to_owned());
             targets.add(target);
             drift.push(drift_entry);
         }
 
         let backup_drift = self
-            .connect_pool_backups(&config, rrid, &hosts, &live, timeout_prompt.clone())
+            .connect_pool_backups(&config, rrid, &hosts, timeout_prompt.clone())
             .await;
         drift.extend(backup_drift);
 
@@ -1287,13 +1284,16 @@ impl Session {
     /// Retries failed pool slots against their remaining free candidates
     /// (RFC §5.7 backup-refhost).
     ///
-    /// For each slot in `slot_candidates` whose chosen host is not among the
-    /// just-connected `live` hosts: drop the dead claim(s), then sequentially
-    /// `acquire_any` the next free sibling and connect it until one succeeds or
-    /// the candidates are exhausted. Any host that connects joins the active
-    /// group and returns its drift entry. A no-op when pool selection is
-    /// inactive (`arbiter`/`owner` unset) or no slots are recorded; best-effort,
-    /// so a connect failure releases the in-process claim and moves on.
+    /// Only a slot whose pool-claimed primary failed to connect in *this* call
+    /// (`attempted_initial` ∩ `pool_claims`) and that has no candidate attached
+    /// is retried: drop the dead claim(s), then sequentially `acquire_any` the
+    /// next free sibling and connect it until one succeeds or the candidates are
+    /// exhausted. A slot with any attached host is served, and a slot nobody
+    /// claimed in this call (`add_host -t`, a slot found all-busy) is left
+    /// alone. Any host that connects joins the active group and returns its
+    /// drift entry. A no-op when pool selection is inactive (`arbiter`/`owner`
+    /// unset) or no slots are recorded; best-effort, so a connect failure
+    /// releases the in-process claim and moves on.
     ///
     /// The whole phase shares one wall-clock budget (`4 * connect_timeout`), not
     /// a per-slot one: a per-slot budget still multiplies by slot count, so a
@@ -1305,7 +1305,6 @@ impl Session {
         config: &Config,
         rrid: &str,
         attempted_initial: &[String],
-        live: &std::collections::HashSet<String>,
         timeout_prompt: Option<mtui_hosts::TimeoutPrompt>,
     ) -> Vec<(String, Option<Vec<String>>)> {
         // Snapshot pool state + selection identity before any await.
@@ -1331,6 +1330,18 @@ impl Session {
         let wait = i64::try_from(config.lock_wait).unwrap_or(i64::MAX);
         let poll = i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX);
 
+        let attached: std::collections::HashSet<String> =
+            self.targets().names().into_iter().collect();
+        // Pool-claimed hosts this call tried and lost. Must never include a
+        // claim taken outside this call's pool selection.
+        let failed: std::collections::HashSet<String> = {
+            let claims = &self.metadata().base().pool_claims;
+            attempted_initial
+                .iter()
+                .filter(|h| claims.contains(*h) && !attached.contains(*h))
+                .cloned()
+                .collect()
+        };
         let mut attempted: std::collections::HashSet<String> =
             attempted_initial.iter().cloned().collect();
         let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
@@ -1349,7 +1360,9 @@ impl Session {
                 );
                 break;
             }
-            if candidates.iter().any(|c| live.contains(c)) {
+            if candidates.iter().any(|c| attached.contains(c))
+                || !candidates.iter().any(|c| failed.contains(c))
+            {
                 continue;
             }
             // Drop dead primary claim(s) so a sibling can be tried and the
@@ -1357,7 +1370,7 @@ impl Session {
             {
                 let base = self.metadata_mut().base_mut();
                 for c in &candidates {
-                    if base.pool_claims.contains(c) && !live.contains(c) {
+                    if base.pool_claims.contains(c) && !attached.contains(c) {
                         base.pool_claims.remove(c);
                         arbiter.release(c, &owner);
                     }
@@ -2112,6 +2125,7 @@ mod tests {
     use mtui_hosts::MockConnection;
     use mtui_testreport::{ObsReport, TestReport};
     use mtui_types::RequestReviewID;
+    use mtui_types::hostlog::CommandLog;
 
     const REFHOSTS_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -2837,41 +2851,38 @@ mod tests {
     /// Once the shared budget is spent, the remaining slots are abandoned rather
     /// than every sibling of every slot walked. Each candidate is a black-hole
     /// listener (bound, never `accept()`ed) costing a full `connect_timeout = 1s`
-    /// to fail, so walking all 6 across 3 slots would take ~6s while the
-    /// `4 * connect_timeout` budget must cut it off around 4s.
+    /// to fail. The first of each of the 3 slots is the failed primary, so the 6
+    /// siblings would take ~6s while the `4 * connect_timeout` budget must cut
+    /// it off around 4s.
     #[tokio::test]
     async fn connect_pool_backups_stops_once_budget_is_spent() {
         let mut config = config_with_path_refhosts();
         config.connect_timeout = 1;
         let mut s = Session::new(config.clone(), false);
-        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, &[], &[]);
 
-        // 3 slots x 2 siblings, kept alive so the ports stay open.
-        let listeners: Vec<std::net::TcpListener> = (0..6)
+        let listeners: Vec<std::net::TcpListener> = (0..9)
             .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("bind"))
             .collect();
-        let candidates: Vec<String> = listeners
-            .iter()
-            .map(|l| format!("127.0.0.1:{}", l.local_addr().unwrap().port()))
-            .collect();
+        let candidates: Vec<String> = listeners.iter().map(listener_addr).collect();
+        let primaries: Vec<String> = candidates.chunks(3).map(|c| c[0].clone()).collect();
 
         let arbiter = test_arbiter();
-        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
-        {
-            let base = s.metadata_mut().base_mut();
-            base.arbiter = Some(arbiter);
-            base.owner = Some(owner);
-            for (i, pair) in candidates.chunks(2).enumerate() {
-                base.slot_candidates
-                    .insert(format!("slot-{i}"), pair.to_vec());
-            }
-        }
+        let owner: Owner = ("reg".to_owned(), rrid.to_owned());
+        let names: Vec<String> = (0..3).map(|i| format!("slot-{i}")).collect();
+        let slots: Vec<(&str, &[String])> = candidates
+            .chunks(3)
+            .zip(&names)
+            .map(|(c, n)| (n.as_str(), c))
+            .collect();
+        let claims: Vec<&str> = primaries.iter().map(String::as_str).collect();
+        wire_pool(&mut s, arbiter, &owner, &slots, &claims);
 
-        let live = std::collections::HashSet::new();
         let started = Instant::now();
         let drift = tokio::time::timeout(
             Duration::from_secs(7),
-            s.connect_pool_backups(&config, "SUSE:Maintenance:1:1", &[], &live, None),
+            s.connect_pool_backups(&config, rrid, &primaries, None),
         )
         .await
         .expect("must not hang past the outer test wrapper");
@@ -2884,6 +2895,156 @@ mod tests {
             started.elapsed()
         );
         drop(listeners);
+    }
+
+    /// An unused local address: bound to learn a free port, then released, so a
+    /// connect is refused at once.
+    fn closed_addr() -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+    }
+
+    fn listener_addr(l: &std::net::TcpListener) -> String {
+        format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+    }
+
+    /// Whether anything dialled `l` since it was bound (a backlogged connection
+    /// is still `accept`able after the client gave up).
+    fn was_dialled(l: &std::net::TcpListener) -> bool {
+        l.set_nonblocking(true).expect("nonblocking");
+        l.accept().is_ok()
+    }
+
+    /// Wires the pool seam onto the active report: the arbiter and `owner`, the
+    /// recorded `slots`, and `claims` as both pool claims and arbiter-held.
+    fn wire_pool(
+        s: &mut Session,
+        arbiter: &'static HostArbiter,
+        owner: &Owner,
+        slots: &[(&str, &[String])],
+        claims: &[&str],
+    ) {
+        for c in claims {
+            assert!(arbiter.try_acquire(c, owner), "{c} must start free");
+        }
+        let base = s.metadata_mut().base_mut();
+        base.arbiter = Some(arbiter);
+        base.owner = Some(owner.clone());
+        for (slot, cands) in slots {
+            base.slot_candidates
+                .insert((*slot).to_owned(), cands.to_vec());
+        }
+        for c in claims {
+            base.pool_claims.insert((*c).to_owned());
+        }
+    }
+
+    /// A slot that already has a host attached is served: re-running `add_host`
+    /// must neither drop its pool claim nor dial a sibling, and the attached
+    /// host keeps its command log.
+    #[tokio::test]
+    async fn backup_keeps_attached_slot_host() {
+        let mut config = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let mut s = Session::new(config, false);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, &[], &[]);
+        let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), rrid.to_owned());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &["mock-a".to_owned(), listener_addr(&sibling)])],
+            &["mock-a"],
+        );
+        let conn = MockConnection::new("mock-a").with_default(CommandLog::new("", "ok", "", 0, 0));
+        s.targets_mut().add(Target::with_connection(
+            "mock-a",
+            TargetState::Enabled,
+            Box::new(conn),
+        ));
+        s.targets_mut().run("echo marker").await;
+        assert_eq!(s.targets().get("mock-a").unwrap().out().len(), 1);
+
+        s.connect_and_add_hosts(vec![], rrid).await;
+
+        assert!(
+            s.metadata().base().pool_claims.contains("mock-a"),
+            "a served slot keeps its pool claim"
+        );
+        assert_eq!(arbiter.owner_of("mock-a"), Some(owner));
+        assert_eq!(
+            s.targets().get("mock-a").unwrap().out().len(),
+            1,
+            "the attached host was replaced or reset"
+        );
+        assert!(
+            !was_dialled(&sibling),
+            "a served slot must not be backed up"
+        );
+    }
+
+    /// `add_host -t` names hosts that are not pool claims, so it must not back
+    /// up slots nobody asked about.
+    #[tokio::test]
+    async fn named_add_does_not_back_up_unrelated_slots() {
+        let mut config = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let mut s = Session::new(config, false);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, &[], &[]);
+        let unrelated = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), rrid.to_owned());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[listener_addr(&unrelated)])],
+            &[],
+        );
+
+        s.add_named_hosts(vec![closed_addr()]).await;
+
+        assert!(s.targets().is_empty());
+        assert!(
+            !was_dialled(&unrelated),
+            "an unrelated slot was claimed and dialled"
+        );
+    }
+
+    /// The case backup exists for: a pool-claimed primary that fails to connect
+    /// is replaced by a sibling from its slot, and every claim is released once
+    /// the sibling fails too.
+    #[tokio::test]
+    async fn backup_retries_failed_primary() {
+        let mut config = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let mut s = Session::new(config, false);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, &[], &[]);
+        let primary = closed_addr();
+        let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let sibling_addr = listener_addr(&sibling);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), rrid.to_owned());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[primary.clone(), sibling_addr.clone()])],
+            &[&primary],
+        );
+
+        s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+
+        assert!(was_dialled(&sibling), "the sibling was never tried");
+        assert!(s.targets().is_empty());
+        assert_eq!(arbiter.owner_of(&primary), None);
+        assert_eq!(arbiter.owner_of(&sibling_addr), None);
+        assert!(s.metadata().base().pool_claims.is_empty());
     }
 
     /// `check_cancelled` is `Ok` until the token fires, then reports
