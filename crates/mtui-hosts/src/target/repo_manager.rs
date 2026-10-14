@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use mtui_types::rrid::RequestReviewID;
 use mtui_types::shellquote::quote_args;
 use mtui_types::system::SystemProduct;
+use mtui_types::url_redaction::sanitize_url;
 use tracing::{debug, info, warn};
 
 use super::Target;
@@ -86,7 +87,7 @@ pub enum RepoFailure {
     },
     /// `zypper rr` did not remove the URL.
     Remove {
-        /// The repo URL that failed to be removed.
+        /// The repo URL that failed to be removed, with any userinfo masked.
         url: String,
     },
     /// The trailing `zypper ref` (or its `transactional-update` wrapper)
@@ -107,7 +108,7 @@ impl std::fmt::Display for RepoFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Add { alias } => write!(f, "adding repo {alias} failed"),
-            Self::Remove { url } => write!(f, "removing repo {url} failed"),
+            Self::Remove { url } => write!(f, "removing repo {} failed", sanitize_url(url)),
             Self::Refresh { command } => write!(f, "refreshing repos failed: {command}"),
             Self::UnknownCommand { command } => {
                 write!(f, "unknown zypper sub-command: {command}")
@@ -275,9 +276,12 @@ impl<'a> RepoManager<'a> {
         }
 
         for (product, url) in &matched_repos {
+            // Only the executed argument keeps the userinfo; every log line and
+            // failure value below carries the masked form.
+            let safe_url = sanitize_url(url);
             if is_ar {
                 let alias = issue_alias(product, rrid);
-                info!("Adding repo {url} on {hostname}");
+                info!("Adding repo {safe_url} on {hostname}");
                 // Quote the metadata-derived alias/url so a crafted value cannot
                 // break out of its argument into the root command line.
                 let args = quote_args(&[alias.as_str(), url.as_str(), alias.as_str()]);
@@ -312,7 +316,7 @@ impl<'a> RepoManager<'a> {
                     }
                 }
             } else if is_rr {
-                info!("Removing repo {url} on {hostname}");
+                info!("Removing repo {safe_url} on {hostname}");
                 let args = quote_args(&[url.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
                 // Unlike a bare `ar`, a non-zero `rr` here is never a benign
@@ -322,11 +326,11 @@ impl<'a> RepoManager<'a> {
                 if self.target.lastexit() != Some(0) {
                     let err = last_error_line(self.target);
                     warn!(
-                        "removing repo {url} on {hostname} failed: zypper exited {}{}",
+                        "removing repo {safe_url} on {hostname} failed: zypper exited {}{}",
                         exit_display(self.target.lastexit()),
                         err,
                     );
-                    failure.get_or_insert_with(|| RepoFailure::Remove { url: url.clone() });
+                    failure.get_or_insert(RepoFailure::Remove { url: safe_url });
                 }
             } else {
                 // Unknown sub-command: force-unlock the target and bail.
@@ -457,6 +461,17 @@ mod tests {
     /// A system whose flattened set is exactly `products`.
     fn system_of(base: SystemProduct, addons: &[SystemProduct]) -> System {
         System::new(base, addons.iter().cloned().collect(), false)
+    }
+
+    #[test]
+    fn remove_failure_display_masks_credentials_in_a_directly_built_variant() {
+        let failure = RepoFailure::Remove {
+            url: "https://audituser:CANARY@repo.example/r/".to_owned(),
+        };
+        assert_eq!(
+            failure.to_string(),
+            "removing repo https://***@repo.example/r/ failed"
+        );
     }
 
     // --- run_zypper: ar / rr -----------------------------------------------

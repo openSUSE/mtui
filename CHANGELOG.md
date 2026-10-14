@@ -350,6 +350,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   own file, with `-job-<id>` inserted before the extension (for example
   `h-zypper-x86_64-job-41.log`). File names no job collides on are unchanged,
   and files from earlier exports are not deleted.
+- A repository URL that embeds credentials (`https://user:token@host/…`) is
+  still sent to `zypper` exactly as given, but its userinfo no longer reaches
+  logs, prompts, errors or the per-host command log: the `Adding repo` /
+  `Removing repo` lines, the failed-removal message, a rejected-URL error, the
+  command-timeout prompt and error, and the command and output stored for
+  `showlog`, `export` and the report all show `https://***@host/…` instead.
+  Output that merely echoes such a URL (a zypper error line) is masked the same
+  way. Only a `scheme://…@` authority is recognised: a password printed on its
+  own, or carried in a URL path or query, is not.
 - Automatic `export` now refuses install-log filenames derived from dashboard
   metadata that contain a path separator or control character (or are an
   absolute path), before fetching or writing anything, so a hostile dashboard

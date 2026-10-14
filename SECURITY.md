@@ -42,8 +42,10 @@ In scope: defects in mtui itself. The security-relevant areas are:
   `config show` and `config set`; a change adding a credential field must
   add it there in the same commit.
 - **URLs in logs.** URLs may carry credentials in userinfo or query
-  parameters, so they are passed through `mtui_datasources::sanitize_url`
-  before being logged.
+  parameters, so they are passed through `mtui_types::sanitize_url` (also
+  exported as `mtui_datasources::sanitize_url`) before being logged. Free-form
+  text that may hold several URLs — a remote command line or its output — goes
+  through `mtui_types::sanitize_urls_in_text`.
 - **The MCP server.** `mtui-mcp --transport http` binds loopback
   (`127.0.0.1`) by default and relies on rmcp's DNS-rebinding guard. It
   exposes mtui commands — including ones that mutate remote hosts — to

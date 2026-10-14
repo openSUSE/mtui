@@ -258,6 +258,13 @@ oscrc.
 - Configured datasource URLs may embed credentials
   (`scheme://user:pass@host`). mtui sanitises the userinfo to `***` before any
   URL reaches a log or an error message, keeping the host visible for diagnosis.
+- A repository URL from the report metadata may carry userinfo
+  (`https://user:token@host/repo/`) and is sent to `zypper` unchanged, so
+  authenticated repositories keep working. Everything mtui records about the
+  command — log lines, the timeout prompt, errors, and the command and output
+  kept in the per-host log that `showlog` and `export` print — masks the userinfo
+  to `***`, including a URL a remote tool echoes back in its output. A password
+  that appears without a `scheme://…@` URL around it is not recognised.
 
 ## Example
 
