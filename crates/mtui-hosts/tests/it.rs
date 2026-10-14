@@ -15,6 +15,8 @@ mod history_append;
 mod lock_format;
 #[path = "operation_group.rs"]
 mod operation_group;
+#[path = "repository_redaction.rs"]
+mod repository_redaction;
 #[path = "sftp_traversal.rs"]
 mod sftp_traversal;
 #[path = "spinner_concurrent_logging.rs"]

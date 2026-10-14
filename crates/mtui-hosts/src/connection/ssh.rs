@@ -38,6 +38,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
+use mtui_types::url_redaction::sanitize_urls_in_text;
 use russh::client::{self, Handle};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
@@ -1162,6 +1163,9 @@ impl Connection for SshConnection {
 
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
         let started = Instant::now();
+        // `command` is executed as given; every log, prompt, error and stored
+        // log below carries this copy with URL credentials masked.
+        let shown = sanitize_urls_in_text(command);
 
         // Open a channel, reconnecting + retrying on a lost link.
         let mut attempt = 0;
@@ -1212,12 +1216,12 @@ impl Connection for SshConnection {
             {
                 tracing::warn!(
                     host = %self.hostname,
-                    command,
+                    command = %shown,
                     "command exceeded absolute deadline; aborting (non-interactive)",
                 );
                 let _ = channel.close().await;
                 return Err(HostError::Timeout {
-                    command: command.to_owned(),
+                    command: shown.clone(),
                 });
             }
 
@@ -1238,17 +1242,17 @@ impl Connection for SshConnection {
                         // orphaned.
                         tracing::warn!(
                             host = %self.hostname,
-                            command,
+                            command = %shown,
                             "command exceeded absolute deadline; aborting (non-interactive)",
                         );
                         let _ = channel.close().await;
                         return Err(HostError::Timeout {
-                            command: command.to_owned(),
+                            command: shown.clone(),
                         });
                     }
                     let decision = on_command_timeout(
                         &self.hostname,
-                        command,
+                        &shown,
                         self.is_repl,
                         self.timeout_prompt.as_ref(),
                     )
@@ -1259,7 +1263,7 @@ impl Connection for SshConnection {
                             // Reclaim the abandoned command's remote process.
                             let _ = channel.close().await;
                             return Err(HostError::Timeout {
-                                command: command.to_owned(),
+                                command: shown.clone(),
                             });
                         }
                     }
@@ -1287,7 +1291,7 @@ impl Connection for SshConnection {
             let elapsed = started.elapsed().as_secs_f64();
             tracing::warn!(
                 host = %self.hostname,
-                command,
+                command = %shown,
                 elapsed,
                 saw_exit,
                 "SSH session lost mid-command",
@@ -1305,7 +1309,7 @@ impl Connection for SshConnection {
         if capture.truncated {
             tracing::warn!(
                 host = %self.hostname,
-                command,
+                command = %shown,
                 "command output exceeded capture caps; truncated",
             );
         }
@@ -1317,6 +1321,7 @@ impl Connection for SshConnection {
             exitcode,
             runtime,
         )
+        .with_urls_masked()
         .with_flags(capture.truncated, false))
     }
 

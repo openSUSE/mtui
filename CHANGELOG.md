@@ -45,6 +45,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a claim recording the same user and request is adopted whatever PID it
   records, instead of the host being skipped as busy. The existing claim is
   left as it is, so its timestamp is not refreshed.
+- A repository URL that embeds credentials (`https://user:token@host/…`) is
+  still sent to `zypper` exactly as given, but its userinfo no longer reaches
+  logs, prompts, errors or the per-host command log: the `Adding repo` /
+  `Removing repo` lines, the failed-removal message, a rejected-URL error, the
+  command-timeout prompt and error, and the command and output stored for
+  `showlog`, `export` and the report all show `https://***@host/…` instead.
+  Output that merely echoes such a URL (a zypper error line) is masked the same
+  way. Only a `scheme://…@` authority is recognised: a password printed on its
+  own, or carried in a URL path or query, is not.
 
 ## [26.3.5] - 2026-10-27
 
