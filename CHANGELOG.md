@@ -69,6 +69,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session: the timeout is returned as it happened, so the lock layer can
   inspect the host instead of mistaking its own file for another tester's.
   Read-only requests still retry once on a new session after a session failure.
+  mtui drop its cached SFTP session and replay the request. An exclusive create
+  whose reply is lost is returned as a timeout instead of being replayed, so
+  the lock layer can inspect the host instead of mistaking its own file for
+  another tester's. Reads, appends, truncating writes and requests that never
+  reached the server still retry once on a new session after the cached one
+  fails.
 
 ## [26.3.5] - 2026-10-27
 
