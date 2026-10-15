@@ -454,6 +454,62 @@ impl SshConnection {
     ) -> Result<Self> {
         let hostname = hostname.into();
         let resolved = resolve(&hostname, port);
+        Self::connect_resolved(
+            hostname,
+            resolved,
+            policy,
+            connect_timeout,
+            timeout,
+            known_hosts,
+        )
+        .await
+    }
+
+    /// Connects as `user` with exactly the key at `identity`, bypassing
+    /// `~/.ssh/config` and the default key set.
+    ///
+    /// Only for tests that need a login the developer's SSH setup cannot
+    /// express; authentication stays public-key only.
+    ///
+    /// # Errors
+    ///
+    /// As [`connect`](Self::connect).
+    #[doc(hidden)]
+    pub async fn connect_as(
+        hostname: impl Into<String>,
+        port: u16,
+        user: impl Into<String>,
+        identity: PathBuf,
+        policy: HostKeyPolicy,
+        connect_timeout: CommandTimeout,
+        known_hosts: Option<PathBuf>,
+    ) -> Result<Self> {
+        let hostname = hostname.into();
+        let resolved = Resolved {
+            connect_host: hostname.clone(),
+            port,
+            user: user.into(),
+            identity_files: vec![identity],
+        };
+        Self::connect_resolved(
+            hostname,
+            resolved,
+            policy,
+            connect_timeout,
+            connect_timeout,
+            known_hosts,
+        )
+        .await
+    }
+
+    async fn connect_resolved(
+        hostname: String,
+        resolved: Resolved,
+        policy: HostKeyPolicy,
+        connect_timeout: CommandTimeout,
+        timeout: CommandTimeout,
+        known_hosts: Option<PathBuf>,
+    ) -> Result<Self> {
         let transport = TransportTimers::default();
         let handle = establish(
             &hostname,
