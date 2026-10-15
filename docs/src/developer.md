@@ -186,6 +186,17 @@ display) passed into each call. There are no hidden globals.
   `Connection` trait); HTTP goes through `wiremock`; subprocesses are
   driven through a command-runner trait or a stub on `PATH`. Real
   hosts/containers are gated behind `#[ignore]` + a CI env flag.
+- **Real-sshd upload fixture.** `crates/mtui-hosts/tests/remote_upload_safety.rs`
+  runs the upload path against a disposable, unprivileged OpenSSH `sshd` on
+  loopback (generated keys, a scratch root under the system temp dir, public-key
+  login, killed on drop) so symlink/hardlink/rename behaviour is the operating
+  system's. It is `#[ignore]` and needs `MTUI_TEST_REAL_SFTP=1`; if that is set
+  and `sshd`, `sftp-server` or `ssh-keygen` is missing it panics rather than
+  passing: `MTUI_TEST_REAL_SFTP=1 cargo test -p mtui-hosts --test it
+  remote_upload_safety -- --ignored --test-threads=1`. Optional overrides:
+  `MTUI_TEST_REAL_SSHD`, `MTUI_TEST_REAL_SFTP_SERVER`,
+  `MTUI_TEST_REAL_SFTP_SCRATCH`. It runs as one user, so how a sticky directory
+  treats a *different* user's file is not covered.
 - **Snapshot text contracts** with `insta` (report document goldens, MCP
   schemas, the lock wire format, display output). Review new
   snapshots with `cargo insta review`.

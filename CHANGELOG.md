@@ -341,6 +341,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `put` (REPL and MCP) no longer opens the destination for truncation, which
+  followed a symlink planted at the upload name and wrote through a hardlink to
+  another file. The file is staged in a private directory next to the
+  destination, set to mode `0770` before it appears, and swapped in atomically
+  with `posix-rename@openssh.com`, so readers never see a partial file and a
+  symlink or hardlink at the name is replaced, leaving its target untouched. The
+  destination path and the `put` schema are unchanged. A host is now refused,
+  by name and before anything is written, when its SFTP server lacks that
+  extension, when a parent directory is a symlink, is owned by someone other
+  than root or the login, or is group/world-writable without the sticky bit, or
+  when the path contains `..`; a failed `chmod` now fails the upload instead of
+  being ignored. A lost reply to the final rename is reported as "may or may not
+  have been published" and is not retried. A cancelled upload can leave a
+  private `.mtui-upload-*` directory behind.
 - An SFTP request that fails with an ordinary status (file not found,
   permission denied, an exclusive create that lost the race) no longer makes
   mtui drop its cached SFTP session and replay the request. An exclusive create
