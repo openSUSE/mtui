@@ -366,7 +366,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
   file's modification time because it has no timestamp of its own; a missing or
   future modification time never reaps. A lock line holding non-UTF-8 bytes or
-  an empty user is invalid the same way, instead of being read leniently.
+  an empty user is invalid the same way, instead of being read leniently. A
+  file that reads empty may be another tester's claim between its create and its
+  write, so mtui re-reads one it cannot prove is older than five seconds for up
+  to five seconds before calling it invalid, and the error says how long ago the
+  file was modified.
 - An SFTP request that fails with an ordinary status (file not found,
   permission denied, an exclusive create that lost the race) no longer makes
   mtui drop its cached SFTP session and replay the request. An exclusive create

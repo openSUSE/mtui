@@ -550,7 +550,8 @@ use probe_config::ProbeConfig;
 /// The operation-lock read decides reachability; a pool-claim read that fails
 /// (a permission-denied read) degrades to "no claim" with a warning rather than
 /// mislabelling a host that answered as `unreachable`. An empty or unparseable
-/// `/var/lock/mtui-pool.lock` reads as a claim naming no RRID, never as free.
+/// `/var/lock/mtui-pool.lock` reads as a claim naming no RRID, and an invalid
+/// operation lock reads as `locked`; neither is ever reported as free.
 async fn probe_state(target: &mut Target, host: &str) -> (String, Option<String>) {
     let Ok(locked) = target.is_locked().await else {
         return ("unreachable".to_owned(), None);
@@ -916,6 +917,23 @@ mod tests {
         assert_eq!(state, "locked");
         assert_eq!(pool.as_deref(), Some(""));
         assert_eq!(lock_label(Some(&state), pool.as_deref()), "locked+pool");
+    }
+
+    #[tokio::test]
+    async fn probe_state_reports_an_invalid_op_lock_as_locked_not_as_free() {
+        use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+
+        let conn = MockConnection::new("whale-01").with_file(TARGET_LOCK_PATH, Vec::new());
+        let mut target = Target::with_connection(
+            "whale-01",
+            mtui_types::enums::TargetState::Enabled,
+            Box::new(conn),
+        );
+
+        let (state, pool) = probe_state(&mut target, "whale-01").await;
+
+        assert_eq!(state, "locked");
+        assert_eq!(pool, None);
     }
 
     #[tokio::test]
