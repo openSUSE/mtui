@@ -666,21 +666,18 @@ impl SshConnection {
     /// Runs a verb's *first* SFTP request (`open`/`read`/`read_dir`/
     /// `read_link`/`open_with_flags` — i.e. before anything has been written)
     /// against the cached subsystem, replaying it once on a freshly-handshaked
-    /// session only when both gates hold:
+    /// session only when the failure is session-fatal ([`is_session_fatal`]; a
+    /// status reply is a normal outcome from a healthy session) and either
     ///
-    /// - `replay` is [`FirstRequestReplay::ReadOnly`]. An OPEN with CREATE,
-    ///   TRUNCATE, EXCLUDE or APPEND may already have taken effect server-side
-    ///   when its reply is lost, so replaying it can hide that effect (an
-    ///   exclusive create then collides with its own file) or repeat it.
-    /// - the failure is session-fatal ([`is_session_fatal`]). A status reply
-    ///   is a normal per-request outcome from a healthy session.
+    /// - `replay` is [`FirstRequestReplay::Repeatable`], or
+    /// - the request provably never left the client ([`is_never_sent`]).
     ///
     /// A long-lived shared subsystem can be silently closed by the peer (idle
     /// timeout, restarted sshd), which is the case the replay recovers. A
     /// session opened fresh in this same call is never replayed (a different,
     /// likely permanent problem), nor is any request past the first. A
-    /// session-fatal failure always drops the cached subsystem, replayed or
-    /// not, so the next verb re-handshakes.
+    /// session-fatal failure, including the replay's own, always drops the
+    /// cached subsystem so the next verb re-handshakes.
     ///
     /// Returns the session alongside the result so the caller can issue further
     /// requests against the same subsystem.
@@ -703,7 +700,8 @@ impl SshConnection {
         if fatal {
             self.sftp = None;
         }
-        if !(from_cache && fatal && replay == FirstRequestReplay::ReadOnly) {
+        let replayable = replay == FirstRequestReplay::Repeatable || is_never_sent(&e);
+        if !(from_cache && fatal && replayable) {
             return Err(map_err(self, e));
         }
         tracing::debug!(
@@ -713,7 +711,12 @@ impl SshConnection {
         let sftp = self.sftp().await?;
         match req(Arc::clone(&sftp)).await {
             Ok(v) => Ok((sftp, v)),
-            Err(e) => Err(map_err(self, e)),
+            Err(e) => {
+                if is_session_fatal(&e) {
+                    self.sftp = None;
+                }
+                Err(map_err(self, e))
+            }
         }
     }
 
@@ -725,15 +728,18 @@ impl SshConnection {
     }
 }
 
-/// Whether [`SshConnection::sftp_first_request`] may replay its request.
+/// Whether [`SshConnection::sftp_first_request`] may replay a request that
+/// reached the server before its session failed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FirstRequestReplay {
-    /// The request has no server-side effect, so a replay cannot differ from a
-    /// first attempt.
-    ReadOnly,
-    /// The request can create, truncate or append, and a lost reply leaves the
-    /// outcome unknown to the caller.
-    Never,
+    /// Repeating the request gives the same outcome: a read, or an open whose
+    /// truncate/append effect is identical the second time because the payload
+    /// follows in later writes.
+    Repeatable,
+    /// Repeating the request collides with its own first effect (an exclusive
+    /// create finds the file it just made). Only a request that never left the
+    /// client is replayed.
+    UndeliveredOnly,
 }
 
 /// Whether `e` leaves the SFTP subsystem unusable, as opposed to being one
@@ -748,6 +754,23 @@ fn is_session_fatal(e: &russh_sftp::client::error::Error) -> bool {
         | SftpError::UnexpectedPacket
         | SftpError::UnexpectedBehavior(_) => true,
     }
+}
+
+/// Whether `e` proves the request was never queued for sending, so replaying
+/// it cannot duplicate an effect under any [`FirstRequestReplay`] policy.
+///
+/// russh-sftp raises both cases as `UnexpectedBehavior(String)` with no
+/// dedicated variant, so the two messages its `send_bytes` produces before
+/// anything leaves the client are matched literally: the closed-channel check
+/// (`session closed`) and a failed queue send (`SendError: …`). Any other
+/// `UnexpectedBehavior`, e.g. `sender dropped` after a request was queued, is
+/// ambiguous and stays unmatched.
+fn is_never_sent(e: &russh_sftp::client::error::Error) -> bool {
+    use russh_sftp::client::error::Error as SftpError;
+    matches!(
+        e,
+        SftpError::UnexpectedBehavior(m) if m == "session closed" || m.starts_with("SendError: ")
+    )
 }
 
 /// Builds a generic [`HostError::Sftp`] for `host` from a displayable error.
@@ -1482,7 +1505,7 @@ impl Connection for SshConnection {
         let open_path = remote_str.clone();
         let (sftp, mut file) = self
             .sftp_first_request(
-                FirstRequestReplay::Never,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open_with_flags(open_path, flags).await }
@@ -1506,7 +1529,7 @@ impl Connection for SshConnection {
         let open_path = remote.to_string_lossy().to_string();
         let (_sftp, mut src) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open(open_path).await }
@@ -1536,7 +1559,7 @@ impl Connection for SshConnection {
         let list_path = remote_str.clone();
         let (sftp, dir) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let list_path = list_path.clone();
                     async move { sftp.read_dir(list_path).await }
@@ -1611,7 +1634,7 @@ impl Connection for SshConnection {
         let list_path = path.to_string_lossy().to_string();
         let (_sftp, dir) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let list_path = list_path.clone();
                     async move { sftp.read_dir(list_path).await }
@@ -1626,7 +1649,7 @@ impl Connection for SshConnection {
         let read_path = path.to_string_lossy().to_string();
         let (_sftp, data) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let read_path = read_path.clone();
                     async move { sftp.read(read_path).await }
@@ -1643,7 +1666,7 @@ impl Connection for SshConnection {
         let open_path = path.to_string_lossy().to_string();
         let (_sftp, mut file) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open(open_path).await }
@@ -1715,7 +1738,7 @@ impl Connection for SshConnection {
             let open_path = path_str.clone();
             let (_sftp, file) = self
                 .sftp_first_request(
-                    FirstRequestReplay::Never,
+                    FirstRequestReplay::UndeliveredOnly,
                     move |sftp| {
                         let open_path = open_path.clone();
                         async move { sftp.open_with_flags(open_path, flags).await }
@@ -1727,11 +1750,14 @@ impl Connection for SshConnection {
         } else {
             // Truncating overwrite. Explicit CREATE: the `write` convenience
             // opens WRITE-only and fails with NO_SUCH_FILE on a missing file.
+            // Replayed after a lost reply so the file is not left truncated;
+            // an original open still queued on the dead session could truncate
+            // once more after the replayed write.
             let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
             let open_path = path_str;
             let (_sftp, file) = self
                 .sftp_first_request(
-                    FirstRequestReplay::Never,
+                    FirstRequestReplay::Repeatable,
                     move |sftp| {
                         let open_path = open_path.clone();
                         async move { sftp.open_with_flags(open_path, flags).await }
@@ -1760,7 +1786,7 @@ impl Connection for SshConnection {
         let open_path = path.to_string_lossy().to_string();
         let (_sftp, mut file) = self
             .sftp_first_request(
-                FirstRequestReplay::Never,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open_with_flags(open_path, flags).await }
@@ -1802,7 +1828,7 @@ impl Connection for SshConnection {
         let link_path = path.to_string_lossy().to_string();
         let (_sftp, target) = self
             .sftp_first_request(
-                FirstRequestReplay::ReadOnly,
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let link_path = link_path.clone();
                     async move { sftp.read_link(link_path).await }
@@ -1991,6 +2017,30 @@ mod tests {
             SftpError::UnexpectedBehavior("RecvError".to_owned()),
         ] {
             assert!(is_session_fatal(&fatal), "{fatal:?}");
+        }
+    }
+
+    #[test]
+    fn never_sent_matches_only_the_errors_raised_before_a_request_is_queued() {
+        use russh_sftp::client::error::Error as SftpError;
+        use russh_sftp::protocol::StatusCode;
+
+        for never in [
+            SftpError::UnexpectedBehavior("session closed".to_owned()),
+            SftpError::UnexpectedBehavior("SendError: channel closed".to_owned()),
+        ] {
+            assert!(is_never_sent(&never), "{never:?}");
+            assert!(is_session_fatal(&never), "{never:?}");
+        }
+        for ambiguous in [
+            SftpError::UnexpectedBehavior("sender dropped".to_owned()),
+            SftpError::UnexpectedBehavior("RecvError: channel closed".to_owned()),
+            SftpError::Timeout,
+            SftpError::IO("session closed".to_owned()),
+            SftpError::UnexpectedPacket,
+            sftp_status(StatusCode::ConnectionLost),
+        ] {
+            assert!(!is_never_sent(&ambiguous), "{ambiguous:?}");
         }
     }
 

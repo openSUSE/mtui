@@ -343,11 +343,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - An SFTP request that fails with an ordinary status (file not found,
   permission denied, an exclusive create that lost the race) no longer makes
-  mtui drop its cached SFTP session and replay the request. A create, truncate
-  or append whose reply is lost is likewise no longer replayed on a fresh
-  session: the timeout is returned as it happened, so the lock layer can
-  inspect the host instead of mistaking its own file for another tester's.
-  Read-only requests still retry once on a new session after a session failure.
+  mtui drop its cached SFTP session and replay the request. An exclusive create
+  whose reply is lost is returned as a timeout instead of being replayed, so
+  the lock layer can inspect the host instead of mistaking its own file for
+  another tester's. Reads, appends, truncating writes and requests that never
+  reached the server still retry once on a new session after the cached one
+  fails.
 - A template can reattach to its own pool claim on a host after mtui restarts:
   a claim recording the same user and request is adopted whatever PID it
   records, instead of the host being skipped as busy. The existing claim is
