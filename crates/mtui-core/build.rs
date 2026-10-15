@@ -10,11 +10,11 @@
 //!
 //! clap renders `mtui <long_version>`, so the captured value omits the leading
 //! `mtui ` and the final line reads `mtui <ver> (<ref>[-dirty], <profile>,
-//! <target>)`, where `<ref>` is `git describe --tags --always --dirty --long`
-//! output — a tag-relative name once releases are tagged (`v1.2.0-3-gabcdef`),
-//! or a bare short SHA until then. When built outside a git checkout the ref
-//! field is omitted; the profile and target are always present. The script never
-//! fails the build.
+//! <target>)`, where `<ref>` is `git describe` output restricted to release tags
+//! of the crate's own `MAJOR.MINOR` series (`26.3.3-2-gabcdef012345`), or a bare
+//! short SHA when no such tag is reachable. When built outside a git checkout the
+//! ref field is omitted; the profile and target are always present. The script
+//! never fails the build.
 
 use std::process::Command;
 
@@ -40,18 +40,31 @@ fn main() {
 }
 
 /// Returns a human-readable git ref for the build: `git describe` output when a
-/// tag is reachable (e.g. `v1.2.0-3-gabcdef-dirty`), otherwise a bare short SHA
-/// (e.g. `abcdef012345-dirty`). Returns `None` when git is unavailable or this is
-/// not a checkout (e.g. a release tarball).
+/// release tag of the crate's own `MAJOR.MINOR.*` series is reachable (e.g.
+/// `26.3.3-2-gabcdef012345-dirty`), otherwise a bare short SHA (e.g.
+/// `abcdef012345-dirty`). Returns `None` when git is unavailable or this is not a
+/// checkout (e.g. a release tarball).
 ///
-/// `git describe --tags --always --dirty --long` already degrades to the short
-/// SHA when no tag is reachable, so today (no tags) it prints the same short-SHA
-/// form as the previous `rev-parse` scheme; once releases are tagged it upgrades
-/// to the tag-relative form automatically. `git_short_sha` is kept as an explicit
-/// fallback for the case where `describe` fails but `rev-parse` still works.
+/// Matching only the own series keeps unrelated tags (`archive/python-main`,
+/// legacy `16.x`) out of the ref; `--always` degrades to the short SHA, and
+/// `git_short_sha` covers the case where `describe` fails but `rev-parse` works.
 fn git_ref() -> Option<String> {
+    let pattern = format!(
+        "{}.{}.*",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR")
+    );
     let out = Command::new("git")
-        .args(["describe", "--tags", "--always", "--dirty", "--long"])
+        .args([
+            "describe",
+            "--tags",
+            "--match",
+            &pattern,
+            "--always",
+            "--dirty",
+            "--long",
+            "--abbrev=12",
+        ])
         .output()
         .ok()?;
     if out.status.success()

@@ -38,6 +38,37 @@ fn version_prints_provenance_block_and_exits_zero() {
         stdout.contains('('),
         "expected build-provenance block in --version, got: {stdout:?}"
     );
+    assert_git_ref_is_in_series(&stdout);
+}
+
+/// With a git ref present (`<ref>, <profile>, <target>`), it must not name a tag
+/// outside this crate's `MAJOR.MINOR` series; a bare SHA is always fine.
+fn assert_git_ref_is_in_series(stdout: &str) {
+    let block = stdout
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')'))
+        .map(|(block, _)| block)
+        .expect("provenance block");
+    let fields: Vec<&str> = block.split(", ").collect();
+    if fields.len() != 3 {
+        return;
+    }
+    let git_ref = fields[0];
+    assert!(
+        !git_ref.contains('/'),
+        "ref names a foreign tag: {git_ref:?}"
+    );
+    if git_ref.contains("-g") {
+        let series = format!(
+            "{}.{}.",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR")
+        );
+        assert!(
+            git_ref.starts_with(&series),
+            "tag-form ref must be in the {series}* series, got: {git_ref:?}"
+        );
+    }
 }
 
 #[test]
