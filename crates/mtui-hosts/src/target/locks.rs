@@ -3093,6 +3093,8 @@ mod tests {
     /// Forwards to a [`MockConnection`], planting `foreign` right before the
     /// first exclusive write and logging every write/remove it forwards.
     /// `on_mtime` is planted the same way, right before the first mtime read.
+    type LandOnOpen = (u32, Option<Vec<u8>>);
+
     #[derive(Clone)]
     struct RacingConnection {
         inner: MockConnection,
@@ -3101,7 +3103,7 @@ mod tests {
         /// `(n, line)`: the first `n` opens see the file as it is, the next one
         /// finds `line` written (or, for `None`, the file removed), as a
         /// claimant's WRITE landing after its OPEN.
-        land_on_open: Arc<Mutex<Option<(u32, Option<Vec<u8>>)>>>,
+        land_on_open: Arc<Mutex<Option<LandOnOpen>>>,
         forwarded_writes: Arc<Mutex<Vec<bool>>>,
         forwarded_removes: Arc<Mutex<usize>>,
     }
