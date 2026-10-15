@@ -304,20 +304,36 @@ fn check_ancestor(
 #[derive(Debug)]
 enum Fail {
     Refused(UploadRefusal),
-    /// `lost`: the session is gone, so it cannot carry cleanup either.
-    Failed {
-        reason: String,
-        lost: bool,
-    },
+    Failed(Stop),
     Indeterminate(String),
+}
+
+/// A definite failure before publication. `lost`: the session is gone, so it
+/// cannot carry cleanup either.
+#[derive(Debug)]
+struct Stop {
+    reason: String,
+    lost: bool,
+}
+
+impl Stop {
+    fn plain(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            lost: false,
+        }
+    }
+}
+
+impl From<Stop> for Fail {
+    fn from(stop: Stop) -> Self {
+        Self::Failed(stop)
+    }
 }
 
 impl Fail {
     fn plain(reason: impl Into<String>) -> Self {
-        Self::Failed {
-            reason: reason.into(),
-            lost: false,
-        }
+        Stop::plain(reason).into()
     }
 }
 
@@ -342,11 +358,15 @@ fn transport_lost(e: &SftpError) -> bool {
     }
 }
 
-fn failed(what: &str, e: &SftpError) -> Fail {
-    Fail::Failed {
+fn stopped(what: &str, e: &SftpError) -> Stop {
+    Stop {
         reason: format!("{what}: {e}"),
         lost: transport_lost(e),
     }
+}
+
+fn failed(what: &str, e: &SftpError) -> Fail {
+    stopped(what, e).into()
 }
 
 fn is_missing(e: &SftpError) -> bool {
@@ -464,11 +484,11 @@ async fn write_payload<O: SftpOps>(
     data: &[u8],
     uid: u32,
     open_handle: &mut Option<String>,
-) -> std::result::Result<(), Fail> {
+) -> std::result::Result<(), Stop> {
     let handle = ops
         .create_exclusive(&staged.payload, 0o600)
         .await
-        .map_err(|e| failed("create the staged payload", &e))?;
+        .map_err(|e| stopped("create the staged payload", &e))?;
     let handle = open_handle.insert(handle).clone();
 
     let chunk = ops.write_chunk().max(1);
@@ -478,7 +498,7 @@ async fn write_payload<O: SftpOps>(
         writes.push((offset, piece));
         offset = offset
             .checked_add(piece.len() as u64)
-            .ok_or_else(|| Fail::plain("payload offset overflow".to_owned()))?;
+            .ok_or_else(|| Stop::plain("payload offset overflow".to_owned()))?;
     }
     for batch in writes.chunks(WRITE_WINDOW) {
         let mut inflight = Vec::with_capacity(batch.len());
@@ -488,29 +508,29 @@ async fn write_payload<O: SftpOps>(
         }
         future::try_join_all(inflight)
             .await
-            .map_err(|(at, e)| failed(&format!("write at offset {at}"), &e))?;
+            .map_err(|(at, e)| stopped(&format!("write at offset {at}"), &e))?;
     }
 
     ops.fchmod(&handle, PUBLISHED_MODE)
         .await
-        .map_err(|e| failed("set mode 0770 on the staged payload", &e))?;
+        .map_err(|e| stopped("set mode 0770 on the staged payload", &e))?;
     let attrs = ops
         .fstat(&handle)
         .await
-        .map_err(|e| failed("inspect the staged payload", &e))?;
+        .map_err(|e| stopped("inspect the staged payload", &e))?;
     let sealed = attrs
         .permissions
         .is_some_and(|p| p & S_IFMT == S_IFREG && p & 0o7777 == PUBLISHED_MODE)
         && attrs.uid == Some(uid)
         && attrs.size == Some(offset);
     if !sealed {
-        return Err(Fail::plain(
+        return Err(Stop::plain(
             "the staged payload does not have the expected owner, mode and size".to_owned(),
         ));
     }
     ops.close(&handle)
         .await
-        .map_err(|e| failed("close the staged payload", &e))?;
+        .map_err(|e| stopped("close the staged payload", &e))?;
     *open_handle = None;
     Ok(())
 }
@@ -538,7 +558,7 @@ fn attribute(host: &str, path: &Path, fail: Fail) -> HostError {
     let (host, path) = (host.to_owned(), path.display().to_string());
     match fail {
         Fail::Refused(reason) => HostError::UploadRefused { host, path, reason },
-        Fail::Failed { reason, .. } => HostError::UploadFailed { host, path, reason },
+        Fail::Failed(Stop { reason, .. }) => HostError::UploadFailed { host, path, reason },
         Fail::Indeterminate(reason) => HostError::UploadIndeterminate { host, path, reason },
     }
 }
@@ -570,8 +590,8 @@ async fn run<O: SftpOps>(
     let staged = create_stage(ops, &parent, uid).await?;
 
     let mut open_handle = None;
-    if let Err(fail) = write_payload(ops, &staged, data, uid, &mut open_handle).await {
-        return Err(abandon(ops, &staged, open_handle.as_deref(), fail).await);
+    if let Err(stop) = write_payload(ops, &staged, data, uid, &mut open_handle).await {
+        return Err(abandon(ops, &staged, open_handle.as_deref(), stop).await);
     }
 
     match ops.posix_rename(&staged.payload, &target).await {
@@ -585,27 +605,25 @@ async fn run<O: SftpOps>(
             "publishing rename got no verdict ({e}); staging {} may remain",
             staged.dir
         ))),
-        Err(e) => Err(abandon(ops, &staged, None, failed("publish the upload", &e)).await),
+        Err(e) => Err(abandon(ops, &staged, None, stopped("publish the upload", &e)).await),
     }
 }
 
 /// Cleans up after a pre-publication failure, keeping the original cause.
-async fn abandon<O: SftpOps>(ops: &O, staged: &Staged, handle: Option<&str>, fail: Fail) -> Fail {
-    let Fail::Failed { reason, lost } = fail else {
-        return fail;
-    };
+async fn abandon<O: SftpOps>(ops: &O, staged: &Staged, handle: Option<&str>, stop: Stop) -> Fail {
+    let Stop { reason, lost } = stop;
     let note = if lost {
         Some(format!("staging {} left behind (session lost)", staged.dir))
     } else {
         clean_up(ops, staged, handle).await
     };
-    Fail::Failed {
+    Fail::Failed(Stop {
         reason: match note {
             Some(note) => format!("{reason}; {note}"),
             None => reason,
         },
         lost,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -655,6 +673,7 @@ mod tests {
         chunk: usize,
         reported_size_delta: u64,
         mkdir_ignores_mode: bool,
+        bare_stage_attrs: bool,
     }
 
     impl Fake {
@@ -685,6 +704,7 @@ mod tests {
                 chunk: 4,
                 reported_size_delta: 0,
                 mkdir_ignores_mode: false,
+                bare_stage_attrs: false,
             }
         }
 
@@ -780,6 +800,9 @@ mod tests {
 
         async fn lstat(&self, path: &str) -> std::result::Result<FileAttributes, SftpError> {
             self.record("lstat", path)?;
+            if self.bare_stage_attrs && path.contains(STAGE_PREFIX) {
+                return Ok(FileAttributes::empty());
+            }
             self.node(path)
                 .map(|n| Self::attrs(&n))
                 .ok_or_else(|| status(StatusCode::NoSuchFile))
@@ -1229,6 +1252,103 @@ mod tests {
         );
         assert_eq!(fake.count("rmdir"), 1, "own stage removed");
         assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn a_stage_without_attributes_cannot_be_judged_and_is_removed() {
+        let mut fake = Fake::new();
+        fake.bare_stage_attrs = true;
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                HostError::UploadRefused {
+                    reason: UploadRefusal::MissingAttributes { .. },
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("open"), 0);
+        assert_eq!(fake.count("rmdir"), 1);
+    }
+
+    #[tokio::test]
+    async fn stage_creation_failure_is_reported_with_the_directory() {
+        let fake = Fake::new();
+        fake.fail("mkdir", STAGE_PREFIX, status(StatusCode::PermissionDenied));
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("create staging directory") && reason.contains("Permission denied")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("open"), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_ancestor_fails_the_upload_with_its_name() {
+        let fake = Fake::new();
+        fake.fail("lstat", "/srv", status(StatusCode::PermissionDenied));
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("inspect /srv")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("mkdir"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_created_ancestor_that_cannot_be_inspected_fails_the_upload() {
+        let fake = Fake::new();
+        fake.fail("lstat", "/srv/a", status(StatusCode::NoSuchFile));
+        fake.fail("lstat", "/srv/a", status(StatusCode::Failure));
+
+        let err = upload(&fake, b"NEW", "/srv/a/upload.bin")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("inspect /srv/a")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("open"), 0);
+    }
+
+    #[tokio::test]
+    async fn cleanup_also_closes_a_payload_handle_the_failed_step_left_open() {
+        let fake = Fake::new();
+        fake.fail("write", "", status(StatusCode::Failure));
+        fake.fail("close", "", status(StatusCode::Failure));
+
+        let err = upload(&fake, b"0123456789", "/srv/a").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("close handle")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("close"), 1);
+    }
+
+    #[tokio::test]
+    async fn an_empty_stage_that_cannot_be_removed_after_publication_is_not_a_failure() {
+        let fake = Fake::new();
+        fake.fail("rmdir", STAGE_PREFIX, status(StatusCode::PermissionDenied));
+
+        upload(&fake, b"NEW", "/srv/upload.bin")
+            .await
+            .expect("published");
+
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"NEW");
     }
 
     #[tokio::test]
