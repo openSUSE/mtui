@@ -341,6 +341,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
+  (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
+  release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
+  when there is none.
 - `put` (REPL and MCP) no longer opens the destination for truncation, which
   followed a symlink planted at the upload name and wrote through a hardlink to
   another file. The file is staged in a private directory next to the
