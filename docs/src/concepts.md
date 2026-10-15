@@ -134,6 +134,21 @@ cooperate rather than clobber one another.
   the `-p`/`--pool` flag on [`list_locks`](cli.md#list_locks) /
   [`unlock`](cli.md#unlock).
 
+Each lock file holds exactly one line, `timestamp:user:pid[:comment]` (Unix
+seconds, user name, numeric process id, optional free text that may contain
+colons). A pool claim's comment is `mtui pool <RRID> [<owner>]`. A missing file
+means the host is free. Anything else that is not such a line — an empty or
+whitespace-only file, the wrong number of fields, a non-numeric pid, an empty
+user, bytes that are not UTF-8 — is an **invalid lock file**. It is never read
+as free, because it usually marks a claim that died before writing its line.
+[`list_locks`](cli.md#list_locks) reports it as `invalid lock file`, and
+`lock` and pool claims refuse the host with an error naming it, the file and
+the way out. `unlock -f` removes it (`unlock -p -f` for the pool claim); a plain
+`unlock` leaves it alone. It is also reaped like any stale lock once older than
+`[lock] stale_age` (`pool_stale_age` for the pool claim), except that the age is
+the file's modification time, since there is no timestamp inside; a file whose
+modification time is missing or in the future is never reaped.
+
 By default, `lock`/`unlock` act on the whole active template's hosts; pass
 `-t <host>` (repeatable) to scope either to a subset. Plain `unlock` releases
 only the operation lock **this session took**: a lock it never took — another

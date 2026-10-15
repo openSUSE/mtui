@@ -548,9 +548,9 @@ use probe_config::ProbeConfig;
 /// Probes one connected target's operation-lock and pool-claim state.
 ///
 /// The operation-lock read decides reachability; a pool-claim read that fails
-/// (a garbled `/var/lock/mtui-pool.lock`, a permission-denied read) degrades
-/// to "no claim" with a warning rather than mislabelling a host that answered
-/// as `unreachable`.
+/// (a permission-denied read) degrades to "no claim" with a warning rather than
+/// mislabelling a host that answered as `unreachable`. An empty or unparseable
+/// `/var/lock/mtui-pool.lock` reads as a claim naming no RRID, never as free.
 async fn probe_state(target: &mut Target, host: &str) -> (String, Option<String>) {
     let Ok(locked) = target.is_locked().await else {
         return ("unreachable".to_owned(), None);
@@ -897,12 +897,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_state_keeps_op_verdict_when_pool_lock_is_garbled() {
+    async fn probe_state_reports_a_garbled_pool_lock_as_a_claim_not_as_free() {
         use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
 
         // "not-a-lock" has <3 colon fields, so `RemoteLock::from_lockfile`
-        // rejects it — a valid line here would disarm this test under both
-        // implementations.
+        // rejects it — a valid line here would disarm this test.
         let conn = MockConnection::new("whale-01")
             .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec())
             .with_file(POOL_LOCK_PATH, b"not-a-lock".to_vec());
@@ -915,7 +914,8 @@ mod tests {
         let (state, pool) = probe_state(&mut target, "whale-01").await;
 
         assert_eq!(state, "locked");
-        assert_eq!(pool, None);
+        assert_eq!(pool.as_deref(), Some(""));
+        assert_eq!(lock_label(Some(&state), pool.as_deref()), "locked+pool");
     }
 
     #[tokio::test]

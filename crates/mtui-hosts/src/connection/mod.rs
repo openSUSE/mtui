@@ -203,6 +203,18 @@ pub trait Connection: Send + Sync {
     /// Deletes a remote file over SFTP.
     async fn sftp_remove(&mut self, path: &Path) -> Result<()>;
 
+    /// Reads a remote file's modification time over SFTP, in Unix seconds.
+    ///
+    /// `Ok(None)` means the server reported no modification time.
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::SftpNotFound`](crate::HostError::SftpNotFound) when the file
+    /// is missing, [`HostError::SftpTimeout`](crate::HostError::SftpTimeout) /
+    /// [`HostError::Sftp`](crate::HostError::Sftp) otherwise, as for
+    /// [`sftp_open`](Self::sftp_open).
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>>;
+
     /// Recursively deletes a remote directory over SFTP (files then the dir).
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()>;
 

@@ -635,6 +635,9 @@ impl Target {
             return Ok(None);
         };
         let snap = pool.snapshot().await?;
+        if snap.invalid {
+            return Ok(Some(String::new()));
+        }
         if snap.lock.user.is_empty() {
             return Ok(None);
         }
@@ -694,6 +697,9 @@ impl Target {
             let Ok(snap) = lock.snapshot().await else {
                 return LockRow::default();
             };
+            if snap.invalid {
+                return LockRow::invalid();
+            }
             if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
@@ -708,6 +714,7 @@ impl Target {
                 // comment the operation lock carries.
                 comment: snap.rrid,
                 sibling: None,
+                invalid: false,
             }
         } else {
             let Some(lock) = self.lock.as_mut() else {
@@ -717,6 +724,9 @@ impl Target {
             let Ok(snap) = lock.snapshot().await else {
                 return LockRow::default();
             };
+            if snap.invalid {
+                return LockRow::invalid();
+            }
             if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
@@ -728,6 +738,7 @@ impl Target {
                 time,
                 comment: snap.lock.comment,
                 sibling: snap.sibling,
+                invalid: false,
             }
         }
     }
@@ -2316,6 +2327,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_reaps_an_old_invalid_lockfile_and_keeps_a_young_one() {
+        let now = SystemClock.now_unix();
+        for (age, reaped) in [(200_000, true), (100, false)] {
+            let conn = MockConnection::new("h1")
+                .with_file(TARGET_LOCK_PATH, Vec::new())
+                .with_mtime(TARGET_LOCK_PATH, now - age);
+            let handle = conn.clone();
+            let mut t = enabled_with(conn);
+
+            t.connect().await.expect("connect");
+
+            assert_eq!(
+                handle.file_contents(TARGET_LOCK_PATH).is_none(),
+                reaped,
+                "age {age}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn connect_keeps_fresh_foreign_lock() {
         // A foreign lock younger than the stale age is *not* reaped — connect
         // only warns. Timestamp is computed from the same clock the lock uses so
@@ -2615,6 +2646,33 @@ mod tests {
         assert_eq!(row.locked_by, "alice");
         assert_eq!(row.comment, "busy testing");
         assert!(row.time.ends_with("UTC"));
+    }
+
+    #[tokio::test]
+    async fn lock_status_reports_an_invalid_lock_file_as_locked_and_invalid() {
+        for pool in [false, true] {
+            let path = if pool {
+                POOL_LOCK_PATH
+            } else {
+                TARGET_LOCK_PATH
+            };
+            let mut t = enabled_with(MockConnection::new("h1").with_file(path, Vec::new()));
+            let row = t.lock_status(pool).await;
+            assert_eq!(row, LockRow::invalid(), "pool {pool}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_pool_claim_is_a_claim_that_names_no_rrid_and_cannot_be_won() {
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, b"junk".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        assert_eq!(t.pool_claim_rrid().await.unwrap(), Some(String::new()));
+        let err = t.pool_claim("mtui pool X [X]").await.unwrap_err();
+
+        assert!(matches!(err, HostError::InvalidLockFile { .. }), "{err:?}");
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), b"junk");
     }
 
     #[tokio::test]
