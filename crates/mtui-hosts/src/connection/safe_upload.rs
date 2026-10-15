@@ -1421,7 +1421,7 @@ mod tests {
             assert_eq!(
                 check_ancestor("/d", &attrs(perm, uid), UID),
                 Ok(()),
-                "{perm:o} uid {uid}"
+                "mode {perm:o}"
             );
         }
         assert!(matches!(
