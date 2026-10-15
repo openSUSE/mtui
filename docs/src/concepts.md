@@ -141,9 +141,12 @@ means the host is free. Anything else that is not such a line — an empty or
 whitespace-only file, the wrong number of fields, a non-numeric pid, an empty
 user, bytes that are not UTF-8 — is an **invalid lock file**. It is never read
 as free, because it usually marks a claim that died before writing its line.
+Another tester's claim also reads empty for an instant between creating the
+file and writing it, so mtui re-reads a file it cannot prove is older than five
+seconds for up to five seconds, and only a file still invalid then is reported.
 [`list_locks`](cli.md#list_locks) reports it as `invalid lock file`, and
 `lock` and pool claims refuse the host with an error naming it, the file and
-the way out. `unlock -f` removes it (`unlock -p -f` for the pool claim); a plain
+the way out (`unlock -f` is only right if no other mtui is claiming the host). `unlock -f` removes it (`unlock -p -f` for the pool claim); a plain
 `unlock` leaves it alone. It is also reaped like any stale lock once older than
 `[lock] stale_age` (`pool_stale_age` for the pool claim), except that the age is
 the file's modification time, since there is no timestamp inside; a file whose

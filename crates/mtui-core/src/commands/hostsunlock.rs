@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plain_unlock_leaves_an_invalid_op_lock_and_force_unlock_removes_it() {
+    async fn force_unlock_removes_an_op_lock_file_that_plain_unlock_skips() {
         let conn = invalid_lock("h1", TARGET_LOCK_PATH);
         let (mut session, buf) =
             session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", conn.clone())]);
