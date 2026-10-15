@@ -3258,7 +3258,7 @@ mod tests {
         b"1700000000:alice:notapid",
         b"1700000000::4242",
         b"\xff\xfe\xfd",
-        b"1700000000:alice:4242:caf\xe9",
+        b"1700000000:alice:4242:note-\xe9",
     ];
 
     const VALID_FOREIGN: &[u8] = b"1700000000:otheruser:4242:busy";
