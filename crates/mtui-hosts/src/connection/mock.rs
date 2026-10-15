@@ -91,6 +91,8 @@ pub enum MockSftpOp {
     Rmdir(PathBuf),
     /// `sftp_readlink(path)`.
     Readlink(PathBuf),
+    /// `sftp_mtime(path)`.
+    Mtime(PathBuf),
 }
 
 /// A scriptable, in-memory [`Connection`] implementation for tests.
@@ -149,6 +151,8 @@ pub struct MockConnection {
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
+    /// See [`with_mtime`](Self::with_mtime).
+    mtimes: HashMap<PathBuf, u64>,
     /// Size attribute the server reports for `sftp_read_capped`, overriding the
     /// stored length; `None` models a server that omits it.
     size_attrs: HashMap<PathBuf, Option<u64>>,
@@ -217,6 +221,7 @@ impl MockConnection {
             listings: HashMap::new(),
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
+            mtimes: HashMap::new(),
             size_attrs: HashMap::new(),
             sftp_remove_fails: false,
             sftp_remove_not_found: false,
@@ -497,6 +502,14 @@ impl MockConnection {
     #[must_use]
     pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
         self.links.insert(path.into(), target.into());
+        self
+    }
+
+    /// Scripts the modification time (Unix seconds) `sftp_mtime` reports for
+    /// `path`. An existing file without one reports no modification time.
+    #[must_use]
+    pub fn with_mtime(mut self, path: impl Into<PathBuf>, secs: u64) -> Self {
+        self.mtimes.insert(path.into(), secs);
         self
     }
 
@@ -1080,6 +1093,22 @@ impl Connection for MockConnection {
         Ok(())
     }
 
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>> {
+        self.record_sftp(MockSftpOp::Mtime(path.to_path_buf()));
+        if !self
+            .files
+            .lock()
+            .expect("mock files lock")
+            .contains_key(path)
+        {
+            return Err(HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
+        Ok(self.mtimes.get(path).copied())
+    }
+
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Rmdir(path.to_path_buf()));
         Ok(())
@@ -1410,6 +1439,31 @@ mod tests {
             .await
             .expect_err("missing");
         assert!(matches!(err, HostError::SftpNotFound { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_mtime_reports_the_scripted_time_or_none_or_not_found() {
+        let mut conn = MockConnection::new("h1")
+            .with_file("/dated", b"x".to_vec())
+            .with_file("/undated", b"x".to_vec())
+            .with_mtime("/dated", 1_700_000_000);
+        assert_eq!(
+            conn.sftp_mtime(Path::new("/dated")).await.expect("ok"),
+            Some(1_700_000_000)
+        );
+        assert_eq!(
+            conn.sftp_mtime(Path::new("/undated")).await.expect("ok"),
+            None
+        );
+        let err = conn
+            .sftp_mtime(Path::new("/missing"))
+            .await
+            .expect_err("missing");
+        assert!(matches!(err, HostError::SftpNotFound { .. }));
+        assert!(
+            conn.sftp_ops()
+                .contains(&MockSftpOp::Mtime(PathBuf::from("/dated")))
+        );
     }
 
     #[tokio::test]
