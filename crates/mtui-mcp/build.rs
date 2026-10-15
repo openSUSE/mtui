@@ -27,16 +27,30 @@ fn main() {
 }
 
 /// Returns a human-readable git ref for the build: `git describe` output when a
-/// tag is reachable (e.g. `v1.2.0-3-gabcdef-dirty`), otherwise a bare short SHA
-/// (e.g. `abcdef012345-dirty`). Returns `None` when git is unavailable or this is
-/// not a checkout (e.g. a release tarball).
+/// release tag of the crate's own `MAJOR.MINOR.*` series is reachable (e.g.
+/// `26.3.3-2-gabcdef012345-dirty`), otherwise a bare short SHA (e.g.
+/// `abcdef012345-dirty`). Returns `None` when git is unavailable or this is not a
+/// checkout (e.g. a release tarball).
 ///
-/// `describe` already degrades to the short SHA when no tag is reachable and
-/// upgrades to the tag-relative form once releases are tagged; `git_short_sha`
-/// covers the case where `describe` fails but `rev-parse` still works.
+/// `--always` degrades to the short SHA; `git_short_sha` covers the case where
+/// `describe` fails but `rev-parse` still works.
 fn git_ref() -> Option<String> {
+    let pattern = format!(
+        "{}.{}.*",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR")
+    );
     let out = Command::new("git")
-        .args(["describe", "--tags", "--always", "--dirty", "--long"])
+        .args([
+            "describe",
+            "--tags",
+            "--match",
+            &pattern,
+            "--always",
+            "--dirty",
+            "--long",
+            "--abbrev=12",
+        ])
         .output()
         .ok()?;
     if out.status.success()

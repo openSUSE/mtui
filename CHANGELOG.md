@@ -87,6 +87,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   file's modification time because it has no timestamp of its own; a missing or
   future modification time never reaps. A lock line holding non-UTF-8 bytes or
   an empty user is invalid the same way, instead of being read leniently.
+- `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
+  (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
+  release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
+  when there is none.
 
 ## [26.3.5] - 2026-10-27
 
