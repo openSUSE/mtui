@@ -17,7 +17,9 @@ use std::time::Duration;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
-use russh_sftp::protocol::{Data, File, FileAttributes, Handle, Name, Status, StatusCode, Version};
+use russh_sftp::protocol::{
+    Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
+};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -65,6 +67,30 @@ struct FakeFs {
     /// Session handle and channel id of the most recent SFTP subsystem, so a
     /// test can close that channel from the server side.
     sftp_channel: Option<(russh::server::Handle, ChannelId)>,
+    /// Permission bits per path, from the `open` and `fsetstat` attributes.
+    modes: HashMap<String, u32>,
+    /// `(path, flags, permissions)` of every `open`, in arrival order.
+    opens: Vec<(String, OpenFlags, Option<u32>)>,
+    /// `(path, permissions)` of every `mkdir`, in arrival order.
+    mkdirs: Vec<(String, Option<u32>)>,
+    /// `(from, to)` of every `posix-rename@openssh.com` received.
+    posix_renames: Vec<(String, String)>,
+    /// Leaves `posix-rename@openssh.com` out of the INIT reply.
+    no_posix_rename: bool,
+    /// How the server answers `posix-rename@openssh.com`.
+    rename_reply: RenameReply,
+}
+
+/// The server's answer to `posix-rename@openssh.com`.
+#[derive(Default, Clone, Copy)]
+enum RenameReply {
+    /// Rename, then report success.
+    #[default]
+    Apply,
+    /// Not implemented: the handler's default `OpUnsupported`.
+    Unsupported,
+    /// Rename, then never reply, as a link that dies after the effect.
+    ApplyThenSilence,
 }
 
 /// Lets a test observe an `open`'s filesystem effects while its reply is still
@@ -348,9 +374,24 @@ impl russh::server::Handler for TestSshSession {
     }
 }
 
+/// Decodes two SSH `string`s (u32 big-endian length, then bytes).
+fn decode_two_strings(mut data: &[u8]) -> Option<(String, String)> {
+    let mut next = || {
+        let (len, rest) = data.split_first_chunk::<4>()?;
+        let len = usize::try_from(u32::from_be_bytes(*len)).ok()?;
+        let (text, rest) = rest.split_at_checked(len)?;
+        data = rest;
+        String::from_utf8(text.to_vec()).ok()
+    };
+    let first = next()?;
+    let second = next()?;
+    data.is_empty().then_some((first, second))
+}
+
 /// Maps a command string to a scripted `(stdout, stderr, exit_code)`.
 fn scripted_command(cmd: &str) -> (String, String, u32) {
     match cmd {
+        "id -u" => ("0\n".to_owned(), String::new(), 0),
         "echo hello" => ("hello\n".to_owned(), String::new(), 0),
         "exit 3" => (String::new(), String::new(), 3),
         "to-stderr" => (String::new(), "boom\n".to_owned(), 1),
@@ -396,7 +437,13 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _ext: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
-        Ok(Version::new())
+        let mut version = Version::new();
+        if !self.fs.lock().await.no_posix_rename {
+            version
+                .extensions
+                .insert("posix-rename@openssh.com".to_owned(), "1".to_owned());
+        }
+        Ok(version)
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
@@ -411,9 +458,13 @@ impl russh_sftp::server::Handler for SftpHandler {
         id: u32,
         filename: String,
         pflags: russh_sftp::protocol::OpenFlags,
-        _attrs: FileAttributes,
+        attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
-        use russh_sftp::protocol::OpenFlags;
+        self.fs
+            .lock()
+            .await
+            .opens
+            .push((filename.clone(), pflags, attrs.permissions));
         // Consumed before sleeping, so a retry issued while this call is still
         // asleep is not also delayed.
         *self
@@ -442,6 +493,9 @@ impl russh_sftp::server::Handler for SftpHandler {
             // A create materialises the file so a later exclusive create sees it
             // and a read observes the write; TRUNCATE resets existing contents.
             if pflags.contains(OpenFlags::CREATE) {
+                if let (false, Some(mode)) = (fs.files.contains_key(&filename), attrs.permissions) {
+                    fs.modes.insert(filename.clone(), mode);
+                }
                 if pflags.contains(OpenFlags::TRUNCATE) {
                     fs.files.insert(filename.clone(), Vec::new());
                 } else {
@@ -554,10 +608,53 @@ impl russh_sftp::server::Handler for SftpHandler {
         &mut self,
         id: u32,
         path: String,
-        _attrs: FileAttributes,
+        attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
-        self.fs.lock().await.dirs.entry(path).or_default();
+        let mut fs = self.fs.lock().await;
+        fs.mkdirs.push((path.clone(), attrs.permissions));
+        if let Some(mode) = attrs.permissions {
+            fs.modes.insert(path.clone(), mode);
+        }
+        fs.dirs.entry(path).or_default();
         Ok(Self::ok(id))
+    }
+
+    async fn fsetstat(
+        &mut self,
+        id: u32,
+        handle: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        if let Some(mode) = attrs.permissions {
+            self.fs.lock().await.modes.insert(handle, mode);
+        }
+        Ok(Self::ok(id))
+    }
+
+    async fn extended(
+        &mut self,
+        id: u32,
+        request: String,
+        data: Vec<u8>,
+    ) -> Result<Packet, Self::Error> {
+        let reply = self.fs.lock().await.rename_reply;
+        if request != "posix-rename@openssh.com" || matches!(reply, RenameReply::Unsupported) {
+            return Err(self.unimplemented());
+        }
+        let (from, to) = decode_two_strings(&data).ok_or(StatusCode::BadMessage)?;
+        {
+            let mut fs = self.fs.lock().await;
+            fs.posix_renames.push((from.clone(), to.clone()));
+            let moved = fs.files.remove(&from).ok_or(StatusCode::NoSuchFile)?;
+            fs.files.insert(to.clone(), moved);
+            if let Some(mode) = fs.modes.remove(&from) {
+                fs.modes.insert(to, mode);
+            }
+        }
+        if matches!(reply, RenameReply::ApplyThenSilence) {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+        Ok(Packet::Status(Self::ok(id)))
     }
 
     async fn setstat(
@@ -590,7 +687,22 @@ impl russh_sftp::server::Handler for SftpHandler {
         id: u32,
         path: String,
     ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
-        self.stat(id, path).await
+        let fs = self.fs.lock().await;
+        let permissions = if path == "/" || fs.dirs.contains_key(&path) {
+            0o040_000 | fs.modes.get(&path).copied().unwrap_or(0o755)
+        } else if fs.files.contains_key(&path) {
+            0o100_000 | fs.modes.get(&path).copied().unwrap_or(0o644)
+        } else {
+            return Err(StatusCode::NoSuchFile);
+        };
+        Ok(russh_sftp::protocol::Attrs {
+            id,
+            attrs: FileAttributes {
+                permissions: Some(permissions),
+                uid: Some(0),
+                ..FileAttributes::default()
+            },
+        })
     }
 
     async fn fstat(
@@ -609,6 +721,8 @@ impl russh_sftp::server::Handler for SftpHandler {
             id,
             attrs: FileAttributes {
                 size,
+                uid: Some(0),
+                permissions: Some(0o100_000 | fs.modes.get(&handle).copied().unwrap_or(0o644)),
                 ..FileAttributes::default()
             },
         })
@@ -950,6 +1064,189 @@ async fn sftp_put_creates_fresh_remote_path() {
         .cloned()
         .expect("fresh file created on the remote");
     assert_eq!(stored, payload);
+}
+
+/// What the client really sends for an upload: an exclusive create inside a
+/// private stage, mode set on the handle, then a POSIX rename onto the
+/// destination, which itself is never opened.
+#[tokio::test]
+async fn sftp_put_stages_privately_and_publishes_with_posix_rename() {
+    let fs = SharedFs::default();
+    let dest = "/pub/upload.bin";
+    fs.lock()
+        .await
+        .files
+        .insert(dest.to_owned(), b"OLD".to_vec());
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    conn.sftp_put_bytes(b"NEW", std::path::Path::new(dest))
+        .await
+        .expect("put");
+
+    let state = fs.lock().await;
+    assert_eq!(state.files.get(dest).map(Vec::as_slice), Some(&b"NEW"[..]));
+    assert_eq!(state.modes.get(dest), Some(&0o770));
+    let [(path, flags, perms)] = state.opens.as_slice() else {
+        panic!("exactly one open expected: {:?}", state.opens);
+    };
+    assert!(
+        path.starts_with("/pub/.mtui-upload-") && path.ends_with("/payload"),
+        "{path}"
+    );
+    assert_eq!(
+        flags.bits(),
+        (OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::EXCLUDE).bits()
+    );
+    assert_eq!(*perms, Some(0o600));
+    let stage = path.trim_end_matches("/payload");
+    assert!(
+        state.mkdirs.contains(&(stage.to_owned(), Some(0o700))),
+        "{:?}",
+        state.mkdirs
+    );
+    assert_eq!(state.posix_renames, vec![(path.clone(), dest.to_owned())]);
+    assert!(
+        !state.dirs.contains_key(stage),
+        "stage removed after publication"
+    );
+    assert!(state.files.keys().all(|k| !k.contains("/payload")));
+    assert!(EXEC_LOG.lock().unwrap().iter().any(|c| c == "id -u"));
+}
+
+#[tokio::test]
+async fn sftp_put_refuses_a_server_without_posix_rename_before_any_effect() {
+    let fs = SharedFs::default();
+    fs.lock().await.no_posix_rename = true;
+    fs.lock()
+        .await
+        .files
+        .insert("/pub/upload.bin".to_owned(), b"OLD".to_vec());
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"))
+        .await
+        .expect_err("must fail closed");
+
+    assert!(
+        matches!(
+            &err,
+            mtui_hosts::HostError::UploadRefused {
+                reason: mtui_hosts::UploadRefusal::PosixRenameUnavailable,
+                host,
+                ..
+            } if host == "127.0.0.1"
+        ),
+        "{err:?}"
+    );
+    let state = fs.lock().await;
+    assert!(
+        state.opens.is_empty() && state.mkdirs.is_empty(),
+        "no side effects"
+    );
+    assert_eq!(
+        state.files.get("/pub/upload.bin").map(Vec::as_slice),
+        Some(&b"OLD"[..])
+    );
+}
+
+#[tokio::test]
+async fn sftp_put_does_not_fall_back_when_the_rename_is_unsupported() {
+    let fs = SharedFs::default();
+    fs.lock().await.rename_reply = RenameReply::Unsupported;
+    fs.lock()
+        .await
+        .files
+        .insert("/pub/upload.bin".to_owned(), b"OLD".to_vec());
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"))
+        .await
+        .expect_err("must fail closed");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::UploadFailed { .. }),
+        "{err:?}"
+    );
+    let state = fs.lock().await;
+    assert_eq!(
+        state.files.get("/pub/upload.bin").map(Vec::as_slice),
+        Some(&b"OLD"[..])
+    );
+    assert!(
+        state
+            .opens
+            .iter()
+            .all(|(p, ..)| p.contains(".mtui-upload-"))
+    );
+    assert!(
+        state.files.keys().all(|k| !k.contains("/payload")),
+        "stage cleaned"
+    );
+}
+
+/// A rename whose reply never arrives may already have taken effect, so it is
+/// reported as unknown and never sent again.
+#[tokio::test]
+async fn sftp_put_reports_an_unanswered_rename_as_indeterminate_without_retrying() {
+    let fs = SharedFs::default();
+    fs.lock().await.rename_reply = RenameReply::ApplyThenSilence;
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(1)).await;
+
+    let err = conn
+        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"))
+        .await
+        .expect_err("no verdict");
+
+    assert!(
+        matches!(&err, mtui_hosts::HostError::UploadIndeterminate { path, .. } if path == "/pub/upload.bin"),
+        "{err:?}"
+    );
+    let state = fs.lock().await;
+    assert_eq!(state.posix_renames.len(), 1, "never repeated");
+    assert_eq!(
+        state.files.get("/pub/upload.bin").map(Vec::as_slice),
+        Some(&b"NEW"[..])
+    );
+}
+
+/// Every host's refusal reaches the group's results under its own name.
+#[tokio::test]
+async fn sftp_put_refusals_stay_attributed_per_host_through_the_group() {
+    let refusing = SharedFs::default();
+    refusing.lock().await.no_posix_rename = true;
+    let good = SharedFs::default();
+    let bad_port = start_server(refusing).await;
+    let good_port = start_server(good.clone()).await;
+    let targets = vec![
+        connect_target("bad", bad_port, TargetState::Enabled).await,
+        connect_target("good", good_port, TargetState::Enabled).await,
+    ];
+    let mut group = HostsGroup::new(targets, false);
+
+    let results = group
+        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"))
+        .await;
+
+    assert_eq!(results["good"], Ok(()));
+    let bad = results["bad"].as_ref().expect_err("refused");
+    assert!(
+        bad.contains("refused on 127.0.0.1") && bad.contains("posix-rename"),
+        "{bad}"
+    );
+    assert_eq!(
+        good.lock()
+            .await
+            .files
+            .get("/pub/upload.bin")
+            .map(Vec::as_slice),
+        Some(&b"NEW"[..])
+    );
 }
 
 #[tokio::test]
