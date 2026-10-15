@@ -46,11 +46,13 @@ use russh::keys::{
     HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate, load_secret_key,
 };
 use russh::{ChannelMsg, client::Config as ClientConfig};
-use russh_sftp::client::SftpSession as RusshSftpSession;
+use russh_sftp::client::{RawSftpSession, SftpSession as RusshSftpSession};
+use russh_sftp::protocol::Version;
 use tokio::time::{Duration, timeout};
 
 #[cfg(feature = "shell")]
 use super::ShellChannel;
+use super::safe_upload;
 use super::sftp_session::SftpSession;
 use super::timeout::{CommandTimeout, HostKeyPolicy};
 use super::{Connection, DEFAULT_USER, SftpRead};
@@ -648,6 +650,41 @@ impl SshConnection {
         RusshSftpSession::new_with_config(channel.into_stream(), config)
             .await
             .map_err(|e| self.sftp_err(e))
+    }
+
+    /// Opens a private raw SFTP session and runs INIT, for uploads that need
+    /// verbs the cached high-level session cannot send. Bounded and timed like
+    /// [`open_sftp_subsystem`](Self::open_sftp_subsystem).
+    async fn open_raw_sftp_subsystem(&self) -> Result<(RawSftpSession, Version)> {
+        let channel = self
+            .handle()?
+            .channel_open_session()
+            .await
+            .map_err(|e| self.sftp_err(e))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| self.sftp_err(e))?;
+        let config = russh_sftp::client::Config {
+            request_timeout_secs: self.connect_timeout.as_secs().max(1),
+            ..Default::default()
+        };
+        let raw = RawSftpSession::new_with_config(channel.into_stream(), config);
+        let version = raw.init().await.map_err(|e| self.sftp_err(e))?;
+        Ok((raw, version))
+    }
+
+    /// The numeric id of the login, from a fixed `id -u`, for judging who owns
+    /// the directories an upload passes through.
+    async fn upload_uid(&mut self, remote: &Path) -> Result<u32> {
+        let log = self.run("id -u").await?;
+        safe_upload::parse_uid(log.exitcode, &log.stdout).map_err(|reason| {
+            HostError::UploadRefused {
+                host: self.hostname.clone(),
+                path: remote.display().to_string(),
+                reason,
+            }
+        })
     }
 
     /// Drops the cached SFTP subsystem so the next [`sftp`](Self::sftp) call
@@ -1535,49 +1572,27 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()> {
-        use russh_sftp::protocol::OpenFlags;
-        use tokio::io::AsyncWriteExt;
-
-        // Create parent directories (best-effort; "already exists" is success).
-        let remote_str = remote.to_string_lossy().to_string();
-        {
-            let sftp = self.sftp().await?;
-            let parts: Vec<&str> = remote_str.split('/').collect();
-            let mut path = String::new();
-            for subdir in &parts[..parts.len().saturating_sub(1)] {
-                if subdir.is_empty() {
-                    path.push('/');
-                    continue;
-                }
-                path.push_str(subdir);
-                path.push('/');
-                let _ = sftp.create_dir(path.clone()).await;
-            }
+        if !self.is_active() {
+            self.reconnect(0, false).await?;
         }
-
-        // Explicit CREATE: russh-sftp's `write` convenience opens WRITE-only,
-        // which returns SSH_FX_NO_SUCH_FILE for a not-yet-existing file.
-        let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
-        let open_path = remote_str.clone();
-        let (sftp, mut file) = self
-            .sftp_first_request(
-                FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let open_path = open_path.clone();
-                    async move { sftp.open_with_flags(open_path, flags).await }
-                },
-                |s, e| s.sftp_verb_err_at(e, remote),
-            )
-            .await?;
-        file.write_all(data)
-            .await
-            .map_err(|e| self.sftp_verb_err(e))?;
-        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
-        if let Ok(mut meta) = sftp.metadata(remote_str.clone()).await {
-            meta.permissions = Some(0o770);
-            let _ = sftp.set_metadata(remote_str, meta).await;
+        let uid = self.upload_uid(remote).await?;
+        let hostname = self.hostname.clone();
+        let (mut raw, version) = timeout(
+            self.connect_timeout.as_duration(),
+            self.open_raw_sftp_subsystem(),
+        )
+        .await
+        .map_err(|_| HostError::Transport {
+            host: hostname.clone(),
+            reason: "sftp subsystem handshake timed out".to_owned(),
+        })??;
+        let outcome = async {
+            safe_upload::negotiate(&mut raw, &hostname, remote, &version).await?;
+            safe_upload::publish(&raw, &hostname, uid, data, remote).await
         }
-        Ok(())
+        .await;
+        let _ = raw.close_session();
+        outcome
     }
 
     async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {

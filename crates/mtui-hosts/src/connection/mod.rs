@@ -12,6 +12,7 @@
 //! are a CLI concern (`mtui-cli`).
 
 mod mock;
+mod safe_upload;
 mod sftp_session;
 #[cfg(feature = "shell")]
 mod shell;
