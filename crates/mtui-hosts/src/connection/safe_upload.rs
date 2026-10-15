@@ -1233,7 +1233,8 @@ mod tests {
 
     #[tokio::test]
     async fn unsafe_ancestors_are_refused_before_any_stage_exists() {
-        let cases: [(&str, Node, fn(&UploadRefusal) -> bool); 5] = [
+        type Expect = fn(&UploadRefusal) -> bool;
+        let cases: [(&str, Node, Expect); 5] = [
             ("link", Node::Link, |r| {
                 matches!(r, UploadRefusal::NotDirectory { .. })
             }),
