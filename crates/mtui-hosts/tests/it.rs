@@ -15,6 +15,8 @@ mod history_append;
 mod lock_format;
 #[path = "operation_group.rs"]
 mod operation_group;
+#[path = "remote_upload_safety.rs"]
+mod remote_upload_safety;
 #[path = "repository_redaction.rs"]
 mod repository_redaction;
 #[path = "sftp_traversal.rs"]
