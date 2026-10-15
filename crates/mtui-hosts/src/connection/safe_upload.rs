@@ -607,3 +607,872 @@ async fn abandon<O: SftpOps>(ops: &O, staged: &Staged, handle: Option<&str>, fai
         lost,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::Mutex;
+
+    use russh_sftp::protocol::Status;
+
+    use super::*;
+
+    const UID: u32 = 1000;
+    const DIR: u32 = S_IFDIR;
+    const REG: u32 = S_IFREG;
+    const LNK: u32 = 0o120_000;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Node {
+        Dir { mode: u32, uid: u32 },
+        File { mode: u32, uid: u32, data: Vec<u8> },
+        Link,
+    }
+
+    fn status(code: StatusCode) -> SftpError {
+        SftpError::Status(Status {
+            id: 0,
+            status_code: code,
+            error_message: code.to_string(),
+            language_tag: String::new(),
+        })
+    }
+
+    struct Inject {
+        op: &'static str,
+        path_has: &'static str,
+        err: SftpError,
+    }
+
+    /// An independent, scripted model of a server: it records every request and
+    /// applies it to a small in-memory tree, without using the code under test.
+    struct Fake {
+        nodes: Mutex<BTreeMap<String, Node>>,
+        handles: Mutex<BTreeMap<String, String>>,
+        log: Mutex<Vec<String>>,
+        inject: Mutex<Vec<Inject>>,
+        names: Mutex<VecDeque<String>>,
+        chunk: usize,
+        reported_size_delta: u64,
+        mkdir_ignores_mode: bool,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            let mut nodes = BTreeMap::new();
+            for dir in ["/", "/srv", "/home", "/home/u"] {
+                nodes.insert(
+                    dir.to_owned(),
+                    Node::Dir {
+                        mode: 0o755,
+                        uid: 0,
+                    },
+                );
+            }
+            nodes.insert(
+                "/srv".to_owned(),
+                Node::Dir {
+                    mode: 0o755,
+                    uid: UID,
+                },
+            );
+            Self {
+                nodes: Mutex::new(nodes),
+                handles: Mutex::default(),
+                log: Mutex::default(),
+                inject: Mutex::default(),
+                names: Mutex::new((1..=9).map(|i| format!("{STAGE_PREFIX}n{i}")).collect()),
+                chunk: 4,
+                reported_size_delta: 0,
+                mkdir_ignores_mode: false,
+            }
+        }
+
+        fn put(&self, path: &str, node: Node) {
+            self.nodes.lock().unwrap().insert(path.to_owned(), node);
+        }
+
+        fn fail(&self, op: &'static str, path_has: &'static str, err: SftpError) {
+            self.inject
+                .lock()
+                .unwrap()
+                .push(Inject { op, path_has, err });
+        }
+
+        fn node(&self, path: &str) -> Option<Node> {
+            self.nodes.lock().unwrap().get(path).cloned()
+        }
+
+        fn ops(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+
+        fn count(&self, op: &str) -> usize {
+            self.ops()
+                .iter()
+                .filter(|l| l.starts_with(&format!("{op} ")))
+                .count()
+        }
+
+        fn pos(&self, op: &str) -> usize {
+            self.ops()
+                .iter()
+                .position(|l| l.starts_with(&format!("{op} ")))
+                .unwrap_or_else(|| panic!("no {op} in {:?}", self.ops()))
+        }
+
+        fn record(&self, op: &str, path: &str) -> std::result::Result<(), SftpError> {
+            self.log.lock().unwrap().push(format!("{op} {path}"));
+            let mut inject = self.inject.lock().unwrap();
+            match inject
+                .iter()
+                .position(|i| i.op == op && path.contains(i.path_has))
+            {
+                Some(i) => Err(inject.remove(i).err),
+                None => Ok(()),
+            }
+        }
+
+        fn children(&self, dir: &str) -> Vec<String> {
+            let prefix = if dir == "/" {
+                "/".to_owned()
+            } else {
+                format!("{dir}/")
+            };
+            self.nodes
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|k| k.starts_with(&prefix) && k.as_str() != dir)
+                .cloned()
+                .collect()
+        }
+
+        fn attrs(node: &Node) -> FileAttributes {
+            let (type_bits, mode, uid, size) = match node {
+                Node::Dir { mode, uid } => (DIR, *mode, *uid, 0),
+                Node::File { mode, uid, data } => (REG, *mode, *uid, data.len() as u64),
+                Node::Link => (LNK, 0o777, UID, 0),
+            };
+            FileAttributes {
+                permissions: Some(type_bits | mode),
+                uid: Some(uid),
+                size: Some(size),
+                ..FileAttributes::empty()
+            }
+        }
+
+        fn path_of(&self, handle: &str) -> String {
+            self.handles
+                .lock()
+                .unwrap()
+                .get(handle)
+                .cloned()
+                .expect("known handle")
+        }
+    }
+
+    impl SftpOps for Fake {
+        async fn realpath(&self, path: &str) -> std::result::Result<String, SftpError> {
+            self.record("realpath", path)?;
+            Ok("/home/u".to_owned())
+        }
+
+        async fn lstat(&self, path: &str) -> std::result::Result<FileAttributes, SftpError> {
+            self.record("lstat", path)?;
+            self.node(path)
+                .map(|n| Self::attrs(&n))
+                .ok_or_else(|| status(StatusCode::NoSuchFile))
+        }
+
+        async fn mkdir(&self, path: &str, mode: u32) -> std::result::Result<(), SftpError> {
+            self.record("mkdir", path)?;
+            let parent = path
+                .rsplit_once('/')
+                .map_or("/", |(p, _)| if p.is_empty() { "/" } else { p });
+            if self.node(parent).is_none() {
+                return Err(status(StatusCode::NoSuchFile));
+            }
+            if self.node(path).is_some() {
+                return Err(status(StatusCode::Failure));
+            }
+            let mode = if self.mkdir_ignores_mode {
+                0o777
+            } else {
+                mode & !0o022
+            };
+            self.put(path, Node::Dir { mode, uid: UID });
+            Ok(())
+        }
+
+        async fn create_exclusive(
+            &self,
+            path: &str,
+            mode: u32,
+        ) -> std::result::Result<String, SftpError> {
+            self.record("open", path)?;
+            if self.node(path).is_some() {
+                return Err(status(StatusCode::Failure));
+            }
+            self.put(
+                path,
+                Node::File {
+                    mode: mode & !0o022,
+                    uid: UID,
+                    data: Vec::new(),
+                },
+            );
+            let handle = format!("h{}", self.handles.lock().unwrap().len() + 1);
+            self.handles
+                .lock()
+                .unwrap()
+                .insert(handle.clone(), path.to_owned());
+            Ok(handle)
+        }
+
+        async fn write(
+            &self,
+            handle: &str,
+            offset: u64,
+            data: &[u8],
+        ) -> std::result::Result<(), SftpError> {
+            let path = self.path_of(handle);
+            self.record("write", &format!("{path}@{offset}+{}", data.len()))?;
+            let mut nodes = self.nodes.lock().unwrap();
+            let Some(Node::File { data: stored, .. }) = nodes.get_mut(&path) else {
+                return Err(status(StatusCode::Failure));
+            };
+            let end = usize::try_from(offset).unwrap() + data.len();
+            if stored.len() < end {
+                stored.resize(end, 0);
+            }
+            stored[usize::try_from(offset).unwrap()..end].copy_from_slice(data);
+            Ok(())
+        }
+
+        async fn fchmod(&self, handle: &str, mode: u32) -> std::result::Result<(), SftpError> {
+            let path = self.path_of(handle);
+            self.record("fchmod", &path)?;
+            if let Some(Node::File { mode: m, .. }) = self.nodes.lock().unwrap().get_mut(&path) {
+                *m = mode;
+            }
+            Ok(())
+        }
+
+        async fn fstat(&self, handle: &str) -> std::result::Result<FileAttributes, SftpError> {
+            let path = self.path_of(handle);
+            self.record("fstat", &path)?;
+            let mut attrs = Self::attrs(&self.node(&path).expect("open file"));
+            attrs.size = attrs.size.map(|s| s - self.reported_size_delta);
+            Ok(attrs)
+        }
+
+        async fn close(&self, handle: &str) -> std::result::Result<(), SftpError> {
+            let path = self.path_of(handle);
+            self.record("close", &path)
+        }
+
+        async fn remove(&self, path: &str) -> std::result::Result<(), SftpError> {
+            self.record("remove", path)?;
+            match self.nodes.lock().unwrap().remove(path) {
+                Some(_) => Ok(()),
+                None => Err(status(StatusCode::NoSuchFile)),
+            }
+        }
+
+        async fn rmdir(&self, path: &str) -> std::result::Result<(), SftpError> {
+            self.record("rmdir", path)?;
+            if !self.children(path).is_empty() {
+                return Err(status(StatusCode::Failure));
+            }
+            self.nodes.lock().unwrap().remove(path);
+            Ok(())
+        }
+
+        async fn posix_rename(&self, from: &str, to: &str) -> std::result::Result<(), SftpError> {
+            self.record("posix_rename", &format!("{from} -> {to}"))?;
+            if matches!(self.node(to), Some(Node::Dir { .. })) {
+                return Err(status(StatusCode::Failure));
+            }
+            let moved = self
+                .nodes
+                .lock()
+                .unwrap()
+                .remove(from)
+                .ok_or_else(|| status(StatusCode::NoSuchFile))?;
+            self.put(to, moved);
+            Ok(())
+        }
+
+        fn stage_name(&self) -> String {
+            self.names
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted stage names")
+        }
+
+        fn write_chunk(&self) -> usize {
+            self.chunk
+        }
+    }
+
+    fn old_file() -> Node {
+        Node::File {
+            mode: 0o644,
+            uid: UID,
+            data: b"OLD".to_vec(),
+        }
+    }
+
+    async fn upload(fake: &Fake, data: &[u8], path: &str) -> Result<()> {
+        publish(fake, "h1", UID, data, Path::new(path)).await
+    }
+
+    fn file_data(fake: &Fake, path: &str) -> Vec<u8> {
+        match fake.node(path) {
+            Some(Node::File { data, .. }) => data,
+            other => panic!("{path} is {other:?}"),
+        }
+    }
+
+    fn assert_no_stage_left(fake: &Fake, parent: &str) {
+        let stray: Vec<_> = fake
+            .children(parent)
+            .into_iter()
+            .filter(|c| c.contains(STAGE_PREFIX))
+            .collect();
+        assert!(stray.is_empty(), "staging left behind: {stray:?}");
+    }
+
+    #[tokio::test]
+    async fn publishes_after_mode_and_close_and_leaves_no_stage() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+
+        upload(&fake, b"0123456789", "/srv/upload.bin")
+            .await
+            .expect("upload");
+
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"0123456789");
+        let Some(Node::File { mode, .. }) = fake.node("/srv/upload.bin") else {
+            panic!("not a file");
+        };
+        assert_eq!(mode, 0o770);
+        assert!(
+            fake.pos("fchmod") < fake.pos("posix_rename"),
+            "{:?}",
+            fake.ops()
+        );
+        assert!(
+            fake.pos("close") < fake.pos("posix_rename"),
+            "{:?}",
+            fake.ops()
+        );
+        assert!(fake.pos("write") < fake.pos("fchmod"));
+        assert_eq!(fake.count("posix_rename"), 1);
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn never_opens_or_removes_the_final_path() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+
+        upload(&fake, b"NEW", "/srv/upload.bin")
+            .await
+            .expect("upload");
+
+        for line in fake.ops() {
+            assert!(
+                !(line.starts_with("open ") || line.starts_with("remove "))
+                    || line.contains(STAGE_PREFIX),
+                "touched the destination directly: {line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn chunks_cover_every_byte_and_empty_payload_writes_nothing() {
+        let fake = Fake::new();
+        upload(&fake, b"abcdefghij", "/srv/a")
+            .await
+            .expect("upload");
+        let writes: Vec<_> = fake
+            .ops()
+            .into_iter()
+            .filter(|l| l.starts_with("write "))
+            .collect();
+        assert_eq!(writes.len(), 3, "{writes:?}");
+        assert!(
+            writes[2].ends_with("@8+2"),
+            "final partial chunk: {writes:?}"
+        );
+        assert_eq!(file_data(&fake, "/srv/a"), b"abcdefghij");
+
+        let fake = Fake::new();
+        upload(&fake, b"", "/srv/e").await.expect("upload");
+        assert_eq!(fake.count("write"), 0);
+        assert_eq!(file_data(&fake, "/srv/e"), b"");
+    }
+
+    #[tokio::test]
+    async fn write_failure_keeps_old_destination_and_cleans_stage() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+        fake.fail("write", "@4+", status(StatusCode::Failure));
+
+        let err = upload(&fake, b"0123456789", "/srv/upload.bin")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { host, reason, .. }
+            if host == "h1" && reason.contains("write at offset")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("posix_rename"), 0);
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"OLD");
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn chmod_failure_is_fatal_and_precedes_any_publication() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+        fake.fail("fchmod", "", status(StatusCode::PermissionDenied));
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert_eq!(fake.count("posix_rename"), 0);
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"OLD");
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn close_failure_is_fatal_and_precedes_any_publication() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+        fake.fail("close", "", status(StatusCode::Failure));
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert_eq!(fake.count("posix_rename"), 0);
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"OLD");
+    }
+
+    #[tokio::test]
+    async fn short_or_mismatched_payload_is_not_published() {
+        let mut fake = Fake::new();
+        fake.reported_size_delta = 1;
+        fake.put("/srv/upload.bin", old_file());
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert_eq!(fake.count("posix_rename"), 0);
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"OLD");
+    }
+
+    #[tokio::test]
+    async fn unsupported_rename_fails_without_any_fallback() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+        fake.fail("posix_rename", "", status(StatusCode::OpUnsupported));
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert_eq!(fake.count("posix_rename"), 1);
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"OLD");
+        assert!(
+            fake.ops()
+                .iter()
+                .all(|l| !l.contains("/srv/upload.bin") || l.starts_with("posix_rename")),
+            "fallback touched the destination: {:?}",
+            fake.ops()
+        );
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn rename_without_verdict_is_indeterminate_and_never_repeated() {
+        let fake = Fake::new();
+        fake.put("/srv/upload.bin", old_file());
+        fake.fail("posix_rename", "", SftpError::Timeout);
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadIndeterminate { path, .. }
+            if path == "/srv/upload.bin"),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("posix_rename"), 1);
+        let after = &fake.ops()[fake.pos("posix_rename") + 1..];
+        assert!(
+            after.is_empty(),
+            "no cleanup guesses after an unknown outcome: {after:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lost_session_before_publication_attempts_no_cleanup() {
+        let fake = Fake::new();
+        fake.fail("write", "", SftpError::Timeout);
+
+        let err = upload(&fake, b"0123456789", "/srv/a").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("left behind")),
+            "{err:?}"
+        );
+        assert_eq!(fake.count("remove"), 0);
+        assert_eq!(fake.count("rmdir"), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_cleanup_is_named_next_to_the_original_cause() {
+        let fake = Fake::new();
+        fake.fail("write", "", status(StatusCode::Failure));
+        fake.fail("remove", "", status(StatusCode::PermissionDenied));
+
+        let err = upload(&fake, b"0123456789", "/srv/a").await.unwrap_err();
+
+        let HostError::UploadFailed { reason, .. } = &err else {
+            panic!("{err:?}");
+        };
+        assert!(reason.contains("write at offset"), "{reason}");
+        assert!(reason.contains("staging left behind"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn a_planted_stage_is_never_adopted_and_a_fresh_name_is_used() {
+        let fake = Fake::new();
+        let planted = format!("/srv/{STAGE_PREFIX}n1");
+        fake.put(
+            &planted,
+            Node::Dir {
+                mode: 0o777,
+                uid: 4242,
+            },
+        );
+        let decoy = format!("{planted}/{PAYLOAD}");
+        fake.put(
+            &decoy,
+            Node::File {
+                mode: 0o666,
+                uid: 4242,
+                data: b"MINE".to_vec(),
+            },
+        );
+
+        upload(&fake, b"NEW", "/srv/upload.bin")
+            .await
+            .expect("retries a fresh name");
+
+        assert_eq!(file_data(&fake, &decoy), b"MINE");
+        assert_eq!(file_data(&fake, "/srv/upload.bin"), b"NEW");
+        assert!(
+            fake.ops()
+                .iter()
+                .all(|l| !l.starts_with("open ") || !l.contains("n1/"))
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_stage_collisions_fail_without_touching_the_planted_one() {
+        let fake = Fake::new();
+        for i in 1..=3 {
+            let dir = format!("/srv/{STAGE_PREFIX}n{i}");
+            fake.put(
+                &dir,
+                Node::Dir {
+                    mode: 0o777,
+                    uid: 4242,
+                },
+            );
+        }
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert_eq!(fake.count("mkdir"), 3, "bounded retries");
+        assert_eq!(fake.count("open"), 0);
+        assert_eq!(
+            fake.count("rmdir"),
+            0,
+            "planted directories are not ours to remove"
+        );
+        assert!(fake.node("/srv/upload.bin").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stage_that_is_not_private_is_removed_and_the_upload_fails() {
+        let mut fake = Fake::new();
+        fake.mkdir_ignores_mode = true;
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("not private")),
+            "{err:?}"
+        );
+        assert_eq!(
+            fake.count("open"),
+            0,
+            "no payload in a stage others can enter"
+        );
+        assert_eq!(fake.count("rmdir"), 1, "own stage removed");
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[tokio::test]
+    async fn unsafe_ancestors_are_refused_before_any_stage_exists() {
+        let cases: [(&str, Node, fn(&UploadRefusal) -> bool); 5] = [
+            ("link", Node::Link, |r| {
+                matches!(r, UploadRefusal::NotDirectory { .. })
+            }),
+            ("file", old_file(), |r| {
+                matches!(r, UploadRefusal::NotDirectory { .. })
+            }),
+            (
+                "foreign",
+                Node::Dir {
+                    mode: 0o755,
+                    uid: 4242,
+                },
+                |r| matches!(r, UploadRefusal::ForeignOwner { owner: 4242, .. }),
+            ),
+            (
+                "world",
+                Node::Dir {
+                    mode: 0o777,
+                    uid: UID,
+                },
+                |r| matches!(r, UploadRefusal::WritableNotSticky { mode: 0o777, .. }),
+            ),
+            (
+                "group",
+                Node::Dir {
+                    mode: 0o775,
+                    uid: 0,
+                },
+                |r| matches!(r, UploadRefusal::WritableNotSticky { mode: 0o775, .. }),
+            ),
+        ];
+        for (name, node, expected) in cases {
+            let fake = Fake::new();
+            fake.put(&format!("/srv/{name}"), node);
+
+            let err = upload(&fake, b"NEW", &format!("/srv/{name}/upload.bin"))
+                .await
+                .unwrap_err();
+
+            let HostError::UploadRefused { reason, host, .. } = &err else {
+                panic!("{name}: {err:?}");
+            };
+            assert_eq!(host, "h1");
+            assert!(expected(reason), "{name}: {reason:?}");
+            assert_eq!(fake.count("mkdir"), 0, "{name}: refused before staging");
+            assert_eq!(fake.count("open"), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn ancestor_policy_accepts_trusted_directories() {
+        let attrs = |perm: u32, uid: u32| FileAttributes {
+            permissions: Some(DIR | perm),
+            uid: Some(uid),
+            ..FileAttributes::empty()
+        };
+        for (perm, uid) in [
+            (0o755, 0),
+            (0o700, UID),
+            (0o1777, 0),
+            (0o1777, UID),
+            (0o750, UID),
+        ] {
+            assert_eq!(
+                check_ancestor("/d", &attrs(perm, uid), UID),
+                Ok(()),
+                "{perm:o} uid {uid}"
+            );
+        }
+        assert!(matches!(
+            check_ancestor("/d", &attrs(0o1777, 4242), UID),
+            Err(UploadRefusal::ForeignOwner { .. })
+        ));
+        assert!(matches!(
+            check_ancestor(
+                "/d",
+                &FileAttributes {
+                    uid: Some(0),
+                    ..FileAttributes::empty()
+                },
+                UID
+            ),
+            Err(UploadRefusal::MissingAttributes { .. })
+        ));
+        assert!(matches!(
+            check_ancestor(
+                "/d",
+                &FileAttributes {
+                    permissions: Some(DIR | 0o755),
+                    ..FileAttributes::empty()
+                },
+                UID
+            ),
+            Err(UploadRefusal::MissingAttributes { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_ancestors_are_created_then_verified() {
+        let fake = Fake::new();
+
+        upload(&fake, b"NEW", "/srv/a/b/upload.bin")
+            .await
+            .expect("upload");
+
+        assert_eq!(file_data(&fake, "/srv/a/b/upload.bin"), b"NEW");
+        let Some(Node::Dir { mode, .. }) = fake.node("/srv/a") else {
+            panic!("a is not a dir");
+        };
+        assert_eq!(mode & 0o022, 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_parent_creation_reports_the_creation_error() {
+        let fake = Fake::new();
+        fake.fail("mkdir", "/srv/a", status(StatusCode::PermissionDenied));
+
+        let err = upload(&fake, b"NEW", "/srv/a/upload.bin")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, HostError::UploadFailed { reason, .. }
+            if reason.contains("create /srv/a") && reason.contains("Permission denied")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relative_destination_resolves_against_the_start_directory() {
+        let fake = Fake::new();
+
+        upload(&fake, b"NEW", "up.bin").await.expect("upload");
+
+        assert_eq!(file_data(&fake, "/home/u/up.bin"), b"NEW");
+        assert_eq!(fake.count("realpath"), 1);
+    }
+
+    #[tokio::test]
+    async fn directory_destination_fails_and_is_left_intact() {
+        let fake = Fake::new();
+        fake.put(
+            "/srv/upload.bin",
+            Node::Dir {
+                mode: 0o755,
+                uid: UID,
+            },
+        );
+
+        let err = upload(&fake, b"NEW", "/srv/upload.bin").await.unwrap_err();
+
+        assert!(matches!(err, HostError::UploadFailed { .. }), "{err:?}");
+        assert!(matches!(
+            fake.node("/srv/upload.bin"),
+            Some(Node::Dir { .. })
+        ));
+        assert_no_stage_left(&fake, "/srv");
+    }
+
+    #[test]
+    fn destination_parsing_keeps_plain_components_and_rejects_the_rest() {
+        let ok = Dest::parse(Path::new("/tmp//a/./b")).unwrap();
+        assert_eq!(
+            ok,
+            Dest {
+                absolute: true,
+                dirs: vec!["tmp".into(), "a".into()],
+                name: "b".into()
+            }
+        );
+        let rel = Dest::parse(Path::new("x/y")).unwrap();
+        assert!(!rel.absolute);
+        for bad in ["/a/../b", "/a/", "/", "", ".", "/a/\0b"] {
+            assert!(
+                matches!(Dest::parse(Path::new(bad)), Err(UploadRefusal::BadPath(_))),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_payload_is_two_length_prefixed_strings() {
+        assert_eq!(
+            rename_payload("/a/p", "/a/f").unwrap(),
+            b"\x00\x00\x00\x04/a/p\x00\x00\x00\x04/a/f".to_vec()
+        );
+        assert_eq!(
+            rename_payload("", "x").unwrap(),
+            b"\x00\x00\x00\x00\x00\x00\x00\x01x".to_vec()
+        );
+    }
+
+    #[test]
+    fn only_posix_rename_version_one_is_accepted() {
+        let ext = |v: Option<&str>| {
+            v.map(|v| (POSIX_RENAME.to_owned(), v.to_owned()))
+                .into_iter()
+                .collect()
+        };
+        assert_eq!(require_posix_rename(&ext(Some("1"))), Ok(()));
+        for other in [None, Some("2"), Some("")] {
+            assert_eq!(
+                require_posix_rename(&ext(other)),
+                Err(UploadRefusal::PosixRenameUnavailable)
+            );
+        }
+    }
+
+    #[test]
+    fn uid_parsing_is_strict() {
+        assert_eq!(parse_uid(0, "501\n"), Ok(501));
+        assert_eq!(parse_uid(0, "0"), Ok(0));
+        for (code, out) in [
+            (1, "501"),
+            (0, ""),
+            (0, "root"),
+            (0, "-1"),
+            (0, "501 20"),
+            (0, "4294967296"),
+            (-1, "501"),
+        ] {
+            assert!(
+                matches!(parse_uid(code, out), Err(UploadRefusal::UnknownUser(_))),
+                "{code} {out:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn non_utf8_style_and_missing_name_destinations_are_refused_without_requests() {
+        let fake = Fake::new();
+        let err = upload(&fake, b"x", "/srv/../etc/x").await.unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::UploadRefused {
+                reason: UploadRefusal::BadPath(_),
+                ..
+            }
+        ));
+        assert!(fake.ops().is_empty());
+    }
+}
