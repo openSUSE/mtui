@@ -1880,6 +1880,21 @@ impl Connection for SshConnection {
         Ok(())
     }
 
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>> {
+        let stat_path = path.to_string_lossy().to_string();
+        let (_sftp, meta) = self
+            .sftp_first_request(
+                FirstRequestReplay::Repeatable,
+                move |sftp| {
+                    let stat_path = stat_path.clone();
+                    async move { sftp.metadata(stat_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+        Ok(meta.mtime.map(u64::from))
+    }
+
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
         let sftp = self.sftp().await?;
         let path_str = path.to_string_lossy().to_string();

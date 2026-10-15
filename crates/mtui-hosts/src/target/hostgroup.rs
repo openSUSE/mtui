@@ -72,7 +72,8 @@ use super::{LockOwner, LockRow, OpLockHolders, Target};
 ///   should **not** count this as a
 ///   failure.
 /// * [`Failed`](LockOutcome::Failed) — a real transport/SFTP error acquiring or
-///   releasing the lock; the caller may name the host.
+///   releasing the lock, or an invalid lock file
+///   ([`HostError::InvalidLockFile`]); the caller may name the host.
 /// * [`Skipped`](LockOutcome::Skipped) — nothing was attempted on the wire (an
 ///   unconnected host has no built lock to act on); the reason is
 ///   display-ready. Distinct from `Acquired`/`Released`'s own "nothing to do"
@@ -1463,7 +1464,7 @@ impl HostsGroup {
                     let foreign = locked
                         && target
                             .lock_mut()
-                            .is_some_and(|l| !l.owned_here().unwrap_or(false));
+                            .is_some_and(|l| !l.is_invalid() && !l.owned_here().unwrap_or(false));
                     if foreign {
                         let hostname = target.hostname().to_owned();
                         let lock = target.lock_mut().expect("foreign implies a built lock");
@@ -3293,6 +3294,64 @@ mod tests {
         assert!(matches!(err, HostError::Update(_)));
         // h1's lock was released during the abort.
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    fn invalid_lock_host(name: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(name)
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, Vec::new());
+        let handle = conn.clone();
+        (
+            Target::with_connection(name, TargetState::Enabled, Box::new(conn)),
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn update_lock_names_an_invalid_lock_file_instead_of_a_phantom_owner() {
+        let (h2, h2_handle) = invalid_lock_host("h2");
+        let mut g = HostsGroup::new(vec![enabled("h1"), h2], false);
+
+        let err = g.update_lock().await.expect_err("invalid lock -> abort");
+
+        let HostError::Update(msg) = err else {
+            panic!("expected Update, got {err:?}");
+        };
+        assert!(
+            msg.contains("h2") && msg.contains("invalid (empty or unparseable)"),
+            "{msg}"
+        );
+        assert!(!msg.contains("held by"), "{msg}");
+        assert_eq!(h2_handle.file_contents(TARGET_LOCK_PATH).unwrap(), b"");
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn lock_and_unlock_report_an_invalid_lock_file_as_failed_not_contended() {
+        let (h1, handle) = invalid_lock_host("h1");
+        let mut g = HostsGroup::new(vec![h1], false);
+
+        let locked = g.lock("").await;
+        let LockOutcome::Failed(reason) = &locked["h1"] else {
+            panic!("expected Failed, got {:?}", locked["h1"]);
+        };
+        assert!(
+            reason.contains("invalid (empty or unparseable)"),
+            "{reason}"
+        );
+        let unlocked = g.unlock().await;
+        assert!(
+            matches!(&unlocked["h1"], LockOutcome::Failed(r) if r.contains("--force")),
+            "{:?}",
+            unlocked["h1"]
+        );
+        assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), b"");
+
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.unlock_force(&names, &collected).await;
+        assert_eq!(collected.into_inner().unwrap()["h1"], LockOutcome::Released);
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_none());
     }
 
     #[tokio::test]

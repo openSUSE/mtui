@@ -355,6 +355,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   being ignored. A lost reply to the final rename is reported as "may or may not
   have been published" and is not retried. A cancelled upload can leave a
   private `.mtui-upload-*` directory behind.
+- An empty or unparseable `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock`
+  (left by a claim that died between creating the file and writing its line)
+  no longer reads as a free host, which wedged it: every claim retried against
+  it and reported the host as claimed by an unknown owner, `unlock --force`
+  did nothing, and a stale reap never fired. It is now an invalid lock file:
+  `list_locks` reports it as such, `lock` and pool claims refuse with an error
+  naming the host and the file and how to clear it, `unlock --force` (`--pool`
+  for the pool claim) removes it, and a plain `unlock` leaves it alone. The
+  `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
+  file's modification time because it has no timestamp of its own; a missing or
+  future modification time never reaps. A lock line holding non-UTF-8 bytes or
+  an empty user is invalid the same way, instead of being read leniently.
 - An SFTP request that fails with an ordinary status (file not found,
   permission denied, an exclusive create that lost the race) no longer makes
   mtui drop its cached SFTP session and replay the request. An exclusive create

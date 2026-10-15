@@ -78,6 +78,7 @@ impl Command for ListLocks {
                 time: row.time,
                 comment: row.comment,
                 sibling: row.sibling,
+                invalid: row.invalid,
             };
             rows.push((name.clone(), target.system().clone(), status));
         }
@@ -108,6 +109,32 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("h1"), "{out}");
         assert!(out.contains("not locked"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_lock_file_is_listed_as_invalid_not_as_free() {
+        use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+
+        for (path, flags) in [(TARGET_LOCK_PATH, &[][..]), (POOL_LOCK_PATH, &["-p"][..])] {
+            let conn = MockConnection::new("h1").with_file(path, Vec::new());
+            let (mut session, buf) = crate::commands::testkit::session_with_targets(
+                "SUSE:Maintenance:1:1",
+                vec![Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(conn),
+                )],
+            );
+            let args = matches(&ListLocks, flags);
+            ListLocks.call(&mut session, &args).await.unwrap();
+            let out = buf.contents();
+            assert!(
+                out.contains("invalid lock file (empty or unparseable)"),
+                "{out}"
+            );
+            assert!(!out.contains("not locked"), "{out}");
+        }
     }
 
     #[tokio::test]

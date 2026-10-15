@@ -50,6 +50,9 @@ pub struct LockStatus {
     /// The label of the sibling template/session in this process holding the
     /// lock; takes the place of `me`/`locked_by`.
     pub(crate) sibling: Option<String>,
+    /// The lock file exists but is empty or unparseable; renders instead of an
+    /// owner.
+    pub(crate) invalid: bool,
 }
 
 /// Whether ANSI color escapes are emitted (`auto`/`always`/`never`); the active
@@ -325,7 +328,10 @@ impl CommandPromptDisplay {
     /// [`LockStatus::is_mine`] is set.
     pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
         let sys = system.to_string();
-        if lock.is_locked {
+        if lock.invalid {
+            let invalid = Self::yellow(self, "invalid lock file (empty or unparseable)");
+            self.println(&format!("{hostname:20} {sys:20}: {invalid}"));
+        } else if lock.is_locked {
             let by = match &lock.sibling {
                 Some(label) => mtui_hosts::sibling_holder_name(label),
                 None if lock.is_mine => "me".to_owned(),
@@ -990,6 +996,26 @@ mod tests {
         );
         assert!(out.contains("since now by this mtui process\n"), "{out}");
         assert!(!out.contains("by me"), "{out}");
+    }
+
+    #[test]
+    fn list_locks_reports_an_invalid_lock_file_instead_of_an_owner() {
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let lock = LockStatus {
+            is_locked: true,
+            invalid: true,
+            ..Default::default()
+        };
+        d.list_locks("h", &system("SLES"), &lock);
+        let out = rendered(&buf);
+        assert!(
+            out.contains("invalid lock file (empty or unparseable)"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("since") && !out.contains("not locked"),
+            "{out}"
+        );
     }
 
     #[test]

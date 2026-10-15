@@ -51,6 +51,8 @@ struct FakeFs {
     /// path -> size attribute `fstat` reports instead of the stored length;
     /// `None` omits the attribute.
     size_attrs: HashMap<String, Option<u64>>,
+    /// path -> modification time `stat` reports; absent omits the attribute.
+    mtimes: HashMap<String, u32>,
     /// `(offset, len)` of every `read` request received.
     reads: Vec<(u64, u32)>,
     /// Total bytes served by `read`.
@@ -485,6 +487,9 @@ impl russh_sftp::server::Handler for SftpHandler {
             if let Some(code) = fs.open_status.get(&filename) {
                 return Err(*code);
             }
+            if !pflags.contains(OpenFlags::CREATE) && !fs.files.contains_key(&filename) {
+                return Err(StatusCode::NoSuchFile);
+            }
             // O_EXCL against an existing file fails as a real sshd would — what
             // the lock protocol relies on.
             if pflags.contains(OpenFlags::EXCLUDE) && fs.files.contains_key(&filename) {
@@ -675,7 +680,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         if fs.files.contains_key(&path) || fs.dirs.contains_key(&path) {
             Ok(russh_sftp::protocol::Attrs {
                 id,
-                attrs: FileAttributes::default(),
+                attrs: FileAttributes {
+                    mtime: fs.mtimes.get(&path).copied(),
+                    ..FileAttributes::default()
+                },
             })
         } else {
             Err(StatusCode::NoSuchFile)
@@ -1910,6 +1918,72 @@ async fn lock_reaps_stale_foreign_lock_over_sftp() {
     )
     .unwrap();
     assert!(line.contains(":alice:"), "now owned by alice: {line}");
+}
+
+#[tokio::test]
+async fn sftp_mtime_reports_the_servers_modification_time() {
+    let fs = SharedFs::default();
+    {
+        let mut fs = fs.lock().await;
+        fs.files.insert("/dated".to_owned(), b"x".to_vec());
+        fs.files.insert("/undated".to_owned(), b"x".to_vec());
+        fs.mtimes.insert("/dated".to_owned(), 1_700_000_000);
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    assert_eq!(
+        conn.sftp_mtime(std::path::Path::new("/dated"))
+            .await
+            .expect("dated"),
+        Some(1_700_000_000)
+    );
+    assert_eq!(
+        conn.sftp_mtime(std::path::Path::new("/undated"))
+            .await
+            .expect("undated"),
+        None
+    );
+    let err = conn
+        .sftp_mtime(std::path::Path::new("/missing"))
+        .await
+        .expect_err("missing");
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_lock_file_is_invalid_and_reaped_by_its_modification_time_over_sftp() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let fs = SharedFs::default();
+    {
+        let mut fs = fs.lock().await;
+        fs.files.insert(TARGET_LOCK_PATH.to_owned(), Vec::new());
+        fs.mtimes.insert(TARGET_LOCK_PATH.to_owned(), now - 60);
+    }
+    let port = start_server(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+
+    let err = lock.try_claim("mtui operation").await.expect_err("young");
+    assert!(
+        matches!(err, mtui_hosts::HostError::InvalidLockFile { .. }),
+        "{err:?}"
+    );
+    assert_eq!(fs.lock().await.files[TARGET_LOCK_PATH], b"");
+
+    fs.lock()
+        .await
+        .mtimes
+        .insert(TARGET_LOCK_PATH.to_owned(), now - 200_000);
+    assert!(lock.try_claim("mtui operation").await.expect("old"));
+    let line = String::from_utf8(fs.lock().await.files[TARGET_LOCK_PATH].clone()).unwrap();
+    assert!(line.contains(":alice:"), "reaped and re-claimed: {line}");
 }
 
 #[tokio::test]
