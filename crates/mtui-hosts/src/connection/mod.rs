@@ -116,6 +116,11 @@ pub trait Connection: Send + Sync {
 
     /// Transfers a local file to the remote host over SFTP, creating parent
     /// directories and making the uploaded file executable (mode `0770`).
+    ///
+    /// The file is staged privately and published with an atomic rename, so an
+    /// existing symlink, hardlink or file at `remote` is replaced rather than
+    /// written through, and a server that cannot do this fails the upload
+    /// instead of falling back (see [`sftp_put_bytes`](Self::sftp_put_bytes)).
     async fn sftp_put(&mut self, local: &Path, remote: &Path) -> Result<()>;
 
     /// Transfers already-read bytes to the remote host over SFTP, with the same
@@ -125,6 +130,16 @@ pub trait Connection: Send + Sync {
     /// Lets a fan-out upload read an immutable local payload **once** and
     /// dispatch the shared bytes to every host; [`sftp_put`](Self::sftp_put) is
     /// the wrapper that reads `local` then calls this.
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::UploadRefused`](crate::HostError::UploadRefused) when the
+    /// server lacks `posix-rename@openssh.com` or a parent directory is not
+    /// trusted (nothing is written);
+    /// [`HostError::UploadFailed`](crate::HostError::UploadFailed) when the
+    /// destination was definitely not replaced; and
+    /// [`HostError::UploadIndeterminate`](crate::HostError::UploadIndeterminate)
+    /// when the publishing rename got no reply and is never retried.
     async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()>;
 
     /// Transfers a remote file to the local host over SFTP.
