@@ -240,6 +240,105 @@ pub enum HostError {
         /// The rejected (attacker-controlled) entry name.
         name: String,
     },
+
+    /// An upload was refused before any byte was staged because the server or
+    /// the destination's ancestry cannot guarantee a safe, atomic publication.
+    ///
+    /// There is deliberately no weaker fallback: the destination is left as it
+    /// was.
+    #[error("upload to {path} refused on {host}: {reason}")]
+    UploadRefused {
+        /// The host that refused.
+        host: String,
+        /// The destination the caller asked for.
+        path: String,
+        /// The specific policy that failed.
+        reason: UploadRefusal,
+    },
+
+    /// An upload failed with a definite outcome: the destination was not
+    /// replaced.
+    ///
+    /// `reason` also names any staging debris that could not be cleaned up.
+    #[error("upload to {path} failed on {host}: {reason}")]
+    UploadFailed {
+        /// The host the upload targeted.
+        host: String,
+        /// The destination the caller asked for.
+        path: String,
+        /// What failed, including degraded cleanup.
+        reason: String,
+    },
+
+    /// The publishing rename was dispatched but its outcome is unknown (timeout
+    /// or lost link), so the destination may or may not hold the new content.
+    ///
+    /// Never retried automatically: a second attempt cannot tell a lost reply
+    /// from a lost request.
+    #[error("upload to {path} on {host} may or may not have been published: {reason}")]
+    UploadIndeterminate {
+        /// The host the upload targeted.
+        host: String,
+        /// The destination the caller asked for.
+        path: String,
+        /// The transport failure that hid the outcome.
+        reason: String,
+    },
+}
+
+/// Why an upload was refused (see [`HostError::UploadRefused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum UploadRefusal {
+    /// The SFTP server does not advertise `posix-rename@openssh.com` version 1,
+    /// the only publication primitive that replaces a destination atomically.
+    #[error("the SFTP server does not offer posix-rename@openssh.com")]
+    PosixRenameUnavailable,
+
+    /// The destination is not an absolute or relative path of plain components
+    /// ending in a file name.
+    #[error("unsupported destination path: {0}")]
+    BadPath(String),
+
+    /// The upload login's numeric user id could not be established.
+    #[error("cannot determine the remote user id: {0}")]
+    UnknownUser(String),
+
+    /// A directory on the way to the destination is a symlink or not a
+    /// directory.
+    #[error("{dir} is not a plain directory")]
+    NotDirectory {
+        /// The offending ancestor.
+        dir: String,
+    },
+
+    /// The server reported no owner or mode for an ancestor, so it cannot be
+    /// judged.
+    #[error("{dir} has no ownership or mode attributes")]
+    MissingAttributes {
+        /// The ancestor that could not be judged.
+        dir: String,
+    },
+
+    /// An ancestor belongs to neither root nor the upload user.
+    #[error("{dir} is owned by uid {owner}, not root or the upload user (uid {uid})")]
+    ForeignOwner {
+        /// The offending ancestor.
+        dir: String,
+        /// Its owner.
+        owner: u32,
+        /// The upload user.
+        uid: u32,
+    },
+
+    /// An ancestor can be modified by other users and is not sticky.
+    #[error("{dir} is group- or world-writable without the sticky bit (mode {mode:04o})")]
+    WritableNotSticky {
+        /// The offending ancestor.
+        dir: String,
+        /// Its permission bits.
+        mode: u32,
+    },
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ pub use connection::{
     CommandTimeout, Connection, HostKeyPolicy, MAX_STREAM_BYTES, MockConnection, MockSftpOp,
     SftpRead, SshConnection, TimeoutPrompt,
 };
-pub use error::{HostError, Result};
+pub use error::{HostError, Result, UploadRefusal};
 pub use prompter::{Prompter, Reader};
 pub use target::{
     Check, CheckArgs, CheckFailure, Clock, Command, ContendedSurface, Doer, HostArbiter,
