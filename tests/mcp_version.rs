@@ -32,6 +32,31 @@ fn version_prints_provenance_block_and_exits_zero() {
         stdout.contains('('),
         "expected build-provenance block in --version, got: {stdout:?}"
     );
+    // With a git ref present (`<ref>, <profile>, <target>`), it must not name a
+    // tag outside this crate's `MAJOR.MINOR` series; a bare SHA is always fine.
+    let block = stdout
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')'))
+        .map(|(block, _)| block)
+        .expect("provenance block");
+    let fields: Vec<&str> = block.split(", ").collect();
+    if let [git_ref, _, _] = fields[..] {
+        assert!(
+            !git_ref.contains('/'),
+            "ref names a foreign tag: {git_ref:?}"
+        );
+        if git_ref.contains("-g") {
+            let series = format!(
+                "{}.{}.",
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                env!("CARGO_PKG_VERSION_MINOR")
+            );
+            assert!(
+                git_ref.starts_with(&series),
+                "tag-form ref must be in the {series}* series, got: {git_ref:?}"
+            );
+        }
+    }
     // `-V` renders identically to `--version`.
     let short = mtui_mcp().arg("-V").output().expect("run -V");
     assert!(short.status.success(), "-V must exit 0");
