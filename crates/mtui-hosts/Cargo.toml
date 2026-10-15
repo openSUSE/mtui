@@ -34,6 +34,7 @@ tokio = { workspace = true }
 # CancellationToken for the cooperative host-boundary cancellation seam.
 tokio-util.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 # Perf baseline benches: fan-out scaling / SFTP / lock reporting.
