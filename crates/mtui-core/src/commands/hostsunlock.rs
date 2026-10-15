@@ -413,6 +413,57 @@ mod tests {
         assert!(foreign.file_contents(TARGET_LOCK_PATH).is_some());
     }
 
+    fn invalid_lock(host: &str, path: &str) -> MockConnection {
+        MockConnection::new(host).with_file(path, Vec::new())
+    }
+
+    #[tokio::test]
+    async fn plain_unlock_leaves_an_invalid_op_lock_and_force_unlock_removes_it() {
+        let conn = invalid_lock("h1", TARGET_LOCK_PATH);
+        let (mut session, buf) =
+            session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", conn.clone())]);
+
+        let args = matches(&HostsUnlock, &[]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents()
+                .contains("h1: skipped, not locked by this session")
+        );
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_some());
+
+        let args = matches(&HostsUnlock, &["-f"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("h1: unlocked"),
+            "{}",
+            buf.contents()
+        );
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_names_an_invalid_claim_without_force_and_removes_it_with_force() {
+        let conn = invalid_lock("h1", POOL_LOCK_PATH);
+        let (mut session, buf) =
+            session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", conn.clone())]);
+
+        let args = matches(&HostsUnlock, &["-p"]);
+        let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)), "{err:?}");
+        let out = buf.contents();
+        assert!(
+            out.contains("h1: FAILED (h1: lock file /var/lock/mtui-pool.lock is invalid")
+                && out.contains("unlock --pool --force"),
+            "{out}"
+        );
+        assert!(conn.file_contents(POOL_LOCK_PATH).is_some());
+
+        let args = matches(&HostsUnlock, &["-p", "-f"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("h1: pool claim removed"));
+        assert!(conn.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
     #[tokio::test]
     async fn unlock_skips_the_callers_own_stranded_lock_without_probing_it() {
         // Same user, foreign PID: this instance never took the lock either

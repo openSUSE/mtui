@@ -75,6 +75,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   another tester's. Reads, appends, truncating writes and requests that never
   reached the server still retry once on a new session after the cached one
   fails.
+- An empty or unparseable `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock`
+  (left by a claim that died between creating the file and writing its line)
+  no longer reads as a free host, which wedged it: every claim retried against
+  it and reported the host as claimed by an unknown owner, `unlock --force`
+  did nothing, and a stale reap never fired. It is now an invalid lock file:
+  `list_locks` reports it as such, `lock` and pool claims refuse with an error
+  naming the host and the file and how to clear it, `unlock --force` (`--pool`
+  for the pool claim) removes it, and a plain `unlock` leaves it alone. The
+  `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
+  file's modification time because it has no timestamp of its own; a missing or
+  future modification time never reaps. A lock line holding non-UTF-8 bytes or
+  an empty user is invalid the same way, instead of being read leniently.
 
 ## [26.3.5] - 2026-10-27
 
