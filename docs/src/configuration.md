@@ -95,7 +95,7 @@ Defaults below are the built-in values.
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `tempdir` | path | `/tmp` | Remote scratch directory on target hosts. |
+| `tempdir` | path | `/tmp` | Remote scratch directory on target hosts, and where `put` publishes uploads (see [Remote uploads](#remote-uploads)). |
 
 ### `[qem_dashboard]`
 
@@ -286,3 +286,35 @@ api_url = "https://api.suse.de"
 profile = "core"
 tools_deny = ["put", "get"]
 ```
+
+## Remote uploads
+
+`put` (REPL and MCP) never opens its destination for writing. The bytes go to a
+private `.mtui-upload-<uuid>` directory (mode `0700`) beside the destination,
+the file is created there exclusively, given mode `0770` and verified, and then
+`posix-rename@openssh.com` swaps it in under the destination name. The
+destination path is exactly what it was before; only the mechanism changed.
+
+Consequences to expect:
+
+- An existing file, symlink or hardlink at the destination is **replaced**, not
+  written through: the old inode and anything it was linked to stay as they
+  were, and the new file is owned by the login user with mode `0770`.
+- Every directory on the way must be a real directory owned by `root` or the
+  login user and not writable by anyone else (a sticky world-writable directory
+  such as `/tmp` is fine). Missing directories are created `0755`. Otherwise
+  the host is refused, naming the directory; the destination is not relocated.
+  `..` in a path is refused.
+- The server must offer `posix-rename@openssh.com` (OpenSSH does). There is no
+  slower fallback: a server without it fails the upload for that host.
+- The login's numeric uid is read with a fixed `id -u` over the existing SSH
+  connection, so a `put` runs one extra short command per host.
+- Replacement is atomic but not durable: nothing is `fsync`ed.
+- A `put` that is cancelled or loses its connection mid-transfer can leave an
+  empty-or-partial private `.mtui-upload-*` directory behind; it is never
+  visible under the destination name and is safe to delete. If the link dies
+  after the final rename was sent, the host reports that the upload *may or may
+  not* have been published, and mtui does not retry it.
+- A sticky directory restricts replacing another user's file; as a non-root
+  login, uploading over a file owned by someone else there fails with an
+  explicit error.

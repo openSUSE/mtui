@@ -267,6 +267,14 @@ host, the same destination the REPL `put` uses. `filename` must be a bare name
 outright: truncating an upload would corrupt it. Any host failure fails the
 call with the host named.
 
+The destination path and the tool's schema are unchanged, but a file is
+published atomically (see [Uploads](configuration.md#remote-uploads)): readers
+of `<filename>` see the whole old file or the whole new one, an existing
+symlink or hardlink at that name is replaced rather than written through, and
+the file ends up mode `0770`. A host whose server lacks `posix-rename@openssh.com`,
+or whose destination directories other users could swap, is refused by name
+and nothing is written there.
+
 ## Command behaviour notes
 
 - The `prepare` tool fails — instead of reporting success — when the loaded
