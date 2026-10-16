@@ -687,7 +687,7 @@ async fn make_testreport_slfo_obs_document_is_refused() {
     assert!(!report.is_loaded(), "slfo + obs must not load");
     let reason = report.base().load_error.as_deref().expect("a load_error");
     assert!(
-        reason.contains("Gitea"),
+        reason.contains("Gitea pull requests only"),
         "load_error should say SLFO updates are Gitea-only: {reason}"
     );
 }

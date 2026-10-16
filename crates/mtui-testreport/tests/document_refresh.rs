@@ -201,3 +201,33 @@ async fn force_fetches_unconditionally_and_replaces_the_local_document() {
     );
     assert!(!report.base().document_dirty);
 }
+
+/// A refreshed document that would turn a loaded report into an SLFO update
+/// served through OBS is refused and leaves the report as it was.
+#[tokio::test]
+async fn refuses_an_slfo_document_served_through_obs() {
+    let server = MockServer::start().await;
+    let mut doc = serde_json::to_value(document()).unwrap();
+    doc["kind"] = "slfo".into();
+    doc["workflow"] = "obs".into();
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{ID}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(doc.to_string())
+                .insert_header("etag", NEW_ETAG),
+        )
+        .mount(&server)
+        .await;
+
+    let mut report = loaded_report();
+    let before = state(&report);
+
+    let outcome = refresh_document(&mut report, &client(&server), false).await;
+
+    assert!(
+        matches!(&outcome, Err(RefreshError::Refused(m)) if m.contains("Gitea pull requests only")),
+        "{outcome:?}"
+    );
+    assert_eq!(state(&report), before);
+}

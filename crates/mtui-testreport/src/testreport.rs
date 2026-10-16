@@ -677,8 +677,8 @@ pub trait TestReport {
 
     /// Which update workflow mtui drives for this report.
     ///
-    /// See [`UpdateSource`] for the precedence rule; resolved once at load from
-    /// [`giteacohash`](Self::giteacohash).
+    /// See [`UpdateSource`]; resolved once at load from the document's
+    /// `workflow`.
     fn update_source(&self) -> UpdateSource {
         self.base().update_source
     }
@@ -710,7 +710,7 @@ pub struct SlackReviewMarker {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashCheck {
     /// The template hash matches the Gitea PR head, or there is nothing to
-    /// verify (null / OBS / PI reports, or the legacy `1.1` maintenance id).
+    /// verify (null / OBS / PI reports).
     Ok,
     /// The template hash differs from the Gitea PR head — the template is
     /// stale.

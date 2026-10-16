@@ -18,7 +18,7 @@ use mtui_datasources::qem_dashboard::incident::QemIncident;
 use mtui_datasources::{TeReGen, VerifyPolicy, resolve_verify};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
-use mtui_types::{UpdateID, UpdateSource, Workflow};
+use mtui_types::{UpdateID, Workflow};
 use tracing::{error, info, warn};
 
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
@@ -446,12 +446,8 @@ async fn load_via_document(
         }
     };
 
+    crate::ingest::check_document(&document)?;
     crate::ingest::apply_document(report.base_mut(), &document);
-    if rrid.kind == RequestKind::Slfo && report.base().update_source == UpdateSource::Obs {
-        return Err(format!(
-            "{rrid} is served through the OBS workflow, but SLFO updates are Gitea pull requests only"
-        ));
-    }
     report.base_mut().document = Some(*document);
 
     if let Some(dir) = trpath.parent() {
