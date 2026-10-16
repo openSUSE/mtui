@@ -33,6 +33,18 @@ fn should_compose(doc: &ReportDocument) -> bool {
     matches!(doc.workflow, DocWorkflow::Gitea) || matches!(doc.kind, DocumentKind::Pi)
 }
 
+/// Refuses a document no report class can drive: every SLFO update is a Gitea
+/// pull request, so `kind: slfo` with `workflow: obs` is an error.
+pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
+    if doc.kind == DocumentKind::Slfo && doc.workflow == DocWorkflow::Obs {
+        return Err(format!(
+            "{} is served through the OBS workflow, but SLFO updates are Gitea pull requests only",
+            doc.id
+        ));
+    }
+    Ok(())
+}
+
 /// Applies `doc` onto `base`, filling every field the document maps to.
 /// Downstream derivations (`update_repos_parser()`, `packages_for_map`,
 /// `register`/`normalize*`, `check_hash`, `composition()`) are untouched —

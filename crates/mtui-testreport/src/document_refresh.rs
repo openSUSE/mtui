@@ -7,7 +7,7 @@
 use mtui_datasources::teregen::{DocumentFetch, TeregenV2, TeregenV2Error};
 use thiserror::Error;
 
-use crate::ingest::apply_document;
+use crate::ingest::{apply_document, check_document};
 use crate::testreport::TestReport;
 
 /// What [`refresh_document`] did.
@@ -29,6 +29,9 @@ pub enum RefreshError {
     /// refresh.
     #[error("this report was not loaded from a document")]
     NoDocument,
+    /// The fetched document is one no report can be driven from.
+    #[error("{0}")]
+    Refused(String),
     /// The fetch was refused or failed.
     #[error(transparent)]
     Fetch(#[from] TeregenV2Error),
@@ -44,7 +47,8 @@ pub enum RefreshError {
 ///
 /// [`RefreshError::NoDocument`] when the report carries no document, with no
 /// request sent. [`RefreshError::Fetch`] when the server refuses or the
-/// transport fails; the report is left unchanged.
+/// transport fails, and [`RefreshError::Refused`] when the document is one no
+/// report can be driven from; the report is left unchanged either way.
 pub async fn refresh_document(
     report: &mut (dyn TestReport + Send + Sync),
     client: &TeregenV2,
@@ -58,6 +62,7 @@ pub async fn refresh_document(
     match client.fetch_document(&id, etag.as_deref()).await? {
         DocumentFetch::NotModified => Ok(Refreshed::Unchanged),
         DocumentFetch::Fresh { document, etag, .. } => {
+            check_document(&document).map_err(RefreshError::Refused)?;
             apply_document(report.base_mut(), &document);
             let base = report.base_mut();
             base.document = Some(*document);
