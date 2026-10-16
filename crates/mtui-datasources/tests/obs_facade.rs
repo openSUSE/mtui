@@ -32,11 +32,11 @@ fn rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap()
 }
 
-/// An SLFO RRID: `approve`/`reject` skip the `qam.suse.de` testreport
+/// A PI RRID: `approve`/`reject` skip the `qam.suse.de` testreport
 /// preconditions for this kind, so the facade's op wrappers can be exercised
 /// against a single wiremock OBS server (no reports server needed).
-fn slfo_rrid() -> RequestReviewID {
-    RequestReviewID::parse("SUSE:SLFO:1.1:70000").unwrap()
+fn pi_rrid() -> RequestReviewID {
+    RequestReviewID::parse("SUSE:PI:1.1:70000").unwrap()
 }
 
 /// The facade's injectable client-factory type (mirrors the private alias).
@@ -154,7 +154,7 @@ async fn factory_error_folds_into_logged_err() {
 }
 
 /// #599: `force` reaches the op — a held group is refused bare and taken
-/// over with `force`. SLFO, so no qam.suse.de precondition round-trip.
+/// over with `force`. PI, so no qam.suse.de precondition round-trip.
 #[tokio::test]
 async fn assign_forwards_force_to_the_op() {
     use wiremock::matchers::{method, path};
@@ -178,7 +178,7 @@ async fn assign_forwards_force_to_the_op() {
         .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
         .mount(&server)
         .await;
-    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
     let group = ["qam-sle".to_owned()];
 
     let err = osc.assign(&group, false).await.unwrap_err();
@@ -196,13 +196,13 @@ async fn assign_forwards_force_to_the_op() {
 
 #[tokio::test]
 async fn approve_happy_path_accepts_via_injected_client() {
-    // SLFO approve (no groups): the op GETs the request (USER is assigned via an
+    // PI approve (no groups): the op GETs the request (USER is assigned via an
     // accepted by_group review) then POSTs the changereviewstate. Preconditions
-    // are skipped for SLFO, so one wiremock OBS server suffices.
+    // are skipped for PI, so one wiremock OBS server suffices.
     let server = MockServer::start().await;
     let request_xml = "<request id='70000'><state name='review'/>\
          <action type='maintenance_release'>\
-         <source project='SUSE:SLFO:1.1' package='p'/></action>\
+         <source project='SUSE:PI:1.1' package='p'/></action>\
          <review state='accepted' by_group='qam-sle'>\
          <history who='qamuser' when='2020-01-01T00:00:00'>\
          <description>Review got accepted</description></history></review></request>";
@@ -217,7 +217,7 @@ async fn approve_happy_path_accepts_via_injected_client() {
         .mount(&server)
         .await;
 
-    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
     osc.approve(&[]).await.unwrap();
 }
 
@@ -227,7 +227,7 @@ async fn approve_preflight_checks_groups_and_assignment_without_posting() {
     let server = MockServer::start().await;
     let held = "<request id='70000'><state name='review'/>\
          <action type='maintenance_release'>\
-         <source project='SUSE:SLFO:1.1' package='p'/></action>\
+         <source project='SUSE:PI:1.1' package='p'/></action>\
          <review state='accepted' by_group='qam-sle'>\
          <history who='qamuser' when='2020-01-01T00:00:00'>\
          <description>Review got accepted</description></history></review></request>";
@@ -240,7 +240,7 @@ async fn approve_preflight_checks_groups_and_assignment_without_posting() {
         .respond_with(ResponseTemplate::new(200).set_body_string("<status code='ok'/>"))
         .mount(&server)
         .await;
-    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
 
     osc.approve_preflight(&[]).await.unwrap();
     let err = osc
@@ -258,7 +258,7 @@ async fn approve_preflight_checks_groups_and_assignment_without_posting() {
         ))
         .mount(&other)
         .await;
-    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(other.uri()));
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(other.uri()));
     let err = osc.approve_preflight(&[]).await.unwrap_err();
     assert!(err.to_string().contains("not assigned"), "{err}");
 
@@ -276,12 +276,12 @@ async fn approve_preflight_checks_groups_and_assignment_without_posting() {
 
 #[tokio::test]
 async fn reject_happy_path_declines_via_injected_client() {
-    // SLFO reject: preconditions + reject-reason attribute are skipped for SLFO,
+    // PI reject: preconditions + reject-reason attribute are skipped for PI,
     // so the op GETs the request then POSTs the declined changereviewstate.
     let server = MockServer::start().await;
     let request_xml = "<request id='70000'><state name='review'/>\
          <action type='maintenance_release'>\
-         <source project='SUSE:SLFO:1.1' package='p'/></action>\
+         <source project='SUSE:PI:1.1' package='p'/></action>\
          <review state='new' by_group='qam-sle'/></request>";
     Mock::given(method("GET"))
         .and(path("/request/70000"))
@@ -294,7 +294,7 @@ async fn reject_happy_path_declines_via_injected_client() {
         .mount(&server)
         .await;
 
-    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
     osc.reject(&[], "regression", "broke on boot")
         .await
         .unwrap();

@@ -338,6 +338,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The `mtui-vim-plugin` subpackage and `dist/vim-plugin/` (the text report
   format it highlighted is gone); upgrading `mtui` obsoletes the subpackage.
   The release tarball no longer carries a `vim-plugin/` directory.
+- SLFO updates served through the OBS/IBS workflow. Every SL Micro / SLFO update
+  is now a Gitea pull request, so a report document with `kind: slfo` and
+  `workflow: obs` is refused at load ("SLFO updates are Gitea pull requests
+  only"), and the IBS staging repo layout (`slrepoparse`) and the OBS-only
+  skips for SLFO are gone. PI updates still skip the `qam.suse.de` testreport
+  checks.
 
 ### Fixed
 

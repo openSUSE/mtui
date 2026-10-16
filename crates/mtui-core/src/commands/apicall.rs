@@ -1,10 +1,8 @@
 //! Backend-API commands (`assign`, `unassign`, `reject`, `comment`).
 //!
 //! Each command dispatches to the OSC or Gitea backend by the loaded report's
-//! own [`UpdateSource`] — resolved at load from the template's
-//! `gitea_commit_hash`, never inferred from the RRID's shape (#433: the
-//! SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1` id space between both
-//! workflows). A Product Increment's reference-host lock is bracketed around the
+//! own [`UpdateSource`] — resolved at load from the report document's
+//! `workflow`, never inferred from the RRID's shape. A Product Increment's reference-host lock is bracketed around the
 //! loaded report, not these review actions: `Session::load_update_reported`
 //! seeds `lock_comment`, `Target::close` releases on unload/quit. `approve`
 //! lives in [`approve`](super::approve) and reuses the dispatch helpers here.
@@ -571,15 +569,14 @@ mod tests {
     }
 
     /// The dispatch reads the report's own `UpdateSource`, not the RRID's
-    /// shape: `Git` routes to Gitea even at the dual-served `1.1`, and `Obs`
-    /// routes to OSC even at `1.2`.
+    /// shape: `Git` routes to Gitea and `Obs` to OSC.
     #[test]
     fn is_gitea_workflow_reflects_the_reports_update_source() {
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.1:5", &["h1"], "ok");
         session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         assert!(is_gitea_workflow(&session));
 
-        let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:5", &["h1"], "ok");
         session.metadata_mut().base_mut().update_source = UpdateSource::Obs;
         assert!(!is_gitea_workflow(&session));
 
@@ -588,8 +585,7 @@ mod tests {
     }
 
     /// A Product Increment carries no Gitea metadata, so it always resolves
-    /// `Obs`. Unlike `qam`'s precondition guard, which groups PI *with* SLFO —
-    /// merging the two would route PI through the wrong backend.
+    /// `Obs`.
     #[test]
     fn is_gitea_workflow_excludes_pi() {
         for id in ["SUSE:PI:1.1:5", "SUSE:PI:1.2:5", "SUSE:PI:42:99"] {
@@ -1213,7 +1209,6 @@ mod tests {
             for (id, source, refused) in [
                 (MAINT, UpdateSource::Obs, true),
                 ("SUSE:PI:1.1:5", UpdateSource::Obs, false),
-                ("SUSE:SLFO:1.2:5", UpdateSource::Obs, false),
                 (MAINT, UpdateSource::Git, false),
             ] {
                 let (mut session, _buf) = session_with_hosts(id, &["h1"], "ok");

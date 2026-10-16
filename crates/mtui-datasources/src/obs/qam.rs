@@ -7,7 +7,7 @@
 //! unassign guard, the refused group-approve, `by_user` reject with the
 //! `MAINT:RejectReason` read-modify-write, the preconditions (`assign`: the
 //! `qam.suse.de` text log exists; `approve`/`reject`: the report document's
-//! verdict on TeReGen v2 — both skipped for PI/SLFO), and `assign`'s refusal of a group review that is
+//! verdict on TeReGen v2 — both skipped for PI), and `assign`'s refusal of a group review that is
 //! already approved or held, by someone else or by the caller (#599) — OBS's
 //! `assignreview` checks only that the request is open. The `[oscqam] ` prefix
 //! goes on approve/reject comments only.
@@ -42,21 +42,9 @@ fn verdict_label(verdict: Option<Verdict>) -> &'static str {
 }
 
 /// Whether the request carries no maintenance testreport or `MAINT` attribute,
-/// so the `qam.suse.de` preconditions do not apply. True for **both** PI and
-/// SLFO.
-///
-/// Do **not** fold this into `openqa::base`'s bare `kind == Slfo` test, which it
-/// otherwise resembles: that one excludes PI. Merging them would make PI
-/// requests demand a maintenance testreport they never have, and retag every PI
-/// openQA `build` param `git` instead of `smelt`.
-///
-/// **Deliberately keyed on `kind` alone, not `mtui_types::UpdateSource`**
-/// (#433): having a maintenance testreport on `qam.suse.de` is a property of the
-/// *product* — PI and SLFO never have one — not of the backend serving a given
-/// update. A git-served and an OBS-served `SLFO:1.1` request carry the identical
-/// RRID here and must both skip; the test below pins it.
+/// so the `qam.suse.de` preconditions do not apply: true for PI requests only.
 fn skips_maintenance_testreport(rrid: &RequestReviewID) -> bool {
-    matches!(rrid.kind, RequestKind::Pi | RequestKind::Slfo)
+    matches!(rrid.kind, RequestKind::Pi)
 }
 
 /// Whether `approve`/`reject` read the verdict from the report document: every
@@ -282,7 +270,7 @@ async fn check_previous_rejects(
 /// Returns [`ObsError::Op`] if the request is not open for review, the group
 /// cannot be auto-inferred, its review is already accepted or held by another
 /// user (unless `force`) or by `user` themselves, no testreport exists
-/// (non-SLFO), or a previous decline blocks the re-review; or a transport/API
+/// (non-PI), or a previous decline blocks the re-review; or a transport/API
 /// error.
 pub async fn assign(
     client: &ObsClient,
@@ -428,7 +416,7 @@ pub async fn approve_preflight(
 ///
 /// Returns [`ObsError::Op`] if groups are given (group-approve refused), the
 /// user is not assigned, or the report document's verdict is not `PASSED`
-/// (non-PI/SLFO); or a transport/API error.
+/// (non-PI); or a transport/API error.
 pub async fn approve(
     client: &ObsClient,
     v2: &TeregenV2,
@@ -495,7 +483,7 @@ async fn write_reject_reason(
 /// # Errors
 ///
 /// Returns [`ObsError::Op`] if the report document's verdict is not `FAILED` or
-/// it has no comment (non-PI/SLFO); or a transport/API error.
+/// it has no comment (non-PI); or a transport/API error.
 // The explicit-params design (no `Config` coupling) puts `reject` one arg past
 // clippy's default threshold.
 #[allow(clippy::too_many_arguments)]
@@ -548,34 +536,15 @@ pub async fn reject(
 mod tests {
     use super::*;
 
-    /// Pins what separates this predicate from `openqa::base`'s bare
-    /// `kind == Slfo`: PI skips the preconditions too. Without it, folding the
-    /// two into one helper compiles, passes, and silently makes PI requests
-    /// demand a maintenance testreport they never have.
     #[test]
-    fn pi_and_slfo_both_skip_the_maintenance_testreport() {
-        for id in ["SUSE:PI:1.1:70000", "SUSE:PI:42:99", "SUSE:SLFO:1.1:70000"] {
+    fn pi_skips_the_maintenance_testreport() {
+        for id in ["SUSE:PI:1.1:70000", "SUSE:PI:42:99"] {
             let rrid = RequestReviewID::parse(id).unwrap();
             assert!(
                 skips_maintenance_testreport(&rrid),
                 "{id} must skip the qam.suse.de preconditions"
             );
         }
-    }
-
-    /// A git-served and an OBS-served `SLFO:1.1` update both skip the
-    /// `qam.suse.de` preconditions (#433): the predicate takes no
-    /// `UpdateSource` because the two sources present the *same* RRID here, and
-    /// "SLFO has no maintenance testreport" is a product-level fact. Both
-    /// branches below therefore construct the same RRID — the point is the pin,
-    /// not a difference this function could observe.
-    #[test]
-    fn slfo_1_1_skips_regardless_of_which_backend_served_it() {
-        let git_served = RequestReviewID::parse("SUSE:SLFO:1.1:418286").unwrap();
-        assert!(skips_maintenance_testreport(&git_served));
-
-        let obs_served = RequestReviewID::parse("SUSE:SLFO:1.1:418286").unwrap();
-        assert!(skips_maintenance_testreport(&obs_served));
     }
 
     #[test]

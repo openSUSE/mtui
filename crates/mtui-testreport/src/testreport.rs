@@ -131,7 +131,7 @@ pub struct TestReportBase {
     /// Gitea commit hash (JSON key `gitea_commit_hash`).
     pub giteacohash: Option<String>,
     /// Which update workflow mtui drives for this report, resolved once at
-    /// load from [`giteacohash`](Self::giteacohash). Defaults to
+    /// load from the document's `workflow`. Defaults to
     /// [`UpdateSource::Obs`] until a report is loaded.
     pub update_source: UpdateSource,
     /// `hostname -> product-drift warning lines` from the last connect.

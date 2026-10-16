@@ -1,16 +1,8 @@
 //! Which update workflow mtui drives for a report.
 
-/// Which update workflow mtui drives for a report, decided per-update from the
-/// template metadata — NOT from the RRID's shape, which the SL-Micro 6.0/6.1
-/// cutover makes undecidable (both workflows share the SLFO:1.1 id space).
-///
-/// **This is a selection, not an observation.** During the OBS-1.1 → git-1.1
-/// transition an update may be served *both* ways at once, so the rule is a
-/// precedence, not an exclusive inference: Gitea metadata present
-/// (`gitea_commit_hash`) ⇒ `Git`, otherwise `Obs`. Being both is expected and
-/// `Git` is the deliberate answer — do not add a branch for it. So `Obs` means
-/// "drive the OBS workflow", not "only OBS-served": a dual-served update
-/// resolves to `Git` and mtui leaves its OBS review request alone by design.
+/// Which update workflow mtui drives for a report, decided per update from the
+/// report document's `workflow` — NOT from the RRID's shape, which cannot tell an
+/// IBS request number from a Gitea pull request number.
 ///
 /// The variants mirror qem-dashboard's `incidents.type` column, whose value
 /// qem-bot writes into the openQA BUILD string as `:{type}:{number}:{package}`

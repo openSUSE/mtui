@@ -194,7 +194,7 @@ pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> 
 }
 
 /// Records `names` for `raw` under one key per normalizer the tree's repo
-/// parsers use — raw (`gitrepoparse`/`slrepoparse`), `normalize_16`
+/// parsers use — raw (`gitrepoparse`), `normalize_16`
 /// (`reporepoparse`) and `normalize` (the OBS update repos) — because the host reports whichever form its own
 /// `/etc/products.d` carries. Where two agree the entry simply merges; where a
 /// normalizer's output collides with another product's raw name the sets

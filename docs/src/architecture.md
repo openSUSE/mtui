@@ -92,7 +92,7 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
   TeReGen. Each component is qem-bot's own: `type` mirrors
   qem-dashboard's `incidents.type` column (`git`/`smelt`,
   `mtui_types::UpdateSource`); `number` is the dashboard's own incident
-  number, which for **every** SLFO update (git- or OBS-served) is the
+  number, which for **every** SLFO update (all of them Gitea PRs) is the
   review id, not the maintenance id
   (`crates/mtui-datasources/src/qem_dashboard/incident.rs::QemIncident::incident_number`);
   `package` is chosen by qem-bot's `sort_packages` ordering (demote
@@ -109,12 +109,7 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
   virtualenv to install.
 - **Async I/O** (`tokio`) with true parallel host fan-out.
 - **Git-vs-OBS is decided per update, from the report document, not from the RRID.**
-  During the SL-Micro 6.0/6.1 cutover both workflows share the `SLFO:1.1` id
-  space, so no rule over the RRID's shape can be correct — and an update can
-  briefly be served *both* ways at once. `mtui_types::UpdateSource` is a
-  **selection, not an observation**: `Git` when the report document's
-  `workflow` is `gitea`, `Obs` otherwise, resolved once at load. On a
-  dual-served update `Git` wins by design, and mtui leaves that update's OBS
-  review request untouched — `assign`/`approve`/`reject`/`comment` only ever
-  reach the Gitea side. See [`approve`](cli.md#approve) for the operator-facing
-  consequence.
+  The RRID's shape cannot tell an IBS request number from a Gitea PR number.
+  `mtui_types::UpdateSource` is `Git` when the report document's `workflow` is
+  `gitea`, `Obs` otherwise, resolved once at load. Every SLFO update is a Gitea
+  PR, so a `kind: slfo` document with `workflow: obs` is refused at load.

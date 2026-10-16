@@ -1,7 +1,7 @@
 //! Golden checks of the exact output strings for all `*repoparse` variants
-//! (`parse_product`, `slrepoparse`, `gitrepoparse`, `reporepoparse`).
+//! (`parse_product`, `gitrepoparse`, `reporepoparse`).
 
-use mtui_testreport::{gitrepoparse, parse_product, reporepoparse, slrepoparse};
+use mtui_testreport::{gitrepoparse, parse_product, reporepoparse};
 use mtui_types::SystemProduct;
 
 #[test]
@@ -33,13 +33,6 @@ fn repoparse_variants_skip_malformed_and_keep_valid() {
     let products = vec!["garbage".to_string(), "SLES 15 (x86_64)".to_string()];
     let product = SystemProduct::new("SLES", "15", "x86_64");
 
-    let repos = slrepoparse("https://example.com", &products);
-    assert_eq!(repos.len(), 1);
-    assert_eq!(
-        repos[&product],
-        "https://example.com/images/repo/SLES-15-x86_64/"
-    );
-
     let repos = gitrepoparse("https://example.com", &products);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[&product], "https://example.com/standard");
@@ -50,16 +43,6 @@ fn repoparse_variants_skip_malformed_and_keep_valid() {
     );
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[&product], "https://example.com/SLES-15-x86_64/");
-}
-
-#[test]
-fn slrepoparse_builds_images_repo_url() {
-    let repos = slrepoparse("https://example.com", &["SLES 15 (x86_64)".to_string()]);
-    let product = SystemProduct::new("SLES", "15", "x86_64");
-    assert_eq!(
-        repos[&product],
-        "https://example.com/images/repo/SLES-15-x86_64/"
-    );
 }
 
 #[test]
@@ -108,10 +91,10 @@ fn reporepoparse_drops_injection_and_bad_scheme_urls() {
 }
 
 #[test]
-fn slrepoparse_drops_injection_shaped_base() {
+fn gitrepoparse_drops_injection_shaped_base() {
     // An injection-shaped base repository URL yields a shell-unsafe derived URL,
     // which must be dropped rather than reaching a root zypper command.
-    let repos = slrepoparse(
+    let repos = gitrepoparse(
         "https://example.com/$(reboot)",
         &["SLES 15 (x86_64)".to_string()],
     );
@@ -133,7 +116,7 @@ mod credential_redaction {
     use std::fmt::Write as _;
     use std::sync::OnceLock;
 
-    use mtui_testreport::{reporepoparse, slrepoparse};
+    use mtui_testreport::{gitrepoparse, reporepoparse};
     use mtui_types::SystemProduct;
     use tracing::field::{Field, Visit};
     use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -186,7 +169,7 @@ mod credential_redaction {
         let mut repos = None;
 
         let events = capture_events(|| {
-            repos = Some(slrepoparse(
+            repos = Some(gitrepoparse(
                 "https://audituser:MTUI_SECRET_CANARY@repo.example/x;reboot",
                 &products,
             ));

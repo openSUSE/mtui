@@ -2,11 +2,7 @@
 //!
 //! Keys its identity on the parsed [`RequestReviewID`], derives its update-repo
 //! map by dispatching among the [`repoparse`](super::repoparse) helpers, and
-//! verifies its git commit hash against Gitea. The verification is bypassed for
-//! an OBS-served update (no Gitea PR to compare against), keyed on the report's
-//! own [`UpdateSource`] and **not** the RRID's maintenance id — issue #433: the
-//! SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1` id space between both
-//! workflows.
+//! verifies its git commit hash against Gitea.
 //!
 //! `list_update_commands` is a documented no-op stub: the doer seam
 //! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
@@ -18,10 +14,10 @@ use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
 use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
-use mtui_types::{RequestReviewID, SystemProduct, UpdateSource};
+use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
-use super::repoparse::{gitrepoparse, reporepoparse, slrepoparse};
+use super::repoparse::{gitrepoparse, reporepoparse};
 use super::set_repo_with_add_flags;
 use super::update_flow;
 use crate::testreport::{HashCheck, TestReport, TestReportBase};
@@ -68,9 +64,6 @@ impl TestReport for SlReport {
         if !self.base.repositories.is_empty() {
             let repos: Vec<String> = self.base.repositories.iter().cloned().collect();
             return reporepoparse(&repos, &self.base.products);
-        }
-        if self.base.update_source == UpdateSource::Obs {
-            return slrepoparse(&self.base.repository, &self.base.products);
         }
         gitrepoparse(&self.base.repository, &self.base.products)
     }
@@ -136,11 +129,6 @@ impl TestReport for SlReport {
     }
 
     async fn check_hash(&self) -> HashCheck {
-        // An OBS-served update has no Gitea PR to compare against.
-        if self.base.update_source == UpdateSource::Obs {
-            return HashCheck::Ok;
-        }
-
         let old = self.base.giteacohash.clone().unwrap_or_default();
         let giteaprapi = self.base.giteaprapi.clone().unwrap_or_default();
         let gitea = match Gitea::new(&self.base.config, &giteaprapi, None) {
