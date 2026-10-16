@@ -6,7 +6,7 @@
 //!
 //! They live next to the report impls because they *are* the report side of
 //! update-repo derivation: `SLTestReport::update_repos_parser` dispatches among
-//! [`reporepoparse`], [`slrepoparse`] and [`gitrepoparse`]. All operate on the
+//! [`reporepoparse`] and [`gitrepoparse`]. All operate on the
 //! flat [`SystemProduct`] `(name, version, arch)`.
 //!
 //! **Security:** every derived URL is validated through [`RepoUrl`] before it
@@ -53,8 +53,8 @@ pub(crate) fn validated_url(url: String) -> Option<String> {
 
 /// Joins a base URL and a path segment with exactly one `/` separator.
 ///
-/// The tails used (`"standard"`, `"images/repo/..."`) never start with `/`, so
-/// this reproduces the exact strings the tests assert.
+/// The tail used (`"standard"`) never starts with `/`, so this reproduces the
+/// exact strings the tests assert.
 fn urljoin(base: &str, tail: &str) -> String {
     if base.ends_with('/') {
         format!("{base}{tail}")
@@ -89,22 +89,6 @@ pub fn parse_product(product: &str) -> Result<Vec<SystemProduct>, ProductParseEr
     Ok(archs
         .map(|arch| SystemProduct::new(name, version, arch))
         .collect())
-}
-
-/// Derives the update-repo map for SUSE Linux (maintenance `1.1`, still in IBS).
-///
-/// Each product/arch maps to
-/// `<repository>/images/repo/<name>-<version>-<arch>/`.
-#[must_use]
-pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProduct, String> {
-    products
-        .iter()
-        .flat_map(|pd| parse_products(pd))
-        .filter_map(|x| {
-            let tail = format!("images/repo/{}-{}-{}/", x.name, x.version, x.arch);
-            validated_url(urljoin(repository, &tail)).map(|url| (x, url))
-        })
-        .collect()
 }
 
 /// Parses a product string, dropping (and logging at ERROR) a malformed one so a

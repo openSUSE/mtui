@@ -43,7 +43,7 @@ pub struct QemIncident {
     /// The resolved dashboard incident number (a maintenance or review id).
     pub incident_number: String,
     /// The report's own [`UpdateSource`], resolved by the caller at load time
-    /// from the template's `gitea_commit_hash`;
+    /// from the report document's `workflow`;
     /// [`update_source`](Self::update_source) falls back to it when no dashboard
     /// record is available.
     pub source: UpdateSource,
@@ -105,16 +105,11 @@ impl QemIncident {
 
     /// Resolve the dashboard incident number from an [`RequestReviewID`].
     ///
-    /// Mirrors qem-bot's own dashboard writes (#433): a git submission's
-    /// dashboard `number` is the Gitea PR number (`gitea.py::698`), a classic
-    /// one is the maintenance incident id (`smeltsync.py::111`) — but for
-    /// **every** SLFO update, git- and OBS-served alike, it is the RRID's
-    /// `review_id`, which the dashboard does not distinguish by source. Every
-    /// other kind keys on the maintenance id.
-    ///
-    /// Deliberately a `kind`-only predicate: both SLFO sources key on
-    /// `review_id`, so an [`UpdateSource`] parameter would be unused and would
-    /// imply a distinction that does not exist.
+    /// Mirrors qem-bot's own dashboard writes: a git submission's dashboard
+    /// `number` is the Gitea PR number (`gitea.py::698`), a classic one is the
+    /// maintenance incident id (`smeltsync.py::111`). Every SLFO update is a
+    /// Gitea PR, so for it the number is the RRID's `review_id`; every other
+    /// kind keys on the maintenance id.
     ///
     /// [`RequestReviewID`]: mtui_types::RequestReviewID
     /// [`UpdateSource`]: mtui_types::UpdateSource
@@ -221,11 +216,9 @@ mod tests {
         assert_eq!(QemIncident::incident_number(&rrid), "199773");
     }
 
-    /// An OBS-served `SLFO:1.1` request keys on the review id too: the
-    /// predicate is `kind == Slfo` alone (#433). The unfixed
-    /// `maintenance_id == "1.2"` guard returned `"1.1"` here, making mtui GET
-    /// `/api/incidents/1.1` for every OBS-served `1.1` update — this must be
-    /// observed red against it.
+    /// A Gitea `SLFO:1.1` PR keys on the review id too: the predicate is
+    /// `kind == Slfo` alone. A `maintenance_id == "1.2"` guard would return
+    /// `"1.1"` here and make mtui GET `/api/incidents/1.1`.
     #[test]
     fn incident_number_uses_review_id_for_slfo_1_1() {
         let rrid: RequestReviewID = "SUSE:SLFO:1.1:199773".parse().unwrap();

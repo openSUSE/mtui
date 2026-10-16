@@ -6,7 +6,7 @@
 //! [`reject`](crate::obs::qam::reject) read the tester's `verdict` and
 //! `comment` from the report document on TeReGen v2 instead ([`report_verdict`]):
 //! mtui no longer writes the text log, and a document upload does not re-render
-//! it. The caller skips both for PI/SLFO requests, which carry no maintenance
+//! it. The caller skips both for PI requests, which carry no maintenance
 //! testreport.
 
 use mtui_types::RequestReviewID;

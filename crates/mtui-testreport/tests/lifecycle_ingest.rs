@@ -664,6 +664,34 @@ async fn slfo_session(
     (config, gitea, teregen, UpdateID::parse(SLFO_RRID).unwrap())
 }
 
+/// SL Micro / SLFO updates are Gitea pull requests; a `kind: slfo` document
+/// served through the OBS workflow is refused at load.
+#[tokio::test]
+async fn make_testreport_slfo_obs_document_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let teregen = MockServer::start().await;
+    serve_document(
+        &teregen,
+        SLFO_RRID,
+        slfo_gitea_document(SLFO_RRID, "http://x/pulls/1", "deadbeef")
+            .replace(r#""workflow": "gitea""#, r#""workflow": "obs""#),
+    )
+    .await;
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.teregen_api = teregen.uri();
+    config.teregen_api_v2 = teregen.uri();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+
+    assert!(!report.is_loaded(), "slfo + obs must not load");
+    let reason = report.base().load_error.as_deref().expect("a load_error");
+    assert!(
+        reason.contains("Gitea"),
+        "load_error should say SLFO updates are Gitea-only: {reason}"
+    );
+}
+
 /// A matching hash loads the SLFO report; the happy path keeps AUTO and does
 /// not autoconnect. The dashboard is a separate server from Gitea, whose
 /// catch-all GET matcher would otherwise swallow its requests.

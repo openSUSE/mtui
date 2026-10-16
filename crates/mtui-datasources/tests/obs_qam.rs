@@ -23,18 +23,9 @@ fn rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap()
 }
 
-/// A genuine PI-kind RRID. `qam`'s precondition guard is
-/// `matches!(kind, Pi | Slfo)`, so PI is a distinct arm needing its own fixture:
-/// an SLFO RRID here would leave every `_pi_` test below exercising the SLFO arm
-/// twice and the PI arm not at all.
+/// A PI-kind RRID, which skips the `qam.suse.de` preconditions.
 fn pi_rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:PI:1.1:70000").unwrap()
-}
-
-/// An SLFO-kind RRID sharing the same review id, so the two kinds can be run
-/// through the identical mock setup and compared.
-fn slfo_rrid() -> RequestReviewID {
-    RequestReviewID::parse("SUSE:SLFO:1.1:70000").unwrap()
 }
 
 fn client_for(server: &MockServer) -> ObsClient {
@@ -943,12 +934,6 @@ async fn assign_skips_preconditions_for_pi() {
     assert_assign_skips_preconditions(&pi_rrid()).await;
 }
 
-#[tokio::test]
-async fn assign_skips_preconditions_for_slfo() {
-    // Pins the SLFO half of `matches!(kind, Pi | Slfo)`.
-    assert_assign_skips_preconditions(&slfo_rrid()).await;
-}
-
 // --------------------------------------------------------------------------- //
 // unassign                                                                     //
 // --------------------------------------------------------------------------- //
@@ -1343,44 +1328,41 @@ async fn approve_refused_when_the_document_host_is_unreachable() {
     assert_eq!(post_count(&api).await, 0);
 }
 
-/// PI and SLFO carry no maintenance document gate: approve proceeds without a
+/// PI carries no maintenance document gate: approve proceeds without a
 /// single call to the report host.
 #[tokio::test]
-async fn approve_skips_the_document_for_pi_and_slfo() {
-    for target in [pi_rrid(), slfo_rrid()] {
-        let api = MockServer::start().await;
-        let teregen = MockServer::start().await;
-        let reviews = group_review(
-            "qam-sle",
-            "accepted",
-            &[(USER, "2020-01-01T00:00:00", ACCEPT)],
-        );
-        Mock::given(method("GET"))
-            .and(path("/request/70000"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(request_xml("review", &reviews)),
-            )
-            .mount(&api)
-            .await;
-        mount_post_request(&api, "70000").await;
+async fn approve_skips_the_document_for_pi() {
+    let target = pi_rrid();
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    let reviews = group_review(
+        "qam-sle",
+        "accepted",
+        &[(USER, "2020-01-01T00:00:00", ACCEPT)],
+    );
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(request_xml("review", &reviews)))
+        .mount(&api)
+        .await;
+    mount_post_request(&api, "70000").await;
 
-        qam::approve(
-            &client_for(&api),
-            &v2_for(&teregen),
-            "http://unused",
-            &target,
-            USER,
-            &[],
-        )
-        .await
-        .unwrap();
+    qam::approve(
+        &client_for(&api),
+        &v2_for(&teregen),
+        "http://unused",
+        &target,
+        USER,
+        &[],
+    )
+    .await
+    .unwrap();
 
-        assert!(
-            teregen.received_requests().await.unwrap().is_empty(),
-            "{target}: the report host must not be contacted"
-        );
-        assert_eq!(post_count(&api).await, 1, "{target}");
-    }
+    assert!(
+        teregen.received_requests().await.unwrap().is_empty(),
+        "{target}: the report host must not be contacted"
+    );
+    assert_eq!(post_count(&api).await, 1, "{target}");
 }
 
 // --------------------------------------------------------------------------- //

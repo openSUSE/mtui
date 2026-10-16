@@ -115,19 +115,6 @@ the unverified scaffold anyway.
 No. The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`)
 talks to the OBS/IBS API natively — no `osc` subprocess.
 
-## Why does `assign`/`approve` go to Gitea when I expected OBS (or vice versa)?
-
-mtui decides per update, from the loaded report document, not from the
-RRID: an update whose document's `workflow` is `gitea` is Gitea-served, otherwise
-it is OBS-served. This matters because the RRID's shape
-cannot answer the question during the SL-Micro 6.0/6.1 cutover — both workflows
-share the `SLFO:1.1` id space, and an update can briefly be served **both**
-ways at once. When that happens mtui always drives the Gitea workflow and
-**leaves that update's OBS review request alone** — `assign`/`unassign`/
-`reject`/`comment`/`approve` never touch it. If an update's OBS request looks
-stuck open, check whether its report document's `workflow` is `gitea`; if so,
-that is expected, not a bug.
-
 ## How do I install packages the update newly introduces?
 
 Feature updates often add packages that only exist in the test-update repository,

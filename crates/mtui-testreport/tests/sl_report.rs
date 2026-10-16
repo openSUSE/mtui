@@ -1,12 +1,6 @@
-//! Covers the `SlReport` surface: `id`, `parser`, `update_repos_parser` (all
-//! three dispatch branches), `check_hash` (the OBS fast path plus the Gitea
-//! match/mismatch compare via wiremock), and `set_repo`.
-//!
-//! `update_repos_parser`/`check_hash` dispatch on the report's own
-//! [`UpdateSource`](mtui_types::UpdateSource), not the RRID's maintenance id
-//! (#433) — the tests below deliberately exercise both `1.1` and `1.2`
-//! maintenance ids under each source so no case can pass by accident on the
-//! retired `maintenance_id == "1.1"` literal.
+//! Covers the `SlReport` surface: `id`, `parser`, `update_repos_parser` (both
+//! dispatch branches), `check_hash` (the Gitea match/mismatch compare via
+//! wiremock), and `set_repo`.
 //!
 //! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
 //! the no-op stub is smoke-checked.
@@ -83,42 +77,7 @@ fn update_repos_parser_repositories_outrank_git_source() {
     );
 }
 
-/// OBS-served at the classic `1.1` maintenance id: `slrepoparse`.
-#[test]
-fn update_repos_parser_uses_slrepoparse_when_obs_at_1_1() {
-    let mut r = SlReport::new(config());
-    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
-    r.base_mut().update_source = UpdateSource::Obs;
-    r.base_mut().repository = "https://example.com".to_string();
-    r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
-    let out = r.update_repos_parser();
-    // slrepoparse builds the images/repo path.
-    assert_eq!(
-        out.values().next().unwrap(),
-        "https://example.com/images/repo/SLES-15-x86_64/"
-    );
-}
-
-/// OBS-served at `1.2`: still `slrepoparse` — the dispatch keys on
-/// `update_source`, not the maintenance id, so this must pass even though the
-/// retired literal check (`maintenance_id == "1.1"`) would have missed it.
-#[test]
-fn update_repos_parser_uses_slrepoparse_when_obs_at_1_2() {
-    let mut r = SlReport::new(config());
-    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.2:7"));
-    r.base_mut().update_source = UpdateSource::Obs;
-    r.base_mut().repository = "https://example.com".to_string();
-    r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
-    let out = r.update_repos_parser();
-    assert_eq!(
-        out.values().next().unwrap(),
-        "https://example.com/images/repo/SLES-15-x86_64/"
-    );
-}
-
-/// Git-served at the classic `1.1` maintenance id: `gitrepoparse` — the
-/// dual-served case. Must be observed red against the unfixed code, which
-/// routed every `1.1` maintenance id to `slrepoparse` regardless of source.
+/// Git-served at `1.1`: `gitrepoparse`.
 #[test]
 fn update_repos_parser_uses_gitrepoparse_when_git_at_1_1() {
     let mut r = SlReport::new(config());
@@ -140,32 +99,6 @@ fn update_repos_parser_uses_gitrepoparse_when_git_at_1_2() {
     r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
     let out = r.update_repos_parser();
     assert_eq!(out.values().next().unwrap(), "https://example.com/standard");
-}
-
-#[tokio::test]
-async fn check_hash_obs_bypasses_gitea() {
-    let mut r = SlReport::new(config());
-    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
-    r.base_mut().update_source = UpdateSource::Obs;
-    assert_eq!(r.check_hash().await, HashCheck::Ok);
-}
-
-/// OBS-served bypasses Gitea entirely: zero HTTP requests, not merely a
-/// passing verdict — otherwise "skipped" and "succeeded" would be
-/// indistinguishable.
-#[tokio::test]
-async fn check_hash_obs_at_1_1_issues_zero_requests() {
-    let server = MockServer::start().await;
-    let mut r = SlReport::new(config_with_gitea(&server));
-    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
-    r.base_mut().update_source = UpdateSource::Obs;
-    r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
-
-    assert_eq!(r.check_hash().await, HashCheck::Ok);
-    assert!(
-        server.received_requests().await.unwrap().is_empty(),
-        "OBS-served check_hash must never call Gitea"
-    );
 }
 
 /// Mount a GET on the PR endpoint returning `{ "head": { "sha": <sha> } }`,

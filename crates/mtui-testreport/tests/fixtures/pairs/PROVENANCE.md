@@ -23,19 +23,16 @@ document at capture time.
 | `SUSE:SLFO:1.2:7787` | slfo | gitea | 10 | 3 products (SLE-BCI, SLES, SLES-SAP) |
 | `SUSE:SLFO:1.2:7810` | slfo | gitea | 5 | 3 products (SLE-BCI, SLES, SLES-SAP) |
 
-**Not represented in this set** — neither shape was in-flight in the
-`testing` queue at capture time:
+**Not represented in this set** — it was not in-flight in the `testing` queue
+at capture time:
 
-- **SLFO OBS-served** (#433's dual-serving case: an SLFO RRID built via the
-  classic OBS pipeline rather than Gitea). Of the 83 SLFO ids in the queue, 55
-  served a v2 document and every one of them was `workflow: gitea`.
 - **PI** (Product Increment). The queue carried zero `SUSE:PI:*` ids.
 
-Both are worth adding once a live example exists; until then the PI and
-SLFO/OBS mapping rules (the `kind: pi` arm, `DocWorkflow::Obs` origin gating)
-are covered only by `crates/mtui-testreport/src/ingest.rs`'s unit tests
-against the synthetic fixtures in `crates/mtui-types/tests/fixtures/document/`
-(`pi.json`), not by this golden corpus.
+It is worth adding once a live example exists; until then the PI mapping rules
+(the `kind: pi` arm) are covered only by
+`crates/mtui-testreport/src/ingest.rs`'s unit tests against the synthetic
+fixtures in `crates/mtui-types/tests/fixtures/document/` (`pi.json`), not by
+this golden corpus.
 
 ## Known gap not exercised here
 
