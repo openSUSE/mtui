@@ -40,3 +40,24 @@ pub use reports::{NullReport, ObsReport, PiReport, SlReport};
 pub use support::{atomic_write_file, detect_system};
 pub use testreport::{HashCheck, ReportOpenQA, SlackReviewMarker, TestReport, TestReportBase};
 pub use update_workflow::{Diagnostic, UpdateError};
+
+/// Crate-private parsers the detached `fuzz/` crate drives. Not API: only
+/// built with the `fuzzing` feature, and hidden from the docs.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    use std::collections::HashMap;
+
+    use mtui_types::report_document::ReportDocument;
+
+    /// Forwards to `ingest::check_document`.
+    pub fn check_document(doc: &ReportDocument) -> Result<(), String> {
+        crate::ingest::check_document(doc)
+    }
+
+    /// Forwards to `reports::update_flow::parse_downgrade_versions`.
+    #[must_use]
+    pub fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
+        crate::reports::update_flow::parse_downgrade_versions(output)
+    }
+}

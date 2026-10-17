@@ -19,6 +19,10 @@ harness = false
 name = "testreport"
 path = "benches/testreport.rs"
 
+[features]
+# `mtui_testreport::fuzzing`, for the detached `fuzz/` crate only.
+fuzzing = []
+
 [dependencies]
 async-trait.workspace = true
 futures.workspace = true

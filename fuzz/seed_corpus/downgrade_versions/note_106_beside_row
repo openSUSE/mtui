@@ -1,0 +1,2 @@
+mtui: note: zypper -n se exited 106, a repository was skipped; the version list may be short
+pkg-a = 1.0-1
