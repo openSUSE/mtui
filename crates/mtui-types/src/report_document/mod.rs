@@ -219,7 +219,12 @@ impl FromStr for ReportDocument {
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let mut de = serde_json::Deserializer::from_str(raw);
-        serde_path_to_error::deserialize(&mut de).map_err(DocumentError::from)
+        let doc = serde_path_to_error::deserialize(&mut de).map_err(DocumentError::from)?;
+        de.end().map_err(|source| DocumentError {
+            pointer: "/".to_owned(),
+            source,
+        })?;
+        Ok(doc)
     }
 }
 
@@ -434,10 +439,15 @@ fn collect_dropped(
 /// Returns the same [`DocumentError`] [`ReportDocument::from_str`] would.
 pub fn parse_and_warn_on_dropped_keys(raw: &str) -> Result<ReportDocument, DocumentError> {
     let doc: ReportDocument = raw.parse()?;
-    // `raw` already parsed successfully above, so re-parsing it as a bare
-    // `Value` cannot fail.
-    let original: Value =
-        serde_json::from_str(raw).expect("raw already parsed successfully as ReportDocument");
+    // The typed parse skips an unknown key's value unchecked; this one rejects
+    // some (`1e400`, a lone surrogate), and the warning is not worth failing for.
+    let original: Value = match serde_json::from_str(raw) {
+        Ok(original) => original,
+        Err(e) => {
+            tracing::debug!(error = %e, "report document: dropped-key check skipped");
+            return Ok(doc);
+        }
+    };
     let round_tripped = serde_json::to_value(&doc).expect("ReportDocument always serializes");
     for pointer in dropped_pointers(&original, &round_tripped) {
         tracing::warn!(pointer, "report document: unknown key dropped during parse");
@@ -589,6 +599,35 @@ mod tests {
         }"#;
         let err = raw.parse::<ReportDocument>().unwrap_err();
         assert_eq!(err.pointer, "/install/targets/0");
+    }
+
+    /// Bytes after the document used to parse as a `ReportDocument` but not as
+    /// JSON, so the second parse in `parse_and_warn_on_dropped_keys` panicked.
+    #[test]
+    fn trailing_characters_after_the_document_are_an_error_not_a_panic() {
+        let raw = format!("{SLFO_GITEA} x");
+        let err = raw.parse::<ReportDocument>().unwrap_err();
+        assert_eq!(err.pointer, "/");
+        assert!(err.to_string().contains("trailing characters"), "{err}");
+        assert!(parse_and_warn_on_dropped_keys(&raw).is_err());
+
+        assert!(format!("{SLFO_GITEA} \n").parse::<ReportDocument>().is_ok());
+    }
+
+    /// The typed parse skips an unknown key's value unchecked; a `Value` parse
+    /// rejects some of those values, and used to panic the second parse.
+    #[test]
+    fn an_unknown_key_only_a_value_parse_rejects_is_not_a_panic() {
+        let body = SLFO_GITEA.trim_end().strip_suffix('}').unwrap();
+        for extra in [r#""zz": 1e400"#, r#""zz": -1e400"#, r#""zz": "\ud800""#] {
+            let raw = format!("{body}, {extra}}}");
+            assert!(
+                serde_json::from_str::<Value>(&raw).is_err(),
+                "{extra} no longer separates the two parses"
+            );
+            let doc = parse_and_warn_on_dropped_keys(&raw).expect(extra);
+            assert_eq!(doc, SLFO_GITEA.parse::<ReportDocument>().unwrap());
+        }
     }
 
     // --- has_tester_content ---
