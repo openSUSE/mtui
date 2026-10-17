@@ -2012,16 +2012,14 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
     }
 
     let mut out = HashMap::new();
-    for (name, mut vers) in release {
-        // Highest version wins; parse failures sort last so a valid version is
-        // still preferred.
-        vers.sort_by(|a, b| match (RPMVersion::parse(a), RPMVersion::parse(b)) {
-            (Ok(va), Ok(vb)) => vb.cmp(&va),
-            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
-            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
-            (Err(_), Err(_)) => std::cmp::Ordering::Equal,
-        });
-        if let Some(highest) = vers.into_iter().next() {
+    for (name, vers) in release {
+        // Highest version wins, parsed once each; an unparsable one (`None`)
+        // ranks below any valid one, and the first of equals is kept.
+        let highest = vers
+            .into_iter()
+            .map(|v| (RPMVersion::parse(&v).ok(), v))
+            .reduce(|best, next| if next.0 > best.0 { next } else { best });
+        if let Some((_, highest)) = highest {
             out.insert(name, highest);
         }
     }
@@ -2565,6 +2563,16 @@ mod tests {
         let map = parse_downgrade_versions("noise\nS | pkg | repo\nbash = 1.0-1\n");
         assert_eq!(map.len(), 1);
         assert_eq!(map["bash"], "1.0-1");
+    }
+
+    /// A parsable version beats an unparsable (empty) one wherever it is
+    /// listed, and of two equal versions the first listed is kept.
+    #[test]
+    fn parse_downgrade_versions_prefers_parsable_then_first_of_equals() {
+        let map = parse_downgrade_versions("a = \na = 1.0-1\nb = 1.0-1.x86_64\nb = 1.0-1\nc = \n");
+        assert_eq!(map["a"], "1.0-1");
+        assert_eq!(map["b"], "1.0-1.x86_64");
+        assert_eq!(map["c"], "");
     }
 
     #[test]

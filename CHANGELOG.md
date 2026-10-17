@@ -347,6 +347,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A malformed report document from TeReGen no longer panics the load or the
+  `checkout` refresh. Anything but whitespace after the JSON is refused as
+  invalid ("trailing characters"). An unknown key whose value only a generic
+  JSON parse rejects (an out-of-range number such as `1e400`, a lone surrogate)
+  is dropped like any other unknown key, but without the dropped-key warnings.
 - `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
   (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
   release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
