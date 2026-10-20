@@ -23,6 +23,21 @@ use clap::builder::ValueRange;
 use clap::{Arg, ArgAction};
 use serde_json::{Map, Value, json};
 
+/// Whether `arg` is clap's own `--help`/`--version` plumbing rather than a
+/// callable input.
+///
+/// Decided by the arg's action, not its id: a command may declare its own arg
+/// named `version` (e.g. `list_refhosts --version <VERSION>`), and matching on
+/// the id would drop that real input from the schema, the argv reconstruction
+/// and the unknown-key check alike (#681).
+#[must_use]
+pub(crate) fn is_clap_builtin(arg: &Arg) -> bool {
+    matches!(
+        arg.get_action(),
+        ArgAction::Help | ArgAction::HelpShort | ArgAction::HelpLong | ArgAction::Version
+    )
+}
+
 /// Build the JSON-Schema `object` describing `cmd`'s callable inputs.
 ///
 /// Walks `cmd.get_arguments()`, skipping the auto `--help`/`--version` args, and
@@ -36,10 +51,10 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
 
     for arg in cmd.get_arguments() {
         // clap-injected parser plumbing, not callable tool inputs.
-        let id = arg.get_id().as_str();
-        if id == "help" || id == "version" {
+        if is_clap_builtin(arg) {
             continue;
         }
+        let id = arg.get_id().as_str();
 
         let (schema, is_required) = arg_to_property(arg);
         properties.insert(id.to_owned(), schema);
@@ -614,6 +629,32 @@ mod tests {
         let parser = clap::Command::new("probe").arg(clap::Arg::new("real").long("real"));
         let schema = command_input_schema(&parser);
         assert!(!props(&schema).contains_key("help"));
+        assert!(props(&schema).contains_key("real"));
+    }
+
+    /// A command's own arg named `version` is a real input, not clap's
+    /// `--version` plumbing, so it must surface as a property (#681).
+    #[test]
+    fn list_refhosts_version_arg_is_in_schema() {
+        let schema = schema_for("list_refhosts");
+        let props = props(&schema);
+        assert!(props.contains_key("version"), "{props:?}");
+        // Same shape as its sibling optional string filter `--product`.
+        assert_eq!(props["version"]["anyOf"], props["product"]["anyOf"]);
+    }
+
+    /// The skip goes by action: clap's injected `--help`/`--version` stay out
+    /// even once the parser is built, whatever their id (#681).
+    #[test]
+    fn clap_builtin_args_are_skipped_by_action() {
+        let mut parser = clap::Command::new("probe")
+            .version("1.0")
+            .arg(clap::Arg::new("real").long("real"));
+        parser.build();
+        assert!(parser.get_arguments().any(is_clap_builtin));
+        let schema = command_input_schema(&parser);
+        assert!(!props(&schema).contains_key("help"));
+        assert!(!props(&schema).contains_key("version"));
         assert!(props(&schema).contains_key("real"));
     }
 

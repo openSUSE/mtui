@@ -347,6 +347,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The MCP `list_refhosts` tool now accepts `version`. It was missing from the
+  tool's input schema and refused as an unknown argument, because the MCP layer
+  dropped every argument named `version` as if it were clap's own `--version`
+  flag (#681).
 - A malformed report document from TeReGen no longer panics the load or the
   `checkout` refresh. Anything but whitespace after the JSON is refused as
   invalid ("trailing characters"). An unknown key whose value only a generic

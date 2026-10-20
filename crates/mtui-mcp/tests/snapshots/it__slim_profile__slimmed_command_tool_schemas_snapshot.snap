@@ -636,6 +636,10 @@ expression: pretty
           "default": false,
           "description": "include addons in the output",
           "type": "boolean"
+        },
+        "version": {
+          "description": "product version: 15-SP6 / 15.6 / 15 (SP optional)",
+          "type": "string"
         }
       },
       "type": "object"
