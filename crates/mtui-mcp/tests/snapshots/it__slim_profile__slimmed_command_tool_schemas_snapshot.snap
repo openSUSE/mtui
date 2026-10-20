@@ -842,8 +842,26 @@ expression: pretty
           "description": "show only genuinely failed jobs (pending/unfinished excluded)",
           "type": "boolean"
         },
+        "flavor": {
+          "description": "only jobs with this FLAVOR setting",
+          "type": "string"
+        },
+        "limit": {
+          "default": 0,
+          "description": "cap the number of rows after --offset (0 = all)",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "description": "skip the first N rows (0 = from the start); with --limit, page any middle slice",
+          "type": "integer"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "test": {
+          "description": "only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'",
           "type": "string"
         },
         "url_dashboard_qam": {
@@ -852,6 +870,10 @@ expression: pretty
         },
         "url_openqa": {
           "description": "Override openQA URL (default: config openqa_instance)",
+          "type": "string"
+        },
+        "version": {
+          "description": "only jobs with this VERSION setting, e.g. 15-SP6",
           "type": "string"
         }
       },

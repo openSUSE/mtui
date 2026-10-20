@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
 
+use super::row_budget::{crush, row_notice};
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
@@ -25,12 +26,46 @@ fn is_pending(job: &oqa::JobResult) -> bool {
     !TERMINAL_STATES.contains(&job.state.as_str())
 }
 
+/// Narrowing flags named in the truncation notice.
+const JOBS_HINT: &str = "--failed/--arch/--test/--flavor/--version/--limit/--offset";
+
+/// Row-budget severity: failed jobs (`failed`, `incomplete`,
+/// `timeout_exceeded`, ...) outrank pending ones, which outrank passing and
+/// neutral jobs, so the actionable rows survive a truncation.
+fn anomaly_severity(job: &oqa::JobResult) -> u8 {
+    if is_pending(job) {
+        1
+    } else if PASSING.contains(&job.result.as_str()) || NEUTRAL.contains(&job.result.as_str()) {
+        0
+    } else {
+        2
+    }
+}
+
+/// Compiles a shell-style glob (`*` and `?`) into an anchored regex.
+fn glob_regex(glob: &str) -> Result<regex::Regex, regex::Error> {
+    let pattern = regex::escape(glob).replace(r"\*", ".*").replace(r"\?", ".");
+    regex::Regex::new(&format!("^{pattern}$"))
+}
+
+/// The `VERSION FLAVOR MACHINE` settings of a job, skipping empty ones.
+fn job_settings(job: &oqa::JobResult) -> String {
+    [&job.version, &job.flavor, &job.machine]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Lists the individual openQA jobs for the loaded update's incident build.
 ///
 /// By default `obsoleted` jobs are dropped; `--all` keeps them, `--failed`
 /// shows only genuinely failed jobs (pending/unfinished jobs are excluded and
-/// reported as "N still pending"), and `--arch` filters by architecture.
-/// Requires a loaded update.
+/// reported as "N still pending"), and `--arch`, `--test` (glob), `--flavor`
+/// and `--version` narrow by job settings. The listing is paged with
+/// `--offset`/`--limit` and capped by the shared row budget, keeping failed,
+/// then pending jobs ahead of passing ones. Requires a loaded update.
 pub struct OpenQAJobs;
 
 #[async_trait]
@@ -67,6 +102,40 @@ impl Command for OpenQAJobs {
                 .help("only jobs for this architecture"),
         )
         .arg(
+            Arg::new("test")
+                .long("test")
+                .value_name("GLOB")
+                .help("only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'"),
+        )
+        .arg(
+            Arg::new("flavor")
+                .long("flavor")
+                .value_name("FLAVOR")
+                .help("only jobs with this FLAVOR setting"),
+        )
+        .arg(
+            Arg::new("version")
+                .long("version")
+                .value_name("VERSION")
+                .help("only jobs with this VERSION setting, e.g. 15-SP6"),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("cap the number of rows after --offset (0 = all)"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
+        )
+        .arg(
             Arg::new("url_openqa")
                 .long("url-openqa")
                 .value_name("URL")
@@ -85,6 +154,11 @@ impl Command for OpenQAJobs {
             "--all",
             "--failed",
             "--arch",
+            "--test",
+            "--flavor",
+            "--version",
+            "--limit",
+            "--offset",
             "--url-openqa",
             "--url-dashboard-qam",
         ]
@@ -102,6 +176,17 @@ impl Command for OpenQAJobs {
         let include_obsoleted = args.get_flag("all");
         let only_failed = args.get_flag("failed");
         let arch_filter = args.get_one::<String>("arch").cloned();
+        let test_filter = args
+            .get_one::<String>("test")
+            .map(|glob| {
+                glob_regex(glob)
+                    .map_err(|e| CommandError::Other(format!("invalid --test glob {glob:?}: {e}")))
+            })
+            .transpose()?;
+        let flavor_filter = args.get_one::<String>("flavor").cloned();
+        let version_filter = args.get_one::<String>("version").cloned();
+        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
+        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
 
         let url_openqa = args
             .get_one::<String>("url_openqa")
@@ -161,6 +246,15 @@ impl Command for OpenQAJobs {
         if let Some(arch) = &arch_filter {
             jobs.retain(|j| &j.arch == arch);
         }
+        if let Some(test) = &test_filter {
+            jobs.retain(|j| test.is_match(&j.test));
+        }
+        if let Some(flavor) = &flavor_filter {
+            jobs.retain(|j| &j.flavor == flavor);
+        }
+        if let Some(version) = &version_filter {
+            jobs.retain(|j| &j.version == version);
+        }
         // Counted before `--failed` filters them out, so the message reflects
         // reality regardless of the active filter.
         let pending_count = jobs.iter().filter(|j| is_pending(j)).count();
@@ -206,7 +300,19 @@ impl Command for OpenQAJobs {
             session.display.println(&pending);
         }
         session.display.println("");
-        for j in &jobs {
+
+        // Header counts above cover the full filtered set; only the listing
+        // is windowed (--offset/--limit) and then crushed to the row budget,
+        // as in `list_refhosts`.
+        let windowed: Vec<oqa::JobResult> = {
+            let mut v: Vec<oqa::JobResult> = jobs.into_iter().skip(offset).collect();
+            if limit > 0 && limit < v.len() {
+                v.truncate(limit);
+            }
+            v
+        };
+        let crushed = crush(windowed, |j| j.url.clone(), anomaly_severity);
+        for j in &crushed.kept {
             let result = if is_pending(j) {
                 session.display.yellow(&format!("{:<15}", j.result))
             } else if PASSING.contains(&j.result.as_str()) {
@@ -216,9 +322,26 @@ impl Command for OpenQAJobs {
             } else {
                 session.display.red(&format!("{:<15}", j.result))
             };
-            session
-                .display
-                .println(&format!("  {result} {:<8} {}  {}", j.arch, j.test, j.url));
+            let settings = job_settings(j);
+            if settings.is_empty() {
+                session
+                    .display
+                    .println(&format!("  {result} {:<8} {}  {}", j.arch, j.test, j.url));
+            } else {
+                session.display.println(&format!(
+                    "  {result} {:<8} {}  [{settings}]  {}",
+                    j.arch, j.test, j.url
+                ));
+            }
+        }
+        if crushed.truncated > 0 {
+            session.display.println(&row_notice(
+                crushed.truncated,
+                crushed.total,
+                crushed.anomaly_kept,
+                crushed.anomaly_total,
+                JOBS_HINT,
+            ));
         }
         Ok(())
     }
@@ -241,7 +364,7 @@ mod tests {
     fn completion_offers_flags_and_templates() {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let out = OpenQAJobs.complete(&session, "--f", "");
-        assert_eq!(out, vec!["--failed"]);
+        assert_eq!(out, vec!["--failed", "--flavor"]);
     }
 
     #[tokio::test]
@@ -447,6 +570,159 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("kdump"), "{out}");
         assert!(out.contains("1 still pending"), "{out}");
+    }
+
+    /// One openQA job as the jobs API returns it, with settings.
+    fn job(
+        id: i64,
+        test: &str,
+        result: &str,
+        state: &str,
+        settings: [&str; 3],
+    ) -> serde_json::Value {
+        let [flavor, version, machine] = settings;
+        serde_json::json!({
+            "id": id, "test": test, "result": result, "state": state, "clone_id": null,
+            "settings": {"ARCH": "x86_64", "FLAVOR": flavor, "VERSION": version, "MACHINE": machine}
+        })
+    }
+
+    /// Runs `openqa_jobs` with `extra` flags against `jobs`; returns stdout.
+    async fn run_with(jobs: Vec<serde_json::Value>, extra: &[&str]) -> String {
+        let server = server_with_jobs(serde_json::json!({ "jobs": jobs })).await;
+        let uri = server.uri();
+        let mut argv: Vec<&str> = extra.to_vec();
+        argv.extend(["--url-dashboard-qam", &uri, "--url-openqa", &uri]);
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&OpenQAJobs, &argv);
+        OpenQAJobs.call(&mut session, &args).await.unwrap();
+        buf.contents()
+    }
+
+    /// Listed job rows (each carries its `/t<id>` URL).
+    fn row_lines(out: &str) -> Vec<&str> {
+        out.lines().filter(|l| l.contains("/t")).collect()
+    }
+
+    const DVD: [&str; 3] = ["Server-DVD-Incidents", "15-SP6", "64bit"];
+    const MICRO: [&str; 3] = ["Micro-Incidents", "6.1", "64bit-2G"];
+
+    #[test]
+    fn glob_regex_matches_whole_name_with_wildcards() {
+        let re = glob_regex("*incident?nstall*").unwrap();
+        assert!(re.is_match("qam-incidentinstall"));
+        assert!(re.is_match("incidentinstall-ha"));
+        assert!(!re.is_match("install"));
+        // Regex metacharacters in the glob are literal.
+        let dot = glob_regex("a.b").unwrap();
+        assert!(dot.is_match("a.b"));
+        assert!(!dot.is_match("axb"));
+    }
+
+    #[test]
+    fn severity_ranks_failed_over_pending_over_passing() {
+        let mk = |result: &str, state: &str| {
+            let mut job = oqa::JobResult::default();
+            result.clone_into(&mut job.result);
+            state.clone_into(&mut job.state);
+            job
+        };
+        for failed in [
+            "failed",
+            "incomplete",
+            "timeout_exceeded",
+            "parallel_failed",
+        ] {
+            assert_eq!(anomaly_severity(&mk(failed, "done")), 2, "{failed}");
+        }
+        assert_eq!(anomaly_severity(&mk("none", "scheduled")), 1);
+        for ok in ["passed", "softfailed", "obsoleted", "skipped"] {
+            assert_eq!(anomaly_severity(&mk(ok, "done")), 0, "{ok}");
+        }
+    }
+
+    /// `--test` keeps every matching job, passed ones included (#643).
+    #[tokio::test]
+    async fn test_glob_filter_keeps_matching_jobs_of_any_result() {
+        let out = run_with(
+            vec![
+                job(1, "qam-incidentinstall", "passed", "done", DVD),
+                job(2, "qam-incidentinstall-ha", "failed", "done", DVD),
+                job(3, "mau-extratests", "failed", "done", DVD),
+            ],
+            &["--test", "*incidentinstall*"],
+        )
+        .await;
+        assert_eq!(row_lines(&out).len(), 2, "{out}");
+        assert!(out.contains("openQA jobs for build BUILD-42 (2)"), "{out}");
+        assert!(!out.contains("mau-extratests"), "{out}");
+    }
+
+    /// `--flavor` and `--version` narrow by job settings, and every row shows
+    /// the job's VERSION, FLAVOR and MACHINE (#643).
+    #[tokio::test]
+    async fn flavor_and_version_filters_and_rows_show_settings() {
+        let jobs = vec![
+            job(1, "dvd-test", "passed", "done", DVD),
+            job(2, "micro-test", "passed", "done", MICRO),
+        ];
+        let out = run_with(jobs.clone(), &["--flavor", "Micro-Incidents"]).await;
+        assert_eq!(row_lines(&out).len(), 1, "{out}");
+        assert!(out.contains("micro-test"), "{out}");
+        assert!(out.contains("[6.1 Micro-Incidents 64bit-2G]"), "{out}");
+
+        let out = run_with(jobs, &["--version", "15-SP6"]).await;
+        assert_eq!(row_lines(&out).len(), 1, "{out}");
+        assert!(out.contains("dvd-test"), "{out}");
+        assert!(out.contains("[15-SP6 Server-DVD-Incidents 64bit]"), "{out}");
+    }
+
+    /// `--offset`/`--limit` page any slice; windowing alone never prints a
+    /// truncation notice, and the header still counts the full set (#643).
+    #[tokio::test]
+    async fn offset_and_limit_page_rows_without_notice() {
+        let jobs: Vec<_> = (0..10)
+            .map(|i| job(i, &format!("test-{i:02}"), "passed", "done", DVD))
+            .collect();
+        let out = run_with(jobs, &["--offset", "4", "--limit", "3"]).await;
+        let rows = row_lines(&out);
+        assert_eq!(rows.len(), 3, "{out}");
+        assert!(rows[0].contains("test-04"), "{out}");
+        assert!(rows[2].contains("test-06"), "{out}");
+        assert!(out.contains("openQA jobs for build BUILD-42 (10)"), "{out}");
+        assert!(!out.contains("truncated"), "{out}");
+    }
+
+    /// Over the row budget, at most `ROW_CAP` rows plus one notice are
+    /// printed, the header counts every match, and failed and pending jobs
+    /// survive ahead of passing ones (#643).
+    #[tokio::test]
+    async fn row_budget_caps_listing_and_keeps_failed_and_pending() {
+        use super::super::row_budget::ROW_CAP;
+
+        let mut jobs: Vec<_> = (0..140)
+            .map(|i| job(i, &format!("pass-{i:03}"), "passed", "done", DVD))
+            .collect();
+        jobs.extend((0..10).map(|i| job(200 + i, &format!("fail-{i}"), "failed", "done", DVD)));
+        jobs.extend((0..5).map(|i| job(300 + i, &format!("pend-{i}"), "none", "running", DVD)));
+
+        let out = run_with(jobs, &[]).await;
+        let rows = row_lines(&out);
+        assert!(rows.len() <= ROW_CAP, "{} rows", rows.len());
+        assert!(
+            out.contains("openQA jobs for build BUILD-42 (155)"),
+            "{out}"
+        );
+        for i in 0..10 {
+            assert!(out.contains(&format!("fail-{i}")), "fail-{i} dropped");
+        }
+        for i in 0..5 {
+            assert!(out.contains(&format!("pend-{i}")), "pend-{i} dropped");
+        }
+        let notices: Vec<_> = out.lines().filter(|l| l.contains("…[truncated")).collect();
+        assert_eq!(notices.len(), 1, "{out}");
+        assert!(notices[0].contains("(15/15 anomalies kept)"), "{out}");
+        assert!(notices[0].contains(JOBS_HINT), "{out}");
     }
 
     /// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's lifetime:

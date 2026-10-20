@@ -71,6 +71,12 @@ pub struct JobResult {
     pub state: String,
     /// The job group name (may be empty).
     pub(crate) group: String,
+    /// The `FLAVOR` job setting (may be empty).
+    pub flavor: String,
+    /// The `VERSION` job setting (may be empty).
+    pub version: String,
+    /// The `MACHINE` job setting (may be empty).
+    pub machine: String,
     /// The browser-facing job URL (`.../t<id>`).
     pub url: String,
 }
