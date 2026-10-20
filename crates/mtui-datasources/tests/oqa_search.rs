@@ -630,6 +630,42 @@ async fn incident_jobs_include_obsoleted() {
     assert_eq!(rows[0].result, "obsoleted");
 }
 
+/// `FLAVOR`, `VERSION` and `MACHINE` come from the job settings; a job
+/// without them yields empty strings rather than failing (#643).
+#[tokio::test]
+async fn incident_jobs_read_flavor_version_machine_from_settings() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jobs": [
+                {"id": 1, "test": "a", "result": "passed", "settings": {
+                    "ARCH": "x86_64", "FLAVOR": "Server-DVD-Incidents",
+                    "VERSION": "15-SP6", "MACHINE": "64bit"
+                }},
+                {"id": 2, "test": "b", "result": "passed", "settings": {"ARCH": "x86_64"}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let rows = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    let full = rows.iter().find(|r| r.test == "a").unwrap();
+    assert_eq!(full.flavor, "Server-DVD-Incidents");
+    assert_eq!(full.version, "15-SP6");
+    assert_eq!(full.machine, "64bit");
+    let bare = rows.iter().find(|r| r.test == "b").unwrap();
+    assert_eq!(
+        (
+            bare.flavor.as_str(),
+            bare.version.as_str(),
+            bare.machine.as_str()
+        ),
+        ("", "", "")
+    );
+}
+
 #[tokio::test]
 async fn incident_jobs_empty_build_makes_no_request() {
     // A falsy build short-circuits with no HTTP call (no server needed).

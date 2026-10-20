@@ -803,6 +803,25 @@ Options:
       --arch <ARCH>
           only jobs for this architecture
 
+      --test <GLOB>
+          only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'
+
+      --flavor <FLAVOR>
+          only jobs with this FLAVOR setting
+
+      --version <VERSION>
+          only jobs with this VERSION setting, e.g. 15-SP6
+
+      --limit <N>
+          cap the number of rows after --offset (0 = all)
+          
+          [default: 0]
+
+      --offset <N>
+          skip the first N rows (0 = from the start); with --limit, page any middle slice
+          
+          [default: 0]
+
       --url-openqa <URL>
           Override openQA URL (default: config openqa_instance)
 

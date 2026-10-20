@@ -197,6 +197,13 @@ pub async fn incident_jobs(
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
         let state = job.get("state").and_then(|s| s.as_str()).unwrap_or("");
+        let setting = |key: &str| {
+            settings
+                .and_then(|s| s.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         rows.push(JobResult {
             job_id: id,
             test,
@@ -208,6 +215,9 @@ pub async fn incident_jobs(
                 .and_then(|g| g.as_str())
                 .unwrap_or("")
                 .to_string(),
+            flavor: setting("FLAVOR"),
+            version: setting("VERSION"),
+            machine: setting("MACHINE"),
             url: format!("{openqa_trimmed}/t{id}"),
         });
     }

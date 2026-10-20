@@ -10,6 +10,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `openqa_jobs` filters by `--test <GLOB>`, `--flavor` and `--version`, pages
+  with `--offset`/`--limit`, and shows each job's VERSION, FLAVOR and MACHINE.
+  Over 100 rows the listing is capped by the shared row budget like `updates`
+  and `list_refhosts`: failed, then pending jobs are kept ahead of passing
+  ones, a truncation notice names the narrowing flags, and the header still
+  counts every matching job (#643).
 - `--allow-stale` on `reject` (with `--reviewer`) and on `request_review`, to
   publish a report that loaded with a stale Gitea hash anyway (#685).
 - `approve --accept-head <sha>` answers a Gitea checkout-hash mismatch
