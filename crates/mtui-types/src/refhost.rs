@@ -39,9 +39,9 @@ type RawDocument = std::collections::BTreeMap<String, Option<Vec<serde_json::Val
 /// Parser options for `refhosts.yml`:
 /// - `strict_booleans`: without it YAML 1.1 booleans (`no`, `on`, `y`, …) would
 ///   swallow hostnames and values that must stay strings.
-/// - `reject_non_finite_typeless_float: false`: a single `.inf`/`.nan` anywhere
+/// - `non_finite_float_policy: AsString`: a single `.inf`/`.nan` anywhere
 ///   is otherwise document-fatal under `deserialize_any` — exactly the failure
-///   mode this loader exists to prevent. `false` degrades it to a string, so
+///   mode this loader exists to prevent. `AsString` degrades it to a string, so
 ///   `Host::deserialize` drops just that row.
 /// - `budget`: the default `max_nodes` (250,000) would cap the inventory at
 ///   roughly 21k hosts; the raised ceiling is still deliberate DoS hardening for
@@ -49,7 +49,7 @@ type RawDocument = std::collections::BTreeMap<String, Option<Vec<serde_json::Val
 fn options() -> serde_saphyr::Options {
     serde_saphyr::options! {
         strict_booleans: true,
-        reject_non_finite_typeless_float: false,
+        non_finite_float_policy: serde_saphyr::NonFiniteFloatPolicy::AsString,
         budget: serde_saphyr::budget! { max_nodes: 5_000_000, max_events: 10_000_000 },
     }
 }
@@ -278,8 +278,7 @@ default:
 
     #[test]
     fn non_finite_float_in_one_row_does_not_fail_the_whole_document() {
-        // Mutation: `reject_non_finite_typeless_float: true` (the parser's own
-        // default) makes one stray `.inf` document-fatal under `deserialize_any`
+        // Mutation: `non_finite_float_policy: Reject` makes one stray `.inf` document-fatal under `deserialize_any`
         // over the untyped rows, so `load_refhosts` would return `Err` instead
         // of both hosts with `.inf` degraded to a string.
         let yaml = "\
