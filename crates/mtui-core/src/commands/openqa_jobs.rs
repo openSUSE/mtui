@@ -421,6 +421,8 @@ mod tests {
         assert!(out.contains("passed=1"), "{out}");
         assert!(out.contains("install"), "{out}");
         assert!(!out.contains("still pending"), "{out}");
+        // Jobs without settings print no empty `[]`.
+        assert!(!out.contains("[]"), "{out}");
     }
 
     #[tokio::test]
@@ -609,10 +611,21 @@ mod tests {
 
     #[test]
     fn glob_regex_matches_whole_name_with_wildcards() {
-        let re = glob_regex("*incident?nstall*").unwrap();
+        let re = glob_regex("*incidentins?all*").unwrap();
         assert!(re.is_match("qam-incidentinstall"));
         assert!(re.is_match("incidentinstall-ha"));
         assert!(!re.is_match("install"));
+        // Anchored: a pattern without wildcards matches the whole name only.
+        assert!(
+            !glob_regex("incidentinstall")
+                .unwrap()
+                .is_match("qam-incidentinstall")
+        );
+        assert!(
+            !glob_regex("qam-*")
+                .unwrap()
+                .is_match("xqam-incidentinstall")
+        );
         // Regex metacharacters in the glob are literal.
         let dot = glob_regex("a.b").unwrap();
         assert!(dot.is_match("a.b"));
