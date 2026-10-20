@@ -369,8 +369,8 @@ pub(crate) async fn dispatch_tool(
     }
     let allowed = arg_source
         .get_arguments()
+        .filter(|a| !crate::schema::is_clap_builtin(a))
         .map(|a| a.get_id().as_str())
-        .filter(|id| *id != "help" && *id != "version")
         .chain(deprecated.iter().copied());
     if let Err(err) = reject_unknown_kwargs(&kwargs, allowed) {
         return Err::<String, _>(err).into();
@@ -1095,6 +1095,34 @@ mod tests {
             "{:?}",
             errors[0].stderr
         );
+    }
+
+    /// `list_refhosts`'s own `version` arg is accepted, not refused as an
+    /// unknown key alongside clap's `--version` plumbing (#681).
+    #[tokio::test]
+    async fn list_refhosts_version_kwarg_is_accepted() {
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("list_refhosts").expect("list_refhosts route");
+        let kwargs = json!({ "version": "16-0" });
+        let outcome = dispatch_tool(
+            &registry,
+            &session,
+            route,
+            kwargs.as_object().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .outcome;
+        if let Err(err) = completed(outcome) {
+            assert!(
+                !err.stderr.contains("unknown argument"),
+                "version must reach the command: {:?}",
+                err.stderr
+            );
+        }
     }
 
     /// The shim exempts named keys, not unknown keys at large: a typo on a

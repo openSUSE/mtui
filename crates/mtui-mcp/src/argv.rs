@@ -42,10 +42,10 @@ pub(crate) fn kwargs_to_argv(
     let mut tail: Vec<String> = Vec::new();
 
     for arg in cmd.get_arguments() {
-        let id = arg.get_id().as_str();
-        if id == "help" || id == "version" {
+        if crate::schema::is_clap_builtin(arg) {
             continue;
         }
+        let id = arg.get_id().as_str();
         let Some(value) = kwargs.get(id) else {
             continue;
         };
@@ -503,6 +503,15 @@ mod tests {
         assert_eq!(out, vec!["set", "template_dir", "/tmp"]);
         // The full `config set …` argv re-parses through the parent parser.
         assert_reparses("config", &out);
+    }
+
+    /// `list_refhosts` declares its own `--version`; it must round-trip
+    /// instead of being dropped as clap plumbing (#681).
+    #[test]
+    fn list_refhosts_version_round_trips() {
+        let out = argv("list_refhosts", json!({ "version": "16-0" }));
+        assert_eq!(out, vec!["--version", "16-0"]);
+        assert_reparses("list_refhosts", &out);
     }
 
     // --------------------------------------------------------- helpers
