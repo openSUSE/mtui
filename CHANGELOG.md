@@ -353,6 +353,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A Manual `export` with no connected host (the template dropped to Manual on
+  failing install jobs and autoconnect attached nothing) now writes what needs
+  no host: `testing.openqa` from the cached install results and the
+  `openqa_overview` rows. `testing.install` and the install logs are left for
+  an export after `add_host` and `update`, and the output says so. It still
+  skips, with a clearer message, when there is no openQA data either (#644).
 - The MCP `list_refhosts` tool now accepts `version`. It was missing from the
   tool's input schema and refused as an unknown argument, because the MCP layer
   dropped every argument named `version` as if it were clap's own `--version`

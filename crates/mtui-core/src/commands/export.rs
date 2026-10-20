@@ -37,6 +37,12 @@ use crate::session::Session;
 /// command's defaults when none is saved. A failed fetch prints a warning and
 /// the export continues without those rows.
 ///
+/// A `Manual` export with no connected host (and no `-t`) writes only what
+/// needs no host — `testing.openqa` from the cached install results and the
+/// overview — and leaves `testing.install` and the install logs for a later
+/// export once hosts are added (#644). With no openQA data either, it skips
+/// and says so.
+///
 /// A `Manual` export refuses to write at all when *no* selected host has
 /// recorded package versions — the signal that this session never ran `update`
 /// (#526); `--allow-unverified` writes the scaffold anyway.
@@ -62,9 +68,9 @@ impl Command for Export {
         Scope::Fanout
     }
 
-    /// Opts out of the driver's host-less skip: `Auto`/`Kernel` source from
-    /// openQA, so `export --all-templates` must still write them at zero hosts.
-    /// The `Manual` rule (which *does* need hosts) lives in
+    /// Opts out of the driver's host-less skip: every workflow has openQA data
+    /// to write at zero hosts, so `export --all-templates` must still reach
+    /// them. The host-less `Manual` rule (openQA sections only) lives in
     /// [`call`](Self::call).
     fn skip_hostless_templates(&self) -> bool {
         false
@@ -107,14 +113,11 @@ impl Command for Export {
         let force = args.get_flag("force");
         let allow_unverified = args.get_flag("allow_unverified");
 
-        // Nothing to fold, so report and skip rather than write an empty export.
-        // A typo'd `-t` still fails loudly below via `select_names`.
-        if workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty() {
-            session
-                .display
-                .println("skipped: manual export needs a connected host");
-            return Ok(());
-        }
+        // #644: a Manual template with no connected host still has openQA data
+        // to write; only the per-host parts need a host. A typo'd `-t` is not
+        // host-less and still fails loudly below via `select_names`.
+        let hostless =
+            workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty();
 
         let manual_results = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
@@ -141,44 +144,24 @@ impl Command for Export {
                 }
                 session.metadata_mut().openqa_mut().auto = Some(auto);
             }
-            let hosts = select_names(session.targets(), args, false)
-                .map_err(|e| CommandError::Other(e.to_string()))?;
-            let results = manual_hosts(session, &hosts);
-            let unverified: Vec<&str> = results
-                .iter()
-                .filter(|h| is_unverified(h))
-                .map(|h| h.hostname.as_str())
-                .collect();
-            // #526: *every* selected host unverified is the "this session never
-            // ran `update`" signal — refuse before any write, since a
-            // plausible-but-verdictless testreport is worse than none. A
-            // partially verified fleet (a host added after the update) still
-            // writes with the per-host warning below.
-            if !unverified.is_empty() && unverified.len() == results.len() && !allow_unverified {
-                return Err(CommandError::Other(format!(
-                    "no package version data recorded for any selected host ({}); run \
-                     `update` in this session before exporting, or pass \
-                     --allow-unverified to write the unverified scaffold",
-                    unverified.join(", ")
-                )));
+            if hostless {
+                None
+            } else {
+                Some(verified_manual_hosts(session, args, allow_unverified)?)
             }
-            // #396/#437: a host with no recorded package data — or seeded
-            // packages the version query never answered for — keeps the
-            // scaffold's unverified lines. Say so where the operator/MCP client
-            // sees it, not only in the log.
-            for host in &unverified {
-                session.display.println(&format!(
-                    "WARNING: no package version data recorded for {host}; its install \
-                     result was left unverified"
-                ));
-            }
-            Some((hosts, results))
         } else {
             None
         };
 
         require_document(session)?;
         ensure_overview(session, &rrid).await;
+        if hostless && !has_openqa_data(session) {
+            session.display.println(
+                "skipped: no connected host and no openQA results to export; \
+                 add hosts and run `update` first",
+            );
+            return Ok(());
+        }
         self.export_document(session, workflow, force, rrid, manual_results)
             .await
     }
@@ -186,6 +169,58 @@ impl Command for Export {
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
         template_completion(session, text)
     }
+}
+
+/// The selected hosts' [`ManualHost`] views, refusing (#526) when not one of
+/// them has recorded package versions unless `allow_unverified`.
+fn verified_manual_hosts(
+    session: &mut Session,
+    args: &ArgMatches,
+    allow_unverified: bool,
+) -> Result<(Vec<String>, Vec<ManualHost>), CommandError> {
+    let hosts = select_names(session.targets(), args, false)
+        .map_err(|e| CommandError::Other(e.to_string()))?;
+    let results = manual_hosts(session, &hosts);
+    let unverified: Vec<&str> = results
+        .iter()
+        .filter(|h| is_unverified(h))
+        .map(|h| h.hostname.as_str())
+        .collect();
+    // #526: *every* selected host unverified is the "this session never
+    // ran `update`" signal — refuse before any write, since a
+    // plausible-but-verdictless testreport is worse than none. A
+    // partially verified fleet (a host added after the update) still
+    // writes with the per-host warning below.
+    if !unverified.is_empty() && unverified.len() == results.len() && !allow_unverified {
+        return Err(CommandError::Other(format!(
+            "no package version data recorded for any selected host ({}); run \
+             `update` in this session before exporting, or pass \
+             --allow-unverified to write the unverified scaffold",
+            unverified.join(", ")
+        )));
+    }
+    // #396/#437: a host with no recorded package data — or seeded
+    // packages the version query never answered for — keeps the
+    // scaffold's unverified lines. Say so where the operator/MCP client
+    // sees it, not only in the log.
+    for host in &unverified {
+        session.display.println(&format!(
+            "WARNING: no package version data recorded for {host}; its install \
+             result was left unverified"
+        ));
+    }
+    Ok((hosts, results))
+}
+
+/// Whether the report holds openQA data a host-less export can write: install
+/// results that author `testing.openqa.install`, or overview rows.
+fn has_openqa_data(session: &Session) -> bool {
+    let openqa = session.metadata().openqa();
+    mtui_testreport::openqa_install_from_auto(openqa.auto.as_ref()).is_some()
+        || openqa
+            .overview
+            .as_ref()
+            .is_some_and(|o| !mtui_testreport::openqa_extra_from_overview(o).is_empty())
 }
 
 impl Export {
@@ -199,6 +234,7 @@ impl Export {
         rrid: mtui_types::RequestReviewID,
         manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
     ) -> CommandResult {
+        let hostless = workflow == Workflow::Manual && manual_results.is_none();
         let ctx = ExportContext::new(session.config.clone(), force, rrid.clone());
         let overview = session.metadata().openqa().overview.clone();
         let (touched, written) = match workflow {
@@ -217,8 +253,16 @@ impl Export {
                 let written = KernelExport::new(ctx, kernel).write_logs(&http).await;
                 (touched, written)
             }
+            Workflow::Manual if hostless => {
+                // `None` hosts leave `testing.install` untouched, so a later
+                // hosted export still fills it in.
+                let auto = session.metadata().openqa().auto.clone();
+                let touched =
+                    author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
+                (touched, Vec::new())
+            }
             Workflow::Manual => {
-                let (hosts, results) = manual_results.expect("computed for Manual workflow");
+                let (hosts, results) = manual_results.expect("computed for a hosted Manual export");
                 let auto = session.metadata().openqa().auto.clone();
                 let touched = author_onto_document(
                     session,
@@ -232,7 +276,12 @@ impl Export {
             }
         };
 
-        if written.is_empty() {
+        if hostless {
+            session.display.println(
+                "no connected host: wrote the openQA results only; testing.install and \
+                 the install logs need hosts (add_host, update, then export again)",
+            );
+        } else if written.is_empty() {
             session.display.println("no install logs written");
         } else {
             let dir = session
@@ -817,32 +866,106 @@ mod tests {
         assert!(buf.contents().contains("no install logs written"));
     }
 
+    /// The authored `testing` subtree, for host-less assertions.
+    fn authored_testing(session: &Session) -> mtui_types::report_document::Testing {
+        session
+            .metadata()
+            .base()
+            .document
+            .as_ref()
+            .expect("document loaded")
+            .testing
+            .clone()
+    }
+
+    /// #644: a Manual template with no connected host still writes its cached
+    /// openQA install results, leaves `testing.install` and the install logs
+    /// alone, and says the per-host parts were skipped — then a hosted export
+    /// after `add_host`/`update` fills `testing.install` in.
     #[tokio::test]
-    async fn manual_with_zero_hosts_is_skipped_not_errored() {
-        // Nothing to fold, so it reports and skips without touching the
-        // dashboard — whose config points nowhere, so a real attempt would error
-        // and prove the early return did not fire.
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        let base = session.metadata_mut().base_mut();
-        base.workflow = Workflow::Manual;
-        base.document = Some(minimal_document());
-        assert!(session.targets().is_empty());
+    async fn manual_with_zero_hosts_writes_openqa_results_only() {
+        let (mut session, buf, dir, _server) = manual_export_fixture(&["h1"]).await;
+        record_versions(&mut session, "h1");
+        let h1 = session.targets_mut().remove("h1").expect("h1 present");
+        session.metadata_mut().openqa_mut().auto =
+            Some(seeded_auto("http://oqa.invalid/install.log"));
 
         let args = matches(&Export, &[]);
         Export.call(&mut session, &args).await.unwrap();
 
+        let testing = authored_testing(&session);
         assert!(
-            !session.metadata().base().document_dirty,
-            "should not export"
+            testing.openqa.as_ref().is_some_and(|o| o.install.is_some()),
+            "{testing:?}"
         );
-        // Nothing was lazily built: the body returned before that.
-        assert!(session.metadata().openqa().auto.is_none());
-        // The skip reason reaches the display, not just a tracing warn.
+        assert!(testing.install.is_none(), "{testing:?}");
+        assert!(session.metadata().base().document_dirty);
+        let rrid_dir = dir.path().join("SUSE:Maintenance:1:1");
+        assert!(!rrid_dir.join(&session.config.install_logs).exists());
+        let out = buf.contents();
         assert!(
-            buf.contents()
-                .contains("skipped: manual export needs a connected host"),
-            "{:?}",
-            buf.contents()
+            out.contains("no connected host: wrote the openQA results only"),
+            "{out:?}"
+        );
+        assert!(out.contains("testing.openqa"), "{out:?}");
+        assert!(!out.contains("skipped"), "{out:?}");
+
+        session.targets_mut().add(h1);
+        Export.call(&mut session, &args).await.unwrap();
+        assert!(authored_testing(&session).install.is_some());
+        assert!(
+            rrid_dir
+                .join(&session.config.install_logs)
+                .join("h1.log")
+                .is_file()
+        );
+    }
+
+    /// #644: overview rows alone are enough to write a host-less Manual export,
+    /// e.g. when failing install jobs left no install results.
+    #[tokio::test]
+    async fn manual_with_zero_hosts_writes_overview_rows() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&[]).await;
+        session.metadata_mut().openqa_mut().overview =
+            Some(mtui_datasources::OpenQAOverviewResult {
+                single_incidents: vec![mtui_datasources::VersionResult {
+                    version: "15-SP5".to_owned(),
+                    status: "failed".to_owned(),
+                    failed_count: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(authored_extra(&session).contains_key("single_incidents"));
+        assert!(authored_testing(&session).install.is_none());
+        let out = buf.contents();
+        assert!(
+            out.contains("no connected host: wrote the openQA results only"),
+            "{out:?}"
+        );
+    }
+
+    /// #644: with no host and no openQA data there is nothing to write, so the
+    /// document stays untouched (no tester entry either) and the skip is said.
+    #[tokio::test]
+    async fn manual_with_zero_hosts_and_no_openqa_data_is_skipped() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&[]).await;
+        let before = session.metadata().base().document.clone();
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let base = session.metadata().base();
+        assert_eq!(base.document, before);
+        assert!(!base.document_dirty, "should not export");
+        let out = buf.contents();
+        assert!(
+            out.contains("skipped: no connected host and no openQA results to export"),
+            "{out:?}"
         );
     }
 
