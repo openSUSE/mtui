@@ -60,6 +60,12 @@ nowhere and fails with "No refhosts defined". Naming a disconnected host with
 `-t <host>` is still a per-template failure, and a `-T`-scoped call keeps
 single-template error behaviour.
 
+[`export`](cli.md#export) is the exception: it runs on a host-less template
+too, since every workflow has openQA data to write. A Manual template with no
+connected host writes only `testing.openqa` (install results and overview
+rows); `testing.install` and the install logs wait for an export after
+`add_host` and `update`.
+
 [`regenerate`](cli.md#regenerate) also runs exactly once, on the active template
 by default; `-T` names another loaded one.
 
