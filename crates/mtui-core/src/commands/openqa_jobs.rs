@@ -58,9 +58,33 @@ fn job_settings(job: &oqa::JobResult) -> String {
         .join(" ")
 }
 
+/// The lines telling what the default listing leaves out: earlier attempts of
+/// the listed scenarios, and jobs past the read limit.
+fn fetch_notes(superseded: usize, complete: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if superseded > 0 {
+        let attempts = if superseded == 1 {
+            "attempt"
+        } else {
+            "attempts"
+        };
+        notes.push(format!(
+            "{superseded} earlier {attempts} not listed (--all lists every attempt)"
+        ));
+    }
+    if !complete {
+        notes.push(format!(
+            "…[read the newest {} jobs of this build; older jobs not listed]",
+            oqa::MAX_INCIDENT_JOBS
+        ));
+    }
+    notes
+}
+
 /// Lists the individual openQA jobs for the loaded update's incident build.
 ///
-/// By default `obsoleted` jobs are dropped; `--all` keeps them, `--failed`
+/// It lists the newest job of each scenario by default, as openQA's `latest=1`
+/// does, without `obsoleted` jobs; `--all` lists every attempt. `--failed`
 /// shows only genuinely failed jobs (pending/unfinished jobs are excluded and
 /// reported as "N still pending"), and `--arch`, `--test` (glob), `--flavor`
 /// and `--version` narrow by job settings. The listing is paged with
@@ -87,7 +111,10 @@ impl Command for OpenQAJobs {
             Arg::new("all")
                 .long("all")
                 .action(ArgAction::SetTrue)
-                .help("keep obsoleted jobs (superseded by a retrigger)"),
+                .help(
+                    "list every attempt: earlier runs of a retriggered scenario and \
+                     obsoleted jobs too (default: the newest job of each scenario)",
+                ),
         )
         .arg(
             Arg::new("failed")
@@ -173,7 +200,7 @@ impl Command for OpenQAJobs {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
 
-        let include_obsoleted = args.get_flag("all");
+        let every_attempt = args.get_flag("all");
         let only_failed = args.get_flag("failed");
         let arch_filter = args.get_one::<String>("arch").cloned();
         let test_filter = args
@@ -235,7 +262,7 @@ impl Command for OpenQAJobs {
                 }
             };
 
-        let mut jobs = match oqa::incident_jobs(&oqa_client, &build, include_obsoleted).await {
+        let fetched = match oqa::incident_jobs(&oqa_client, &build, every_attempt).await {
             Ok(j) => j,
             Err(e) => {
                 return Err(CommandError::Other(format!(
@@ -243,28 +270,32 @@ impl Command for OpenQAJobs {
                 )));
             }
         };
-        if let Some(arch) = &arch_filter {
-            jobs.retain(|j| &j.arch == arch);
-        }
-        if let Some(test) = &test_filter {
-            jobs.retain(|j| test.is_match(&j.test));
-        }
-        if let Some(flavor) = &flavor_filter {
-            jobs.retain(|j| &j.flavor == flavor);
-        }
-        if let Some(version) = &version_filter {
-            jobs.retain(|j| &j.version == version);
-        }
+        let matches = |j: &oqa::JobResult| {
+            arch_filter.as_ref().is_none_or(|a| &j.arch == a)
+                && test_filter.as_ref().is_none_or(|t| t.is_match(&j.test))
+                && flavor_filter.as_ref().is_none_or(|f| &j.flavor == f)
+                && version_filter.as_ref().is_none_or(|v| &j.version == v)
+        };
+        let is_failed = |j: &oqa::JobResult| {
+            !is_pending(j)
+                && !PASSING.contains(&j.result.as_str())
+                && !NEUTRAL.contains(&j.result.as_str())
+        };
+        let mut jobs = fetched.jobs;
+        jobs.retain(|j| matches(j));
         // Counted before `--failed` filters them out, so the message reflects
         // reality regardless of the active filter.
         let pending_count = jobs.iter().filter(|j| is_pending(j)).count();
         if only_failed {
-            jobs.retain(|j| {
-                !is_pending(j)
-                    && !PASSING.contains(&j.result.as_str())
-                    && !NEUTRAL.contains(&j.result.as_str())
-            });
+            jobs.retain(|j| is_failed(j));
         }
+        // Earlier attempts the same filters would have listed.
+        let superseded = fetched
+            .superseded
+            .iter()
+            .filter(|j| matches(j) && (!only_failed || is_failed(j)))
+            .count();
+        let fetch_notes = fetch_notes(superseded, fetched.complete);
 
         if jobs.is_empty() {
             let msg = session
@@ -276,6 +307,9 @@ impl Command for OpenQAJobs {
                     .display
                     .yellow(&format!("{pending_count} still pending"));
                 session.display.println(&pending);
+            }
+            for note in &fetch_notes {
+                session.display.println(note);
             }
             return Ok(());
         }
@@ -298,6 +332,9 @@ impl Command for OpenQAJobs {
                 .display
                 .yellow(&format!("{pending_count} still pending"));
             session.display.println(&pending);
+        }
+        for note in &fetch_notes {
+            session.display.println(note);
         }
         session.display.println("");
 
@@ -704,6 +741,74 @@ mod tests {
         assert!(rows[2].contains("test-06"), "{out}");
         assert!(out.contains("openQA jobs for build BUILD-42 (10)"), "{out}");
         assert!(!out.contains("truncated"), "{out}");
+    }
+
+    /// By default only the newest attempt of each scenario is listed and the
+    /// earlier ones are counted; `--all` lists every attempt (#643).
+    #[tokio::test]
+    async fn default_lists_newest_attempt_and_all_lists_every_attempt() {
+        let jobs = vec![
+            job(1, "kdump", "failed", "done", DVD),
+            job(2, "kdump", "failed", "done", DVD),
+            job(3, "kdump", "passed", "done", DVD),
+            job(4, "boot", "failed", "done", DVD),
+            job(5, "boot", "obsoleted", "done", MICRO),
+        ];
+        let out = run_with(jobs.clone(), &[]).await;
+        let rows = row_lines(&out);
+        assert_eq!(rows.len(), 2, "{out}");
+        assert!(rows.iter().any(|r| r.contains("/t3")), "{out}");
+        assert!(rows.iter().any(|r| r.contains("/t4")), "{out}");
+        assert!(out.contains("openQA jobs for build BUILD-42 (2)"), "{out}");
+        assert!(
+            out.contains("2 earlier attempts not listed (--all lists every attempt)"),
+            "{out}"
+        );
+
+        let out = run_with(jobs, &["--all"]).await;
+        assert_eq!(row_lines(&out).len(), 5, "{out}");
+        assert!(!out.contains("earlier attempt"), "{out}");
+    }
+
+    /// A retriggered scenario whose newest attempt passed is not a failure:
+    /// `--failed` finds nothing, and the note counts only the hidden failed
+    /// attempts that match the other filters (#643).
+    #[tokio::test]
+    async fn failed_filter_counts_only_matching_hidden_attempts() {
+        let jobs = vec![
+            job(1, "kdump", "failed", "done", DVD),
+            job(2, "kdump", "passed", "done", DVD),
+            job(3, "other", "passed", "done", DVD),
+            job(4, "other", "passed", "done", DVD),
+        ];
+        let out = run_with(jobs.clone(), &["--failed"]).await;
+        assert!(row_lines(&out).is_empty(), "{out}");
+        assert!(
+            out.contains("1 earlier attempt not listed (--all lists every attempt)"),
+            "{out}"
+        );
+
+        let out = run_with(jobs.clone(), &["--failed", "--all"]).await;
+        assert_eq!(row_lines(&out).len(), 1, "{out}");
+
+        let out = run_with(jobs, &["--test", "other"]).await;
+        assert_eq!(row_lines(&out).len(), 1, "{out}");
+        assert!(out.contains("1 earlier attempt not listed"), "{out}");
+    }
+
+    #[test]
+    fn fetch_notes_say_what_is_left_out() {
+        assert!(fetch_notes(0, true).is_empty());
+        assert_eq!(
+            fetch_notes(3, true),
+            vec!["3 earlier attempts not listed (--all lists every attempt)"]
+        );
+        let notes = fetch_notes(0, false);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].contains(&oqa::MAX_INCIDENT_JOBS.to_string()),
+            "{notes:?}"
+        );
     }
 
     /// Over the row budget, at most `ROW_CAP` rows plus one notice are

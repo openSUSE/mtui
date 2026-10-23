@@ -141,11 +141,42 @@ async fn fallback_build(
     Ok(format!(":{incident_id}:{package}"))
 }
 
-/// List the individual openQA jobs for an incident `build`.
+/// Jobs fetched per `/api/v1/jobs` request by [`incident_jobs`]. Small enough
+/// that a page of large jobs (kernel builds carry ~23 KB of settings and
+/// modules per job) stays far below [`MAX_API_BODY`].
+pub const JOBS_PAGE_SIZE: usize = 200;
+
+/// Upper bound on the jobs [`incident_jobs`] reads for one build: openQA's own
+/// `generic_max_limit`. Past it the result is marked incomplete.
+pub const MAX_INCIDENT_JOBS: usize = 10_000;
+
+/// The jobs [`incident_jobs`] found for a build.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IncidentJobs {
+    /// The jobs to list, sorted by result, arch and test.
+    pub jobs: Vec<JobResult>,
+    /// Earlier attempts left out of `jobs` because a newer job of the same
+    /// scenario exists, newest first (always empty with `every_attempt`).
+    pub superseded: Vec<JobResult>,
+    /// `false` when openQA had more jobs than [`MAX_INCIDENT_JOBS`], so the
+    /// oldest ones were not read.
+    pub complete: bool,
+}
+
+/// List the openQA jobs for an incident `build`.
 ///
-/// `obsoleted` jobs (superseded by a later retrigger) are dropped unless
-/// `include_obsoleted` is set. Returns the jobs sorted by result then arch then
-/// scenario. Empty when `build` is empty or no jobs exist.
+/// Reads every page of `/api/v1/jobs?build=<build>`, newest first, continuing
+/// each page with `before=<lowest id so far>`, up to [`MAX_INCIDENT_JOBS`].
+///
+/// Unless `every_attempt` is set, only the newest job of each scenario
+/// (`DISTRI`, `VERSION`, `FLAVOR`, `ARCH`, `TEST`, `MACHINE`) is kept, as
+/// openQA's `latest=1` does, and `obsoleted` jobs (cancelled because a newer
+/// schedule of the build replaced them) are dropped. This is done here rather
+/// than with `latest=1`, because openQA applies its page limit before
+/// de-duplicating and sends no paging link with it.
+///
+/// Jobs are sorted by result then arch then scenario. Empty when `build` is
+/// empty or no jobs exist.
 ///
 /// # Errors
 ///
@@ -153,31 +184,31 @@ async fn fallback_build(
 pub async fn incident_jobs(
     oqa: &ruoqa::Client,
     build: &str,
-    include_obsoleted: bool,
-) -> Result<Vec<JobResult>, OqaSearchError> {
+    every_attempt: bool,
+) -> Result<IncidentJobs, OqaSearchError> {
     if build.is_empty() {
-        return Ok(vec![]);
+        return Ok(IncidentJobs {
+            complete: true,
+            ..IncidentJobs::default()
+        });
     }
     let encoded = urlencoding::encode(build);
-    let data = oqa_request(oqa, &format!("/api/v1/jobs?build={encoded}")).await?;
-    let jobs = data.get("jobs").and_then(|j| j.as_array());
-    let Some(jobs) = jobs else {
-        return Ok(vec![]);
-    };
+    let (raw, complete) = fetch_all_jobs(oqa, &encoded).await?;
 
     let openqa_trimmed = oqa.base_url().as_str().trim_end_matches('/').to_owned();
+    // Newest first, so the first job seen of each scenario is its latest.
+    let mut seen_scenarios = BTreeSet::new();
+    let mut superseded: Vec<JobResult> = Vec::new();
     let mut rows: Vec<JobResult> = Vec::new();
-    for job in jobs {
-        let result = job.get("result").and_then(|r| r.as_str()).unwrap_or("");
-        let is_obsoleted = job
-            .get("result")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<OqaJobResult>(v).ok())
-            == Some(OqaJobResult::Obsoleted);
-        if is_obsoleted && !include_obsoleted {
-            continue;
-        }
+    for job in &raw {
         let settings = job.get("settings");
+        let setting = |key: &str| {
+            settings
+                .and_then(|s| s.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let test = job
             .get("test")
             .and_then(|t| t.as_str())
@@ -192,19 +223,26 @@ pub async fn incident_jobs(
             .or_else(|| job.get("arch").and_then(|a| a.as_str()))
             .unwrap_or("")
             .to_string();
+        let scenario = (
+            setting("DISTRI"),
+            setting("VERSION"),
+            setting("FLAVOR"),
+            arch.clone(),
+            test.clone(),
+            setting("MACHINE"),
+        );
+        let result = job.get("result").and_then(|r| r.as_str()).unwrap_or("");
+        let is_obsoleted = job
+            .get("result")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<OqaJobResult>(v).ok())
+            == Some(OqaJobResult::Obsoleted);
         let id = job
             .get("id")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
         let state = job.get("state").and_then(|s| s.as_str()).unwrap_or("");
-        let setting = |key: &str| {
-            settings
-                .and_then(|s| s.get(key))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        };
-        rows.push(JobResult {
+        let row = JobResult {
             job_id: id,
             test,
             arch,
@@ -219,7 +257,14 @@ pub async fn incident_jobs(
             version: setting("VERSION"),
             machine: setting("MACHINE"),
             url: format!("{openqa_trimmed}/t{id}"),
-        });
+        };
+        if every_attempt {
+            rows.push(row);
+        } else if !seen_scenarios.insert(scenario) {
+            superseded.push(row);
+        } else if !is_obsoleted {
+            rows.push(row);
+        }
     }
     rows.sort_by(|a, b| {
         (a.result.as_str(), a.arch.as_str(), a.test.as_str()).cmp(&(
@@ -228,7 +273,69 @@ pub async fn incident_jobs(
             b.test.as_str(),
         ))
     });
-    Ok(rows)
+    Ok(IncidentJobs {
+        jobs: rows,
+        superseded,
+        complete,
+    })
+}
+
+/// Read every job of the URL-encoded `build`, newest (highest id) first.
+///
+/// Pages with `limit` plus `before=<lowest id so far>` rather than `offset`,
+/// so jobs created while paging cannot shift a page and repeat a job. Stops at
+/// a short page, or at [`MAX_INCIDENT_JOBS`] (then `complete` is `false`).
+async fn fetch_all_jobs(
+    oqa: &ruoqa::Client,
+    encoded_build: &str,
+) -> Result<(Vec<serde_json::Value>, bool), OqaSearchError> {
+    let mut jobs: Vec<serde_json::Value> = Vec::new();
+    let mut seen_ids = BTreeSet::new();
+    let mut before: Option<i64> = None;
+    loop {
+        let mut path = format!("/api/v1/jobs?build={encoded_build}&limit={JOBS_PAGE_SIZE}");
+        if let Some(id) = before {
+            path.push_str(&format!("&before={id}"));
+        }
+        let data = oqa_request(oqa, &path).await?;
+        let page = data
+            .get("jobs")
+            .and_then(|j| j.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let page_len = page.len();
+        let lowest = page
+            .iter()
+            .filter_map(|j| j.get("id").and_then(serde_json::Value::as_i64))
+            .min();
+        for job in page {
+            let id = job.get("id").and_then(serde_json::Value::as_i64);
+            if id.is_none_or(|id| seen_ids.insert(id)) {
+                jobs.push(job);
+            }
+        }
+        if jobs.len() >= MAX_INCIDENT_JOBS {
+            // A full last page means openQA may have older jobs left.
+            let complete = page_len < JOBS_PAGE_SIZE;
+            jobs.truncate(MAX_INCIDENT_JOBS);
+            return Ok((sort_newest_first(jobs), complete));
+        }
+        // A short page is the last one; a page without ids cannot be continued.
+        match lowest {
+            Some(id) if page_len >= JOBS_PAGE_SIZE && before.is_none_or(|b| id < b) => {
+                before = Some(id);
+            }
+            _ => return Ok((sort_newest_first(jobs), true)),
+        }
+    }
+}
+
+/// Sort raw jobs by id, highest first, whatever order openQA sent.
+fn sort_newest_first(mut jobs: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    jobs.sort_by_key(|j| {
+        std::cmp::Reverse(j.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0))
+    });
+    jobs
 }
 
 // --- openQA job-group enumeration ---
