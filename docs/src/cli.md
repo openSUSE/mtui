@@ -795,7 +795,7 @@ Usage: openqa_jobs [OPTIONS]
 
 Options:
       --all
-          keep obsoleted jobs (superseded by a retrigger)
+          list every attempt: earlier runs of a retriggered scenario and obsoleted jobs too (default: the newest job of each scenario)
 
       --failed
           show only genuinely failed jobs (pending/unfinished excluded)

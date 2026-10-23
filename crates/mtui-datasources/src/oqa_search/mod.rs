@@ -31,6 +31,7 @@ pub mod search;
 pub use render::{OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER, render_overview};
 pub use results::{BuildCheckResult, GroupResult, JobResult, OpenQAOverviewResult, VersionResult};
 pub use search::{
-    aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
-    single_incidents, summarize_test_results,
+    IncidentJobs, JOBS_PAGE_SIZE, MAX_INCIDENT_JOBS, aggregated_updates, build_checks,
+    extract_test_results, get_incident_info, incident_jobs, single_incidents,
+    summarize_test_results,
 };

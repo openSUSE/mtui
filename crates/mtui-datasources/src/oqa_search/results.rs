@@ -52,9 +52,11 @@ pub struct BuildCheckResult {
 /// One openQA job for an incident build.
 ///
 /// `result` is openQA's job result: `passed`, `softfailed`, `failed`,
-/// `parallel_failed`, `incomplete`, `skipped` or `obsoleted` (superseded by a
-/// retrigger). `test` is the scenario name (the meaningful field for judging
-/// relevance — unlike the full job name it does not embed the build string).
+/// `parallel_failed`, `incomplete`, `skipped` or `obsoleted` (cancelled because
+/// a newer schedule of the build replaced it; a retrigger instead leaves the
+/// original job's result and sets its `clone_id`). `test` is the scenario name
+/// (the meaningful field for judging relevance — unlike the full job name it
+/// does not embed the build string).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JobResult {
     /// The openQA job id.

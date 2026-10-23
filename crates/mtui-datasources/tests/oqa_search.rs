@@ -604,7 +604,8 @@ async fn incident_jobs_drops_obsoleted_by_default() {
 
     let rows = incident_jobs(&oqa_client(&server.uri()), ":git:5137:libica", false)
         .await
-        .expect("ok");
+        .expect("ok")
+        .jobs;
     let results: Vec<&str> = rows.iter().map(|r| r.result.as_str()).collect();
     assert_eq!(results, vec!["failed", "passed"]);
     let failed = rows.iter().find(|r| r.result == "failed").unwrap();
@@ -625,7 +626,8 @@ async fn incident_jobs_include_obsoleted() {
         .await;
     let rows = incident_jobs(&oqa_client(&server.uri()), ":b", true)
         .await
-        .expect("ok");
+        .expect("ok")
+        .jobs;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].result, "obsoleted");
 }
@@ -650,7 +652,8 @@ async fn incident_jobs_read_flavor_version_machine_from_settings() {
         .await;
     let rows = incident_jobs(&oqa_client(&server.uri()), ":b", false)
         .await
-        .expect("ok");
+        .expect("ok")
+        .jobs;
     let full = rows.iter().find(|r| r.test == "a").unwrap();
     assert_eq!(full.flavor, "Server-DVD-Incidents");
     assert_eq!(full.version, "15-SP6");
@@ -666,13 +669,178 @@ async fn incident_jobs_read_flavor_version_machine_from_settings() {
     );
 }
 
+/// One openQA job of scenario `test` on `machine`.
+fn oqa_job(id: i64, test: &str, machine: &str, result: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "test": test, "result": result, "state": "done",
+        "settings": {
+            "DISTRI": "sle", "VERSION": "15-SP6", "FLAVOR": "Server-DVD-Incidents",
+            "ARCH": "x86_64", "MACHINE": machine
+        }
+    })
+}
+
+/// #643: by default only the newest job of each scenario (DISTRI, VERSION,
+/// FLAVOR, ARCH, TEST, MACHINE) is listed, as openQA's `latest=1`; earlier
+/// attempts come back in `superseded`. `every_attempt` lists everything.
+#[tokio::test]
+async fn incident_jobs_keeps_the_newest_job_of_each_scenario() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            // Deliberately not newest first: the order openQA sends must not matter.
+            "jobs": [
+                oqa_job(10, "install", "64bit", "failed"),
+                oqa_job(30, "install", "64bit", "passed"),
+                oqa_job(20, "install", "64bit", "incomplete"),
+                // Same test on another MACHINE is another scenario.
+                oqa_job(15, "install", "uefi", "failed"),
+                // Newest of its scenario but obsoleted: dropped by default.
+                oqa_job(40, "boot", "64bit", "obsoleted"),
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    let ids = |rows: &[mtui_datasources::JobResult]| {
+        let mut ids: Vec<String> = rows.iter().map(|r| r.url.clone()).collect();
+        ids.sort();
+        ids
+    };
+    let uri = server.uri();
+    assert_eq!(
+        ids(&found.jobs),
+        vec![format!("{uri}/t15"), format!("{uri}/t30")]
+    );
+    assert_eq!(
+        found
+            .superseded
+            .iter()
+            .map(|r| r.url.clone())
+            .collect::<Vec<_>>(),
+        vec![format!("{uri}/t20"), format!("{uri}/t10")],
+        "earlier attempts, newest first"
+    );
+    assert!(found.complete);
+
+    let every = incident_jobs(&oqa_client(&server.uri()), ":b", true)
+        .await
+        .expect("ok");
+    assert_eq!(every.jobs.len(), 5);
+    assert!(every.superseded.is_empty());
+}
+
+/// A fake openQA `/api/v1/jobs` for a build of `total` jobs with ids
+/// `1..=total`, paging like openQA: newest first, `limit` jobs below `before`.
+struct PagedJobs {
+    total: i64,
+}
+
+impl wiremock::Respond for PagedJobs {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let param = |key: &str| {
+            request
+                .url
+                .query_pairs()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.parse::<i64>().ok())
+        };
+        let limit = param("limit").unwrap_or(1000);
+        let top = param("before").map_or(self.total, |b| b - 1);
+        let jobs: Vec<_> = (1..=top)
+            .rev()
+            .take(usize::try_from(limit).unwrap())
+            .map(|id| oqa_job(id, &format!("t{id}"), "64bit", "passed"))
+            .collect();
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": jobs }))
+    }
+}
+
+/// #643: every page is read, continuing with `before=<lowest id>`, so a
+/// build with more jobs than one page is listed in full.
+#[tokio::test]
+async fn incident_jobs_reads_every_page() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(PagedJobs { total: 450 })
+        .mount(&server)
+        .await;
+
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+
+    assert_eq!(found.jobs.len(), 450);
+    assert!(found.complete);
+    let requests = server.received_requests().await.unwrap();
+    let before_params: Vec<Option<String>> = requests
+        .iter()
+        .map(|r| {
+            r.url
+                .query_pairs()
+                .find(|(k, _)| k == "before")
+                .map(|(_, v)| v.into_owned())
+        })
+        .collect();
+    assert_eq!(
+        before_params,
+        vec![None, Some("251".into()), Some("51".into())]
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.url.query().unwrap().contains(&format!(
+                "limit={}",
+                mtui_datasources::oqa_search::JOBS_PAGE_SIZE
+            ))),
+        "every request is limited to one page"
+    );
+}
+
+/// #643: past `MAX_INCIDENT_JOBS` the oldest jobs are not read, and the
+/// result says so instead of silently listing a truncated build.
+#[tokio::test]
+async fn incident_jobs_marks_a_build_past_the_read_limit_incomplete() {
+    let max = i64::try_from(mtui_datasources::oqa_search::MAX_INCIDENT_JOBS).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(PagedJobs { total: max + 1 })
+        .mount(&server)
+        .await;
+
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    assert_eq!(found.jobs.len() as i64, max);
+    assert!(!found.complete);
+
+    // Exactly the limit is still complete: the last page came back short.
+    let exact = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(PagedJobs { total: max - 1 })
+        .mount(&exact)
+        .await;
+    let found = incident_jobs(&oqa_client(&exact.uri()), ":b", false)
+        .await
+        .expect("ok");
+    assert!(found.complete);
+}
+
 #[tokio::test]
 async fn incident_jobs_empty_build_makes_no_request() {
     // A falsy build short-circuits with no HTTP call (no server needed).
     let rows = incident_jobs(&oqa_client("https://openqa.invalid"), "", false)
         .await
         .expect("ok");
-    assert!(rows.is_empty());
+    assert!(rows.jobs.is_empty());
+    assert!(rows.complete);
 }
 
 /// `OqaSearchError`'s `From<ruoqa::Error>` conversion never leaks a credential
