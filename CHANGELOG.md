@@ -357,6 +357,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A host is detected as transactional only when it has a
+  `transactional-update.conf` and `/` is mounted read-only (from
+  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
+  marked transactional, so `prepare`, `update` and `downgrade` refused it and
+  `set_repo` refreshed inside a new default snapshot. When the mount table
+  cannot be read, the config file decides as before (#686).
 - `openqa_jobs` reads every page of a build's jobs (keyset paging with
   `before=`, until an empty page) instead of only openQA's first 1000, and no
   longer fails on very large builds because one response exceeded the body
