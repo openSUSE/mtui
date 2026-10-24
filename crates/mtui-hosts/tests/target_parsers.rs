@@ -22,6 +22,9 @@ fn prod_xml(name: &str, baseversion: &str, patchlevel: Option<&str>, arch: &str)
 
 const PRODUCTS_DIR: &str = "/etc/products.d";
 const BASEPRODUCT: &str = "/etc/products.d/baseproduct";
+const MOUNTS: &str = "/proc/self/mounts";
+const RO_ROOT: &[u8] = b"/dev/vda3 / btrfs ro,relatime,subvol=/@/.snapshots/5/snapshot 0 0\n";
+const RW_ROOT: &[u8] = b"/dev/vda2 / btrfs rw,relatime,subvol=/@/.snapshots/413/snapshot 0 0\n";
 
 #[tokio::test]
 async fn parse_suse_system() {
@@ -84,7 +87,8 @@ async fn parse_transactional_system_usr_etc() {
             "/etc/products.d/SL-Micro-Extras.prod",
             prod_xml("SL-Micro-Extras", "6.1", None, "x86_64"),
         )
-        .with_file("/usr/etc/transactional-update.conf", b"".to_vec());
+        .with_file("/usr/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RO_ROOT.to_vec());
 
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "SL-Micro");
@@ -102,10 +106,64 @@ async fn parse_transactional_system_etc_config() {
             "/etc/products.d/SLE-Micro.prod",
             prod_xml("SLE-Micro", "5.5", None, "x86_64"),
         )
-        .with_file("/etc/transactional-update.conf", b"".to_vec());
+        .with_file("/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RO_ROOT.to_vec());
 
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
     assert!(transactional);
+}
+
+/// A SLES 16 host carrying the transactional-update config file.
+fn sles16_with_conf() -> MockConnection {
+    MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "16.0", None, "x86_64"),
+        )
+        .with_file("/usr/etc/transactional-update.conf", b"".to_vec())
+}
+
+/// #686: the config file on a read-write root is not a transactional host.
+#[tokio::test]
+async fn parse_read_write_root_with_conf_is_not_transactional() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, RW_ROOT.to_vec());
+    let (system, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert_eq!(system.get_base().version, "16.0");
+    assert!(!transactional);
+}
+
+/// The same host with a read-only root is transactional.
+#[tokio::test]
+async fn parse_read_only_root_with_conf_is_transactional() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, RO_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// When the mount table cannot be read, the config file still decides, as
+/// before #686.
+#[tokio::test]
+async fn parse_unreadable_mounts_keeps_the_conf_answer() {
+    let mut conn = sles16_with_conf();
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// A read-only root alone, without the config file, is not transactional.
+#[tokio::test]
+async fn parse_read_only_root_without_conf_is_not_transactional() {
+    let mut conn = MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "15", Some("6"), "x86_64"),
+        )
+        .with_file(MOUNTS, RO_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional);
 }
 
 #[tokio::test]
