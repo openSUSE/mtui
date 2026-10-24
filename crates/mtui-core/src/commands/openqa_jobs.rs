@@ -74,7 +74,7 @@ fn fetch_notes(superseded: usize, complete: bool) -> Vec<String> {
     }
     if !complete {
         notes.push(format!(
-            "…[read the newest {} jobs of this build; older jobs not listed]",
+            "…[not every job of this build could be read (at most the newest {}); older jobs may be missing]",
             oqa::MAX_INCIDENT_JOBS
         ));
     }
@@ -83,8 +83,8 @@ fn fetch_notes(superseded: usize, complete: bool) -> Vec<String> {
 
 /// Lists the individual openQA jobs for the loaded update's incident build.
 ///
-/// It lists the newest job of each scenario by default, as openQA's `latest=1`
-/// does, without `obsoleted` jobs; `--all` lists every attempt. `--failed`
+/// It lists the newest non-obsoleted job of each scenario by default, as
+/// openQA's `latest=1` does; `--all` lists every attempt. `--failed`
 /// shows only genuinely failed jobs (pending/unfinished jobs are excluded and
 /// reported as "N still pending"), and `--arch`, `--test` (glob), `--flavor`
 /// and `--version` narrow by job settings. The listing is paged with
@@ -113,7 +113,7 @@ impl Command for OpenQAJobs {
                 .action(ArgAction::SetTrue)
                 .help(
                     "list every attempt: earlier runs of a retriggered scenario and \
-                     obsoleted jobs too (default: the newest job of each scenario)",
+                     obsoleted jobs too (default: the newest non-obsoleted job of each scenario)",
                 ),
         )
         .arg(
@@ -388,7 +388,9 @@ impl Command for OpenQAJobs {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
-    use wiremock::matchers::{header, header_exists, method, path, query_param};
+    use wiremock::matchers::{
+        header, header_exists, method, path, query_param, query_param_is_missing,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -425,7 +427,17 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v1/jobs"))
             .and(query_param("build", "BUILD-42"))
+            .and(query_param_is_missing("before"))
             .respond_with(ResponseTemplate::new(200).set_body_json(jobs))
+            .mount(&server)
+            .await;
+        // Every job is on the first page; the next one is empty.
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs"))
+            .and(|req: &wiremock::Request| req.url.query_pairs().any(|(k, _)| k == "before"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": [] })),
+            )
             .mount(&server)
             .await;
         server
@@ -765,9 +777,49 @@ mod tests {
             "{out}"
         );
 
+        assert!(!out.contains("not every job"), "{out}");
+
         let out = run_with(jobs, &["--all"]).await;
         assert_eq!(row_lines(&out).len(), 5, "{out}");
         assert!(!out.contains("earlier attempt"), "{out}");
+    }
+
+    /// An obsoleted newest job does not hide its scenario: the newest
+    /// non-obsoleted attempt is listed, so `--failed` still shows the failure
+    /// (#643 review).
+    #[tokio::test]
+    async fn obsoleted_newest_job_lists_the_newest_non_obsoleted_attempt() {
+        let jobs = vec![
+            job(1, "kdump", "passed", "done", DVD),
+            job(2, "kdump", "failed", "done", DVD),
+            job(3, "kdump", "obsoleted", "done", DVD),
+        ];
+        let out = run_with(jobs.clone(), &["--failed"]).await;
+        let rows = row_lines(&out);
+        assert_eq!(rows.len(), 1, "{out}");
+        assert!(rows[0].contains("/t2"), "{out}");
+        // The earlier attempt passed, so `--failed` does not count it.
+        assert!(!out.contains("earlier attempt"), "{out}");
+
+        // Without `--failed` it is counted; the obsoleted job never is.
+        let out = run_with(jobs, &[]).await;
+        assert_eq!(row_lines(&out).len(), 1, "{out}");
+        assert!(out.contains("1 earlier attempt not listed"), "{out}");
+    }
+
+    /// A running newest attempt is the scenario's current state: `--failed`
+    /// does not list the older failure it retries, and says the newest one is
+    /// still pending and that an earlier attempt was left out.
+    #[tokio::test]
+    async fn pending_newest_attempt_hides_the_older_failure_from_failed() {
+        let jobs = vec![
+            job(1, "kdump", "failed", "done", DVD),
+            job(2, "kdump", "none", "running", DVD),
+        ];
+        let out = run_with(jobs, &["--failed"]).await;
+        assert!(row_lines(&out).is_empty(), "{out}");
+        assert!(out.contains("1 still pending"), "{out}");
+        assert!(out.contains("1 earlier attempt not listed"), "{out}");
     }
 
     /// A retriggered scenario whose newest attempt passed is not a failure:
