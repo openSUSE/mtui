@@ -353,6 +353,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A host is detected as transactional only when it has a
+  `transactional-update.conf` and `/` is mounted read-only (from
+  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
+  marked transactional, so `prepare`, `update` and `downgrade` refused it and
+  `set_repo` refreshed inside a new default snapshot. When the mount table
+  cannot be read, the config file decides as before (#686).
 - A Manual `export` with no connected host (the template dropped to Manual on
   failing install jobs and autoconnect attached nothing) now writes what needs
   no host: `testing.openqa` from the cached install results and the
