@@ -14,7 +14,7 @@ use mtui_datasources::oqa_search::search::{
     single_incidents, summarize_test_results,
 };
 use mtui_datasources::{HttpClient, VerifyPolicy};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn client() -> HttpClient {
@@ -686,8 +686,16 @@ fn oqa_job(id: i64, test: &str, machine: &str, result: &str) -> serde_json::Valu
 #[tokio::test]
 async fn incident_jobs_keeps_the_newest_job_of_each_scenario() {
     let server = MockServer::start().await;
+    // The page after the lowest id (10) is empty, as openQA answers it.
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
+        .and(query_param("before", "10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": [] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param_is_missing("before"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             // Deliberately not newest first: the order openQA sends must not matter.
             "jobs": [
@@ -736,8 +744,27 @@ async fn incident_jobs_keeps_the_newest_job_of_each_scenario() {
 
 /// A fake openQA `/api/v1/jobs` for a build of `total` jobs with ids
 /// `1..=total`, paging like openQA: newest first, `limit` jobs below `before`.
+/// The other fields make it misbehave the ways a server might.
+#[derive(Default)]
 struct PagedJobs {
     total: i64,
+    /// Serve at most this many jobs per page, whatever `limit` asks for.
+    cap: Option<usize>,
+    /// Ignore `before`, so every request returns the first page.
+    ignore_before: bool,
+    /// List each page oldest first instead of newest first.
+    reverse_pages: bool,
+    /// Leave the `id` out of every job.
+    no_ids: bool,
+}
+
+impl PagedJobs {
+    fn new(total: i64) -> Self {
+        Self {
+            total,
+            ..Self::default()
+        }
+    }
 }
 
 impl wiremock::Respond for PagedJobs {
@@ -749,13 +776,24 @@ impl wiremock::Respond for PagedJobs {
                 .find(|(k, _)| k == key)
                 .and_then(|(_, v)| v.parse::<i64>().ok())
         };
-        let limit = param("limit").unwrap_or(1000);
-        let top = param("before").map_or(self.total, |b| b - 1);
-        let jobs: Vec<_> = (1..=top)
+        let limit = usize::try_from(param("limit").unwrap_or(1000)).unwrap();
+        let limit = self.cap.map_or(limit, |cap| limit.min(cap));
+        let before = param("before").filter(|_| !self.ignore_before);
+        let top = before.map_or(self.total, |b| b - 1);
+        let mut jobs: Vec<_> = (1..=top)
             .rev()
-            .take(usize::try_from(limit).unwrap())
-            .map(|id| oqa_job(id, &format!("t{id}"), "64bit", "passed"))
+            .take(limit)
+            .map(|id| {
+                let mut job = oqa_job(id, &format!("t{id}"), "64bit", "passed");
+                if self.no_ids {
+                    job.as_object_mut().unwrap().remove("id");
+                }
+                job
+            })
             .collect();
+        if self.reverse_pages {
+            jobs.reverse();
+        }
         ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": jobs }))
     }
 }
@@ -767,7 +805,7 @@ async fn incident_jobs_reads_every_page() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
-        .respond_with(PagedJobs { total: 450 })
+        .respond_with(PagedJobs::new(450))
         .mount(&server)
         .await;
 
@@ -789,7 +827,12 @@ async fn incident_jobs_reads_every_page() {
         .collect();
     assert_eq!(
         before_params,
-        vec![None, Some("251".into()), Some("51".into())]
+        vec![
+            None,
+            Some("251".into()),
+            Some("51".into()),
+            Some("1".into())
+        ]
     );
     assert!(
         requests
@@ -810,7 +853,7 @@ async fn incident_jobs_marks_a_build_past_the_read_limit_incomplete() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
-        .respond_with(PagedJobs { total: max + 1 })
+        .respond_with(PagedJobs::new(max + 1))
         .mount(&server)
         .await;
 
@@ -820,11 +863,11 @@ async fn incident_jobs_marks_a_build_past_the_read_limit_incomplete() {
     assert_eq!(found.jobs.len() as i64, max);
     assert!(!found.complete);
 
-    // Exactly the limit is still complete: the last page came back short.
+    // Exactly the limit is complete: the page after it comes back empty.
     let exact = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
-        .respond_with(PagedJobs { total: max - 1 })
+        .respond_with(PagedJobs::new(max))
         .mount(&exact)
         .await;
     let found = incident_jobs(&oqa_client(&exact.uri()), ":b", false)
@@ -1119,4 +1162,157 @@ async fn build_check_log_failure_warns_without_the_credential() {
         line.contains("***@127.0.0.1"),
         "warn lost its sanitized URL context: {line}"
     );
+}
+
+/// Runs `incident_jobs` against `responder`; returns the result and the
+/// number of requests it made.
+async fn incident_jobs_with(
+    responder: PagedJobs,
+) -> (mtui_datasources::oqa_search::IncidentJobs, usize) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    let requests = server.received_requests().await.unwrap().len();
+    (found, requests)
+}
+
+/// A server that returns fewer jobs per page than asked is still read to the
+/// end: paging stops at an empty page, not at a short one.
+#[tokio::test]
+async fn incident_jobs_reads_past_short_pages() {
+    let (found, requests) = incident_jobs_with(PagedJobs {
+        cap: Some(50),
+        ..PagedJobs::new(120)
+    })
+    .await;
+    assert_eq!(found.jobs.len(), 120);
+    assert!(found.complete);
+    assert_eq!(requests, 4, "pages of 50, 50, 20, then the empty page");
+}
+
+/// A server that ignores `before` cannot be paged: the result is incomplete
+/// and the same page is not read forever.
+#[tokio::test]
+async fn incident_jobs_marks_a_stalled_paging_incomplete() {
+    let (found, requests) = incident_jobs_with(PagedJobs {
+        ignore_before: true,
+        ..PagedJobs::new(450)
+    })
+    .await;
+    assert_eq!(
+        found.jobs.len(),
+        200,
+        "the repeated page is not listed twice"
+    );
+    assert!(!found.complete);
+    assert_eq!(requests, 2);
+}
+
+/// A page without job ids cannot be continued, so the result is incomplete.
+#[tokio::test]
+async fn incident_jobs_marks_a_page_without_ids_incomplete() {
+    let (found, requests) = incident_jobs_with(PagedJobs {
+        no_ids: true,
+        ..PagedJobs::new(450)
+    })
+    .await;
+    assert!(!found.complete);
+    assert_eq!(requests, 1);
+}
+
+/// Past the limit the newest jobs are kept, even when the limit falls inside
+/// a page that lists its jobs oldest first.
+#[tokio::test]
+async fn incident_jobs_keeps_the_newest_jobs_past_the_limit() {
+    let max = i64::try_from(mtui_datasources::oqa_search::MAX_INCIDENT_JOBS).unwrap();
+    let (found, _) = incident_jobs_with(PagedJobs {
+        cap: Some(150),
+        reverse_pages: true,
+        ..PagedJobs::new(max + 100)
+    })
+    .await;
+    assert!(!found.complete);
+    assert_eq!(found.jobs.len() as i64, max);
+    let oldest_kept = found
+        .jobs
+        .iter()
+        .map(|j| j.url.rsplit("/t").next().unwrap().parse::<i64>().unwrap())
+        .min();
+    assert_eq!(oldest_kept, Some(101), "jobs 1..=100 are the oldest");
+}
+
+/// #643 review: an obsoleted newest job does not hide the scenario. The newest
+/// non-obsoleted attempt is listed, and obsoleted jobs are not counted as
+/// earlier attempts.
+#[tokio::test]
+async fn incident_jobs_lists_the_newest_non_obsoleted_attempt() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param_is_missing("before"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jobs": [
+                oqa_job(30, "install", "64bit", "obsoleted"),
+                oqa_job(20, "install", "64bit", "failed"),
+                oqa_job(15, "install", "64bit", "obsoleted"),
+                oqa_job(10, "install", "64bit", "passed"),
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param("before", "10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": [] })))
+        .mount(&server)
+        .await;
+
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    let uri = server.uri();
+    let urls = |rows: &[mtui_datasources::JobResult]| {
+        rows.iter().map(|r| r.url.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(urls(&found.jobs), vec![format!("{uri}/t20")]);
+    assert_eq!(urls(&found.superseded), vec![format!("{uri}/t10")]);
+    assert!(found.complete);
+}
+
+/// The job group is not part of the scenario key, as in openQA's
+/// `latest_jobs`: the same scenario in two groups is listed once.
+#[tokio::test]
+async fn incident_jobs_scenario_key_ignores_the_group() {
+    let mut in_core = oqa_job(20, "install", "64bit", "passed");
+    in_core["group"] = "Core".into();
+    let mut in_ha = oqa_job(10, "install", "64bit", "failed");
+    in_ha["group"] = "HA".into();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param_is_missing("before"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "jobs": [in_core, in_ha] })),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param("before", "10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": [] })))
+        .mount(&server)
+        .await;
+
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    assert_eq!(found.jobs.len(), 1);
+    assert_eq!(found.superseded.len(), 1);
 }
