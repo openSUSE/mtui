@@ -91,6 +91,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
   release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
   when there is none.
+- A host is detected as transactional only when it has a
+  `transactional-update.conf` and `/` is mounted read-only (from
+  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
+  marked transactional, so `prepare`, `update` and `downgrade` refused it and
+  `set_repo` refreshed inside a new default snapshot. When the mount table
+  cannot be read, the config file decides as before (#686).
 
 ## [26.3.5] - 2026-10-27
 
