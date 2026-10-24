@@ -826,7 +826,7 @@ expression: pretty
       "properties": {
         "all": {
           "default": false,
-          "description": "keep obsoleted jobs (superseded by a retrigger)",
+          "description": "list every attempt: earlier runs of a retriggered scenario and obsoleted jobs too (default: the newest non-obsoleted job of each scenario)",
           "type": "boolean"
         },
         "all_templates": {

@@ -162,6 +162,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `openqa_jobs` lists only the newest non-obsoleted attempt of each scenario
+  (DISTRI, VERSION, FLAVOR, ARCH, TEST, MACHINE; not the job group) by default,
+  as openQA's `latest=1` does; a note counts the earlier attempts it left out.
+  `--all` lists every attempt as before (#643).
 - Bare `add_host` now reports each test-target slot it left without a host and
   why: no matching refhost, every candidate claimed by another RRID, no
   candidate connected (unreachable or claimed remotely), retry budget spent, or
@@ -353,6 +357,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_jobs` reads every page of a build's jobs (keyset paging with
+  `before=`, until an empty page) instead of only openQA's first 1000, and no
+  longer fails on very large builds because one response exceeded the body
+  size limit. Past 10000 jobs, or when paging cannot continue, the newest jobs
+  read are listed and a note says older ones may be missing (#643).
 - A Manual `export` with no connected host (the template dropped to Manual on
   failing install jobs and autoconnect attached nothing) now writes what needs
   no host: `testing.openqa` from the cached install results and the
