@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use mtui_config::options::Config;
 use mtui_testreport::{ObsReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::{UpdateID, UpdateSource, Workflow};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:24993:275518";
@@ -98,10 +98,21 @@ fn point_dashboard(config: &mut Config, server: &MockServer) {
     config.openqa_instance_baremetal = server.uri();
 }
 
+/// The `project` and `type` the dashboard requires for the fixture incident:
+/// the SLFO pull requests are git incidents, every other number a maintenance one.
+fn dashboard_key(incident_number: &str) -> (String, &'static str) {
+    if matches!(incident_number, "4413" | "418286") {
+        ("products/SLFO".to_owned(), "git")
+    } else {
+        (format!("SUSE:Maintenance:{incident_number}"), "smelt")
+    }
+}
+
 /// Mounts the three QEM-dashboard endpoints the auto path touches, each with an
 /// empty-but-valid body. No incident settings means no install jobs, so
 /// `DashboardAutoOpenQA` yields `results = None` — the auto→manual trigger.
 async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) {
+    let (project, kind) = dashboard_key(incident_number);
     for (endpoint, body) in [
         ("incidents", serde_json::json!({})),
         ("incident_settings", serde_json::json!([])),
@@ -109,6 +120,8 @@ async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) 
     ] {
         Mock::given(method("GET"))
             .and(path(format!("/api/{endpoint}/{incident_number}")))
+            .and(query_param("project", &project))
+            .and(query_param("type", kind))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(server)
             .await;
@@ -119,14 +132,19 @@ async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) 
 /// `incident_number`, so `DashboardAutoOpenQA` resolves `results = Some(..)` and
 /// the auto workflow is kept (no downgrade).
 async fn mount_dashboard_with_install(server: &MockServer, incident_number: &str) {
+    let (project, kind) = dashboard_key(incident_number);
     Mock::given(method("GET"))
         .and(path(format!("/api/incidents/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(server)
         .await;
     // One incident setting whose jobs contain a passing install job.
     Mock::given(method("GET"))
         .and(path(format!("/api/incident_settings/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"id": 1, "settings": {"DISTRI": "sle", "VERSION": "15-SP5", "ARCH": "x86_64"}}
         ])))
@@ -134,6 +152,8 @@ async fn mount_dashboard_with_install(server: &MockServer, incident_number: &str
         .await;
     Mock::given(method("GET"))
         .and(path(format!("/api/update_settings/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(server)
         .await;
@@ -450,6 +470,7 @@ fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: 
             "rrid": "{rrid}",
             "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.1/",
             "products": ["SLES 15 (x86_64)"],
+            "gitea_pr": "https://src.suse.de/products/SLFO/pulls/1",
             "gitea_pr_api": "{gitea_pr_api}"{hash_field},
             "packages": {{}},
             "testplatform": []

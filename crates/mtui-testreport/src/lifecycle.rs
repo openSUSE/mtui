@@ -226,8 +226,17 @@ pub async fn make_testreport(
             Some(VerifyPolicy::from_config(&report.base().config.ssl_verify)),
         );
         let source = report.update_source();
+        let pr_url = report.base().giteapr.clone();
 
-        match QemIncident::new(rrid.clone(), dashboard_api, policy, source).await {
+        match QemIncident::new(
+            rrid.clone(),
+            dashboard_api,
+            policy,
+            source,
+            pr_url.as_deref(),
+        )
+        .await
+        {
             Ok(incident) => {
                 info!("Getting data from QEM Dashboard");
                 let mut auto = DashboardAutoOpenQA::new(

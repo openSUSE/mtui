@@ -134,11 +134,13 @@ impl Command for Export {
                 let http = build_http(session)?;
                 let dashboard_api = session.config.qem_dashboard_api.clone();
                 let openqa_instance = session.config.openqa_instance.clone();
+                let pr_url = session.metadata().base().giteapr.clone();
                 let incident = build_incident(
                     rrid.clone(),
                     dashboard_api,
                     http,
                     session.metadata().update_source(),
+                    pr_url.as_deref(),
                 )
                 .await;
                 let mut auto = build_auto_openqa(
@@ -358,6 +360,7 @@ mod tests {
         let incident = QemIncident {
             rrid: rrid.clone(),
             incident_number: "1".to_string(),
+            key: None,
             source: mtui_types::UpdateSource::Obs,
             client,
             data: None,
@@ -477,6 +480,7 @@ mod tests {
             format!("{}/api", oqa.uri()),
             http.clone(),
             session.metadata().update_source(),
+            None,
         )
         .await;
         let kernel =
@@ -508,9 +512,10 @@ mod tests {
 
     /// Mounts the three QEM-dashboard endpoints the manual enrichment touches.
     async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
+        let project = format!("SUSE:Maintenance:{incident_number}");
         for (endpoint, body) in [
             ("incidents", serde_json::json!({})),
             ("incident_settings", serde_json::json!([])),
@@ -518,6 +523,8 @@ mod tests {
         ] {
             Mock::given(method("GET"))
                 .and(path(format!("/api/{endpoint}/{incident_number}")))
+                .and(query_param("project", &project))
+                .and(query_param("type", "smelt"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(&server)
                 .await;
@@ -788,6 +795,7 @@ mod tests {
             format!("{}/api", server.uri()),
             http,
             session.metadata().update_source(),
+            None,
         )
         .await;
         let max_parallel = session.config.max_parallel as usize;

@@ -56,8 +56,16 @@ impl Command for ReloadOpenQA {
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let workflow = session.metadata().workflow();
         let source = session.metadata().update_source();
+        let pr_url = session.metadata().base().giteapr.clone();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, http.clone(), source).await;
+        let incident = build_incident(
+            rrid.clone(),
+            dashboard_api,
+            http.clone(),
+            source,
+            pr_url.as_deref(),
+        )
+        .await;
 
         if workflow == Workflow::Kernel {
             if session.metadata().openqa().kernel.is_empty() {
@@ -145,21 +153,28 @@ mod tests {
     /// an empty-but-valid body, so `DashboardAutoOpenQA::run` resolves to a
     /// populated-but-empty result.
     async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
+        let project = format!("SUSE:Maintenance:{incident_number}");
         Mock::given(method("GET"))
             .and(path(format!("/api/incidents/{incident_number}")))
+            .and(query_param("project", &project))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path(format!("/api/incident_settings/{incident_number}")))
+            .and(query_param("project", &project))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path(format!("/api/update_settings/{incident_number}")))
+            .and(query_param("project", &project))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
@@ -210,7 +225,7 @@ mod tests {
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let source = session.metadata().update_source();
-        let incident = build_incident(rrid.clone(), dashboard_api, http, source).await;
+        let incident = build_incident(rrid.clone(), dashboard_api, http, source, None).await;
         let max_parallel = session.config.max_parallel as usize;
         session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
             openqa_instance,

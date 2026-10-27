@@ -13,7 +13,8 @@ use mtui_datasources::oqa_search::search::{
     aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
     single_incidents, summarize_test_results,
 };
-use mtui_datasources::{HttpClient, VerifyPolicy};
+use mtui_datasources::{HttpClient, IncidentKey, VerifyPolicy};
+use mtui_types::UpdateSource;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -539,11 +540,17 @@ async fn build_checks_matches_flavored_python_package_to_source_log() {
 
 // --- get_incident_info ---
 
+fn smelt_key(number: &str) -> IncidentKey {
+    IncidentKey::derive(number, UpdateSource::Obs, None).expect("smelt keys always derive")
+}
+
 #[tokio::test]
 async fn get_incident_info_returns_build_and_versions() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"settings": {"BUILD": ":12358:bash", "DISTRI": "sle"}, "version": "15-SP5", "flavor": "Server-DVD-Incidents"},
             {"settings": {"BUILD": ":12358:bash", "DISTRI": "sle"}, "version": "15-SP4", "flavor": "Server-DVD-Incidents"},
@@ -552,7 +559,7 @@ async fn get_incident_info_returns_build_and_versions() {
         .mount(&server)
         .await;
 
-    let (build, versions) = get_incident_info(&client(), &server.uri(), "12358")
+    let (build, versions) = get_incident_info(&client(), &server.uri(), &smelt_key("12358"))
         .await
         .expect("ok");
     assert_eq!(build, ":12358:bash");
@@ -567,22 +574,52 @@ async fn get_incident_info_no_builds_falls_back_to_package_name() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"packages": ["bash"]})),
         )
         .mount(&server)
         .await;
 
-    let (build, versions) = get_incident_info(&client(), &server.uri(), "12358")
+    let (build, versions) = get_incident_info(&client(), &server.uri(), &smelt_key("12358"))
         .await
         .expect("ok");
     assert_eq!(build, ":12358:bash");
     assert!(versions.is_none());
+}
+
+#[tokio::test]
+async fn get_incident_info_sends_the_git_project_and_type() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/incident_settings/8938"))
+        .and(query_param("project", "products/SLFO"))
+        .and(query_param("type", "git"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"settings": {"BUILD": ":git:8938:bash", "DISTRI": "sle"}, "version": "16.0", "flavor": "Online-Increments"}
+        ])))
+        .mount(&server)
+        .await;
+
+    let key = IncidentKey::derive(
+        "8938",
+        UpdateSource::Git,
+        Some("https://src.suse.de/products/SLFO/pulls/8938"),
+    )
+    .expect("key derives");
+    let (build, versions) = get_incident_info(&client(), &server.uri(), &key)
+        .await
+        .expect("ok");
+    assert_eq!(build, ":git:8938:bash");
+    assert_eq!(versions, Some(vec!["16.0".to_string()]));
 }
 
 // --- incident_jobs ---

@@ -6,7 +6,7 @@ use mtui_datasources::oqa_search as oqa;
 use mtui_testreport::{FileList, inject_overview};
 
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_update, resolve_dashboard_key, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -174,15 +174,25 @@ impl Command for OpenQAOverview {
         session.display.println(&session.display.blue("OpenQA:"));
         session.display.println(&session.display.blue("#######"));
 
-        let (build, versions) =
-            match oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id).await {
-                Ok(v) => v,
-                Err(e) => {
-                    return Err(CommandError::Other(format!(
-                        "QEM Dashboard query failed: {e}"
-                    )));
-                }
-            };
+        let source = session.metadata().update_source();
+        let pr_url = session.metadata().base().giteapr.clone();
+        let key = resolve_dashboard_key(
+            &http,
+            &url_dashboard_qam,
+            &effective_incident_id,
+            source,
+            pr_url.as_deref(),
+        )
+        .await?;
+        let (build, versions) = match oqa::get_incident_info(&http, &url_dashboard_qam, &key).await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(CommandError::Other(format!(
+                    "QEM Dashboard query failed: {e}"
+                )));
+            }
+        };
 
         let max_oqa_parallel = session.config.max_oqa_parallel as usize;
         let test_pattern = args.get_one::<String>("test_pattern").map(String::as_str);
@@ -587,12 +597,14 @@ mod tests {
 
     #[tokio::test]
     async fn full_fetch_renders_sections_and_exports() {
-        use wiremock::matchers::{method, path_regex};
+        use wiremock::matchers::{method, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))

@@ -8,6 +8,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `load_template`, `reload_openqa`, `export`, `openqa_overview` and
+  `openqa_jobs` send the incident's `project` and `type` to the QEM Dashboard,
+  which now requires them; the dashboard openQA data stopped loading with
+  HTTP 400 (#717).
+
 ## [26.3.4] - 2026-10-10
 
 ### Fixed

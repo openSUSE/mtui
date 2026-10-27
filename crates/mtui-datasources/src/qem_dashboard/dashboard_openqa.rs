@@ -39,6 +39,7 @@ use crate::openqa::{OPENQA_INSTALL_DISTRI, install_logfile_for};
 
 use super::client::{FAILED_RESULTS, FUTURE_TIMEOUT, QemDashboardClient};
 use super::incident::QemIncident;
+use super::key::IncidentKey;
 
 /// The install-test job-name marker that identifies an incident-install job.
 const INCIDENT_INSTALL_MARKER: &str = "qam-incidentinstall";
@@ -248,8 +249,9 @@ pub struct DashboardAutoOpenQA {
     host: String,
     /// The dashboard client (shared with the incident).
     client: QemDashboardClient,
-    /// The resolved dashboard incident number.
-    incident_number: String,
+    /// The incident's dashboard identity, or `None` when it could not be
+    /// worked out.
+    key: Option<IncidentKey>,
     /// The rendered `Results from openQA jobs` block (empty until [`run`](Self::run)).
     pub pp: Vec<String>,
     /// The install-log URLs, or `None` when the install jobs did not all pass.
@@ -278,7 +280,7 @@ impl DashboardAutoOpenQA {
         Self {
             host: host.into(),
             client: incident.client.clone(),
-            incident_number: incident.incident_number.clone(),
+            key: incident.key.clone(),
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
@@ -354,17 +356,20 @@ impl DashboardAutoOpenQA {
         &self,
         per_fetch: std::time::Duration,
     ) -> Result<Vec<NormalizedJob>, QemDashboardError> {
-        let n = &self.incident_number;
+        let Some(key) = &self.key else {
+            tracing::warn!("no dashboard identity for the incident; skipping the openQA job fetch");
+            return Ok(Vec::new());
+        };
 
         // Independent, so fetched concurrently.
         let (incident_res, update_res) = tokio::join!(
             Self::await_settings(
-                self.client.try_incident_settings(n),
+                self.client.try_incident_settings(key),
                 "incident_settings",
                 per_fetch
             ),
             Self::await_settings(
-                self.client.try_update_settings(n),
+                self.client.try_update_settings(key),
                 "update_settings",
                 per_fetch
             ),
@@ -790,6 +795,7 @@ mod tests {
     //! Pure-helper assertions; the `run`/`load_jobs` wiremock + timeout tests
     //! live in `tests/qem_dashboard.rs`.
     use super::*;
+    use mtui_types::UpdateSource;
     use serde_json::json;
 
     const OPENQA_HOST: &str = "https://openqa.example.com";
@@ -1203,7 +1209,7 @@ mod tests {
         DashboardAutoOpenQA {
             host: OPENQA_HOST.to_string(),
             client,
-            incident_number: "12358".to_string(),
+            key: IncidentKey::derive("12358", UpdateSource::Obs, None),
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
@@ -1350,7 +1356,7 @@ mod tests {
     // --- load_jobs fan-out: ordering + timeout skip (async timeout seam) ---
 
     use std::time::Duration;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn dashboard_against(server: &MockServer) -> DashboardAutoOpenQA {
@@ -1359,7 +1365,7 @@ mod tests {
         DashboardAutoOpenQA {
             host: OPENQA_HOST.to_string(),
             client,
-            incident_number: "12358".to_string(),
+            key: IncidentKey::derive("12358", UpdateSource::Obs, None),
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
@@ -1376,6 +1382,8 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(
                     incident_ids
@@ -1388,6 +1396,8 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/api/update_settings/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(
                     update_ids
@@ -1429,6 +1439,18 @@ mod tests {
             .collect();
         assert_eq!(dashboard.job_test_names(), expected);
         // `.expect(1)` on each mock asserts exactly-once on server drop.
+    }
+
+    #[tokio::test]
+    async fn load_jobs_without_a_key_requests_nothing() {
+        let server = MockServer::start().await;
+        let mut dashboard = dashboard_against(&server);
+        dashboard.key = None;
+
+        let jobs = dashboard.load_jobs(FUTURE_TIMEOUT).await.unwrap();
+
+        assert!(jobs.is_empty());
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

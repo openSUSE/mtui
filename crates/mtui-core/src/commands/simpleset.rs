@@ -141,8 +141,16 @@ impl Command for SetWorkflow {
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let current = session.metadata().workflow();
         let source = session.metadata().update_source();
+        let pr_url = session.metadata().base().giteapr.clone();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, http.clone(), source).await;
+        let incident = build_incident(
+            rrid.clone(),
+            dashboard_api,
+            http.clone(),
+            source,
+            pr_url.as_deref(),
+        )
+        .await;
 
         match desired {
             Workflow::Kernel => {
@@ -373,9 +381,10 @@ mod tests {
     /// The three QEM-dashboard endpoints the auto path touches, each returning
     /// an empty-but-valid body.
     async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
+        let project = format!("SUSE:Maintenance:{incident_number}");
         for (endpoint, body) in [
             ("incidents", serde_json::json!({})),
             ("incident_settings", serde_json::json!([])),
@@ -383,6 +392,8 @@ mod tests {
         ] {
             Mock::given(method("GET"))
                 .and(path(format!("/api/{endpoint}/{incident_number}")))
+                .and(query_param("project", &project))
+                .and(query_param("type", "smelt"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(&server)
                 .await;
@@ -479,7 +490,7 @@ mod tests {
         let host = session.config.openqa_instance.clone();
         let http = session.http_client().unwrap();
         let source = session.metadata().update_source();
-        let incident = build_incident(rrid, dashboard_api, http.clone(), source).await;
+        let incident = build_incident(rrid, dashboard_api, http.clone(), source, None).await;
         let openqa_transport = session.openqa_transport().unwrap();
         session
             .metadata_mut()
