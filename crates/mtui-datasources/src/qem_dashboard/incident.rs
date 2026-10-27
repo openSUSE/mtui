@@ -16,6 +16,7 @@ use crate::http::VerifyPolicy;
 use crate::openqa::base::IncidentName;
 
 use super::client::QemDashboardClient;
+use super::key::IncidentKey;
 
 /// Package-name suffixes qem-bot demotes when choosing an incident's short
 /// name (#433; `qem-bot/openqabot/types/submission.py:29-72`, `sort_packages`).
@@ -47,6 +48,9 @@ pub struct QemIncident {
     /// [`update_source`](Self::update_source) falls back to it when no dashboard
     /// record is available.
     pub source: UpdateSource,
+    /// The dashboard identity of the incident, or `None` when it could not be
+    /// worked out (and for a Product Increment, which has none).
+    pub key: Option<IncidentKey>,
     /// The shared dashboard client (reused by the auto-workflow provider).
     pub client: QemDashboardClient,
     /// The fetched incident record, or `None` when unavailable.
@@ -58,7 +62,8 @@ impl QemIncident {
     ///
     /// `source` is the report's own [`UpdateSource`], the fallback for
     /// [`update_source`](Self::update_source) when no dashboard record is
-    /// available.
+    /// available. `pr_url` is the report's Gitea pull request URL, from which
+    /// a git incident's dashboard project is read.
     ///
     /// # Errors
     ///
@@ -69,9 +74,10 @@ impl QemIncident {
         apiurl: impl Into<String>,
         policy: VerifyPolicy,
         source: UpdateSource,
+        pr_url: Option<&str>,
     ) -> Result<Self, QemDashboardError> {
         let client = QemDashboardClient::new(apiurl, policy)?;
-        Ok(Self::with_client(rrid, client, source).await)
+        Ok(Self::with_client(rrid, client, source, pr_url).await)
     }
 
     /// Build the incident metadata from an existing client (test/composition
@@ -82,22 +88,33 @@ impl QemIncident {
     /// holds a product-family string rather than an id, so every id-shaped use
     /// of it would be meaningless (#433). `data` is left `None`, indistinguishable
     /// from a failed fetch apart from the absent request.
+    ///
+    /// When the dashboard key cannot be worked out, nothing is fetched and both
+    /// [`key`](Self::key) and `data` are `None`.
     #[must_use = "the fetched incident metadata should be used"]
     pub async fn with_client(
         rrid: RequestReviewID,
         client: QemDashboardClient,
         source: UpdateSource,
+        pr_url: Option<&str>,
     ) -> Self {
         let incident_number = Self::incident_number(&rrid);
-        let data = if rrid.kind == RequestKind::Pi {
-            None
-        } else {
-            client.incident(&incident_number).await
-        };
+        let mut key = None;
+        let mut data = None;
+        if rrid.kind != RequestKind::Pi {
+            key = client.resolve_key(&incident_number, source, pr_url).await;
+            match &key {
+                Some(key) => data = client.incident(key).await,
+                None => tracing::warn!(
+                    "could not identify incident {incident_number} on the QEM Dashboard"
+                ),
+            }
+        }
         Self {
             rrid,
             incident_number,
             source,
+            key,
             client,
             data,
         }
@@ -196,7 +213,7 @@ impl IncidentName for QemIncident {
 mod tests {
     use super::*;
     use crate::http::HttpClient;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> QemDashboardClient {
@@ -250,6 +267,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["kernel-default", "kernel-ec2"],
@@ -259,7 +278,8 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
 
         assert!(incident.is_present());
         assert_eq!(incident.get_incident_name().as_deref(), Some("kernel-ec2"));
@@ -270,7 +290,8 @@ mod tests {
         let server = MockServer::start().await;
         // No mount -> 404 -> data folds to None.
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
 
         assert!(!incident.is_present());
         assert_eq!(incident.get_incident_name(), None);
@@ -281,6 +302,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({"number": 12358, "packages": []})),
@@ -289,7 +312,8 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
 
         assert!(incident.is_present());
         assert_eq!(incident.get_incident_name(), None);
@@ -304,6 +328,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["a-livepatch-b", "kernel-default"],
@@ -312,7 +338,8 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
         assert_eq!(
             incident.get_incident_name().as_deref(),
             Some("kernel-default")
@@ -327,6 +354,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["ab-x86_64", "kernel-default"],
@@ -335,7 +364,8 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
         assert_eq!(
             incident.get_incident_name().as_deref(),
             Some("kernel-default")
@@ -349,6 +379,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["cat", "bat"],
@@ -357,7 +389,8 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
         assert_eq!(incident.get_incident_name().as_deref(), Some("bat"));
     }
 
@@ -367,6 +400,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["bash"],
@@ -377,7 +412,8 @@ mod tests {
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
         // The template fact disagrees (Obs); the dashboard record still wins.
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
         assert_eq!(incident.update_source(), UpdateSource::Git);
     }
 
@@ -389,6 +425,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "products/SLFO"))
+            .and(query_param("type", "git"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["bash"],
@@ -397,7 +435,11 @@ mod tests {
             .await;
 
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git).await;
+        let pr_url = "https://src.suse.de/products/SLFO/pulls/12358";
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git, Some(pr_url))
+                .await;
+        assert!(incident.is_present());
         assert_eq!(incident.update_source(), UpdateSource::Obs);
     }
 
@@ -408,9 +450,60 @@ mod tests {
         let server = MockServer::start().await;
         // No mount -> 404 -> data folds to None.
         let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-        let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git).await;
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git, None).await;
         assert!(!incident.is_present());
         assert_eq!(incident.update_source(), UpdateSource::Git);
+    }
+
+    /// With no way to name the incident's project, nothing per-incident is
+    /// requested: an unkeyed fetch would only draw the dashboard's 400.
+    #[tokio::test]
+    async fn unresolved_key_fetches_nothing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incidents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let rrid: RequestReviewID = "SUSE:SLFO:1.2:8938".parse().unwrap();
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git, None).await;
+
+        assert!(incident.key.is_none());
+        assert!(!incident.is_present());
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.url.path() == "/api/incidents"),
+            "only the list lookup may be requested: {requests:?}"
+        );
+    }
+
+    /// A git incident is keyed by the repository named in its PR URL.
+    #[tokio::test]
+    async fn git_incident_is_fetched_with_the_pr_repository_as_project() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incidents/8938"))
+            .and(query_param("project", "products/SLFO"))
+            .and(query_param("type", "git"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "number": 8938,
+                "packages": ["bash"],
+                "type": "git",
+            })))
+            .mount(&server)
+            .await;
+
+        let rrid: RequestReviewID = "SUSE:SLFO:1.2:8938".parse().unwrap();
+        let pr_url = "https://src.suse.de/products/SLFO/pulls/8938";
+        let incident =
+            QemIncident::with_client(rrid, client_for(&server), UpdateSource::Git, Some(pr_url))
+                .await;
+
+        assert!(incident.is_present());
+        assert_eq!(incident.key.unwrap().project, "products/SLFO");
     }
 
     /// A PI request is on neither service, so `with_client` skips the fetch
@@ -422,6 +515,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/16.0"))
+            .and(query_param("project", "SUSE:Maintenance:16.0"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 16,
                 "packages": ["patch"],
@@ -430,7 +525,8 @@ mod tests {
             .await;
 
         let pi: RequestReviewID = "SUSE:PI:16.0:199773".parse().unwrap();
-        let incident = QemIncident::with_client(pi, client_for(&server), UpdateSource::Obs).await;
+        let incident =
+            QemIncident::with_client(pi, client_for(&server), UpdateSource::Obs, None).await;
 
         assert!(!incident.is_present());
         assert_eq!(incident.get_incident_name(), None);
@@ -443,6 +539,8 @@ mod tests {
         // PI skip above was a real skip, not an unmounted endpoint.
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["kernel-default"],
@@ -451,7 +549,7 @@ mod tests {
             .await;
         let maint: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
         let incident =
-            QemIncident::with_client(maint, client_for(&server), UpdateSource::Obs).await;
+            QemIncident::with_client(maint, client_for(&server), UpdateSource::Obs, None).await;
         assert!(incident.is_present());
         assert!(!server.received_requests().await.unwrap().is_empty());
     }

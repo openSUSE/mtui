@@ -8,7 +8,7 @@ use mtui_datasources::oqa_search as oqa;
 
 use super::row_budget::{crush, row_notice};
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_update, resolve_dashboard_key, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -252,15 +252,25 @@ impl Command for OpenQAJobs {
             rrid.review_id.to_string()
         };
 
-        let (build, _versions) =
-            match oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id).await {
-                Ok(v) => v,
-                Err(e) => {
-                    return Err(CommandError::Other(format!(
-                        "QEM Dashboard query failed: {e}"
-                    )));
-                }
-            };
+        let source = session.metadata().update_source();
+        let pr_url = session.metadata().base().giteapr.clone();
+        let key = resolve_dashboard_key(
+            &http,
+            &url_dashboard_qam,
+            &effective_incident_id,
+            source,
+            pr_url.as_deref(),
+        )
+        .await?;
+        let (build, _versions) = match oqa::get_incident_info(&http, &url_dashboard_qam, &key).await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(CommandError::Other(format!(
+                    "QEM Dashboard query failed: {e}"
+                )));
+            }
+        };
 
         let fetched = match oqa::incident_jobs(&oqa_client, &build, every_attempt).await {
             Ok(j) => j,
@@ -419,6 +429,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))
@@ -472,6 +484,74 @@ mod tests {
         assert!(!out.contains("still pending"), "{out}");
         // Jobs without settings print no empty `[]`.
         assert!(!out.contains("[]"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn git_update_queries_the_dashboard_with_its_pr_repository() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "products/SLFO"))
+            .and(query_param("type", "git"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "16.0"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs"))
+            .and(query_param("build", "BUILD-42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jobs": [{"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "state": "done", "clone_id": null}]
+            })))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let base = session.metadata_mut().base_mut();
+        base.update_source = mtui_types::UpdateSource::Git;
+        base.giteapr = Some("https://src.suse.de/products/SLFO/pulls/1".to_owned());
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        OpenQAJobs.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("openQA jobs for build BUILD-42"));
+    }
+
+    #[tokio::test]
+    async fn unidentifiable_incident_is_reported_not_queried() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incidents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().update_source = mtui_types::UpdateSource::Git;
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        let err = OpenQAJobs.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("could not identify incident 1 on the QEM Dashboard"),
+            "{err}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|r| r.url.path() == "/api/incidents"));
     }
 
     #[tokio::test]
@@ -570,6 +650,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))
@@ -950,6 +1032,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))

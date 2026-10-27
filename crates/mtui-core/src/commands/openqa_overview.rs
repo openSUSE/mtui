@@ -5,7 +5,9 @@ use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
 
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_document, require_update, template_completion};
+use crate::commands::support::{
+    require_document, require_update, resolve_dashboard_key, template_completion,
+};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -345,6 +347,8 @@ pub(crate) struct OverviewParams {
     url_dashboard_qam: String,
     url_qam: String,
     max_oqa_parallel: usize,
+    source: mtui_types::UpdateSource,
+    pr_url: Option<String>,
     http: mtui_datasources::HttpClient,
     openqa_transport: reqwest::Client,
 }
@@ -379,6 +383,8 @@ impl OverviewParams {
                 .url_qam
                 .unwrap_or_else(|| derive_qam_url(&config.reports_url)),
             max_oqa_parallel: config.max_oqa_parallel as usize,
+            source: session.metadata().update_source(),
+            pr_url: session.metadata().base().giteapr.clone(),
             http,
             openqa_transport,
         })
@@ -401,6 +407,8 @@ pub(crate) async fn fetch_overview(
         url_dashboard_qam,
         url_qam,
         max_oqa_parallel,
+        source,
+        pr_url,
         http,
         openqa_transport,
     } = params;
@@ -420,10 +428,17 @@ pub(crate) async fn fetch_overview(
         request_id.to_string()
     };
 
-    let (build, versions) =
-        oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id)
-            .await
-            .map_err(|e| CommandError::Other(format!("QEM Dashboard query failed: {e}")))?;
+    let key = resolve_dashboard_key(
+        &http,
+        &url_dashboard_qam,
+        &effective_incident_id,
+        source,
+        pr_url.as_deref(),
+    )
+    .await?;
+    let (build, versions) = oqa::get_incident_info(&http, &url_dashboard_qam, &key)
+        .await
+        .map_err(|e| CommandError::Other(format!("QEM Dashboard query failed: {e}")))?;
 
     if packages.is_empty()
         && !build.is_empty()
@@ -750,12 +765,14 @@ mod tests {
 
     #[tokio::test]
     async fn full_fetch_renders_sections_and_exports() {
-        use wiremock::matchers::{method, path_regex};
+        use wiremock::matchers::{method, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))
@@ -796,12 +813,14 @@ mod tests {
     /// The full result stays on the report for `export`, with or without `--export`.
     #[tokio::test]
     async fn overview_is_saved_on_the_report() {
-        use wiremock::matchers::{method, path_regex};
+        use wiremock::matchers::{method, path_regex, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}
             ])))

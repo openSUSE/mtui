@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use mtui_config::options::Config;
 use mtui_testreport::{UpdateKind, make_testreport};
 use mtui_types::{UpdateID, Workflow};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// A maintenance/OBS RRID — `tr_factory` routes it to `ObsReport`, whose
@@ -70,7 +70,7 @@ fn slfo_gitea_document(id: &str, gitea_api: &str, commit: &str) -> String {
             "people": {{"testers": [], "reviewer": {{"name": null}}}},
             "update": {{"packager": "p", "source_packages": ["a"],
                        "origin": {{"api": "{gitea_api}", "commit": "{commit}",
-                                   "pull_request": "https://x/pr/1"}},
+                                   "pull_request": "https://src.suse.de/products/SLFO/pulls/7819"}},
                        "products": [{{"name": "n", "version": "v", "archs": ["x86_64"]}}]}},
             "install": {{"repository": "http://x/", "targets": [{{
                 "product": "n", "version": "v", "arch": "x86_64",
@@ -127,10 +127,21 @@ fn point_dashboard(config: &mut Config, server: &MockServer) {
     config.openqa_instance_baremetal = server.uri();
 }
 
+/// The `project` and `type` the dashboard requires for the fixture incident:
+/// `7819` is the SLFO pull request, every other number a maintenance incident.
+fn dashboard_key(incident_number: &str) -> (String, &'static str) {
+    if incident_number == "7819" {
+        ("products/SLFO".to_owned(), "git")
+    } else {
+        (format!("SUSE:Maintenance:{incident_number}"), "smelt")
+    }
+}
+
 /// Mounts the three QEM-dashboard endpoints the auto path touches, each with an
 /// empty-but-valid body. No incident settings means no install jobs, so
 /// `DashboardAutoOpenQA` yields `results = None` — the auto→manual trigger.
 async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) {
+    let (project, kind) = dashboard_key(incident_number);
     for (endpoint, body) in [
         ("incidents", serde_json::json!({})),
         ("incident_settings", serde_json::json!([])),
@@ -138,6 +149,8 @@ async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) 
     ] {
         Mock::given(method("GET"))
             .and(path(format!("/api/{endpoint}/{incident_number}")))
+            .and(query_param("project", &project))
+            .and(query_param("type", kind))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(server)
             .await;
@@ -148,13 +161,18 @@ async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) 
 /// `incident_number`, so `DashboardAutoOpenQA` resolves `results = Some(..)` and
 /// the auto workflow is kept (no downgrade).
 async fn mount_dashboard_with_install(server: &MockServer, incident_number: &str) {
+    let (project, kind) = dashboard_key(incident_number);
     Mock::given(method("GET"))
         .and(path(format!("/api/incidents/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("/api/incident_settings/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"id": 1, "settings": {"DISTRI": "sle", "VERSION": "15-SP5", "ARCH": "x86_64"}}
         ])))
@@ -162,6 +180,8 @@ async fn mount_dashboard_with_install(server: &MockServer, incident_number: &str
         .await;
     Mock::given(method("GET"))
         .and(path(format!("/api/update_settings/{incident_number}")))
+        .and(query_param("project", &project))
+        .and(query_param("type", kind))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(server)
         .await;
