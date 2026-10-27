@@ -50,7 +50,7 @@ jobs:
       # `clippy` is the key's sole writer (see `docs`'s `save-if: false`), so
       # there is no save race to warn about.
       - name: Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           shared-key: check-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -71,7 +71,7 @@ jobs:
       # makes `clippy` the sole writer: `cargo clippy --all-targets` produces
       # a superset of the dependency metadata rustdoc needs.
       - name: Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           shared-key: check-all-features
           save-if: false
@@ -96,7 +96,7 @@ jobs:
       # against, so sharing would hand this job a hit that still forces full
       # codegen — a cache that looks like it works and does not.
       - name: Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build with no default features
@@ -115,7 +115,7 @@ jobs:
       # instrumentation RUSTFLAGS into `target/llvm-cov-target`, sharing
       # nothing with the check-only `clippy`/`docs`/`feature-matrix` keys.
       - name: Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The SSH integration suite authenticates the client from an identity file;
@@ -131,7 +131,7 @@ jobs:
         # SHA-pinned like every other action (Scorecard Pinned-Dependencies);
         # the tool is selected via the input, not the mutable `@cargo-llvm-cov`
         # tag alias.
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-llvm-cov
       # This is CI's only run of the test suite: `cargo llvm-cov` builds and
@@ -167,7 +167,7 @@ jobs:
       # `test` job's key, leaving ample budget (see plans/ci-caching.md) for
       # macOS's own key (runner.os already differs from the ubuntu jobs).
       - name: Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The SSH integration suite authenticates from an identity file; the
