@@ -244,7 +244,7 @@ russh-sftp = "3"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.
-sandogasa-rpmvercmp = "0.26"
+sandogasa-rpmvercmp = "0.27"
 # HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
 # index (oqa_search build-check overview), replacing upstream's minimal
 # html.parser LogFileLinkParser.
