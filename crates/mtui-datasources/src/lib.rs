@@ -30,7 +30,7 @@ pub use oqa_search::{
     OpenQAOverviewResult, VersionResult, aggregated_updates, build_checks, get_incident_info,
     incident_jobs, render_overview, single_incidents,
 };
-pub use qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
+pub use qem_dashboard::{DashboardAutoOpenQA, IncidentKey, QemDashboardClient, QemIncident};
 pub use refhost::{Attributes, ProductDiff, Refhosts};
 pub use slack::{
     Message, PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction,

@@ -10,6 +10,8 @@
 //! * [`incident`] — [`QemIncident`], the incident-metadata model: it resolves
 //!   the dashboard incident number from an [`RequestReviewID`] and fetches the
 //!   incident record.
+//! * [`key`] — [`IncidentKey`], the `(number, project, type)` identity the
+//!   dashboard's per-incident endpoints require.
 //! * [`dashboard_openqa`] — [`DashboardAutoOpenQA`], the auto-workflow data
 //!   provider that loads the incident + aggregate openQA jobs and renders the
 //!   review-facing `Results from openQA jobs` block.
@@ -26,7 +28,9 @@
 pub mod client;
 pub mod dashboard_openqa;
 pub mod incident;
+pub mod key;
 
 pub use client::QemDashboardClient;
 pub use dashboard_openqa::DashboardAutoOpenQA;
 pub use incident::QemIncident;
+pub use key::IncidentKey;
