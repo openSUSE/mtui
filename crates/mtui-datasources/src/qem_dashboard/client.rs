@@ -8,10 +8,13 @@
 
 use std::time::Duration;
 
+use mtui_types::UpdateSource;
 use serde_json::Value;
 
 use crate::error::QemDashboardError;
 use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy};
+
+use super::key::IncidentKey;
 
 /// openQA job result statuses reported individually in the exported log.
 ///
@@ -128,11 +131,46 @@ impl QemDashboardClient {
         }
     }
 
-    /// Fetch the incident record for `incident_number`.
+    /// Work out the dashboard [`IncidentKey`] for an incident.
+    ///
+    /// Derives it locally when it can. Otherwise looks the incident up in the
+    /// incident list by `number` and `source`, and accepts the row only when
+    /// exactly one matches. `None` when the key stays unresolved, including an
+    /// unreachable dashboard.
+    pub async fn resolve_key(
+        &self,
+        number: &str,
+        source: UpdateSource,
+        pr_url: Option<&str>,
+    ) -> Option<IncidentKey> {
+        if let Some(key) = IncidentKey::derive(number, source, pr_url) {
+            return Some(key);
+        }
+        let wanted: i64 = number.parse().ok()?;
+        let mut rows = self.get_list("incidents").await.into_iter().filter(|row| {
+            row.get("number").and_then(Value::as_i64) == Some(wanted)
+                && UpdateSource::from_qem_type(
+                    row.get("type").and_then(Value::as_str).unwrap_or(""),
+                ) == source
+        });
+        let row = rows.next()?;
+        if rows.next().is_some() {
+            return None;
+        }
+        let project = row.get("project").and_then(Value::as_str)?;
+        Some(IncidentKey {
+            number: number.to_owned(),
+            project: project.to_owned(),
+            source,
+        })
+    }
+
+    /// Fetch the incident record for `key`.
     ///
     /// Returns `None` on any failure.
-    pub(crate) async fn incident(&self, incident_number: &str) -> Option<Value> {
-        self.get(&format!("incidents/{incident_number}")).await
+    pub(crate) async fn incident(&self, key: &IncidentKey) -> Option<Value> {
+        self.get(&format!("incidents/{}?{}", key.number, key.query()))
+            .await
     }
 
     /// Fetch the openQA jobs for an incident settings id (empty on failure).
@@ -156,9 +194,9 @@ impl QemDashboardClient {
     /// malformed JSON body.
     pub(crate) async fn try_incident_settings(
         &self,
-        incident_number: &str,
+        key: &IncidentKey,
     ) -> Result<Vec<Value>, QemDashboardError> {
-        self.try_get_list(&format!("incident_settings/{incident_number}"))
+        self.try_get_list(&format!("incident_settings/{}?{}", key.number, key.query()))
             .await
     }
 
@@ -171,9 +209,9 @@ impl QemDashboardClient {
     /// malformed JSON body.
     pub(crate) async fn try_update_settings(
         &self,
-        incident_number: &str,
+        key: &IncidentKey,
     ) -> Result<Vec<Value>, QemDashboardError> {
-        self.try_get_list(&format!("update_settings/{incident_number}"))
+        self.try_get_list(&format!("update_settings/{}?{}", key.number, key.query()))
             .await
     }
 }
@@ -181,12 +219,16 @@ impl QemDashboardClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> QemDashboardClient {
         let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
         QemDashboardClient::with_client(http, format!("{}/api", server.uri()))
+    }
+
+    fn smelt(number: &str) -> IncidentKey {
+        IncidentKey::derive(number, UpdateSource::Obs, None).unwrap()
     }
 
     #[test]
@@ -201,6 +243,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))
+            .and(query_param("project", "SUSE:Maintenance:12358"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "number": 12358,
                 "packages": ["bash"],
@@ -209,7 +253,7 @@ mod tests {
             .await;
 
         let client = client_for(&server);
-        let data = client.incident("12358").await.unwrap();
+        let data = client.incident(&smelt("12358")).await.unwrap();
         assert_eq!(data["number"], 12358);
     }
 
@@ -218,12 +262,14 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/999"))
+            .and(query_param("project", "SUSE:Maintenance:999"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        assert!(client.incident("999").await.is_none());
+        assert!(client.incident(&smelt("999")).await.is_none());
     }
 
     #[tokio::test]
@@ -231,12 +277,14 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/5"))
+            .and(query_param("project", "SUSE:Maintenance:5"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        assert!(client.incident("5").await.is_none());
+        assert!(client.incident(&smelt("5")).await.is_none());
     }
 
     #[tokio::test]
@@ -283,12 +331,14 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        let err = client.try_incident_settings("1").await.unwrap_err();
+        let err = client.try_incident_settings(&smelt("1")).await.unwrap_err();
         assert!(matches!(err, QemDashboardError::Fetch(_)));
     }
 
@@ -297,12 +347,14 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/update_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        let err = client.try_update_settings("1").await.unwrap_err();
+        let err = client.try_update_settings(&smelt("1")).await.unwrap_err();
         assert!(matches!(err, QemDashboardError::Fetch(_)));
     }
 
@@ -311,12 +363,20 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        assert!(client.try_incident_settings("1").await.unwrap().is_empty());
+        assert!(
+            client
+                .try_incident_settings(&smelt("1"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -324,11 +384,129 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"x": 1})))
             .mount(&server)
             .await;
 
         let client = client_for(&server);
-        assert!(client.try_incident_settings("1").await.unwrap().is_empty());
+        assert!(
+            client
+                .try_incident_settings(&smelt("1"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    const PR_URL: &str = "https://src.suse.de/products/SLFO/pulls/8938";
+
+    async fn mount_list(server: &MockServer, body: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path("/api/incidents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_key_derives_locally_without_listing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incidents"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let smelt = client.resolve_key("30071", UpdateSource::Obs, None).await;
+        assert_eq!(smelt.unwrap().project, "SUSE:Maintenance:30071");
+        let git = client
+            .resolve_key("8938", UpdateSource::Git, Some(PR_URL))
+            .await;
+        assert_eq!(git.unwrap().project, "products/SLFO");
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_key_falls_back_to_the_list_for_git_without_a_url() {
+        let server = MockServer::start().await;
+        mount_list(
+            &server,
+            serde_json::json!([
+                {"number": 8938, "project": "products/SLFO", "type": "git"},
+                {"number": 8938, "project": "SUSE:Maintenance:8938", "type": "smelt"},
+                {"number": 1, "project": "other/repo", "type": "git"},
+            ]),
+        )
+        .await;
+
+        let client = client_for(&server);
+        let key = client
+            .resolve_key("8938", UpdateSource::Git, None)
+            .await
+            .unwrap();
+        assert_eq!(key.project, "products/SLFO");
+        assert_eq!(key.source, UpdateSource::Git);
+        assert_eq!(key.number, "8938");
+    }
+
+    #[tokio::test]
+    async fn resolve_key_is_unresolved_when_no_row_matches() {
+        let server = MockServer::start().await;
+        mount_list(
+            &server,
+            serde_json::json!([{"number": 8938, "project": "SUSE:Maintenance:8938", "type": "smelt"}]),
+        )
+        .await;
+
+        let client = client_for(&server);
+        assert!(
+            client
+                .resolve_key("8938", UpdateSource::Git, None)
+                .await
+                .is_none()
+        );
+        assert!(
+            client
+                .resolve_key("7", UpdateSource::Git, None)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_key_is_unresolved_when_several_rows_match() {
+        let server = MockServer::start().await;
+        mount_list(
+            &server,
+            serde_json::json!([
+                {"number": 8938, "project": "products/SLFO", "type": "git"},
+                {"number": 8938, "project": "other/repo", "type": "git"},
+            ]),
+        )
+        .await;
+
+        let client = client_for(&server);
+        assert!(
+            client
+                .resolve_key("8938", UpdateSource::Git, None)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_key_is_unresolved_when_the_dashboard_is_down() {
+        let server = MockServer::start().await;
+        let client = client_for(&server);
+        assert!(
+            client
+                .resolve_key("8938", UpdateSource::Git, None)
+                .await
+                .is_none()
+        );
     }
 }

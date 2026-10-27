@@ -8,7 +8,7 @@ use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
 use mtui_types::{RequestReviewID, UpdateSource};
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const OPENQA_HOST: &str = "https://openqa.example.com";
@@ -24,6 +24,8 @@ async fn loads_incident_and_aggregate_jobs() {
 
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(json!({"number": 12358, "packages": ["bash"], "channels": []})),
@@ -32,6 +34,8 @@ async fn loads_incident_and_aggregate_jobs() {
         .await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
             "id": 7,
             "incident": 12358,
@@ -61,9 +65,11 @@ async fn loads_incident_and_aggregate_jobs() {
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
             "id": 23,
-            "incidents": [12358],
+            "incidents": [{"number": 12358, "project": "SUSE:Maintenance:12358", "type": "smelt"}],
             "product": "SLES-15-SP5",
             "arch": "x86_64",
             "build": "20240101-1",
@@ -92,7 +98,7 @@ async fn loads_incident_and_aggregate_jobs() {
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident =
-        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs, None).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
 
@@ -121,6 +127,8 @@ async fn slfo_1_2_incident_uses_review_id() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "products/SLFO"))
+        .and(query_param("type", "git"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(json!({"number": 12358, "packages": ["bash"], "channels": []})),
@@ -129,18 +137,27 @@ async fn slfo_1_2_incident_uses_review_id() {
         .await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "products/SLFO"))
+        .and(query_param("type", "git"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "products/SLFO"))
+        .and(query_param("type", "git"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
 
     let rrid: RequestReviewID = "SUSE:SLFO:1.2:12358".parse().unwrap();
-    let incident =
-        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
+    let incident = QemIncident::with_client(
+        rrid.clone(),
+        client_for(&server),
+        UpdateSource::Git,
+        Some("https://src.suse.de/products/SLFO/pulls/12358"),
+    )
+    .await;
     assert_eq!(incident.incident_number, "12358");
 
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
@@ -157,6 +174,8 @@ async fn incident_metadata_shortest_package_name() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "number": 12358,
             "packages": ["kernel-default", "kernel-ec2"],
@@ -166,7 +185,8 @@ async fn incident_metadata_shortest_package_name() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+    let incident =
+        QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
     assert!(incident.is_present());
     assert_eq!(incident.get_incident_name().as_deref(), Some("kernel-ec2"));
 }
@@ -180,12 +200,15 @@ async fn oversized_incident_body_folds_to_absent() {
     let oversized = vec![b'x'; MAX_API_BODY + 1];
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(oversized))
         .mount(&server)
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
+    let incident =
+        QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs, None).await;
     assert!(!incident.is_present());
 }
 
@@ -196,23 +219,29 @@ async fn run_errors_when_dashboard_unreachable() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number": 12358})))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident =
-        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs, None).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     assert!(dashboard.run().await.is_err());
 }
@@ -224,23 +253,29 @@ async fn run_ok_on_empty_success() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number": 12358})))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident =
-        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs, None).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
     assert!(dashboard.results.is_none());
@@ -252,6 +287,8 @@ async fn run_ok_on_empty_success() {
 async fn mount_mixed_jobs(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
             "id": 7, "incident": 12358, "version": "15-SP5",
             "flavor": "Server-DVD-Incidents", "arch": "x86_64",
@@ -273,8 +310,10 @@ async fn mount_mixed_jobs(server: &MockServer) {
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
-            "id": 23, "incidents": [12358], "product": "SLES-15-SP5",
+            "id": 23, "incidents": [{"number": 12358, "project": "SUSE:Maintenance:12358", "type": "smelt"}], "product": "SLES-15-SP5",
             "arch": "x86_64", "build": "20240101-1", "repohash": "abc123",
             "settings": {"DISTRI": "sle", "VERSION": "15-SP5"}
         }])))
@@ -294,7 +333,7 @@ async fn mount_mixed_jobs(server: &MockServer) {
 async fn dashboard_for(server: &MockServer) -> DashboardAutoOpenQA {
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident =
-        QemIncident::with_client(rrid.clone(), client_for(server), UpdateSource::Obs).await;
+        QemIncident::with_client(rrid.clone(), client_for(server), UpdateSource::Obs, None).await;
     DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4)
 }
 
@@ -364,6 +403,8 @@ async fn failed_refresh_keeps_previous_outputs() {
 async fn mount_two_install_jobs(server: &MockServer, aarch64_status: &str) {
     Mock::given(method("GET"))
         .and(path("/api/incident_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {"id": 7, "settings": {}},
             {"id": 8, "settings": {}}
@@ -372,6 +413,8 @@ async fn mount_two_install_jobs(server: &MockServer, aarch64_status: &str) {
         .await;
     Mock::given(method("GET"))
         .and(path("/api/update_settings/12358"))
+        .and(query_param("project", "SUSE:Maintenance:12358"))
+        .and(query_param("type", "smelt"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(server)
         .await;

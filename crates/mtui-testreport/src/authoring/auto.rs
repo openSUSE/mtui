@@ -95,6 +95,7 @@ mod tests {
         let incident = QemIncident {
             rrid: rrid.clone(),
             incident_number: "1".to_string(),
+            key: None,
             source: UpdateSource::Obs,
             client,
             data: None,

@@ -362,6 +362,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   longer fails on very large builds because one response exceeded the body
   size limit. Past 10000 jobs, or when paging cannot continue, the newest jobs
   read are listed and a note says older ones may be missing (#643).
+- `load_template`, `reload_openqa`, `export`, `openqa_overview` and
+  `openqa_jobs` send the incident's `project` and `type` to the QEM Dashboard,
+  which now requires them; the dashboard openQA data stopped loading with
+  HTTP 400 (#717).
 - A Manual `export` with no connected host (the template dropped to Manual on
   failing install jobs and autoconnect attached nothing) now writes what needs
   no host: `testing.openqa` from the cached install results and the

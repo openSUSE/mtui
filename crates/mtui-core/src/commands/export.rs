@@ -124,11 +124,13 @@ impl Command for Export {
                 let http = build_http(session)?;
                 let dashboard_api = session.config.qem_dashboard_api.clone();
                 let openqa_instance = session.config.openqa_instance.clone();
+                let pr_url = session.metadata().base().giteapr.clone();
                 let incident = build_incident(
                     rrid.clone(),
                     dashboard_api,
                     http,
                     session.metadata().update_source(),
+                    pr_url.as_deref(),
                 )
                 .await;
                 let mut auto = build_auto_openqa(
@@ -491,6 +493,7 @@ mod tests {
         let incident = QemIncident {
             rrid: rrid.clone(),
             incident_number: "1".to_string(),
+            key: None,
             source: mtui_types::UpdateSource::Obs,
             client,
             data: None,
@@ -544,6 +547,7 @@ mod tests {
             format!("{}/api", oqa.uri()),
             http.clone(),
             session.metadata().update_source(),
+            None,
         )
         .await;
         let kernel =
@@ -826,6 +830,7 @@ mod tests {
             format!("{}/api", server.uri()),
             http,
             session.metadata().update_source(),
+            None,
         )
         .await;
         let max_parallel = session.config.max_parallel as usize;
@@ -1113,12 +1118,14 @@ mod tests {
     /// Dashboard + openQA + QAM mocks that answer one incident build with a
     /// single openQA version, so an overview fetch yields rows.
     async fn overview_server() -> MockServer {
-        use wiremock::matchers::{method, path_regex};
+        use wiremock::matchers::{method, path_regex, query_param};
         use wiremock::{Mock, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"version": "15-SP5",
                  "settings": {"BUILD": "20260101-1", "DISTRI": "sle", "VERSION": "15-SP5"}}

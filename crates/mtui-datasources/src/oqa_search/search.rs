@@ -18,6 +18,7 @@ use scraper::{Html, Selector};
 
 use crate::error::OqaSearchError;
 use crate::http::{HttpClient, MAX_API_BODY, sanitize_url};
+use crate::qem_dashboard::IncidentKey;
 
 use super::heuristics::{
     AGGREGATED_EXCLUDED_VERSIONS, AGGREGATED_GROUPS_TERMS, AGGREGATED_NAME_MAP, EXCLUDED_GROUPS,
@@ -67,17 +68,18 @@ async fn oqa_request(oqa: &ruoqa::Client, path: &str) -> Result<serde_json::Valu
 pub async fn get_incident_info(
     http: &HttpClient,
     url_dashboard_qam: &str,
-    incident_id: &str,
+    key: &IncidentKey,
 ) -> Result<(String, Option<Vec<String>>), OqaSearchError> {
-    let url = format!("{url_dashboard_qam}/api/incident_settings/{incident_id}");
+    let url = format!(
+        "{url_dashboard_qam}/api/incident_settings/{}?{}",
+        key.number,
+        key.query()
+    );
     let incident_settings = get_json(http, &url).await?;
 
     let settings = incident_settings.as_array();
     let Some(settings) = settings.filter(|s| !s.is_empty()) else {
-        return Ok((
-            fallback_build(http, url_dashboard_qam, incident_id).await?,
-            None,
-        ));
+        return Ok((fallback_build(http, url_dashboard_qam, key).await?, None));
     };
 
     let build = settings
@@ -86,10 +88,7 @@ pub async fn get_incident_info(
         .and_then(|s| s.get("BUILD"))
         .and_then(|b| b.as_str());
     let Some(build) = build else {
-        return Ok((
-            fallback_build(http, url_dashboard_qam, incident_id).await?,
-            None,
-        ));
+        return Ok((fallback_build(http, url_dashboard_qam, key).await?, None));
     };
     let build = build.to_string();
 
@@ -127,9 +126,13 @@ pub async fn get_incident_info(
 async fn fallback_build(
     http: &HttpClient,
     url_dashboard_qam: &str,
-    incident_id: &str,
+    key: &IncidentKey,
 ) -> Result<String, OqaSearchError> {
-    let url = format!("{url_dashboard_qam}/api/incidents/{incident_id}");
+    let url = format!(
+        "{url_dashboard_qam}/api/incidents/{}?{}",
+        key.number,
+        key.query()
+    );
     let incident_info = get_json(http, &url).await?;
     let package = incident_info
         .get("packages")
@@ -137,7 +140,7 @@ async fn fallback_build(
         .and_then(|a| a.first())
         .and_then(|p| p.as_str())
         .unwrap_or("");
-    Ok(format!(":{incident_id}:{package}"))
+    Ok(format!(":{}:{package}", key.number))
 }
 
 /// Jobs fetched per `/api/v1/jobs` request by [`incident_jobs`]. Small enough

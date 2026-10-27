@@ -9,7 +9,7 @@ use mtui_datasources::openqa::build_openqa_client_with_transport;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{HttpClient, OpenQAError, QemDashboardClient};
+use mtui_datasources::{HttpClient, IncidentKey, OpenQAError, QemDashboardClient};
 use mtui_hosts::HostsGroup;
 use mtui_types::{RequestReviewID, UpdateSource};
 
@@ -47,15 +47,46 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
 /// [`Session::http_client`](crate::session::Session::http_client)) to reuse the
 /// session connection pool, and plain values rather than `&Session` so callers
 /// never hold a non-`Sync` borrow across the `.await`. `source` is the
-/// incident's fallback when the dashboard has no record.
+/// incident's fallback when the dashboard has no record. `pr_url` is the
+/// report's Gitea pull request URL, which names a git incident's project.
 pub(crate) async fn build_incident(
     rrid: RequestReviewID,
     dashboard_api: String,
     http: HttpClient,
     source: UpdateSource,
+    pr_url: Option<&str>,
 ) -> QemIncident {
     let client = QemDashboardClient::with_client(http, dashboard_api);
-    QemIncident::with_client(rrid, client, source).await
+    QemIncident::with_client(rrid, client, source, pr_url).await
+}
+
+/// Resolves the dashboard identity of the loaded update for the commands that
+/// query the dashboard directly.
+///
+/// `url_dashboard_qam` is the dashboard's base URL, without `/api`.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the dashboard cannot say which incident this is.
+pub(crate) async fn resolve_dashboard_key(
+    http: &HttpClient,
+    url_dashboard_qam: &str,
+    number: &str,
+    source: UpdateSource,
+    pr_url: Option<&str>,
+) -> Result<IncidentKey, CommandError> {
+    let client = QemDashboardClient::with_client(
+        http.clone(),
+        format!("{}/api", url_dashboard_qam.trim_end_matches('/')),
+    );
+    client
+        .resolve_key(number, source, pr_url)
+        .await
+        .ok_or_else(|| {
+            CommandError::Other(format!(
+                "QEM Dashboard query failed: could not identify incident {number} on the QEM Dashboard"
+            ))
+        })
 }
 
 /// A fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on openQA
