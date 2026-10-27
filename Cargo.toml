@@ -248,7 +248,7 @@ sandogasa-rpmvercmp = "0.26"
 # HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
 # index (oqa_search build-check overview), replacing upstream's minimal
 # html.parser LogFileLinkParser.
-scraper = "0.27"
+scraper = "0.29"
 # ser/de + config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
