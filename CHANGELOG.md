@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.5] - 2026-10-27
+
 ### Fixed
 
 - `load_template`, `reload_openqa`, `export`, `openqa_overview` and
