@@ -733,12 +733,12 @@ fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> Str
 }
 
 /// Warns about any [`LockOutcome::Failed`] host in a [`HostsGroup::unlock`]
-/// outcome map, via the same message builder [`perform_operation`] uses for
+/// outcome map, via the same message builder `perform_operation` uses for
 /// `install`/`uninstall`.
 ///
 /// [`LockOutcome::Contended`] is excluded — benign, another tester owns the
 /// lock — so this only warns on a real transport/SFTP error.
-fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
+pub fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
     let failures: Vec<(String, String)> = outcomes
         .iter()
         .filter_map(|(host, outcome)| match outcome {

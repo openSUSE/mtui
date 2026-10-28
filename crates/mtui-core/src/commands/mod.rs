@@ -800,6 +800,24 @@ pub(crate) mod testkit {
         session_with_fake(rrid, targets, FakeFlags::default(), None)
     }
 
+    /// Like [`session_with_targets`], but the active report can add/remove
+    /// issue repos, for commands under test that require it (`set_repo`).
+    #[must_use]
+    pub(crate) fn session_with_targets_and_set_repo(
+        rrid: &str,
+        targets: Vec<Target>,
+    ) -> (Session, Buffer) {
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                set_repo_enabled: true,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
     /// A session whose active report's `perform_update` returns `Err`,
     /// exercising the `update` command's failure path end-to-end.
     #[must_use]

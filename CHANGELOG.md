@@ -357,6 +357,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Standalone `set_repo` takes the operation lock before changing repos and
+  releases it afterwards, like `prepare`/`update` do — while another owner
+  holds a host it now refuses (`Hosts locked: …`) instead of adding or
+  removing that host's test repo under them (#665).
+
 - In-band `get`/`put` take the shared gate plus their own template's lock and
   dispatch on a per-call fork instead of holding the exclusive gate and the
   canonical session mutex across the SFTP fan-out, so a transfer on one
