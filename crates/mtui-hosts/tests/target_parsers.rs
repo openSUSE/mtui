@@ -5,7 +5,7 @@
 //! the whole SUSE/non-SUSE/dangling/transactional branch matrix is exercised
 //! end-to-end.
 
-use mtui_hosts::{Connection, MockConnection, parse_system};
+use mtui_hosts::{Connection, MockConnection, MockSftpOp, parse_system};
 
 /// Builds a minimal `<product>` XML document for the given fields. When
 /// `patchlevel` is `Some`, a `<baseversion>`+`<patchlevel>` pair is emitted (so
@@ -142,13 +142,60 @@ async fn parse_read_only_root_with_conf_is_transactional() {
     assert!(transactional);
 }
 
-/// When the mount table cannot be read, the config file still decides, as
-/// before #686.
+/// When the mount table is missing, the config file still decides, as before
+/// #686.
 #[tokio::test]
-async fn parse_unreadable_mounts_keeps_the_conf_answer() {
+async fn parse_missing_mounts_keeps_the_conf_answer() {
     let mut conn = sles16_with_conf();
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
     assert!(transactional);
+}
+
+/// Any other error reading the mount table is propagated, like the config
+/// probes, instead of being taken for a read-only root.
+#[tokio::test]
+async fn parse_mounts_open_error_propagates() {
+    let mut conn = sles16_with_conf().with_open_error(MOUNTS);
+    assert!(parse_system(&mut conn).await.is_err());
+}
+
+/// A mount table without a `/` entry gives no answer, so the config file
+/// decides.
+#[tokio::test]
+async fn parse_mounts_without_root_keeps_the_conf_answer() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, b"/dev/vda4 /var btrfs ro 0 0\n".to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// A full mount table: other mounts are ignored, `errors=remount-ro` is not
+/// `ro`, and the `/` mounted on top decides.
+#[tokio::test]
+async fn parse_reads_root_from_a_full_mount_table() {
+    let table = b"proc /proc proc rw,nosuid 0 0\n\
+/dev/vda4 /var btrfs ro,relatime 0 0\n\
+/dev/vda3 / btrfs ro,relatime 0 0\n\
+/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\n";
+    let mut conn = sles16_with_conf().with_file(MOUNTS, table.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional, "the read-write / on top wins");
+}
+
+/// The older `/etc` config layout with a read-write root is not transactional
+/// either.
+#[tokio::test]
+async fn parse_read_write_root_with_etc_conf_is_not_transactional() {
+    let mut conn = MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "16.0", None, "x86_64"),
+        )
+        .with_file("/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RW_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional);
 }
 
 /// A read-only root alone, without the config file, is not transactional.
@@ -164,6 +211,10 @@ async fn parse_read_only_root_without_conf_is_not_transactional() {
         .with_file(MOUNTS, RO_ROOT.to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
     assert!(!transactional);
+    assert!(
+        !conn.sftp_ops().contains(&MockSftpOp::Open(MOUNTS.into())),
+        "without the config file the mount table is not read"
+    );
 }
 
 #[tokio::test]
