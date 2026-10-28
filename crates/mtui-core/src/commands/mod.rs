@@ -611,6 +611,37 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
+    /// Like [`session_with_targets`], but the active report can add/remove
+    /// issue repos, for commands under test that require it (`set_repo`).
+    #[must_use]
+    pub(crate) fn session_with_targets_and_set_repo(
+        rrid: &str,
+        targets: Vec<Target>,
+    ) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
+            update_degradations: false,
+            fail_perform: false,
+            set_repo_enabled: true,
+        }));
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
+        (session, buf)
+    }
+
     /// A session whose active report's `perform_update` returns `Err`,
     /// exercising the `update` command's failure path end-to-end.
     #[must_use]
