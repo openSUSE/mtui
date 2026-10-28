@@ -95,8 +95,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `transactional-update.conf` and `/` is mounted read-only (from
   `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
   marked transactional, so `prepare`, `update` and `downgrade` refused it and
-  `set_repo` refreshed inside a new default snapshot. When the mount table
-  cannot be read, the config file decides as before (#686).
+  `set_repo` refreshed inside a new default snapshot. When the mount table is
+  missing or has no `/` entry, the config file decides as before, since taking
+  a transactional host for a standard one would run zypper on a read-only
+  root; any other error reading it fails the probe (#686).
 
 ## [26.3.5] - 2026-10-27
 
