@@ -99,6 +99,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   missing or has no `/` entry, the config file decides as before, since taking
   a transactional host for a standard one would run zypper on a read-only
   root; any other error reading it fails the probe (#686).
+- Standalone `set_repo` takes the operation lock before changing repos and
+  releases it afterwards, like `prepare`/`update` do — while another owner
+  holds a host it now refuses (`Hosts locked: …`) instead of adding or
+  removing that host's test repo under them (#665).
 
 ## [26.3.5] - 2026-10-27
 

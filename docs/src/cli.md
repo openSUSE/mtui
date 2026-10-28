@@ -138,7 +138,7 @@ Options:
 
 ## `set_repo`
 
-Adds or removes an issue repository to or from hosts.
+Adds or removes an issue repository to or from hosts. Takes the operation lock first, like `prepare`/`update`: refuses while another owner holds a host.
 
 ```text
 Usage: set_repo [OPTIONS] <--add|--remove>
