@@ -956,6 +956,12 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
+        // Reconnect at entry as the ssh impl's `sftp()` does: without it the
+        // mock accepts reads on a host that has gone away, and close-path
+        // tests pass whichever side of an idle timeout the read lands on.
+        if !self.active {
+            self.reconnect(0, false).await?;
+        }
         // The per-op path opens its own session per call, so it pays the
         // handshake here — the once-per-read cost the 0mop.3 batched path
         // amortizes to once-per-probe.
@@ -1074,6 +1080,12 @@ impl Connection for MockConnection {
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
+        // Reconnect at entry as the ssh impl's `sftp()` does (see
+        // `sftp_open`): without it the mock accepts removals on a host that
+        // has gone away.
+        if !self.active {
+            self.reconnect(0, false).await?;
+        }
         if self.sftp_remove_not_found {
             return Err(HostError::SftpNotFound {
                 host: self.hostname.clone(),

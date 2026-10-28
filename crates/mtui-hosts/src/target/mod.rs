@@ -2584,6 +2584,44 @@ mod tests {
             handle.file_contents(crate::POOL_LOCK_PATH).is_none(),
             "pool claim released despite a dead link"
         );
+        // The lock sessions really went through reconnect, not through a mock
+        // that ignores link state: the counter is shared with the clones.
+        assert!(
+            handle.reconnect_count() > 0,
+            "releases must reconnect the dead link"
+        );
+    }
+
+    /// Best-effort: a dead link that will not come back does not fail
+    /// teardown; the locks stay for the stale reap or a manual unlock.
+    #[tokio::test]
+    async fn close_succeeds_but_leaves_locks_when_reconnect_fails() {
+        let user = Config::default().session_user;
+        let pid = std::process::id();
+        let rrid = "SUSE:Maintenance:1:2";
+        let conn = MockConnection::new("h1")
+            .with_file(
+                TARGET_LOCK_PATH,
+                format!("1700000000:{user}:{pid}").into_bytes(),
+            )
+            .with_file(
+                crate::POOL_LOCK_PATH,
+                format!("1700000000:{user}:{pid}:mtui pool {rrid} [owner]").into_bytes(),
+            )
+            .inactive()
+            .failing_reconnect();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_rrid(rrid);
+        t.close(None).await.expect("close ok");
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_some(),
+            "an unreachable lockfile is left for the stale reap"
+        );
+        assert!(
+            handle.file_contents(crate::POOL_LOCK_PATH).is_some(),
+            "an unreachable pool claim is left for the stale reap"
+        );
     }
 
     /// Best-effort stays best-effort: another owner's locks survive `close`
