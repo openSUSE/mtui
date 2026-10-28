@@ -357,6 +357,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `remove_host` (and session teardown) releases the operation lock and the
+  pool claim even when the host link has gone idle: the release no longer
+  depends on the main link reporting active, and the lock objects' own
+  sessions reconnect on demand. A claim stranded this way previously stayed
+  until `--force` or the 24 h stale reap (#664).
+
 - `openqa_jobs` reads every page of a build's jobs (keyset paging with
   `before=`, until an empty page) instead of only openQA's first 1000, and no
   longer fails on very large builds because one response exceeded the body

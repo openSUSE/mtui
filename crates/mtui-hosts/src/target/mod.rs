@@ -828,11 +828,13 @@ impl Target {
 
     /// Cleanly disconnects the target, optionally rebooting or powering it off.
     ///
-    /// When a live connection exists it
-    /// is first quiesced — best-effort [`unlock`](Self::unlock) of the operation
-    /// lock and [`pool_unlock`](Self::pool_unlock) of the pool claim (both
-    /// `force = false`, so locks/claims owned by another owner are left intact) —
-    /// then `action` selects the disconnect behaviour:
+    /// Release is attempted whenever the lock objects exist, even when the
+    /// main link is down: each lock carries its own session, which reconnects
+    /// on demand, so an idle-closed link (#664) no longer strands the
+    /// operation lock or the pool claim. A lock or claim owned by another
+    /// owner is left intact (`force = false`).
+    ///
+    /// Then `action` selects the disconnect behaviour:
     ///
     /// * `Some("reboot")` → dispatch `reboot` (fire-and-forget; the link drops),
     /// * `Some("poweroff")` → dispatch `halt` (`poweroff` maps to the
@@ -849,15 +851,13 @@ impl Target {
     /// is *not* folded into the result: a lock held by another owner (or a lost
     /// link during unlock) must not mask the shutdown outcome.
     pub async fn close(&mut self, action: Option<&str>) -> Result<()> {
-        let active = self.connection.as_ref().is_some_and(|c| c.is_active());
-        if active {
-            // Best-effort release of our own locks before disconnecting; a lock
-            // held by another owner is left untouched (force = false).
-            self.unlock(false).await;
-            self.pool_unlock(false).await;
-        } else {
-            tracing::debug!(host = %self.hostname, "close: not connected");
-        }
+        // Best-effort release of our own locks before disconnecting; a lock
+        // held by another owner is left untouched (force = false). The
+        // release runs regardless of link state: the lock objects reconnect
+        // on demand, and every caller time-bounds `close`, so a dead peer
+        // cannot hang teardown here.
+        self.unlock(false).await;
+        self.pool_unlock(false).await;
 
         // Session teardown: the dispatch result is deliberately discarded here.
         // `close` has already released the locks and there is no reconnect to
@@ -2551,6 +2551,63 @@ mod tests {
         assert!(
             !t.is_locked().await.expect("is_locked after"),
             "close() must release the operation lock it held"
+        );
+    }
+
+    /// #664: an idle-closed link must not skip the releases. The lock
+    /// objects carry their own sessions, which reconnect on demand, so
+    /// `close` releases whenever the locks exist.
+    #[tokio::test]
+    async fn close_releases_own_locks_when_the_link_is_down() {
+        let user = Config::default().session_user;
+        let pid = std::process::id();
+        let rrid = "SUSE:Maintenance:1:2";
+        let conn = MockConnection::new("h1")
+            .with_file(
+                TARGET_LOCK_PATH,
+                format!("1700000000:{user}:{pid}").into_bytes(),
+            )
+            .with_file(
+                crate::POOL_LOCK_PATH,
+                format!("1700000000:{user}:{pid}:mtui pool {rrid} [owner]").into_bytes(),
+            )
+            .inactive();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_rrid(rrid);
+        t.close(None).await.expect("close ok");
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_none(),
+            "operation lock released despite a dead link"
+        );
+        assert!(
+            handle.file_contents(crate::POOL_LOCK_PATH).is_none(),
+            "pool claim released despite a dead link"
+        );
+    }
+
+    /// Best-effort stays best-effort: another owner's locks survive `close`
+    /// even when the link is down.
+    #[tokio::test]
+    async fn close_leaves_foreign_locks_when_the_link_is_down() {
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec())
+            .with_file(
+                crate::POOL_LOCK_PATH,
+                b"1700000000:alice:4242:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+            )
+            .inactive();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_rrid("SUSE:Maintenance:1:2");
+        t.close(None).await.expect("close ok");
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_some(),
+            "foreign operation lock untouched"
+        );
+        assert!(
+            handle.file_contents(crate::POOL_LOCK_PATH).is_some(),
+            "foreign pool claim untouched"
         );
     }
 
