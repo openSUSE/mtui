@@ -340,6 +340,27 @@ fn host_key(target: &mtui_hosts::Target) -> Option<(String, bool)> {
     Some((release, target.transactional()))
 }
 
+/// One host's label for missing-doer errors: `host (Product version,
+/// transactional|non-transactional)`. Both halves of the
+/// `(release, transactional)` key are always spelled out, so the message never
+/// asks the operator to infer the key.
+fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
+    let base = target.system().get_base();
+    let product = if base.name.is_empty() || base.name == "unknown" {
+        "unrecognised product".to_owned()
+    } else if base.version.is_empty() {
+        base.name.clone()
+    } else {
+        format!("{} {}", base.name, base.version)
+    };
+    let mode = if target.transactional() {
+        "transactional"
+    } else {
+        "non-transactional"
+    };
+    format!("{} ({product}, {mode})", target.hostname())
+}
+
 /// Resolves one host's [`ActionCommands`] for `role`, or logs and returns
 /// `None` on a missing doer.
 fn resolve_doer(
@@ -351,7 +372,7 @@ fn resolve_doer(
     match registry.doer(role, release, transactional) {
         Ok(cmds) => Some(cmds),
         Err(e) => {
-            error!(role = ?role, error = %e, "missing doer");
+            error!(role = ?role, release = %release, transactional, error = %e, "missing doer");
             None
         }
     }
@@ -360,8 +381,8 @@ fn resolve_doer(
 /// Builds the transactional-only reboot map for `role` over `selected`
 /// (`None` is the whole group).
 ///
-/// Returns `Err` if any transactional host **in scope** is missing a doer, so
-/// the caller can early-return without locking.
+/// Returns the hosts it could not resolve, so the caller can name them
+/// instead of failing the whole group with a bare role name.
 ///
 /// Scoping does not change which host is rebooted — [`prepare_body`]'s retain
 /// filter already refuses a host nothing was dispatched to — it changes what
@@ -373,8 +394,9 @@ fn build_reboot_map(
     registry: &WorkflowRegistry,
     role: Role,
     selected: Option<&BTreeSet<String>>,
-) -> Result<BTreeMap<String, String>, ()> {
+) -> Result<BTreeMap<String, String>, Vec<String>> {
     let mut reboot = BTreeMap::new();
+    let mut unresolved = Vec::new();
     for target in targets.targets() {
         if !target.transactional() {
             continue;
@@ -383,16 +405,24 @@ fn build_reboot_map(
             continue;
         }
         let Some((release, transactional)) = host_key(target) else {
+            // No parsed system: the host cannot be prepared or downgraded,
+            // so name it now rather than failing it key-less downstream.
+            unresolved.push(unresolved_host_label(target));
             continue;
         };
         let Some(doer) = resolve_doer(registry, role, &release, transactional) else {
-            return Err(());
+            unresolved.push(unresolved_host_label(target));
+            continue;
         };
         if let Ok(Some(reboot_cmd)) = doer.render_reboot() {
             reboot.insert(target.hostname().to_owned(), reboot_cmd);
         }
     }
-    Ok(reboot)
+    if unresolved.is_empty() {
+        Ok(reboot)
+    } else {
+        Err(unresolved)
+    }
 }
 
 /// Runs `role`'s post-run check on the hosts `allowed` accepts, returning the
@@ -785,17 +815,8 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
     let registry = WorkflowRegistry::default();
     let mut unresolved: Vec<String> = Vec::new();
     for target in targets.targets() {
-        let resolved = host_key(target).is_some_and(|(release, transactional)| {
-            registry.doer(role, &release, transactional).is_ok()
-        });
-        if !resolved {
-            let base = target.system().get_base();
-            let product = if base.name.is_empty() || base.name == "unknown" {
-                "unrecognised product".to_owned()
-            } else {
-                format!("{} {}", base.name, base.version)
-            };
-            unresolved.push(format!("{} ({product})", target.hostname()));
+        if !host_has_doer(&registry, role, target) {
+            unresolved.push(unresolved_host_label(target));
         }
     }
 
@@ -805,7 +826,7 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
     format!(
         "{err}: no {} command for {}; no host was touched",
         role.as_operation_role(),
-        unresolved.join(", ")
+        unresolved.join("; ")
     )
 }
 
@@ -930,10 +951,13 @@ async fn perform_prepare_classified(
         .collect();
 
     // Resolve the reboot map before locking; a missing preparer aborts early.
-    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare, selected) else {
-        return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
-            "missing preparer",
-        )));
+    let reboot = match build_reboot_map(targets, &registry, Role::Prepare, selected) {
+        Ok(reboot) => reboot,
+        Err(unresolved) => {
+            return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
+                format!("missing preparer: {}", unresolved.join("; ")),
+            )));
+        }
     };
 
     let locked = match selected {
@@ -1586,8 +1610,14 @@ pub async fn perform_downgrade(
     // Resolve reboot before locking so a missing downgrader early-returns
     // without leaving the group locked.
     // Downgrade has no scoped variant; the whole group is the scope.
-    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Downgrade, None) else {
-        return Err(UpdateError::reason_only("missing downgrader"));
+    let reboot = match build_reboot_map(targets, &registry, Role::Downgrade, None) {
+        Ok(reboot) => reboot,
+        Err(unresolved) => {
+            return Err(UpdateError::reason_only(format!(
+                "missing downgrader: {}",
+                unresolved.join("; ")
+            )));
+        }
     };
 
     if let Err(e) = targets.update_lock().await {
@@ -2130,6 +2160,19 @@ pub async fn perform_update(
         .filter(|host| !uncomposed.contains_key(host))
         .collect();
 
+    // Resolve the updater before any fan-out: a host with no updater doer
+    // aborts here, with no query I/O, no lock taken and no repo added.
+    let missing = missing_updaters(targets, &registry, &eligible);
+    if !missing.is_empty() {
+        let labels: Vec<&str> = missing.iter().map(|(_, label)| label.as_str()).collect();
+        let reason = format!("missing updater: {}", labels.join("; "));
+        return Err(UpdateFailure::MissingUpdater(UpdateError::new(
+            reason,
+            // First offender; the full set is in `reason`.
+            missing[0].0.clone(),
+        )));
+    }
+
     targets.package_check_selected(false, &eligible).await;
 
     if let Err(e) = targets.update_lock_selected(&eligible).await {
@@ -2461,6 +2504,41 @@ async fn update_run_phase(
     result
 }
 
+/// Whether `target` resolves to a doer for `role`: a known release plus a
+/// registered command for its `(release, transactional)` key. The one
+/// resolvability rule shared by [`missing_updaters`], [`build_update_maps`]
+/// and [`describe_start_failure`], so the three cannot disagree on which
+/// hosts count as unresolvable.
+fn host_has_doer(registry: &WorkflowRegistry, role: Role, target: &mtui_hosts::Target) -> bool {
+    host_key(target).is_some_and(|(release, transactional)| {
+        registry.doer(role, &release, transactional).is_ok()
+    })
+}
+
+/// Whether `target` resolves to no updater: an unknown release or no doer for
+/// its `(release, transactional)` key. See [`host_has_doer`].
+fn updater_unresolved(target: &mtui_hosts::Target, registry: &WorkflowRegistry) -> bool {
+    !host_has_doer(registry, Role::Update, target)
+}
+
+/// Names of `eligible` hosts with no updater doer, for an early return before
+/// the flow locks anything or touches repos. Shares [`updater_unresolved`]
+/// with [`build_update_maps`]; only command rendering is left to the late
+/// gate. Each entry pairs the hostname (for the error's `host` field) with its
+/// [`unresolved_host_label`] (for the message).
+fn missing_updaters(
+    targets: &HostsGroup,
+    registry: &WorkflowRegistry,
+    eligible: &BTreeSet<String>,
+) -> Vec<(String, String)> {
+    targets
+        .targets()
+        .filter(|t| eligible.contains(t.hostname()))
+        .filter(|t| updater_unresolved(t, registry))
+        .map(|t| (t.hostname().to_owned(), unresolved_host_label(t)))
+        .collect()
+}
+
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
 /// transactional reboot map, over the hosts in `eligible`. Returns `Err` with
 /// the offending host's [`UpdateError`] if one of them is missing an updater —
@@ -2469,6 +2547,12 @@ async fn update_run_phase(
 /// A host outside `eligible` is not resolved at all, not resolved and then
 /// dropped: the update has already excluded it, and a `MissingUpdater` raised
 /// on its behalf would abort the peers it was excluded to spare.
+///
+/// The early [`missing_updaters`] gate already applied the same
+/// [`updater_unresolved`] rule to the same set, and `render_command` cannot
+/// fail for this role (safe substitution), so the `Err` arms below are
+/// unreachable in production — defense in depth that still names the host
+/// with its key anyway, like the early abort does.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -2482,15 +2566,31 @@ fn build_update_maps(
         .targets()
         .filter(|t| eligible.contains(t.hostname()))
     {
-        let missing = || UpdateError::new("missing updater", target.hostname());
-        let (release, transactional) = host_key(target).ok_or_else(missing)?;
+        let unresolved = || {
+            UpdateError::new(
+                format!("missing updater: {}", unresolved_host_label(target)),
+                target.hostname(),
+            )
+        };
+        if updater_unresolved(target, registry) {
+            return Err(unresolved());
+        }
+        let (release, transactional) = host_key(target).ok_or_else(unresolved)?;
         let doer = registry
             .doer(Role::Update, &release, transactional)
-            .map_err(|_| missing())?;
+            .map_err(|_| unresolved())?;
         let vars: HashMap<&str, &str> = [("repa", repa), ("packages", packages)]
             .into_iter()
             .collect();
-        let command = doer.render_command(&vars).map_err(|_| missing())?;
+        let command = doer.render_command(&vars).map_err(|e| {
+            UpdateError::new(
+                format!(
+                    "updater command failed to render for {}: {e}",
+                    unresolved_host_label(target)
+                ),
+                target.hostname(),
+            )
+        })?;
         commands.insert(target.hostname().to_owned(), command);
         if transactional && let Ok(Some(reboot_cmd)) = doer.render_reboot() {
             reboot.insert(target.hostname().to_owned(), reboot_cmd);
@@ -2505,7 +2605,8 @@ mod tests {
 
     use mtui_config::options::Config;
     use mtui_hosts::{
-        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, TARGET_LOCK_PATH, Target,
+        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, MockSftpOp,
+        TARGET_LOCK_PATH, Target,
     };
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
@@ -2543,7 +2644,77 @@ mod tests {
         (t, handle)
     }
 
+    /// Asserts `host`'s mock took no operation lock: no lockfile on disk and
+    /// not even an exclusive-create attempt in the SFTP log. The early aborts
+    /// under test return before `update_lock`, so neither may exist — a
+    /// lock-then-release would still leave its exclusive `Write` behind.
+    /// (`POOL_LOCK_PATH` is the pool-claim lock, untouched by these flows.)
+    fn assert_no_lock_taken(handle: &MockConnection, host: &str) {
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_none(),
+            "{host} took no lock"
+        );
+        // No SFTP traffic at all against the lockfile — not even the reads a
+        // reconcile would issue — so the abort precedes any lock handling.
+        assert!(
+            !handle.sftp_ops().iter().any(|op| {
+                use MockSftpOp::*;
+                let path = match op {
+                    Open(path)
+                    | ReadCapped { path, .. }
+                    | Write { path, .. }
+                    | Remove(path)
+                    | Mtime(path)
+                    | Rmdir(path)
+                    | Readlink(path)
+                    | Put { remote: path, .. }
+                    | PutBytes { remote: path, .. }
+                    | Get { remote: path, .. }
+                    | GetFolder { remote: path, .. }
+                    | Listdir(path)
+                    | Append(path) => path,
+                };
+                path.to_string_lossy() == TARGET_LOCK_PATH
+            }),
+            "{host} issued no lock-path SFTP: {:?}",
+            handle.sftp_ops()
+        );
+    }
+
     // --- pure helpers ------------------------------------------------------
+
+    #[test]
+    fn unresolved_host_label_spells_a_versionless_product_without_a_trailing_space() {
+        // A known product with an empty version must render as its name
+        // alone, not `Name ` with a trailing space.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        assert_eq!(unresolved_host_label(&t), "h1 (SLES, non-transactional)");
+    }
+
+    #[test]
+    fn unresolved_host_label_marks_an_empty_product_unrecognised() {
+        // An empty product name takes the same "unrecognised product" branch
+        // as "unknown".
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(SystemProduct::new("", "", "x86_64"), BTreeSet::new(), false),
+            true,
+        );
+        assert_eq!(
+            unresolved_host_label(&t),
+            "h1 (unrecognised product, transactional)"
+        );
+    }
 
     #[test]
     fn repa_for_has_stable_format() {
@@ -4527,6 +4698,167 @@ mod tests {
             "reason: {}",
             err.reason
         );
+        assert!(
+            err.reason
+                .contains("h1 (sle-studioonsite 11, transactional)"),
+            "the host and its key must be named: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_names_every_unresolved_transactional_host() {
+        // Every unresolved host is named, not just the first — and the abort
+        // happens before any lock, repo change or dispatched command.
+        let repo = RecordingRepo::default();
+        let mut conns = Vec::new();
+        let mut targets = Vec::new();
+        for h in ["h1", "h2"] {
+            let conn = MockConnection::new(h).with_default(CommandLog::new("", "", "", 0, 0));
+            conns.push(conn.clone());
+            let mut t = Target::with_connection(h, TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new("sle-studioonsite", "11", "x86_64"),
+                    BTreeSet::new(),
+                    true,
+                ),
+                true,
+            );
+            targets.push(t);
+        }
+        let mut group = HostsGroup::new(targets, false);
+        let res = perform_prepare(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        let err = res.expect_err("missing preparer must surface as Err");
+        assert!(
+            err.reason.contains(
+                "missing preparer: h1 (sle-studioonsite 11, transactional); \
+                 h2 (sle-studioonsite 11, transactional)"
+            ),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            repo.ops.lock().unwrap().is_empty(),
+            "abort before any repo change"
+        );
+        for (h, c) in ["h1", "h2"].into_iter().zip(&conns) {
+            assert!(c.commands().is_empty(), "{h} dispatched nothing");
+            assert_no_lock_taken(c, h);
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_names_every_unresolved_transactional_host() {
+        // Mirrors the prepare multi-host abort: all hosts named, nothing
+        // dispatched.
+        let repo = RecordingRepo::default();
+        let mut conns = Vec::new();
+        let mut targets = Vec::new();
+        for h in ["h1", "h2"] {
+            let conn = MockConnection::new(h).with_default(CommandLog::new("", "", "", 0, 0));
+            conns.push(conn.clone());
+            let mut t = Target::with_connection(h, TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new("sle-studioonsite", "11", "x86_64"),
+                    BTreeSet::new(),
+                    true,
+                ),
+                true,
+            );
+            targets.push(t);
+        }
+        let mut group = HostsGroup::new(targets, false);
+        let res = perform_downgrade(&mut group, &repo, &["pkg-a".to_owned()], None).await;
+        let err = res.expect_err("missing downgrader must surface as Err");
+        assert!(
+            err.reason.contains(
+                "missing downgrader: h1 (sle-studioonsite 11, transactional); \
+                 h2 (sle-studioonsite 11, transactional)"
+            ),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            repo.ops.lock().unwrap().is_empty(),
+            "abort before any repo change"
+        );
+        for (h, c) in ["h1", "h2"].into_iter().zip(&conns) {
+            assert!(c.commands().is_empty(), "{h} dispatched nothing");
+            assert_no_lock_taken(c, h);
+        }
+    }
+
+    /// Builds an enabled *transactional* target with no parsed system, so
+    /// `host_key` resolves nothing and the label reads "unrecognised product".
+    fn unparsed_transactional_target(hostname: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("unknown", "", ""),
+                BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_names_a_transactional_host_without_a_parsed_system() {
+        // No key at all: the early abort still names the host instead of
+        // failing it key-less after locking.
+        let (t, h1) = unparsed_transactional_target("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let res = perform_prepare(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        let err = res.expect_err("an unparsed transactional host must abort prepare");
+        assert!(
+            err.reason
+                .contains("missing preparer: h1 (unrecognised product, transactional)"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(h1.commands().is_empty(), "nothing dispatched");
+        assert!(repo.ops.lock().unwrap().is_empty(), "no repo change");
+        assert_no_lock_taken(&h1, "h1");
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_names_a_transactional_host_without_a_parsed_system() {
+        let (t, h1) = unparsed_transactional_target("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let res = perform_downgrade(&mut group, &repo, &["pkg-a".to_owned()], None).await;
+        let err = res.expect_err("an unparsed transactional host must abort downgrade");
+        assert!(
+            err.reason
+                .contains("missing downgrader: h1 (unrecognised product, transactional)"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(h1.commands().is_empty(), "nothing dispatched");
+        assert_no_lock_taken(&h1, "h1");
+        assert!(repo.ops.lock().unwrap().is_empty(), "no repo change");
     }
 
     #[tokio::test]
@@ -4557,6 +4889,12 @@ mod tests {
             "reason: {}",
             err.reason
         );
+        assert!(
+            err.reason
+                .contains("h1 (sle-studioonsite 11, transactional)"),
+            "the host and its key must be named: {}",
+            err.reason
+        );
     }
 
     #[tokio::test]
@@ -4578,6 +4916,12 @@ mod tests {
         assert!(
             err.reason.contains("h1"),
             "the offending host must be named: {}",
+            err.reason
+        );
+        assert!(
+            err.reason
+                .contains("h1 (sle-studioonsite 11, transactional)"),
+            "the key must name the transactional half too: {}",
             err.reason
         );
     }
@@ -5645,8 +5989,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aborts_cleanly_when_no_updater_doer() {
-        // An unknown release has no updater doer: a hard fail, no updater
-        // command issued, and the repo the flow added removed on the abort path.
+        // An unknown release has no updater doer: a hard fail naming the host,
+        // with no lock taken and no repo added or removed.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
@@ -5692,10 +6036,16 @@ mod tests {
             "no updater doer ⇒ no updater command issued: {cmds:?}"
         );
         let ops = repo.ops.lock().unwrap().clone();
-        assert!(ops.contains(&RepoOp::Add), "repo add ran: {ops:?}");
         assert!(
-            ops.contains(&RepoOp::Remove),
-            "abort removes the repo: {ops:?}"
+            ops.is_empty(),
+            "no updater doer ⇒ no lock, no repo add, nothing to remove: {ops:?}"
+        );
+        assert_no_lock_taken(&handle, "h1");
+        assert!(
+            err.reason
+                .contains("missing updater: h1 (gentoo 1, non-transactional)"),
+            "reason must name the host with its product: {}",
+            err.reason
         );
         // #407's other half: with `noprepare` nothing was installed and no
         // updater command dispatched, so this abort is correct to stay silent.
@@ -5703,6 +6053,152 @@ mod tests {
             handle.file_contents(HISTORY_LOG).is_none(),
             "an abort that dispatched nothing must leave no row: {:?}",
             handle.file_contents(HISTORY_LOG)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_missing_updater_aborts_before_a_failing_repo_add() {
+        // The early updater check runs before any lock or repo change, so a
+        // host with no updater aborts with `MissingUpdater` even when its repo
+        // add would have failed too — the smaller eligible set never gets to
+        // drop it. The mock fails every command, so without the pre-check this
+        // would be a `RepoAdd` abort with a lock taken and an `ar` issued.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "boom", 1, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("gentoo", "1", "x86_64"),
+            "https://example/repo".to_owned(),
+        );
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let err = match res {
+            Err(UpdateFailure::MissingUpdater(e)) => e,
+            other => panic!("a missing updater is a hard fail Err(MissingUpdater): {other:?}"),
+        };
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason
+                .contains("missing updater: h1 (gentoo 1, non-transactional)"),
+            "reason must name the host with its product: {}",
+            err.reason
+        );
+        assert!(
+            handle.commands().is_empty(),
+            "the early abort dispatches nothing at all, not even a repo add: {:?}",
+            handle.commands()
+        );
+        assert_no_lock_taken(&handle, "h1");
+    }
+
+    /// One unresolvable host aborts the whole update before anything runs:
+    /// a healthy peer is left untouched — no commands, no lock.
+    #[tokio::test]
+    async fn update_missing_updater_aborts_before_healthy_peers_run() {
+        let bad = MockConnection::new("h1").with_default(CommandLog::new("", "", "boom", 1, 0));
+        let bad_handle = bad.clone();
+        let mut h1 = Target::with_connection("h1", TargetState::Enabled, Box::new(bad));
+        h1.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let (h2, h2handle) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("gentoo", "1", "x86_64"),
+            "https://example/repo".to_owned(),
+        );
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let err = match res {
+            Err(UpdateFailure::MissingUpdater(e)) => e,
+            other => panic!("a missing updater is a hard fail Err(MissingUpdater): {other:?}"),
+        };
+        assert!(
+            err.reason
+                .contains("missing updater: h1 (gentoo 1, non-transactional)"),
+            "reason must name the unresolvable host: {}",
+            err.reason
+        );
+        assert!(
+            bad_handle.commands().is_empty(),
+            "nothing dispatched on the unresolvable host"
+        );
+        assert!(
+            h2handle.commands().is_empty(),
+            "healthy peers are left untouched: {:?}",
+            h2handle.commands()
+        );
+        assert_no_lock_taken(&h2handle, "h2");
+    }
+
+    #[test]
+    fn build_update_maps_names_an_unresolvable_host_with_its_key() {
+        // The late gate shares the early check's rule and message, pinned here
+        // directly: a true `render_command` failure cannot be scripted through
+        // any existing mock (the mock scripts shell responses, not template
+        // substitution, and the registry has no doer-injection seam), so the
+        // labeled refusal is exercised through the unresolvable-host arm.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let group = HostsGroup::new(vec![t], false);
+        let registry = WorkflowRegistry::default();
+        let eligible: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let err = build_update_maps(&group, &registry, ":p=42:7", "pkg-a", &eligible)
+            .expect_err("a host with no updater doer must fail the late gate");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason
+                .contains("missing updater: h1 (gentoo 1, non-transactional)"),
+            "reason: {}",
+            err.reason
         );
     }
 
