@@ -480,6 +480,11 @@ pub(crate) mod testkit {
         /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows return
         /// an `Err` naming host `h1`, exercising `perform::drive`'s failure path.
         fail_perform: bool,
+        /// `perform_install` succeeds but records one
+        /// [`Diagnostic::degradation`](mtui_testreport::Diagnostic::degradation),
+        /// exercising `perform::drive`'s render path for the non-`update` ops,
+        /// whose test double otherwise emits no diagnostics at all.
+        install_degradation: bool,
         /// [`as_set_repo`](TestReport::as_set_repo) returns `Some`, so `set_repo`
         /// drives the empty-repo `run_zypper` refresh — the only public path
         /// recording [`Target::last_repo`], hence the only way to exercise the
@@ -566,13 +571,20 @@ pub(crate) mod testkit {
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            if self.install_degradation {
+                diagnostics.push(mtui_testreport::Diagnostic::degradation(
+                    "install lost a hold in the reboot gap (h1)",
+                ));
+            }
             self.perform_verdict()
         }
         async fn perform_uninstall(
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
+            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
             self.perform_verdict()
         }
@@ -583,6 +595,7 @@ pub(crate) mod testkit {
             _force: bool,
             _testing: bool,
             _installed_only: bool,
+            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
             self.perform_verdict()
         }
@@ -590,6 +603,7 @@ pub(crate) mod testkit {
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
+            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
             self.perform_verdict()
         }
@@ -721,6 +735,7 @@ pub(crate) mod testkit {
         update_diagnostics: bool,
         update_degradations: bool,
         fail_perform: bool,
+        install_degradation: bool,
         set_repo_enabled: bool,
     }
 
@@ -751,6 +766,7 @@ pub(crate) mod testkit {
             update_diagnostics: flags.update_diagnostics,
             update_degradations: flags.update_degradations,
             fail_perform: flags.fail_perform,
+            install_degradation: flags.install_degradation,
             set_repo_enabled: flags.set_repo_enabled,
         }));
         // Install the active handle so direct `command.call()` tests (which
@@ -962,6 +978,23 @@ pub(crate) mod testkit {
         )
     }
 
+    /// A session whose active report's `perform_install` succeeds but records
+    /// one degradation, exercising `perform::drive`'s render path for the
+    /// non-`update` ops end-to-end.
+    #[must_use]
+    pub(crate) fn session_with_degraded_install(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                install_degradation: true,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
     /// A standalone loaded report with the named hosts (each mock echoing
     /// `stdout`), boxed for [`TemplateRegistry::add`](crate::TemplateRegistry);
     /// tests needing more than one loaded template `add` extra reports.
@@ -983,6 +1016,7 @@ pub(crate) mod testkit {
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,
+            install_degradation: false,
             set_repo_enabled: false,
         })
     }
@@ -1005,6 +1039,7 @@ pub(crate) mod testkit {
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,
+            install_degradation: false,
             set_repo_enabled: false,
         })
     }

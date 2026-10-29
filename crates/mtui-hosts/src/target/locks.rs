@@ -571,7 +571,11 @@ impl<C: Clock> TargetLock<C> {
         self.claim();
     }
 
-    fn mark_released(&mut self) {
+    /// Drops this instance's in-memory hold record (and its hold-registry
+    /// entry). For a hold the remote side proved is gone or another owner's —
+    /// a reboot that wiped `/var/lock` and lost the re-take race, or a
+    /// lockfile that vanished — so a later `holds()` stops claiming it.
+    pub(crate) fn mark_released(&mut self) {
         self.held = None;
         self.release();
     }
@@ -640,6 +644,14 @@ impl<C: Clock> TargetLock<C> {
     #[must_use]
     pub(crate) fn holds(&self) -> bool {
         self.held.is_some()
+    }
+
+    /// The comment this instance stamped when it took the lock, if it holds
+    /// one. A reboot wipes `/var/lock` but not this record, so the reboot
+    /// lifecycle re-applies exactly this comment.
+    #[must_use]
+    pub(crate) fn held_comment(&self) -> Option<String> {
+        self.held.clone()
     }
 
     /// The lockfile path this lock manages. Set at construction; defaults to
@@ -1337,6 +1349,19 @@ impl<C: Clock> PoolLock<C> {
             sibling: None,
             invalid: self.inner.invalid,
         })
+    }
+
+    /// The pool-claim comment this instance stamped, if it holds the claim.
+    /// See [`TargetLock::held_comment`](Self::held_comment).
+    #[must_use]
+    pub(crate) fn held_comment(&self) -> Option<String> {
+        self.inner.held_comment()
+    }
+
+    /// Drops this instance's in-memory claim record after the remote claim
+    /// proved to be another template's, so `holds()` stops claiming it.
+    pub(crate) fn mark_released(&mut self) {
+        self.inner.mark_released();
     }
 
     /// [`TargetLock::loaded_owner`] for the pool claim — no remote read.

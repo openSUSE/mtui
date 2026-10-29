@@ -140,6 +140,22 @@ cooperate rather than clobber one another.
   the `-p`/`--pool` flag on [`list_locks`](cli.md#list_locks) /
   [`unlock`](cli.md#unlock).
 
+A reboot wipes `/var/lock` (tmpfs), so after the host reconnects mtui
+re-applies the reservation and pool claim this session held — in `reboot`
+itself, in the transactional reboot inside `update`/`downgrade`/`prepare`,
+and in the `install`/`uninstall` operation template. Re-taking is idempotent
+and never overwrites someone else's lock: a hold another tester claimed in
+the gap is left in place, not replaced. The `reboot` command prints one line
+per lost hold naming the host and the hold; the `update`/`prepare`/`downgrade`
+flows record the same as a degradation diagnostic, as do `install`/`uninstall`.
+The reboot outcome itself stays a success either way. A hold another owner
+claimed in the gap also drops its in-memory record, so a later plain `unlock`
+reports the session holds nothing instead of trying to release someone else's
+lock; a hold the re-take could not reach (transport error, or a corrupt line)
+keeps its record — dropping a corrupt line would strand it under a later plain
+`unlock`'s skip, while the kept record surfaces it on the next release
+attempt.
+
 Each lock file holds exactly one line, `timestamp:user:pid[:comment]` (Unix
 seconds, user name, numeric process id, optional free text that may contain
 colons). A pool claim's comment is `mtui pool <RRID> [<owner>]`. A missing file
@@ -187,7 +203,9 @@ report's pool claims already behave. A host added later with `add_host`
 comment is seeded on load and every connect path applies it. Review actions
 (`assign`/`unassign`/`approve`/`reject`) do not lock or unlock hosts
 themselves. A [`reboot`](cli.md#reboot) clears `/var/lock`, so the per-host
-testing lock is re-applied after the host comes back.
+testing lock is re-applied after the host comes back — through the same
+re-apply as reservations and pool claims (see above), with the same lost-hold
+reporting when another tester claimed the host in the gap.
 
 ### Assignment context on `assign`
 

@@ -513,12 +513,15 @@ pub trait TestReport {
     /// method).
     ///
     /// Returns `Err` when the install command failed on one or more hosts
-    /// (non-zero exit or non-empty stderr after the fan-out). The null object's
+    /// (non-zero exit or non-empty stderr after the fan-out). Holds lost in
+    /// the reboot gap are degradation, not failure: each is pushed onto
+    /// `diagnostics` as a degradation. The null object's
     /// default is a no-op `Ok(())`.
     async fn perform_install(
         &self,
         _targets: &mut HostsGroup,
         _packages: &[String],
+        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         Ok(())
     }
@@ -527,11 +530,13 @@ pub trait TestReport {
     ///
     /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
     /// template; see [`perform_install`](Self::perform_install). Default no-op
-    /// `Ok(())`; returns `Err` on a per-host command failure.
+    /// `Ok(())`; returns `Err` on a per-host command failure. Holds lost in
+    /// the reboot gap are reported on `diagnostics` as degradations.
     async fn perform_uninstall(
         &self,
         _targets: &mut HostsGroup,
         _packages: &[String],
+        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         Ok(())
     }
@@ -548,7 +553,8 @@ pub trait TestReport {
     ///
     /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
     /// fan-out, a per-host prepare-command failure, or a prepare check failure.
-    /// The null object's default is a no-op `Ok(())`.
+    /// Holds lost in the reboot gap are reported on `diagnostics` as
+    /// degradations. The null object's default is a no-op `Ok(())`.
     async fn perform_prepare(
         &self,
         _targets: &mut HostsGroup,
@@ -556,6 +562,7 @@ pub trait TestReport {
         _force: bool,
         _testing: bool,
         _installed_only: bool,
+        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         Ok(())
     }
@@ -568,11 +575,14 @@ pub trait TestReport {
     /// transactional ones), run the check, reboot transactional hosts.
     ///
     /// Returns `Err` on a missing downgrader, lock contention, or a per-host
-    /// downgrade check failure. The null object's default is a no-op `Ok(())`.
+    /// downgrade check failure. Holds lost in the reboot gap are reported on
+    /// `diagnostics` as degradations. The null object's default is a no-op
+    /// `Ok(())`.
     async fn perform_downgrade(
         &self,
         _targets: &mut HostsGroup,
         _packages: &[String],
+        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         Ok(())
     }

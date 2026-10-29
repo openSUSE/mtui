@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 
 use mtui_types::shellquote::quote_args;
 
-use super::hostgroup::LockOutcome;
+use super::hostgroup::{LockOutcome, LostHold, RebootReport};
 use crate::error::HostError;
 
 /// A per-host command (or reboot) map as ordered `(hostname, command)` pairs.
@@ -258,11 +258,14 @@ pub trait OperationGroup: Send {
 
     /// Reboots the transactional hosts named in `reboot`.
     ///
-    /// Returns one [`RebootFailure`] for every host whose reboot did not take
-    /// effect, carrying *why* — a transactional host whose snapshot never
-    /// activated must fail the operation, not report success, and the caller
-    /// routes its recovery on the cause.
-    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure>;
+    /// Returns the full [`RebootReport`]: one
+    /// [`RebootFailure`] per host whose reboot did not take effect, carrying
+    /// *why* — a transactional host whose snapshot never activated must fail
+    /// the operation, not report success, and the caller routes its recovery
+    /// on the cause — plus the holds the reboot wiped that could not be
+    /// re-taken, so the template surfaces them instead of losing them
+    /// silently.
+    async fn reboot(&mut self, reboot: HostCommandMap) -> RebootReport;
 
     /// Releases the shared operation lock.
     ///
@@ -290,6 +293,9 @@ pub struct OperationReport {
     /// A host whose check already failed is excluded — its reboot was skipped,
     /// not attempted and lost.
     pub reboot_failures: Vec<RebootFailure>,
+    /// One entry per hold the reboot wiped that could not be re-taken. A lost
+    /// hold never fails the run; the caller reports it as degradation.
+    pub lost_holds: Vec<LostHold>,
     /// `(hostname, reason)` for every host whose operation-lock release
     /// failed with [`LockOutcome::Failed`] — a benign
     /// [`Contended`](LockOutcome::Contended) release is excluded.
@@ -408,10 +414,17 @@ pub trait Operation: Send + Sync {
     /// only — a healthy transactional host still reboots so its snapshot
     /// activates; a host left inert by a failed check is named at WARN.
     ///
+    /// The reboot re-takes even the comment-less operation lock this run
+    /// took, although `unlock()` releases it right after: the re-take
+    /// reconciles the in-memory record — a foreign claim in the gap is
+    /// reported as a lost hold and forgotten — instead of leaving a stale
+    /// hold behind.
+    ///
     /// Returns the started run's [`OperationReport`], which names any host
-    /// that failed its check and any transactional host whose reboot did not
-    /// take effect — a caller that discards it cannot tell either apart from a
-    /// host that came back healthy.
+    /// that failed its check, any transactional host whose reboot did not
+    /// take effect, and any hold lost in the reboot gap — a caller that
+    /// discards it cannot tell any of those apart from a host that came
+    /// back healthy.
     ///
     /// # Errors
     ///
@@ -491,7 +504,8 @@ pub trait Operation: Send + Sync {
                 ok
             })
             .collect();
-        let reboot_failures = group.reboot(reboot).await;
+        let reboot_report = group.reboot(reboot).await;
+        let reboot_failures = reboot_report.failures();
 
         let unlock_failures = group
             .unlock()
@@ -509,6 +523,7 @@ pub trait Operation: Send + Sync {
             check_failures,
             reboot_failures,
             unlock_failures,
+            lost_holds: reboot_report.lost_holds,
         })
     }
 }
@@ -683,7 +698,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::target::LockOwner;
+    use crate::target::{LockOwner, LostHoldKind, LostHoldProof};
 
     /// One recorded interaction with the group, in call order.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -712,6 +727,9 @@ mod tests {
         /// What `reboot` should report as failed, modelling a transactional
         /// host that rebooted and did not reconnect.
         reboot_failures: Vec<RebootFailure>,
+        /// What `reboot` should report as lost, modelling holds another owner
+        /// claimed in the reboot gap.
+        lost_holds: Vec<LostHold>,
         /// What `unlock` should report per host.
         unlock_outcomes: BTreeMap<String, LockOutcome>,
         /// When `true`, `last_output` returns `None` for every host, modelling
@@ -737,6 +755,7 @@ mod tests {
                 events,
                 fail_update_lock: false,
                 reboot_failures: Vec::new(),
+                lost_holds: Vec::new(),
                 unlock_outcomes: BTreeMap::new(),
                 missing_output: false,
             }
@@ -752,6 +771,13 @@ mod tests {
         /// host whose post-reboot reconnect never came back.
         fn with_reboot_failures(mut self, failures: Vec<RebootFailure>) -> Self {
             self.reboot_failures = failures;
+            self
+        }
+
+        /// Scripts `reboot` to report `losses`, modelling holds another owner
+        /// claimed in the reboot gap.
+        fn with_lost_holds(mut self, losses: Vec<LostHold>) -> Self {
+            self.lost_holds = losses;
             self
         }
 
@@ -816,9 +842,31 @@ mod tests {
             Some(HostOutput::default())
         }
 
-        async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure> {
+        async fn reboot(&mut self, reboot: HostCommandMap) -> RebootReport {
             self.events.lock().unwrap().push(Event::Reboot(reboot));
-            self.reboot_failures.clone()
+            // `Update` round-trips through `failures()` verbatim; other causes
+            // would gain wrapper wording, so no test scripts them.
+            let outcomes = self
+                .reboot_failures
+                .iter()
+                .map(|f| {
+                    let err = match f.cause {
+                        RebootFailureCause::NotDispatched => HostError::RebootNotDispatched {
+                            host: f.host.clone(),
+                            reason: f.reason.clone(),
+                        },
+                        RebootFailureCause::NotRebooted => HostError::RebootDidNotHappen {
+                            host: f.host.clone(),
+                        },
+                        RebootFailureCause::Unreachable => HostError::Update(f.reason.clone()),
+                    };
+                    (f.host.clone(), Err(err))
+                })
+                .collect();
+            RebootReport {
+                outcomes,
+                lost_holds: self.lost_holds.clone(),
+            }
         }
 
         async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
@@ -1167,6 +1215,46 @@ mod tests {
         // Unlock must still be the last event: a lost host does not skip
         // releasing the operation lock.
         assert_eq!(group.events().last(), Some(&Event::Unlock));
+    }
+
+    // --- run(): a lost hold is carried, not dropped -------------------------
+
+    #[tokio::test]
+    async fn run_carries_a_hold_lost_in_the_reboot_gap() {
+        // The reboot succeeded but another owner claimed the hold in the gap:
+        // the run stays a success and the loss rides the report, so the
+        // caller can surface it instead of losing it silently.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            true,
+            Doer::new("in $packages", "systemctl reboot"),
+            sink,
+        )];
+        let mut group = MockGroup::new(Ok(plans)).with_lost_holds(vec![LostHold {
+            host: "h1".to_owned(),
+            kind: LostHoldKind::OperationLock,
+            comment: "operator hold".to_owned(),
+            reason: "held by alice since Tuesday".to_owned(),
+            proof: LostHoldProof::Proven,
+        }]);
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let report = op
+            .run(&mut group)
+            .await
+            .expect("a lost hold never fails the run");
+
+        assert!(
+            report.reboot_failures.is_empty(),
+            "no host failed its reboot: {:?}",
+            report.reboot_failures
+        );
+        assert_eq!(report.lost_holds.len(), 1);
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.comment, "operator hold");
+        assert!(loss.describe().contains("h1"));
     }
 
     // --- run(): a failed check excludes its host from the reboot map --------

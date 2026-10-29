@@ -233,7 +233,9 @@ where
             let token = targets.suspend_cancellation();
             // Best-effort: a failed downgrade must never bury the original
             // update error, so its result is logged and diagnosed, not returned.
-            if let Err(de) = perform_downgrade(targets, report, &pkgs, id.as_deref()).await {
+            if let Err(de) =
+                perform_downgrade(targets, report, &pkgs, id.as_deref(), diagnostics).await
+            {
                 warn!(error = %de, "rollback downgrade failed");
                 diagnostics.push(Diagnostic::degradation(format!(
                     "the update failed and the automatic rollback also failed ({de}); \
@@ -618,12 +620,15 @@ fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> V
 ///
 /// Returns [`UpdateError`] when the template could not start (no doer for a
 /// host's `(release, transactional)` key, or a host locked by another owner) or
-/// when a host's post-run check reports a failed install.
+/// when a host's post-run check reports a failed install. Holds lost in the
+/// reboot gap are degradation, not failure: each is pushed onto `diagnostics`
+/// as [`Diagnostic::degradation`].
 pub async fn perform_install(
     targets: &mut HostsGroup,
     packages: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    perform_operation(targets, Role::Install, packages).await
+    perform_operation(targets, Role::Install, packages, diagnostics).await
 }
 
 /// Uninstalls `packages` from every host in `targets`.
@@ -638,8 +643,9 @@ pub async fn perform_install(
 pub async fn perform_uninstall(
     targets: &mut HostsGroup,
     packages: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    perform_operation(targets, Role::Uninstall, packages).await
+    perform_operation(targets, Role::Uninstall, packages, diagnostics).await
 }
 
 /// The shared body of [`perform_install`] / [`perform_uninstall`], driving the
@@ -648,12 +654,14 @@ async fn perform_operation(
     targets: &mut HostsGroup,
     role: Role,
     packages: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     perform_operation_with(
         targets,
         role,
         packages,
         Arc::new(WorkflowRegistry::default()),
+        diagnostics,
     )
     .await
 }
@@ -673,6 +681,7 @@ async fn perform_operation_with(
     role: Role,
     packages: &[String],
     provider: Arc<dyn mtui_hosts::PlanProvider>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     // Exhaustive on purpose: a `_ =>` arm defaulting to install would quietly
     // run the wrong package-manager command if a role were ever added.
@@ -727,6 +736,13 @@ async fn perform_operation_with(
     // failed one — warn rather than joining `failures` below.
     if !report.unlock_failures.is_empty() {
         warn!("{}", unlock_failure_message(op, &report.unlock_failures));
+    }
+
+    // A hold lost in the reboot gap is degradation, not failure: the host did
+    // reboot. No `warn!` here — the re-apply helper already warned once per
+    // loss, and the diagnostic below is what reaches the display.
+    for loss in &report.lost_holds {
+        diagnostics.push(Diagnostic::degradation(loss.describe()));
     }
 
     // A failed check already excluded its host from the reboot map (see
@@ -837,15 +853,24 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
 /// the caller renders these through [`reboot_error`] into its own failure list
 /// before aggregating. The cause is carried rather than flattened to a string
 /// because `update` routes its rollback on it.
+///
+/// A hold the reboot wiped that could not be re-taken is degradation, not
+/// failure: each is pushed onto `diagnostics` as
+/// [`Diagnostic::degradation`], so an unattended MCP caller sees the loss.
+/// No `warn!` here — the re-apply helper already warned once per loss.
 async fn reboot_transactional(
     targets: &mut HostsGroup,
     reboot: BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<RebootFailure> {
     if reboot.is_empty() {
         return Vec::new();
     }
-    let map: Vec<(String, String)> = reboot.into_iter().collect();
-    OperationGroup::reboot(targets, map).await
+    let report = OperationGroup::reboot(targets, reboot.into_iter().collect()).await;
+    for loss in &report.lost_holds {
+        diagnostics.push(Diagnostic::degradation(loss.describe()));
+    }
+    report.failures()
 }
 
 /// Runs the prepare step: adds/removes the issue repo, then installs
@@ -865,6 +890,7 @@ pub async fn perform_prepare(
     force: bool,
     testing: bool,
     installed_only: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     flatten_prepare_failure(
         perform_prepare_classified(
@@ -875,6 +901,7 @@ pub async fn perform_prepare(
             force,
             testing,
             installed_only,
+            diagnostics,
         )
         .await,
     )
@@ -897,6 +924,7 @@ async fn perform_prepare_for(
     force: bool,
     testing: bool,
     installed_only: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     flatten_prepare_failure(
         perform_prepare_classified(
@@ -907,6 +935,7 @@ async fn perform_prepare_for(
             force,
             testing,
             installed_only,
+            diagnostics,
         )
         .await,
     )
@@ -940,6 +969,7 @@ async fn perform_prepare_classified(
     force: bool,
     testing: bool,
     installed_only: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), PrepareFailure> {
     let registry = WorkflowRegistry::new(force, testing);
     let operation = if testing { RepoOp::Add } else { RepoOp::Remove };
@@ -980,6 +1010,7 @@ async fn perform_prepare_classified(
         &pkgs,
         installed_only,
         reboot,
+        diagnostics,
     )
     .await;
     // Exactly the set locked above: releasing a host we never locked would
@@ -1001,7 +1032,7 @@ async fn perform_prepare_classified(
 /// `narrow_to_installed` and `build_prepare_map`. `reboot` is the exception:
 /// it arrives already scoped from [`build_reboot_map`], because the retain
 /// filter below warns a host by name *before* `dispatched` (⊆ `lists`) gets to
-/// drop it.
+/// drop it. A hold lost in the reboot gap is reported on `diagnostics`.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -1012,6 +1043,7 @@ async fn prepare_body(
     pkgs: &[String],
     installed_only: bool,
     reboot: BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), PrepareFailure> {
     let in_scope = |host: &str| selected.is_none_or(|s| s.contains(host));
 
@@ -1305,7 +1337,7 @@ async fn prepare_body(
         })
         .collect();
     failures.extend(
-        reboot_transactional(targets, reboot)
+        reboot_transactional(targets, reboot, diagnostics)
             .await
             .into_iter()
             .map(reboot_error),
@@ -1596,6 +1628,7 @@ pub async fn perform_downgrade(
     report: &dyn SetRepo,
     packages: &[String],
     id: Option<&str>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     // Return before locking or touching repos. Also keeps the probe template
     // from rendering with no package names, where `zypper se` would list the
@@ -1624,7 +1657,16 @@ pub async fn perform_downgrade(
         return Err(UpdateError::reason_only(e.to_string()));
     }
 
-    let result = downgrade_body(targets, &registry, report, packages, reboot, id).await;
+    let result = downgrade_body(
+        targets,
+        &registry,
+        report,
+        packages,
+        reboot,
+        id,
+        diagnostics,
+    )
+    .await;
     warn_on_unlock_failures("downgrade", &targets.unlock().await);
     result
 }
@@ -1637,6 +1679,7 @@ async fn downgrade_body(
     packages: &[String],
     reboot: BTreeMap<String, String>,
     id: Option<&str>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     targets.fanout_set_repo(RepoOp::Remove, report).await;
 
@@ -1891,7 +1934,7 @@ async fn downgrade_body(
     add_op_history(targets, "downgrade", id, packages).await;
 
     failures.extend(
-        reboot_transactional(targets, healthy_reboot)
+        reboot_transactional(targets, healthy_reboot, diagnostics)
             .await
             .into_iter()
             .map(reboot_error),
@@ -2092,7 +2135,17 @@ pub async fn perform_update(
         // aborts rather than patching hosts on a broken premise; `--noprepare`
         // opts out. One that ran and only reported a host failure is too noisy
         // to gate on (see `PrepareFailure`), so it warns and the update goes on.
-        match perform_prepare_classified(targets, report, None, packages, false, false, false).await
+        match perform_prepare_classified(
+            targets,
+            report,
+            None,
+            packages,
+            false,
+            false,
+            false,
+            diagnostics,
+        )
+        .await
         {
             Ok(()) => {}
             Err(PrepareFailure::DidNotRun(e)) => return Err(UpdateFailure::Prepare(e)),
@@ -2297,8 +2350,17 @@ pub async fn perform_update(
     // group-wide add here strands it on the excluded host (#409). It also
     // composes nothing for that host, so there is nothing to prepare on it.
     if newpackage
-        && let Err(e) =
-            perform_prepare_for(targets, &eligible, report, packages, false, true, false).await
+        && let Err(e) = perform_prepare_for(
+            targets,
+            &eligible,
+            report,
+            packages,
+            false,
+            true,
+            false,
+            diagnostics,
+        )
+        .await
     {
         warn!(error = %e, "newpackage prepare after update failed");
         diagnostics.push(Diagnostic::degradation(format!(
@@ -2478,7 +2540,7 @@ async fn update_run_phase(
         };
         aggregate_failures("update", failures).map_err(wrap)
     } else {
-        let reboot_failures = reboot_transactional(targets, reboot).await;
+        let reboot_failures = reboot_transactional(targets, reboot, diagnostics).await;
         // Route on *why* the reboot failed, not on the fact that it did (see
         // `Reboot` vs `RebootNotTaken`). `all`, not `any`: with one host
         // unreachable and one merely inert, rolling back cannot reach the
@@ -2782,6 +2844,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
@@ -2812,6 +2875,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
@@ -2863,6 +2927,7 @@ mod tests {
             false,
             true,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a masked `ar` failure must abort prepare");
@@ -2997,6 +3062,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await;
         assert!(
@@ -3043,6 +3109,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect("a clean --installed prepare returns Ok");
@@ -3074,6 +3141,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a genuine skip is not a failure: {res:?}");
@@ -3109,6 +3177,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a host with nothing to prepare is Ok: {res:?}");
@@ -3156,6 +3225,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await;
         assert!(
@@ -3186,6 +3256,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a dead probe must not report success");
@@ -3232,6 +3303,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a probe that never ran must not report success");
@@ -3276,6 +3348,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect("a clean --installed prepare returns Ok");
@@ -3315,6 +3388,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect("a clean --installed prepare returns Ok");
@@ -3453,9 +3527,17 @@ mod tests {
             names(&["pkg-a", "pkg-b"]),
         )]);
 
-        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
-            .await
-            .expect("a host that composes part of the list prepares that part");
+        perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("a host that composes part of the list prepares that part");
 
         assert_eq!(prepared_packages(&handle), names(&["pkg-a", "pkg-b"]));
     }
@@ -3487,9 +3569,17 @@ mod tests {
             ),
         ]);
 
-        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
-            .await
-            .expect("both hosts compose part of the list");
+        perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("both hosts compose part of the list");
 
         let (got1, got2) = (prepared_packages(&h1), prepared_packages(&h2));
         assert_eq!(got1, names(&["pkg-a", "pkg-b"]));
@@ -3521,9 +3611,17 @@ mod tests {
             ),
         ]);
 
-        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
-            .await
-            .expect("the host composes two of the list");
+        perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("the host composes two of the list");
 
         assert_eq!(prepared_packages(&handle), names(&["pkg-a", "pkg-b"]));
     }
@@ -3546,6 +3644,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         ))
         .await;
         res.expect("no composition is not a reason to fail a host");
@@ -3583,7 +3682,7 @@ mod tests {
             names(&["pkg-a"]),
         )]);
 
-        perform_prepare(&mut group, &repo, &[], false, false, false)
+        perform_prepare(&mut group, &repo, &[], false, false, false, &mut Vec::new())
             .await
             .expect("an empty prepare is a no-op Ok, composition or not");
 
@@ -3621,6 +3720,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         ))
         .await;
         res.expect("an index that does not describe the host is not a host failure");
@@ -3652,9 +3752,17 @@ mod tests {
             names(&["pkg-y", "pkg-z"]),
         )]);
 
-        let err = perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
-            .await
-            .expect_err("a host that composes nothing must be named, not skipped");
+        let err = perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a host that composes nothing must be named, not skipped");
 
         assert_eq!(err.host.as_deref(), Some("h1"), "err: {err:?}");
         assert!(
@@ -3711,9 +3819,17 @@ mod tests {
             ),
         ]);
 
-        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
-            .await
-            .expect("both hosts compose part of the list");
+        perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("both hosts compose part of the list");
 
         for (handle, tail) in [
             (&h1, ":prepare:pkg-a pkg-b\n"),
@@ -4636,6 +4752,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a cancelled prepare reports an error");
@@ -4690,6 +4807,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         let err = res.expect_err("missing preparer must surface as Err");
@@ -4735,6 +4853,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         let err = res.expect_err("missing preparer must surface as Err");
@@ -4778,7 +4897,14 @@ mod tests {
             targets.push(t);
         }
         let mut group = HostsGroup::new(targets, false);
-        let res = perform_downgrade(&mut group, &repo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("missing downgrader must surface as Err");
         assert!(
             err.reason.contains(
@@ -4829,6 +4955,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         let err = res.expect_err("an unparsed transactional host must abort prepare");
@@ -4848,7 +4975,14 @@ mod tests {
         let (t, h1) = unparsed_transactional_target("h1");
         let mut group = HostsGroup::new(vec![t], false);
         let repo = RecordingRepo::default();
-        let res = perform_downgrade(&mut group, &repo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("an unparsed transactional host must abort downgrade");
         assert!(
             err.reason
@@ -4873,6 +5007,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         let err = res.expect_err("a non-zero prepare command exit must surface as Err");
@@ -4882,7 +5017,14 @@ mod tests {
     #[tokio::test]
     async fn perform_downgrade_surfaces_missing_downgrader() {
         let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("missing downgrader must surface as Err");
         assert!(
             err.reason.contains("missing downgrader"),
@@ -4903,7 +5045,7 @@ mod tests {
         // Reporting Ok here is what made `install` print "install completed"
         // for hosts it never touched.
         let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a missing installer must not report success");
         assert!(
@@ -4935,7 +5077,7 @@ mod tests {
         let (ok, _h) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![ok, t], false);
 
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("an unresolvable host aborts the group");
 
@@ -4978,7 +5120,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
 
         assert!(
-            perform_install(&mut group, &["pkg-a".to_owned()])
+            perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
                 .await
                 .is_ok(),
             "stderr alone on a zero exit is not a failure"
@@ -4989,7 +5131,7 @@ mod tests {
     async fn perform_install_runs_the_installer_command() {
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
-        perform_install(&mut group, &["pkg-a".to_owned()])
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect("a clean install");
         assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg-a"]);
@@ -4999,7 +5141,7 @@ mod tests {
     async fn perform_uninstall_runs_the_uninstaller_command() {
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
-        perform_uninstall(&mut group, &["pkg-a".to_owned()])
+        perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect("a clean uninstall");
         assert_eq!(handle.commands(), vec!["zypper -n rm pkg-a"]);
@@ -5010,7 +5152,7 @@ mod tests {
         // The verdict comes from the template's own check.
         let (t, _h) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("non-zero exit surfaces as Err");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -5062,6 +5204,7 @@ mod tests {
             Role::Install,
             &["pkg-a".to_owned()],
             Arc::new(CancellingProvider),
+            &mut Vec::new(),
         )
         .await
         .expect_err("a failing check surfaces as Err");
@@ -5081,7 +5224,7 @@ mod tests {
         let (t, _h) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
         assert!(
-            perform_install(&mut group, &["pkg-a".to_owned()])
+            perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
                 .await
                 .is_ok()
         );
@@ -5105,7 +5248,12 @@ mod tests {
         );
         let mut group = HostsGroup::new(vec![t], false);
 
-        let (res, logs) = capture_logs(perform_install(&mut group, &["pkg-a".to_owned()])).await;
+        let (res, logs) = capture_logs(perform_install(
+            &mut group,
+            &["pkg-a".to_owned()],
+            &mut Vec::new(),
+        ))
+        .await;
 
         assert!(
             res.is_ok(),
@@ -5134,6 +5282,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perform_install_reports_a_hold_lost_in_the_reboot_gap() {
+        // A hold another tester claimed in the reboot gap must surface as a
+        // degradation diagnostic: the run stays a success, and the loss does
+        // not vanish silently. The foreign claim is planted by the reboot
+        // dispatch itself, so it lands strictly after `update_lock` took the
+        // lock and strictly before the post-reboot re-take, with no sleep or
+        // poll rendezvous.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_changing_boot_id()
+            .with_fire_and_forget_plant(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let mut diagnostics = Vec::new();
+        let res = perform_install(&mut group, &["pkg-a".to_owned()], &mut diagnostics).await;
+        assert!(
+            res.is_ok(),
+            "a lost hold warns, it does not fail the run: {res:?}"
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the loss must surface as a diagnostic: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics[0].degradation,
+            "the loss is degradation, not a routine section: {:?}",
+            diagnostics[0]
+        );
+        // The install flow locks with no comment, so `describe` prints the
+        // bare "operation lock" with no reservation noun or parens.
+        assert_eq!(
+            diagnostics[0].text,
+            "h1: reboot cleared the operation lock; h1 is locked by alice (busy)."
+        );
+        // The confirmed loss drops the in-memory record even for the
+        // comment-less lock `Operation::run` releases right after, so a later
+        // plain unlock skips instead of touching alice's lock.
+        let names: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let unlock = group.unlock_taken(&names).await;
+        assert!(
+            matches!(unlock["h1"], LockOutcome::Skipped(_)),
+            "no record left to release: {:?}",
+            unlock["h1"]
+        );
+    }
+
+    #[tokio::test]
     async fn install_stops_at_the_entry_gate_when_cancelled() {
         // A cancel requested before the run must stop it before any command
         // reaches a host, exactly like `perform_update`'s entry gate.
@@ -5141,7 +5346,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         group.cancel_token().cancel();
 
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a cancelled install reports an error");
 
@@ -5159,7 +5364,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         group.cancel_token().cancel();
 
-        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()])
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a cancelled uninstall reports an error");
 
@@ -5188,7 +5393,7 @@ mod tests {
         );
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_install(&mut group, &["pkg-a".to_owned()])
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("no installer doer resolves for this host");
 
@@ -5205,7 +5410,7 @@ mod tests {
         let (t, handle) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_install(&mut group, &["pkg-a".to_owned()])
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a failed install command surfaces as Err");
 
@@ -5235,7 +5440,7 @@ mod tests {
         let (t, handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_install(&mut group, &["pkg-a".to_owned()])
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a lost transactional host must not report success");
 
@@ -5249,6 +5454,60 @@ mod tests {
         assert!(
             contents.contains(":install:pkg-a"),
             "history line: {contents:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reboot_transactional_reports_a_lost_hold_as_a_diagnostic() {
+        // A hold another owner claimed in the reboot gap degrades the run
+        // without failing it: the reboot outcome stays clean, and the loss
+        // lands on `diagnostics` (as well as `tracing`) so an unattended MCP
+        // caller sees it.
+        use mtui_hosts::Connection as _;
+
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_changing_boot_id();
+        let mut handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.lock("operator hold").await.expect("setup lock held");
+        handle
+            .sftp_remove(std::path::Path::new(TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+        handle
+            .sftp_write(
+                std::path::Path::new(TARGET_LOCK_PATH),
+                b"1700000000:alice:4242:busy",
+                false,
+            )
+            .await
+            .expect("foreign claim");
+        let mut group = HostsGroup::new(vec![t], false);
+        let reboot =
+            BTreeMap::from([("h1".to_owned(), "transactional-update --reboot".to_owned())]);
+        let mut diagnostics = Vec::new();
+
+        let failures = reboot_transactional(&mut group, reboot, &mut diagnostics).await;
+
+        assert!(
+            failures.is_empty(),
+            "a lost hold never fails the run: {failures:?}"
+        );
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the lost hold must surface as a diagnostic: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics[0].degradation,
+            "a lost hold degrades the run: {:?}",
+            diagnostics[0]
+        );
+        assert!(
+            diagnostics[0].text.contains("h1") && diagnostics[0].text.contains("operator hold"),
+            "the diagnostic names the host and the hold: {}",
+            diagnostics[0].text
         );
     }
 
@@ -5303,9 +5562,15 @@ mod tests {
         let (t, handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
-            .await
-            .expect_err("a lost transactional host must not report success");
+        perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a lost transactional host must not report success");
 
         let contents = String::from_utf8(
             handle
@@ -5391,6 +5656,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
@@ -5428,6 +5694,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a cancelled prepare reports an error");
@@ -5471,6 +5738,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("the dropped host must fail the flow");
@@ -5515,7 +5783,16 @@ mod tests {
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_prepare(&mut group, &NoopRepo, &[], false, false, false).await;
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &[],
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "an empty prepare is a no-op Ok: {res:?}");
         assert!(
             handle.file_contents(HISTORY_LOG).is_none(),
@@ -5538,6 +5815,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a lost transactional host must not report success");
@@ -5704,7 +5982,14 @@ mod tests {
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("a dead probe must still abort");
         // The verdict must not change: writing the row is bookkeeping.
         assert_eq!(err.reason, "package version probe failed");
@@ -5738,7 +6023,7 @@ mod tests {
         for exit in [100, 101, 102, 103, 106] {
             let (t, _h) = sles_target_with_exit("h1", "", exit);
             let mut group = HostsGroup::new(vec![t], false);
-            let res = perform_install(&mut group, &["pkg-a".to_owned()]).await;
+            let res = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new()).await;
             assert!(
                 res.is_ok(),
                 "exit {exit} is informational, not a failure: {res:?}"
@@ -5778,7 +6063,7 @@ mod tests {
             );
             let mut group = HostsGroup::new(vec![t], false);
 
-            let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
                 .await
                 .expect_err("a non-zero exit must still be reported");
             assert_eq!(err.host.as_deref(), Some("h1"), "{product}");
@@ -5813,7 +6098,7 @@ mod tests {
             );
             let mut group = HostsGroup::new(vec![t], false);
 
-            let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
                 .await
                 .expect_err("an install that never ran must not report success");
 
@@ -6209,7 +6494,14 @@ mod tests {
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
 
         let cmds = handle.commands();
@@ -6227,7 +6519,7 @@ mod tests {
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &[], None).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &[], None, &mut Vec::new()).await;
         assert!(res.is_ok(), "empty list is a no-op Ok: {res:?}");
         assert!(
             handle.commands().is_empty(),
@@ -6242,7 +6534,14 @@ mod tests {
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("a dead probe must abort");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -6261,7 +6560,14 @@ mod tests {
         let (t2, h2) = sles_target_with_exit("h2", "", -1);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let res = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         let err = res.expect_err("a partial dead probe still fails the command");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h2"));
@@ -6369,7 +6675,7 @@ mod tests {
         let (t2, h2, list) = sles_target_with_probe_exit("h2", &packages, 7);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &packages, None).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &packages, None, &mut Vec::new()).await;
 
         // Not vacuous: the scripted probe really is the command that ran.
         assert!(
@@ -6405,8 +6711,14 @@ mod tests {
         let (t2, _h2, _list) = sles_target_with_probe_exit("h2", &packages, 7);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
-        let (res, logs) =
-            capture_logs(perform_downgrade(&mut group, &NoopRepo, &packages, None)).await;
+        let (res, logs) = capture_logs(perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &packages,
+            None,
+            &mut Vec::new(),
+        ))
+        .await;
 
         let err = res.expect_err("a dead probe still fails the command");
         assert_eq!(err.reason, "package version probe failed");
@@ -6659,7 +6971,7 @@ mod tests {
         let (t, _handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a lost transactional host must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -6681,7 +6993,7 @@ mod tests {
         let (t, _handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()])
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await
             .expect_err("a lost transactional host must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -6710,6 +7022,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a lost transactional host must not report success");
@@ -6732,9 +7045,15 @@ mod tests {
         let (t, _handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
-            .await
-            .expect_err("a lost transactional host must not report success");
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a lost transactional host must not report success");
         assert!(
             err.reason.contains("did not come back after the reboot"),
             "reason: {}",
@@ -7721,8 +8040,14 @@ mod tests {
         // trusting the assertions below on the combined flow.
         let (t2, _handle2) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
         let mut probe_group = HostsGroup::new(vec![t2], false);
-        let downgrade_res =
-            perform_downgrade(&mut probe_group, &report, &report.get_package_list(), None).await;
+        let downgrade_res = perform_downgrade(
+            &mut probe_group,
+            &report,
+            &report.get_package_list(),
+            None,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(
             downgrade_res.is_err(),
             "fixture must drive the rollback itself to Err: {downgrade_res:?}"
@@ -7801,6 +8126,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
 
@@ -8318,6 +8644,7 @@ mod tests {
             &NoopRepo,
             &["pkg-a".to_owned(), "pkg-b".to_owned()],
             None,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
@@ -8352,6 +8679,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a failed prepare must not report success");
@@ -8381,7 +8709,16 @@ mod tests {
         let (t, handle) = slmicro_target("h1", "", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_prepare(&mut group, &NoopRepo, &[], false, false, false).await;
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &[],
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "nothing to prepare is not a failure: {res:?}");
 
         // The fixture only means anything if nothing was dispatched.
@@ -8416,6 +8753,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
 
@@ -8454,7 +8792,14 @@ mod tests {
         let (t, handle) = slmicro_target("h1", "", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let _ = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let _ = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
 
         let cmds = handle.commands();
         assert!(
@@ -8485,6 +8830,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await;
         assert!(res.is_err(), "the stderr verdict is unchanged: {res:?}");
@@ -8516,6 +8862,7 @@ mod tests {
             false,
             false,
             false,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a locked update stack must not report success");
@@ -8615,6 +8962,7 @@ mod tests {
                 false,
                 false,
                 false,
+                &mut Vec::new(),
             )
             .await
             .expect_err("a prepare that never ran must not report success");
@@ -8666,9 +9014,15 @@ mod tests {
         );
         let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
-            .await
-            .expect_err("a failed combined downgrade must not report success");
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a failed combined downgrade must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
         // Exact: `contains` would also accept the multi-failure summary, whose
         // text embeds this one.
@@ -8764,7 +9118,7 @@ mod tests {
         let report = crate::reports::PiReport::new(Config::default());
         let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
 
-        let err = perform_downgrade(&mut group, &report, &packages, None)
+        let err = perform_downgrade(&mut group, &report, &packages, None, &mut Vec::new())
             .await
             .expect_err("a cancelled downgrade reports an error");
 
@@ -8818,6 +9172,7 @@ mod tests {
             false,
             false,
             true,
+            &mut Vec::new(),
         )
         .await
         .expect_err("a dead probe must not report success");
@@ -8909,6 +9264,7 @@ mod tests {
                 false,
                 false,
                 false,
+                &mut Vec::new(),
             )
             .await;
         assert!(res.is_ok(), "PI prepare succeeds: {res:?}");
@@ -8931,7 +9287,7 @@ mod tests {
         let report = ObsReport::new(Config::default());
 
         let res = report
-            .perform_downgrade(&mut group, &["pkg-a".to_owned()])
+            .perform_downgrade(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
             .await;
         assert!(res.is_ok(), "OBS downgrade succeeds: {res:?}");
 

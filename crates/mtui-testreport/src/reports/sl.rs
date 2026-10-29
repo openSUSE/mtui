@@ -81,16 +81,18 @@ impl TestReport for SlReport {
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_install(targets, packages).await
+        update_flow::perform_install(targets, packages, diagnostics).await
     }
 
     async fn perform_uninstall(
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_uninstall(targets, packages).await
+        update_flow::perform_uninstall(targets, packages, diagnostics).await
     }
 
     async fn perform_prepare(
@@ -100,17 +102,28 @@ impl TestReport for SlReport {
         force: bool,
         testing: bool,
         installed_only: bool,
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await
+        update_flow::perform_prepare(
+            targets,
+            self,
+            packages,
+            force,
+            testing,
+            installed_only,
+            diagnostics,
+        )
+        .await
     }
 
     async fn perform_downgrade(
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
-        update_flow::perform_downgrade(targets, self, packages, id.as_deref()).await
+        update_flow::perform_downgrade(targets, self, packages, id.as_deref(), diagnostics).await
     }
 
     async fn perform_update(
