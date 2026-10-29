@@ -2681,6 +2681,43 @@ mod tests {
         assert!(matches!(lock, CommandLock::Scoped { .. }));
     }
 
+    /// Unloaded template names get an ephemeral lock, not a map entry, so
+    /// distinct bogus strings cannot grow `rrid_locks` without bound.
+    #[tokio::test]
+    async fn scoped_lock_unloaded_template_leaves_rrid_locks_unchanged() {
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let loaded = sess.scoped_lock(Some("SUSE:Maintenance:1:1")).await;
+        let baseline = sess.rrid_locks.lock().unwrap().len();
+        assert_eq!(baseline, 1, "loaded template interns one lock");
+        drop(loaded);
+
+        let bogus = sess.scoped_lock(Some("SUSE:Maintenance:9:9")).await;
+        assert!(matches!(bogus, CommandLock::Scoped { .. }));
+        drop(bogus);
+        assert_eq!(
+            sess.rrid_locks.lock().unwrap().len(),
+            baseline,
+            "unloaded template must not intern a lock"
+        );
+
+        let other = sess.scoped_lock(Some("SUSE:Maintenance:8:8")).await;
+        drop(other);
+        assert_eq!(
+            sess.rrid_locks.lock().unwrap().len(),
+            baseline,
+            "distinct bogus strings must not grow the map"
+        );
+
+        assert!(
+            Arc::ptr_eq(
+                &sess.lock_for("SUSE:Maintenance:1:1"),
+                &sess.lock_for("SUSE:Maintenance:1:1")
+            ),
+            "loaded key still interns"
+        );
+    }
+
     /// Session-level argv for every tool-reachable command addressing no
     /// template: `config` via its read-only `show` subcommand (a bare `set`
     /// needs the canonical session and stays exclusive, as does `set_log_level`

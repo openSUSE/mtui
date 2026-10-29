@@ -720,9 +720,9 @@ mod tests {
     }
 
     /// The upload destination is read off the activated fork — the same resolve
-    /// that keyed the scope lock — so it cannot name another template's working
-    /// directory. (It passes against main too; it pins this PR's single-resolve
-    /// skew, not a live-config diversion.)
+    /// that keyed the scope lock — so a put naming template A lands under A's
+    /// target working directory even when the canonical session's config
+    /// points elsewhere.
     #[tokio::test]
     async fn put_destination_comes_from_the_target_template() {
         use std::path::PathBuf;
