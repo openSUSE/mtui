@@ -962,14 +962,6 @@ impl McpSession {
         }
     }
 
-    /// The registry gate in exclusive mode: the hold the hand-written transfer
-    /// tools (`get`/`put`, #434) take around their host fan-outs, matching
-    /// [`command_lock`](Self::command_lock)'s `_ =>` arm. `Session::activate` may
-    /// only be flipped under the exclusive gate.
-    pub(crate) async fn exclusive_lock(&self) -> CommandLock {
-        CommandLock::Exclusive(self.gate.exclusive().await)
-    }
-
     /// Holds the registry-shared gate plus one template's per-RRID lock.
     ///
     /// For the hand-written document/transfer tools, which act on one template:
@@ -977,24 +969,43 @@ impl McpSession {
     /// letting tools on *other* templates run in parallel, and the per-RRID lock
     /// serialises against foreground dispatch for the *same* template.
     ///
-    /// `rrid` is the resolved target template id, or `None` to fall back to the
-    /// active one. Callers should resolve and validate the target report *inside*
-    /// the body, where the shared gate guarantees the registry cannot change
-    /// underfoot.
+    /// `rrid` is the target template id, or `None` to fall back to the active
+    /// one. The key is canonicalized here, so short spellings (`S:M:…`) take
+    /// the same lock as the full RRID on every caller. Callers should resolve
+    /// and validate the target report *inside* the body, where the shared gate
+    /// guarantees the registry cannot change underfoot.
     pub async fn scoped_lock(&self, rrid: Option<&str>) -> CommandLock {
         let shared = self.gate.shared().await;
-        let key = match rrid {
-            Some(r) => r.to_owned(),
-            None => self
-                .session
-                .lock()
-                .await
-                .templates
-                .active_rrid()
-                .unwrap_or("")
-                .to_owned(),
+        let (key, known) = match rrid {
+            Some(r) => {
+                let key = canonical_template_name(r);
+                // Validated before interning: an unloaded name would otherwise
+                // leave a permanent entry in `rrid_locks` per distinct bogus
+                // string. It gets an ephemeral lock instead — the body resolves
+                // next and refuses — while the empty fallback stays a single
+                // fixed entry.
+                let known = key.is_empty() || self.session.lock().await.templates.contains(&key);
+                (key, known)
+            }
+            None => {
+                let key = self
+                    .session
+                    .lock()
+                    .await
+                    .templates
+                    .active_rrid()
+                    .unwrap_or("")
+                    .to_owned();
+                // By construction empty or a loaded key (`add` sets it,
+                // `remove` repoints it), so no validation needed.
+                (key, true)
+            }
         };
-        let lock = self.lock_for(&key);
+        let lock = if known {
+            self.lock_for(&key)
+        } else {
+            Arc::new(Mutex::new(()))
+        };
         let rrid = lock.lock_owned().await;
         CommandLock::Scoped {
             _shared: shared,
@@ -1858,8 +1869,9 @@ impl McpSession {
     async fn unlock_after_abort(&self, rrids: &[String], budget: Duration) -> AbortUnlock {
         let mut summary = AbortUnlock::default();
         // Armed before the first await: the preamble takes the canonical session
-        // mutex, which an exclusive dispatch or a `get`/`put` transfer holds for
-        // its whole duration, and leaving that outside the budget is exactly the
+        // mutex, which an exclusive dispatch holds for its whole duration
+        // (scoped calls and transfers take it only briefly to resolve and
+        // fork), and leaving that outside the budget is exactly the
         // minutes-long block `ABORT_UNLOCK_BUDGET` promises to prevent.
         let deadline = Instant::now() + budget;
 
@@ -4821,7 +4833,7 @@ mod tests {
     }
 
     /// The budget covers the preamble too: a session mutex held by a live
-    /// exclusive dispatch or a `get`/`put` transfer must not block `job_cancel`
+    /// exclusive dispatch must not block `job_cancel`
     /// for that operation's whole duration.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn forced_cancel_does_not_block_on_a_busy_session() {

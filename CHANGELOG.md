@@ -357,6 +357,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- In-band `get`/`put` take the shared gate plus their own template's lock and
+  dispatch on a per-call fork instead of holding the exclusive gate and the
+  canonical session mutex across the SFTP fan-out, so a transfer on one
+  template no longer queues behind the slowest operation anywhere else (#667).
 - A host is detected as transactional only when it has a
   `transactional-update.conf` and `/` is mounted read-only (from
   `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was

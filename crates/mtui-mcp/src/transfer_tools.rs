@@ -22,11 +22,16 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use base64ct::{Base64, Encoding};
-use mtui_core::{SingleTemplate, ambiguous_template_message};
+use mtui_core::{
+    Activation, ColorMode, CommandPromptDisplay, SingleTemplate, ambiguous_template_message,
+};
 use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
 
+use crate::capture::SharedBuf;
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
+    CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
+    run_with_heartbeat,
 };
 use crate::tools::ToolDescriptor;
 
@@ -257,26 +262,37 @@ pub(crate) fn resolve_rrid(
     }
 }
 
-/// Restores the previously-active template *pointer* after a transfer
-/// fan-out, then releases the entry guard.
+/// Take the shared gate plus the template's per-RRID lock and dispatch on a
+/// per-call fork, returning the held lock with the activated fork.
 ///
-/// The release is load-bearing (the `run_command` exclusive-arm contract): the
-/// session must hold no active guard between calls, or a later forked (scoped)
-/// call's `try_lock_owned` fails in `activate` and that command is refused as
-/// `template busy` (#524) — before which it silently answered from the null
-/// report instead.
-fn restore_active(session: &mut mtui_core::Session, prev: Option<String>) {
-    match prev {
-        Some(rrid) => {
-            let _ = session.activate(&rrid);
-        }
-        // Nothing was active before: clear the pointer again. An empty rrid
-        // always reports `false`; there is no guard to want here.
-        None => {
-            let _ = session.activate("");
+/// Resolved inside the gate so the scope key and the fork stay on the same
+/// template. Drops any leftover active guard first: no exclusive dispatch can
+/// be in flight under the shared gate, so a guard present here is stale — and
+/// it would fail the fork's activation below with `Busy`. A transient `Busy`
+/// from a racing exclusive dispatch maps to the standard `template busy`
+/// refusal.
+async fn transfer_fork(
+    session: &McpSession,
+    template: Option<&str>,
+) -> Result<(CommandLock, mtui_core::Session), McpCommandError> {
+    let scope = session.scoped_lock(template).await;
+    let mut guard = session.session().lock().await;
+    let rrid = resolve_rrid(&guard, template)?;
+    guard.release_active_guard();
+    let call_buf = SharedBuf::with_limit(session.max_output_bytes());
+    let call_display = CommandPromptDisplay::with_sink(Box::new(call_buf), ColorMode::Never);
+    let mut fork = guard.fork_for_call(call_display);
+    // Fresh token, never inherited: a hard-aborted exclusive dispatch can leave
+    // a cancelled token on the canonical session, and `activate` pushes this
+    // fork's token onto the shared `HostsGroup`.
+    fork.set_cancel_token(CancellationToken::default());
+    match fork.activate(&rrid) {
+        Activation::Active => Ok((scope, fork)),
+        Activation::Busy => Err(refuse(format!("template busy: {rrid}"))),
+        Activation::NotLoaded | Activation::Empty => {
+            Err(refuse(format!("could not activate template {rrid}")))
         }
     }
-    session.release_active_guard();
 }
 
 /// The in-band `get` body.
@@ -295,18 +311,12 @@ async fn transfer_get(
 
     let max_input = session.max_input_bytes();
 
-    // Exclusive gate for fan-out parity with the synthesised commands.
-    let _lock = session.exclusive_lock().await;
-    let mut guard = session.session().lock().await;
-    let rrid = resolve_rrid(&guard, template)?;
-    let prev = guard.templates.active_rrid().map(str::to_owned);
-    if !guard.activate(&rrid).is_active() {
-        restore_active(&mut guard, prev);
-        return Err(refuse(format!("could not activate template {rrid}")));
-    }
+    // Dispatch on a fork, so the SFTP fan-out does not hold the canonical
+    // session mutex.
+    let (scope, mut call_session) = transfer_fork(session, template).await?;
 
     let outcome = {
-        let targets = guard.targets_mut();
+        let targets = call_session.targets_mut();
         let known: BTreeSet<String> = targets.names().into_iter().collect();
         if let Some(ref names) = hosts {
             // Unknown names refuse before any transfer; a named host absent from
@@ -317,7 +327,6 @@ async fn transfer_get(
                 .filter(|n| !known.contains(*n))
                 .collect();
             if !unknown.is_empty() {
-                restore_active(&mut guard, prev);
                 return Err(refuse(format!(
                     "unknown host(s): {} (connected: {})",
                     unknown.join(", "),
@@ -333,8 +342,11 @@ async fn transfer_get(
             }
             None => targets.sftp_read_capped(Path::new(remote), max_input).await,
         };
-        restore_active(&mut guard, prev);
-        drop(guard);
+        // The fork (and its entry guard) is done: release it and the scope
+        // before formatting — both only guarded the fan-out, and the rest
+        // works on owned data.
+        drop(call_session);
+        drop(scope);
 
         // A requested host with no outcome was disabled: diagnose that before the
         // generic empty-map refusal, or an all-named-disabled call is
@@ -484,20 +496,21 @@ async fn transfer_put(
         )));
     }
 
-    let _lock = session.exclusive_lock().await;
-    let mut guard = session.session().lock().await;
-    let rrid = resolve_rrid(&guard, template)?;
-    let prev = guard.templates.active_rrid().map(str::to_owned);
-    if !guard.activate(&rrid).is_active() {
-        restore_active(&mut guard, prev);
-        return Err(refuse(format!("could not activate template {rrid}")));
-    }
-
-    // The same destination the REPL `put` uses: `{target_tempdir}/{filename}`.
-    let remote = guard.metadata().target_wd(&[filename]);
-    let map = guard.targets_mut().sftp_put_bytes(&payload, &remote).await;
-    restore_active(&mut guard, prev);
-    drop(guard);
+    // Dispatch on a fork, so the SFTP fan-out does not hold the canonical
+    // session mutex.
+    let (scope, mut call_session) = transfer_fork(session, template).await?;
+    // Destination from the activated fork — the same source the REPL `put`
+    // uses — so a `target_tempdir` of another loaded report cannot leak in.
+    let remote = call_session.metadata().target_wd(&[filename]);
+    let map = call_session
+        .targets_mut()
+        .sftp_put_bytes(&payload, &remote)
+        .await;
+    // The fork (and its entry guard) is done: release it and the scope
+    // before formatting — both only guarded the fan-out, and the rest works
+    // on owned data.
+    drop(call_session);
+    drop(scope);
 
     if map.is_empty() {
         return Err(refuse(
@@ -524,6 +537,8 @@ async fn transfer_put(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use mtui_config::Config;
     use mtui_hosts::Target;
@@ -583,6 +598,185 @@ mod tests {
             panic!("kwargs must be an object")
         };
         dispatch_transfer_tool(session, name, &map, None).await
+    }
+
+    /// #667: a transfer on one template must not queue behind activity on
+    /// another. Holding template B's scoped lock (shared gate + B's entry, as
+    /// a long dispatch would), a `put` to template A must still complete
+    /// instead of waiting for the exclusive gate.
+    #[tokio::test]
+    async fn put_on_idle_template_does_not_wait_for_busy_template() {
+        let (session, tmp) = session_with(|_| {});
+        load_with_targets(
+            &session,
+            &tmp,
+            "SUSE:Maintenance:1:1",
+            vec![enabled("h1", MockConnection::new("h1"))],
+        )
+        .await;
+        load_with_targets(
+            &session,
+            &tmp,
+            "SUSE:Maintenance:2:2",
+            vec![enabled("h2", MockConnection::new("h2"))],
+        )
+        .await;
+
+        let _busy_b = session.scoped_lock(Some("SUSE:Maintenance:2:2")).await;
+        let v = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            call(
+                &session,
+                "put",
+                json!({ "filename": "f", "content": "x", "template": "SUSE:Maintenance:1:1" }),
+            ),
+        )
+        .await
+        .expect("put on A must not wait behind B")
+        .unwrap();
+        assert_eq!(v["hosts"], json!({ "h1": "ok" }), "only A's hosts: {v}");
+    }
+
+    /// A same-template put waits for the template lock instead of failing:
+    /// holding this template's scoped lock first, a concurrent put to it must
+    /// stay parked while the holder is held, then succeed once it drops —
+    /// never refuse as busy.
+    #[tokio::test]
+    async fn same_template_put_waits_for_the_template_lock() {
+        let (session, tmp) = session_with(|_| {});
+        load_with_targets(
+            &session,
+            &tmp,
+            RRID,
+            vec![enabled("h1", MockConnection::new("h1"))],
+        )
+        .await;
+
+        let holder = session.scoped_lock(Some(RRID)).await;
+        let mut put = tokio::spawn({
+            let session = Arc::clone(&session);
+            async move { call(&session, "put", json!({ "filename": "f", "content": "x" })).await }
+        });
+        // Let the spawned put reach the lock, then assert it is still parked
+        // on the holder: finished-or-refused here means the scope lock was
+        // never taken.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut put)
+                .await
+                .is_err(),
+            "put must stay parked on the held template lock"
+        );
+        drop(holder);
+        let v = tokio::time::timeout(Duration::from_secs(10), put)
+            .await
+            .expect("put must not hang")
+            .expect("spawn ok")
+            .unwrap();
+        assert_eq!(v["hosts"]["h1"], "ok");
+    }
+
+    /// Short spellings take the same per-RRID lock as the full RRID: holding
+    /// the canonical lock, a `put` naming `S:M:1:1` must stay parked until the
+    /// holder drops. Without scope-key canonicalization the short spelling
+    /// keys a different lock and the put sails through.
+    #[tokio::test]
+    async fn short_template_spelling_shares_the_template_lock() {
+        let (session, tmp) = session_with(|_| {});
+        load_with_targets(
+            &session,
+            &tmp,
+            RRID,
+            vec![enabled("h1", MockConnection::new("h1"))],
+        )
+        .await;
+
+        let holder = session.scoped_lock(Some(RRID)).await;
+        let mut put = tokio::spawn({
+            let session = Arc::clone(&session);
+            async move {
+                call(
+                    &session,
+                    "put",
+                    json!({ "filename": "f", "content": "x", "template": "S:M:1:1" }),
+                )
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut put)
+                .await
+                .is_err(),
+            "short-spelled put must park on the canonical template lock"
+        );
+        drop(holder);
+        let v = tokio::time::timeout(Duration::from_secs(10), put)
+            .await
+            .expect("put must not hang")
+            .expect("spawn ok")
+            .unwrap();
+        assert_eq!(v["hosts"]["h1"], "ok");
+    }
+
+    /// The upload destination is read off the activated fork — the same resolve
+    /// that keyed the scope lock — so it cannot name another template's working
+    /// directory. (It passes against main too; it pins this PR's single-resolve
+    /// skew, not a live-config diversion.)
+    #[tokio::test]
+    async fn put_destination_comes_from_the_target_template() {
+        use std::path::PathBuf;
+
+        let (session, tmp) = session_with(|c| {
+            c.target_tempdir = PathBuf::from("/tmp/tpl-a");
+        });
+        let h1 = MockConnection::new("h1");
+        let h1handle = h1.clone();
+        load_with_targets(
+            &session,
+            &tmp,
+            "SUSE:Maintenance:1:1",
+            vec![enabled("h1", h1)],
+        )
+        .await;
+        {
+            let mut guard = session.session().lock().await;
+            guard.config.target_tempdir = PathBuf::from("/tmp/tpl-b");
+        }
+        let h2 = MockConnection::new("h2");
+        let h2handle = h2.clone();
+        load_with_targets(
+            &session,
+            &tmp,
+            "SUSE:Maintenance:2:2",
+            vec![enabled("h2", h2)],
+        )
+        .await;
+
+        call(
+            &session,
+            "put",
+            json!({ "filename": "f", "content": "x", "template": "SUSE:Maintenance:1:1" }),
+        )
+        .await
+        .unwrap();
+
+        let puts: Vec<PathBuf> = h1handle
+            .sftp_ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                MockSftpOp::PutBytes { remote, .. } => Some(remote),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(puts, vec![PathBuf::from("/tmp/tpl-a/f")], "{puts:?}");
+        assert!(
+            h2handle
+                .sftp_ops()
+                .iter()
+                .all(|op| !matches!(op, MockSftpOp::PutBytes { .. })),
+            "nothing uploaded to the non-target template"
+        );
     }
 
     // ---- get -------------------------------------------------------------
