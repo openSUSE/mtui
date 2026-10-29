@@ -65,6 +65,7 @@ pub use repo_manager::{RepoFailure, RepoManager, RepoOp, SetRepo};
 pub(crate) use spinner::suspend_async;
 pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinner, suspend};
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
@@ -370,13 +371,16 @@ impl Target {
 
     /// Sets the connect/command timeout for this target, in whole seconds.
     ///
-    /// The `Target` owns the timeout directly, so this updates the field
-    /// that later [`connect`](Self::connect) calls apply and that
-    /// [`timeout_secs`](Self::timeout_secs) reports. `0` disables the timeout,
-    /// which [`CommandTimeout`] represents as a zero
-    /// duration.
-    pub const fn set_timeout(&mut self, secs: u64) {
-        self.timeout = CommandTimeout::from_secs(secs);
+    /// Updates the field that later [`connect`](Self::connect) calls apply
+    /// and that [`timeout_secs`](Self::timeout_secs) reports, and pushes the
+    /// value to the live connection if there is one — otherwise a timeout
+    /// set after dialling would only take effect at the next connect. Applies
+    /// to subsequently started runs, not to one already in flight.
+    pub fn set_timeout(&mut self, secs: NonZeroU64) {
+        self.timeout = CommandTimeout::from_secs(secs.get());
+        if let Some(conn) = self.connection.as_mut() {
+            conn.set_command_timeout(self.timeout);
+        }
     }
 
     /// Returns a [`RepoManager`] bound to this target for zypper-repo lifecycle.
@@ -1220,7 +1224,7 @@ impl Target {
                             tracing::error!(
                                 host = %self.hostname, command = %shown, "command timed out"
                             );
-                            CommandLog::new(shown, "", "", -1, 0)
+                            CommandLog::new(shown, "", "", -1, 0).with_flags(false, true)
                         }
                         Err(e) => {
                             tracing::error!(
@@ -1600,11 +1604,20 @@ mod tests {
     #[test]
     fn set_timeout_updates_reported_seconds() {
         let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
-        t.set_timeout(120);
+        t.set_timeout(NonZeroU64::new(120).unwrap());
         assert_eq!(t.timeout_secs(), 120);
-        // `0` disables the timeout: zero duration.
-        t.set_timeout(0);
-        assert_eq!(t.timeout_secs(), 0);
+    }
+
+    #[tokio::test]
+    async fn set_timeout_reaches_the_live_connection() {
+        // A timeout set after dialling must move the live connection's
+        // window, not just the stored value the next connect would use.
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_timeout(NonZeroU64::new(42).unwrap());
+        assert_eq!(t.timeout_secs(), 42);
+        assert_eq!(handle.command_timeout(), std::time::Duration::from_secs(42));
     }
 
     #[test]
@@ -1774,6 +1787,10 @@ mod tests {
             assert_masked("stored command", t.lastin());
             assert!(t.lastin().starts_with("zypper rr https://***@repo.example"));
             assert_eq!(t.lastexit(), Some(-1));
+            assert!(
+                t.out().last().expect("logged").timed_out,
+                "timeout must set the flag"
+            );
             assert_eq!(handle.commands(), [cmd], "the host still got the real URL");
         }
 

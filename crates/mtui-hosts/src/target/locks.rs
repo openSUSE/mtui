@@ -3122,6 +3122,9 @@ mod tests {
         fn is_active(&self) -> bool {
             self.inner.is_active()
         }
+        fn set_command_timeout(&mut self, timeout: crate::connection::CommandTimeout) {
+            self.inner.set_command_timeout(timeout)
+        }
         async fn close(&mut self) -> Result<()> {
             self.inner.close().await
         }

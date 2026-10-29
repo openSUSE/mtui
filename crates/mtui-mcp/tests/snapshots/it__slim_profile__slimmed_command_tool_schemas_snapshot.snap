@@ -1411,7 +1411,7 @@ expression: pretty
           "type": "string"
         },
         "timeout": {
-          "description": "Timeout in seconds; \"0\" disables it",
+          "description": "Timeout in seconds; must be positive",
           "type": "integer"
         }
       },

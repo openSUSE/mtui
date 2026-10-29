@@ -77,6 +77,13 @@ pub trait Connection: Send + Sync {
     /// output, or a connection/reconnect error if the link is lost.
     async fn run(&mut self, command: &str) -> Result<CommandLog>;
 
+    /// Replaces the per-command no-output window on the live connection.
+    ///
+    /// Lets [`Target::set_timeout`](crate::Target::set_timeout) reach a host
+    /// that is already dialled: without this the stored value would only take
+    /// effect at the next [`connect`](crate::Target::connect).
+    fn set_command_timeout(&mut self, timeout: CommandTimeout);
+
     /// Reports whether the underlying transport is currently active.
     fn is_active(&self) -> bool;
 

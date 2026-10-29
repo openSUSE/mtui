@@ -1482,6 +1482,10 @@ impl Connection for SshConnection {
         self.handle.as_ref().is_some_and(|h| !h.is_closed())
     }
 
+    fn set_command_timeout(&mut self, timeout: CommandTimeout) {
+        self.timeout = timeout;
+    }
+
     async fn close(&mut self) -> Result<()> {
         // Dropping the last `Arc` ends russh-sftp's `run()` task.
         self.sftp = None;
