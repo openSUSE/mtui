@@ -912,6 +912,55 @@ async fn run_times_out_on_silent_command() {
     );
 }
 
+/// `set_command_timeout` re-arms the live no-output window: a silent command
+/// aborts after the new window, not the one the link was dialled with.
+#[tokio::test]
+async fn set_command_timeout_rearms_the_live_window() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(30)).await;
+    conn.set_command_timeout(CommandTimeout::new(Duration::from_millis(300)));
+    let start = std::time::Instant::now();
+    let err = tokio::time::timeout(Duration::from_secs(10), conn.run("sleep-forever"))
+        .await
+        .expect("a broken timeout must fail the test, not hang it")
+        .expect_err("should time out");
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Timeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "aborted by the new window, not the 30 s dial window"
+    );
+}
+
+/// `Target::set_timeout` reaches the live connection: a silent command past
+/// the new window fails instead of completing on the dial window.
+#[tokio::test]
+async fn target_set_timeout_reaches_the_live_connection() {
+    let port = start_server(SharedFs::default()).await;
+    let mut target = connect_target("h1", port, TargetState::Enabled).await;
+    target.set_timeout(std::num::NonZeroU64::new(1).unwrap());
+    // On the 5 s dial window the 2.5 s silent command would complete with
+    // exit 0, so exit -1 proves the abort came from the new 1 s window. The
+    // outer timeout fails a hang instead of hanging the suite.
+    let mut group = HostsGroup::new(vec![target], false);
+    tokio::time::timeout(Duration::from_secs(15), group.run("quiet-then-exit"))
+        .await
+        .expect("a broken timeout must fail the test, not hang it");
+    let t = group.get("h1").expect("member present");
+    assert_eq!(
+        t.lastexit(),
+        Some(-1),
+        "the 2.5 s silent command must abort on the 1 s window"
+    );
+    let log = t.out().last().expect("one command must be logged");
+    assert!(
+        log.timed_out,
+        "a channel failure also records -1, so only the timeout flag proves the abort: {log:?}"
+    );
+}
+
 #[tokio::test]
 async fn keepalive_keeps_a_quiet_command_alive() {
     let port = start_server(SharedFs::default()).await;

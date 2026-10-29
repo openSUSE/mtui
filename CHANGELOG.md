@@ -357,6 +357,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `set_timeout` pushes the new window to already-connected hosts instead of
+  only storing it for the next connect, so a timeout raised before a long
+  quiet step (or lowered to fail fast) takes effect immediately. `set_timeout
+  0` is refused: a zero window would give a headless run a deadline of now.
+  Commands aborted by the timeout are now also recorded as timed out,
+  instead of looking like any other failed command (#687).
 - Standalone `set_repo` takes the operation lock before changing repos and
   releases it afterwards, like `prepare`/`update` do — while another owner
   holds a host it now refuses (`Hosts locked: …`) instead of adding or
