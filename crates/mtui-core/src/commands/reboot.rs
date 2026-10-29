@@ -14,9 +14,14 @@ use crate::session::Session;
 /// without waiting since the SSH connection is expected to drop, then
 /// reconnecting each with retries and backoff. Transactional or not.
 ///
-/// A reboot clears `/var/lock`, so a Product Increment's per-host testing lock
-/// is re-applied afterwards from the report's `lock_comment` (empty when no PI
-/// assignment is active).
+/// A reboot clears `/var/lock` (tmpfs), so the reservations (`lock -c`) and
+/// pool claims this session held are re-applied once the host is back:
+/// another owner's lock is never overwritten. A hold that could not be
+/// re-taken is reported on its own display line naming the host and the
+/// hold — the reboot outcome itself stays a success — alongside the usual
+/// per-host verdicts. A Product Increment's per-host testing lock (from the report's
+/// `lock_comment`, empty when no PI assignment is active) is re-applied the
+/// same way.
 pub struct Reboot;
 
 #[async_trait]
@@ -68,7 +73,8 @@ impl Command for Reboot {
 
         let relock = session.metadata().base().lock_comment.clone();
         let targets = session.targets_mut();
-        let outcomes = targets.reboot_selected("reboot", &relock, &selected).await;
+        let report = targets.reboot_selected("reboot", &relock, &selected).await;
+        let outcomes = &report.outcomes;
 
         // `Err` is a failed reconnect *or* an unchanged boot id (the host never
         // rebooted); either must fail the command, so an MCP caller never sees a
@@ -76,7 +82,7 @@ impl Command for Reboot {
         let mut failed: Vec<String> = Vec::new();
         let mut ok: Vec<String> = Vec::new();
         let mut failed_lines: Vec<String> = Vec::new();
-        for (host, outcome) in &outcomes {
+        for (host, outcome) in outcomes {
             match outcome {
                 Ok(()) => ok.push(host.clone()),
                 Err(reason) => {
@@ -99,6 +105,12 @@ impl Command for Reboot {
         for line in &failed_lines {
             session.display.println(line);
         }
+        // A lost hold is degradation, not failure: the host did reboot, but
+        // the reservation or pool claim it carried is gone. Each gets its own
+        // display line so an unattended MCP caller sees it.
+        for loss in &report.lost_holds {
+            session.display.println(&loss.describe());
+        }
 
         if failed.is_empty() {
             Ok(())
@@ -117,6 +129,50 @@ mod tests {
     use crate::commands::testkit::{
         empty_session, matches, session_with_hosts, session_with_reboot_outcomes,
     };
+
+    #[tokio::test]
+    async fn lost_hold_is_printed_on_the_display() {
+        // A reservation lost in the reboot gap must reach the display (and so
+        // an MCP caller), not only the server log — while the reboot outcome
+        // itself stays a success.
+        use mtui_hosts::{Connection, MockConnection, TARGET_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+        use mtui_types::hostlog::CommandLog;
+
+        use crate::commands::testkit::session_with_targets;
+
+        let mock = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_changing_boot_id();
+        let mut handle = mock.clone();
+        let mut target = Target::with_connection("h1", TargetState::Enabled, Box::new(mock));
+        target.lock("operator hold").await.expect("setup lock held");
+        handle
+            .sftp_remove(std::path::Path::new(TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+        handle
+            .sftp_write(
+                std::path::Path::new(TARGET_LOCK_PATH),
+                b"1700000000:alice:4242:busy",
+                false,
+            )
+            .await
+            .expect("foreign claim");
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![target]);
+
+        let args = matches(&Reboot, &[]);
+        Reboot.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("rebooted & reconnected"), "{out}");
+        assert!(
+            out.contains("reboot cleared the operation lock")
+                && out.contains("operator hold")
+                && out.contains("alice"),
+            "lost hold named on the display: {out}"
+        );
+    }
 
     #[test]
     fn complete_offers_target_and_hosts() {

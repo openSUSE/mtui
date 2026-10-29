@@ -48,7 +48,7 @@ pub mod spinner;
 
 pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
-pub use hostgroup::{HostsGroup, LockOutcome};
+pub use hostgroup::{HostsGroup, LockOutcome, LostHold, LostHoldKind, LostHoldProof, RebootReport};
 pub use locks::{
     Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, PoolLock,
     RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
@@ -528,6 +528,41 @@ impl Target {
         }
     }
 
+    /// The operation-lock comment this session stamped, if it holds the lock.
+    ///
+    /// A reboot wipes `/var/lock` but not this record; the reboot lifecycle
+    /// re-applies exactly this comment.
+    #[must_use]
+    pub(crate) fn held_lock_comment(&self) -> Option<String> {
+        self.lock.as_ref()?.held_comment()
+    }
+
+    /// The pool-claim comment this session stamped, if it holds the claim.
+    ///
+    /// See [`held_lock_comment`](Self::held_lock_comment).
+    #[must_use]
+    pub(crate) fn held_pool_comment(&self) -> Option<String> {
+        self.pool_lock.as_ref()?.held_comment()
+    }
+
+    /// Drops this session's in-memory operation-lock record after the remote
+    /// lock proved to be another owner's — a hold lost across a reboot that a
+    /// re-take refused to overwrite. The remote file is untouched; a later
+    /// plain `unlock` then correctly reports the session holds nothing instead
+    /// of trying to release someone else's lock.
+    pub(crate) fn forget_operation_hold(&mut self) {
+        if let Some(lock) = self.lock.as_mut() {
+            lock.mark_released();
+        }
+    }
+
+    /// [`forget_operation_hold`](Self::forget_operation_hold) for the pool claim.
+    pub(crate) fn forget_pool_hold(&mut self) {
+        if let Some(pool) = self.pool_lock.as_mut() {
+            pool.mark_released();
+        }
+    }
+
     /// Releases this target's pool claim, best-effort.
     ///
     /// Delegates to `PoolLock::unlock`
@@ -664,7 +699,7 @@ impl Target {
     /// [`HostError::TargetLocked`], which loads before it reports; see
     /// [`TargetLock::loaded_owner`]. Default (empty) when not connected.
     #[must_use]
-    fn loaded_lock_owner(&self) -> LockOwner {
+    pub(crate) fn loaded_lock_owner(&self) -> LockOwner {
         self.lock
             .as_ref()
             .map(TargetLock::loaded_owner)
@@ -673,7 +708,7 @@ impl Target {
 
     /// [`loaded_lock_owner`](Self::loaded_lock_owner) for the pool claim.
     #[must_use]
-    fn loaded_pool_owner(&self) -> LockOwner {
+    pub(crate) fn loaded_pool_owner(&self) -> LockOwner {
         self.pool_lock
             .as_ref()
             .map(PoolLock::loaded_owner)

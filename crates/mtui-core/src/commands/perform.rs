@@ -71,12 +71,28 @@ pub(super) enum PerformOp {
     Update { noprepare: bool, newpackage: bool },
 }
 
-/// The success confirmation shared by every [`drive`] op, so no successful
-/// dispatch is an empty MCP result.
-fn confirm(session: &mut Session, verb: &str, hosts_label: &str) {
-    session
-        .display
-        .println(&format!("{verb} completed on {hosts_label}"));
+/// The success confirmation shared by every non-`update` [`drive`] op, so no
+/// successful dispatch is an empty MCP result. Qualified with the degradation
+/// count like [`confirm_update`]: the verdict prints above the diagnostics
+/// (the head is what survives `mcp_max_output_bytes`), so an unqualified head
+/// line would read as a clean success to a truncated or skim-read result.
+/// Only degradations count; routine check sections never qualify the verdict.
+fn confirm(session: &mut Session, verb: &str, hosts_label: &str, diagnostics: &[Diagnostic]) {
+    let n = degradation_count(diagnostics);
+    if n == 0 {
+        session
+            .display
+            .println(&format!("{verb} completed on {hosts_label}"));
+        return;
+    }
+    let plural = if n == 1 { "" } else { "s" };
+    session.display.println(&format!(
+        "{verb} completed on {hosts_label}, with {n} degradation{plural} reported below"
+    ));
+}
+
+fn degradation_count(diagnostics: &[Diagnostic]) -> usize {
+    diagnostics.iter().filter(|d| d.degradation).count()
 }
 
 /// `update`'s confirmation, qualified when the flow recorded a
@@ -97,9 +113,9 @@ fn confirm(session: &mut Session, verb: &str, hosts_label: &str) {
 /// would be false besides: the thing it points at *is* the patch's own check
 /// output, and the patch's checks are exactly what passed (#534 review).
 fn confirm_update(session: &mut Session, hosts_label: &str, diagnostics: &[Diagnostic]) {
-    let n = diagnostics.iter().filter(|d| d.degradation).count();
+    let n = degradation_count(diagnostics);
     if n == 0 {
-        confirm(session, "update", hosts_label);
+        confirm(session, "update", hosts_label, diagnostics);
         return;
     }
     let plural = if n == 1 { "" } else { "s" };
@@ -162,20 +178,24 @@ pub(super) async fn drive(
     // The host names the op ran over, for the success confirmation line.
     let hosts_label = selected.names().join(", ");
     let report = session.metadata();
+    // Non-fatal flow diagnostics (holds lost in a transactional reboot gap)
+    // are collected here and rendered on both paths, so an unattended MCP
+    // caller sees them.
+    let mut diagnostics = Vec::new();
     // The flow's `Err` message already names the failed host(s)/reason. Success
     // is confirmed to the display so an MCP call is never a silent "success".
     let (verb, outcome): (&str, Result<(), CommandError>) = match &op {
         PerformOp::Install(pkgs) => (
             "install",
             report
-                .perform_install(&mut selected, pkgs)
+                .perform_install(&mut selected, pkgs, &mut diagnostics)
                 .await
                 .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Uninstall(pkgs) => (
             "uninstall",
             report
-                .perform_uninstall(&mut selected, pkgs)
+                .perform_uninstall(&mut selected, pkgs, &mut diagnostics)
                 .await
                 .map_err(|e| map_flow_error(&e)),
         ),
@@ -187,14 +207,21 @@ pub(super) async fn drive(
         } => (
             "prepare",
             report
-                .perform_prepare(&mut selected, packages, *force, *testing, *installed_only)
+                .perform_prepare(
+                    &mut selected,
+                    packages,
+                    *force,
+                    *testing,
+                    *installed_only,
+                    &mut diagnostics,
+                )
                 .await
                 .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Downgrade(pkgs) => (
             "downgrade",
             report
-                .perform_downgrade(&mut selected, pkgs)
+                .perform_downgrade(&mut selected, pkgs, &mut diagnostics)
                 .await
                 .map_err(|e| map_flow_error(&e)),
         ),
@@ -204,9 +231,7 @@ pub(super) async fn drive(
         } => {
             // `update` alone surfaces a failure verdict, so restore the split
             // *before* returning or a failed update strands the unselected
-            // hosts. Its non-fatal diagnostics are collected here — the one
-            // place the display is in scope — and rendered on both paths.
-            let mut diagnostics = Vec::new();
+            // hosts.
             let update_result = report
                 .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
                 .await;
@@ -225,8 +250,11 @@ pub(super) async fn drive(
     };
 
     session.restore_split_targets(selected, remainder);
+    if outcome.is_ok() {
+        confirm(session, verb, &hosts_label, &diagnostics);
+    }
+    render_diagnostics(session, &diagnostics);
     outcome?;
-    confirm(session, verb, &hosts_label);
     Ok(())
 }
 
@@ -373,8 +401,8 @@ mod tests {
 
     use crate::commands::Update;
     use crate::commands::testkit::{
-        matches, session_with_cancelled_update, session_with_degraded_update, session_with_hosts,
-        session_with_update_diagnostics,
+        matches, session_with_cancelled_update, session_with_degraded_install,
+        session_with_degraded_update, session_with_hosts, session_with_update_diagnostics,
     };
 
     const RRID: &str = "SUSE:Maintenance:1:1";
@@ -501,6 +529,79 @@ mod tests {
             "{:?}",
             buf.contents()
         );
+    }
+
+    /// The non-`update` ops route flow diagnostics to the display too: a
+    /// degradation `perform_install` records must reach an MCP caller, not
+    /// only the server log.
+    #[tokio::test]
+    async fn install_degradation_reaches_the_display() {
+        let (mut session, buf) = session_with_degraded_install(RRID, &["h1"]);
+        drive(
+            &mut session,
+            &no_args(),
+            PerformOp::Install(vec!["pkg".to_owned()]),
+        )
+        .await
+        .unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("install lost a hold in the reboot gap (h1)"),
+            "the degradation must be rendered: {out:?}"
+        );
+    }
+
+    /// Like `update`, the other ops qualify the head line when the run
+    /// degraded: it is the only line a truncated MCP result carries.
+    #[tokio::test]
+    async fn a_degraded_install_qualifies_its_confirmation() {
+        let (mut session, buf) = session_with_degraded_install(RRID, &["h1"]);
+        drive(
+            &mut session,
+            &no_args(),
+            PerformOp::Install(vec!["pkg".to_owned()]),
+        )
+        .await
+        .unwrap();
+        let out = buf.contents();
+        let head = out.lines().next().unwrap_or_default();
+        assert!(head.starts_with("install completed on h1,"), "got: {out:?}");
+        assert!(
+            head.contains("1 degradation reported below"),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn non_update_confirm_counts_degradations_in_plural() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        confirm(
+            &mut session,
+            "downgrade",
+            "h1",
+            &[
+                Diagnostic::degradation("first"),
+                Diagnostic::degradation("second"),
+            ],
+        );
+        assert_eq!(
+            buf.contents().trim(),
+            "downgrade completed on h1, with 2 degradations reported below"
+        );
+    }
+
+    #[test]
+    fn non_update_confirm_ignores_routine_sections() {
+        // Only degradations qualify the verdict; routine check output rides
+        // along without changing the head line.
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        confirm(
+            &mut session,
+            "prepare",
+            "h1",
+            &[Diagnostic::plain("not supported by its vendor")],
+        );
+        assert_eq!(buf.contents().trim(), "prepare completed on h1");
     }
 
     #[tokio::test]

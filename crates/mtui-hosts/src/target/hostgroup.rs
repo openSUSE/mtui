@@ -96,6 +96,181 @@ pub enum LockOutcome {
     Skipped(String),
 }
 
+/// Which `/var/lock` hold a reboot wiped and could not re-take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LostHoldKind {
+    /// The operation/zypper lock (`/var/lock/mtui.lock`).
+    OperationLock,
+    /// The pool-claim lock (`/var/lock/mtui-pool.lock`).
+    PoolClaim,
+}
+
+impl LostHoldKind {
+    /// The operator-facing noun for [`LostHold::describe`].
+    #[must_use]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OperationLock => "operation lock",
+            Self::PoolClaim => "pool claim",
+        }
+    }
+}
+
+/// Whether the reboot proved the hold gone or only failed to re-take it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LostHoldProof {
+    /// Another owner claimed the hold in the gap. The hold is gone.
+    Proven,
+    /// The re-take failed with a transport error — or found a corrupt line,
+    /// which reads the same way: dropping the record would make a later
+    /// plain `unlock` skip the host and strand the corrupt file, while the
+    /// kept record surfaces it on the next release attempt. No wipe is
+    /// proven, so no wipe is claimed and the record is kept.
+    Unproven,
+}
+
+/// A hold this session recorded before a reboot that could not be re-taken
+/// afterwards: another owner claimed the host in the gap, or the re-take
+/// failed and the host may be unlocked.
+///
+/// The reboot outcome stays `Ok` — the host did reboot — but the hold is
+/// reported through the display/diagnostics layer rather than failing the
+/// run. A proven loss (a line another owner holds) drops its in-memory
+/// record, so a later plain `unlock` stops claiming it; an unproven one (a
+/// transport error, or a corrupt line that is not ours) keeps the record,
+/// since the hold may still be ours — and a corrupt file must stay visible
+/// to the next release attempt rather than skipped over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LostHold {
+    /// The host the hold was lost on.
+    pub host: String,
+    /// Which hold was lost.
+    pub kind: LostHoldKind,
+    /// The comment the lost hold carried.
+    pub comment: String,
+    /// Why the hold is reported: the other owner's lock line for a proven
+    /// loss; `{error}; the host may be unlocked` for an unproven one (a
+    /// transport error, or the invalid-file message for a corrupt line).
+    pub reason: String,
+    /// Whether the loss is proven or not; a proven loss drops its record.
+    pub proof: LostHoldProof,
+}
+
+impl LostHold {
+    /// The operator-facing one-liner, naming the host, the hold and why the
+    /// re-take did not restore it.
+    ///
+    /// A proven loss reads "reboot cleared …": the reboot wiped `/var/lock`
+    /// and the hold is gone. An unproven one reads "re-take … failed": the
+    /// host was reachable but its lock line could not be read, so no wipe
+    /// is claimed.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        if self.proof == LostHoldProof::Unproven {
+            if self.comment.is_empty() && self.kind == LostHoldKind::OperationLock {
+                return format!(
+                    "{}: re-take of the operation lock failed; {}",
+                    self.host, self.reason
+                );
+            }
+            return format!(
+                "{}: re-take of the {} ({}) failed; {}",
+                self.host,
+                self.kind.as_str(),
+                self.comment,
+                self.reason
+            );
+        }
+        if self.comment.is_empty() && self.kind == LostHoldKind::OperationLock {
+            return format!(
+                "{}: reboot cleared the operation lock; {}",
+                self.host, self.reason
+            );
+        }
+        format!(
+            "{}: reboot cleared the {} ({}); {}",
+            self.host,
+            self.kind.as_str(),
+            self.comment,
+            self.reason
+        )
+    }
+}
+
+/// Records one hold the reboot wiped that could not be re-taken: builds the
+/// [`LostHold`], warns once, and pushes onto `lost`. A proven loss also
+/// drops the target's in-memory record, so a later plain `unlock` stops
+/// claiming it.
+fn record_hold_loss(
+    target: &mut Target,
+    lost: &std::sync::Mutex<Vec<LostHold>>,
+    kind: LostHoldKind,
+    comment: String,
+    reason: String,
+    proof: LostHoldProof,
+) {
+    let loss = LostHold {
+        host: target.hostname().to_owned(),
+        kind,
+        comment,
+        reason,
+        proof,
+    };
+    if proof == LostHoldProof::Proven {
+        tracing::warn!(loss = %loss.describe(), "hold lost across the reboot");
+        match kind {
+            LostHoldKind::OperationLock => target.forget_operation_hold(),
+            LostHoldKind::PoolClaim => target.forget_pool_hold(),
+        }
+    } else {
+        tracing::warn!(loss = %loss.describe(), "hold may be lost across the reboot");
+    }
+    lost.lock().unwrap().push(loss);
+}
+
+/// What a reboot fan-out took with it: the per-host outcomes plus the holds
+/// the reboot wiped that could not be re-taken.
+#[derive(Debug, Default)]
+pub struct RebootReport {
+    /// Each rebooted host's outcome, keyed by hostname.
+    pub outcomes: BTreeMap<String, Result<()>>,
+    /// One entry per hold the reboot wiped that could not be re-taken: a
+    /// hold another owner claimed in the gap (its record dropped), or a
+    /// re-take that failed with a transport error or found a corrupt line
+    /// (its record kept).
+    pub lost_holds: Vec<LostHold>,
+}
+
+impl RebootReport {
+    /// The per-host failures, in [`RebootFailure`] form for the update
+    /// workflow's rollback routing. A host whose outcome is `Ok` — including
+    /// one that lost a hold — contributes nothing.
+    #[must_use]
+    pub fn failures(&self) -> Vec<RebootFailure> {
+        self.outcomes
+            .iter()
+            .filter_map(|(host, outcome)| {
+                let e = outcome.as_ref().err()?;
+                Some(RebootFailure {
+                    host: host.clone(),
+                    cause: reboot_failure_cause(e),
+                    reason: e.to_string(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The `/var/lock` holds one host recorded before a reboot, keyed by
+/// hostname for the post-reboot re-apply.
+#[derive(Debug, Default, Clone)]
+struct HeldHolds {
+    /// The operation-lock comment this session stamped, if it holds one.
+    op: Option<String>,
+    /// The pool-claim comment this session stamped, if it holds one.
+    pool: Option<String>,
+}
+
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
 /// All hosts in a group are expected to be enabled; the lifetime of the object
@@ -835,13 +1010,12 @@ impl HostsGroup {
     /// not held by this instance reports `Skipped` with a `list_locks`/
     /// `--force` pointer, never attempting the release.
     ///
-    /// **Residual**: the in-memory hold record is per-object and a
-    /// [`reboot`](Self::reboot) reconnect rebuilds `TargetLock` from scratch,
-    /// clearing it — so a lock this session logically owns becomes
-    /// `--force`-only for a plain `unlock` after a reconnect.
-    /// [`reboot`](Self::reboot) already re-locks with the same comment when
-    /// `relock_comment` is non-empty, which restores the hold this method
-    /// scopes on.
+    /// The in-memory hold record survives a reboot (only `/var/lock` is
+    /// wiped), and both reboot paths re-apply the recorded holds once the
+    /// host reconnects — so a lock this session owns stays releasable by a
+    /// plain `unlock`, and a hold that could not be re-taken is reported
+    /// (a refused re-take drops its record; a re-take that failed with a
+    /// transport error, or found a corrupt line, keeps it).
     pub async fn unlock_taken(
         &mut self,
         names: &std::collections::BTreeSet<String>,
@@ -1542,18 +1716,138 @@ impl HostsGroup {
     ///
     /// The boot-id snapshot, reboot, reconnect, and verify phases all restrict to
     /// hosts in `names`; the post-reboot relock re-applies only to that subset.
-    /// The returned outcome map contains an entry for every named host that
-    /// exists in the group (unknown names are silently skipped, like the
-    /// whole-group fan-out). Honours the command's `-t/--target` selection so an
-    /// operator never reboots hosts they did not ask for.
+    /// The returned [`RebootReport`] carries the outcome map — an entry for
+    /// every named host that exists in the group (unknown names are silently
+    /// skipped, like the whole-group fan-out) — plus the holds the reboot
+    /// wiped that could not be re-taken. Honours the command's `-t/--target`
+    /// selection so an operator never reboots hosts they did not ask for.
     pub async fn reboot_selected(
         &mut self,
         command: &str,
         relock_comment: &str,
         names: &std::collections::BTreeSet<String>,
-    ) -> BTreeMap<String, Result<()>> {
+    ) -> RebootReport {
         self.reboot_where(command, relock_comment, |t| names.contains(t.hostname()))
             .await
+    }
+
+    /// Snapshots this session's `/var/lock` holds for the selected hosts, so
+    /// the reboot paths can re-apply exactly what the reboot wiped.
+    /// `reboot_where` snapshots *before* its relock phase overwrites the
+    /// in-memory record.
+    fn snapshot_holds<S>(&self, select: &S) -> BTreeMap<String, HeldHolds>
+    where
+        S: Fn(&Target) -> bool,
+    {
+        self.data
+            .values()
+            .filter(|t| select(t))
+            .map(|t| {
+                (
+                    t.hostname().to_owned(),
+                    HeldHolds {
+                        op: t.held_lock_comment(),
+                        pool: t.held_pool_comment(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Re-applies the holds a reboot wiped (`/var/lock` lives on tmpfs): for
+    /// every selected host whose reconnect succeeded, re-take the operation
+    /// lock and pool claim recorded in `held`.
+    ///
+    /// Re-taking is idempotent and never overwrites someone else's lock, so
+    /// the gate is the reconnect — not the verified reboot. Hosts whose
+    /// reconnect failed keep their outcome and their untouched holds. A hold
+    /// the re-take proves gone — taken by someone else in the gap — is
+    /// collected into `lost` (and its in-memory record dropped, so a later
+    /// plain `unlock` stops claiming it); it never fails the run. A re-take
+    /// that fails with a transport error, or finds a corrupt line, is
+    /// collected into `lost` too — `/var/lock` may hold anything, so the
+    /// host may be unlocked while the record says held — but its record is
+    /// kept: the hold may still be ours, and dropping a corrupt line would
+    /// strand it under a later plain `unlock`'s skip. A host that held
+    /// nothing is untouched.
+    async fn reapply_holds<S>(
+        data: &mut BTreeMap<String, Target>,
+        is_repl: bool,
+        max_parallel: usize,
+        select: &S,
+        reconnected: &std::sync::Mutex<BTreeSet<String>>,
+        held: &BTreeMap<String, HeldHolds>,
+        lost: &std::sync::Mutex<Vec<LostHold>>,
+    ) where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
+        actions::run_fanout(data, is_repl, max_parallel, Some("relock"), select, |t| {
+            let (held, lost, reconnected) = (held, lost, reconnected);
+            Box::pin(async move {
+                if !reconnected.lock().unwrap().contains(t.hostname()) {
+                    return;
+                }
+                let Some(HeldHolds { op, pool }) = held.get(t.hostname()) else {
+                    return;
+                };
+                if let Some(comment) = op {
+                    match t.lock(comment).await {
+                        Ok(()) => {}
+                        Err(HostError::TargetLocked(reason)) => {
+                            record_hold_loss(
+                                t,
+                                lost,
+                                LostHoldKind::OperationLock,
+                                comment.clone(),
+                                reason,
+                                LostHoldProof::Proven,
+                            );
+                        }
+                        Err(e) => {
+                            record_hold_loss(
+                                t,
+                                lost,
+                                LostHoldKind::OperationLock,
+                                comment.clone(),
+                                format!("{e}; the host may be unlocked"),
+                                LostHoldProof::Unproven,
+                            );
+                        }
+                    }
+                }
+                if let Some(comment) = pool {
+                    match t.pool_claim(comment).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let owner = t.loaded_pool_owner();
+                            record_hold_loss(
+                                t,
+                                lost,
+                                LostHoldKind::PoolClaim,
+                                comment.clone(),
+                                if owner.by.is_empty() {
+                                    "pool claim held by another template".to_owned()
+                                } else {
+                                    format!("pool claim held by {} since {}", owner.by, owner.since)
+                                },
+                                LostHoldProof::Proven,
+                            );
+                        }
+                        Err(e) => {
+                            record_hold_loss(
+                                t,
+                                lost,
+                                LostHoldKind::PoolClaim,
+                                comment.clone(),
+                                format!("{e}; the host may be unlocked"),
+                                LostHoldProof::Unproven,
+                            );
+                        }
+                    }
+                }
+            }) as actions::BoxTargetFut<'_>
+        })
+        .await;
     }
 
     /// Shared implementation behind [`reboot_selected`](Self::reboot_selected):
@@ -1565,7 +1859,7 @@ impl HostsGroup {
         command: &str,
         relock_comment: &str,
         select: S,
-    ) -> BTreeMap<String, Result<()>>
+    ) -> RebootReport
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
@@ -1573,7 +1867,7 @@ impl HostsGroup {
 
         if self.data.is_empty() {
             tracing::info!("No hosts to reboot");
-            return BTreeMap::new();
+            return RebootReport::default();
         }
         let names: Vec<String> = self
             .data
@@ -1583,10 +1877,16 @@ impl HostsGroup {
             .collect();
         if names.is_empty() {
             tracing::info!("No selected hosts to reboot");
-            return BTreeMap::new();
+            return RebootReport::default();
         }
         tracing::info!(hosts = %names.join(", "), "Rebooting");
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+
+        // Snapshot this session's holds before the reboot wipes `/var/lock`
+        // — and before the relock below overwrites the in-memory record.
+        // Only hosts whose reconnect succeeds get their holds re-applied
+        // after.
+        let held = self.snapshot_holds(&select);
 
         // Phase 1: record boot ids before rebooting (concurrently), so we can
         // confirm a fresh boot afterwards.
@@ -1645,6 +1945,10 @@ impl HostsGroup {
         .await;
 
         // Phase 3: reconnect every host (concurrently) with retry + backoff.
+        // The re-apply gate reads this set, not the verified outcomes: a
+        // host that came back holds a wiped `/var/lock` whether or not its
+        // boot id later verified, and re-taking is idempotent.
+        let reconnected: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -1653,12 +1957,14 @@ impl HostsGroup {
             &select,
             |t| {
                 let outcomes = &outcomes;
+                let reconnected = &reconnected;
                 Box::pin(async move {
                     let hostname = t.hostname().to_owned();
                     let retry = t.reboot_retries();
                     let outcome = match t.reconnect(retry, true).await {
                         Ok(()) => {
                             tracing::info!(host = %hostname, "is back up");
+                            reconnected.lock().unwrap().insert(hostname.clone());
                             Ok(())
                         }
                         Err(e) => {
@@ -1718,11 +2024,43 @@ impl HostsGroup {
             tracing::info!("Re-applying lock after reboot");
             // Re-lock only the hosts that were rebooted (a reboot clears
             // `/var/lock`); a targeted reboot must not touch unselected hosts.
-            let relock: std::collections::BTreeSet<String> = names.iter().cloned().collect();
-            let _ = self.lock_selected(relock_comment, &relock).await;
+            // Hosts that already hold an operation lock are re-taken by phase
+            // 5 with loss reporting, so stamping the relock here too would be
+            // an extra SFTP write and a brief wrong stamp before the recorded
+            // hold overwrites it. Skipping every held host keeps the outcome
+            // the same — the reservation still wins — without the transient.
+            let relock: std::collections::BTreeSet<String> = names
+                .iter()
+                .filter(|h| held.get(h.as_str()).is_none_or(|holds| holds.op.is_none()))
+                .cloned()
+                .collect();
+            if !relock.is_empty() {
+                let _ = self.lock_selected(relock_comment, &relock).await;
+            }
         }
 
-        outcomes.into_inner().unwrap()
+        // Phase 5: re-apply the holds the reboot wiped, exactly as recorded
+        // above, for every host whose reconnect succeeded. A reservation or
+        // pool claim held before the reboot is gone with `/var/lock`; a host
+        // that failed to reconnect keeps its outcome and its untouched holds.
+        // A hold that could not be re-taken lands in `lost_holds` for
+        // the caller to report; it never fails the run.
+        let lost: Mutex<Vec<LostHold>> = Mutex::new(Vec::new());
+        Self::reapply_holds(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            &select,
+            &reconnected,
+            &held,
+            &lost,
+        )
+        .await;
+
+        RebootReport {
+            outcomes: outcomes.into_inner().unwrap(),
+            lost_holds: lost.into_inner().unwrap(),
+        }
     }
 
     /// Reboots the *transactional* hosts named in `reboot` and reconnects each.
@@ -1733,11 +2071,12 @@ impl HostsGroup {
     /// backoff, with the same boot-id snapshot and verification
     /// [`reboot`](Self::reboot) performs. A no-op when the map is empty.
     ///
-    /// Returns each named host's outcome, mirroring
-    /// [`reboot_where`](Self::reboot_where): `Err(HostError)` when the reboot is
+    /// Returns each named host's outcome plus the holds the reboot wiped
+    /// that could not be re-taken, with the same phase structure as the
+    /// selected-host reboot: `Err(HostError)` when the reboot is
     /// known to have failed, `Ok(())` otherwise. Note `Ok(())` is "nothing
-    /// contradicted it", not proof: an unreadable boot id (see
-    /// [`verify_boot_id`](Self::verify_boot_id)) leaves the host unverified and
+    /// contradicted it", not proof: an unreadable boot id (see the
+    /// `verify_boot_id` step) leaves the host unverified and
     /// passing, logged at WARN — failing open here beats reverting a fleet on a
     /// probe that timed out. A caller that discards this map
     /// cannot tell a transactional host whose snapshot never activated from one
@@ -1757,14 +2096,11 @@ impl HostsGroup {
     /// Earliest phase wins: a host that could not be sent the reboot is
     /// reported as such rather than as whatever the later phases make of it,
     /// since those verdicts are consequences of the first failure.
-    async fn reboot_transactional(
-        &mut self,
-        reboot: &BTreeMap<String, String>,
-    ) -> BTreeMap<String, Result<()>> {
+    async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) -> RebootReport {
         use std::sync::Mutex;
 
         if reboot.is_empty() {
-            return BTreeMap::new();
+            return RebootReport::default();
         }
         // The single predicate every phase below shares. A **disabled** host is
         // skipped by all of them: `plans()` resolves a plan per target
@@ -1788,6 +2124,11 @@ impl HostsGroup {
             "Rebooting transactional hosts"
         );
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+
+        // Snapshot this session's holds before the reboot wipes `/var/lock`.
+        // Only hosts whose reconnect succeeds get their holds re-applied
+        // after.
+        let held = self.snapshot_holds(&selected);
 
         let outcomes: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
 
@@ -1840,7 +2181,9 @@ impl HostsGroup {
         )
         .await;
 
-        // Phase 3: reconnect each host once it is back up.
+        // Phase 3: reconnect each host once it is back up. The re-apply gate
+        // reads this set (a host that came back holds a wiped `/var/lock`).
+        let reconnected: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -1849,12 +2192,14 @@ impl HostsGroup {
             &selected,
             |t| {
                 let outcomes = &outcomes;
+                let reconnected = &reconnected;
                 Box::pin(async move {
                     let hostname = t.hostname().to_owned();
                     let retry = t.reboot_retries();
                     let outcome = match t.reconnect(retry, true).await {
                         Ok(()) => {
                             tracing::info!(host = %hostname, "is back up");
+                            reconnected.lock().unwrap().insert(hostname.clone());
                             Ok(())
                         }
                         Err(e) => {
@@ -1916,7 +2261,24 @@ impl HostsGroup {
             },
         )
         .await;
-        outcomes.into_inner().unwrap()
+
+        // Phase 5: re-apply the holds the reboot wiped for reconnected hosts;
+        // a hold that could not be re-taken lands in `lost_holds`.
+        let lost: Mutex<Vec<LostHold>> = Mutex::new(Vec::new());
+        Self::reapply_holds(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            &selected,
+            &reconnected,
+            &held,
+            &lost,
+        )
+        .await;
+        RebootReport {
+            outcomes: outcomes.into_inner().unwrap(),
+            lost_holds: lost.into_inner().unwrap(),
+        }
     }
 
     /// Decides whether `hostname`'s boot id confirms a reboot, logging as before.
@@ -2066,23 +2428,12 @@ impl OperationGroup for HostsGroup {
         })
     }
 
-    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure> {
+    async fn reboot(&mut self, reboot: HostCommandMap) -> RebootReport {
         // Only transactional hosts contribute reboot entries; the reboot is
         // fired fire-and-forget on each, then each is reconnected
         // (sorted) with the connection's retry + backoff.
         let map: BTreeMap<String, String> = reboot.into_iter().collect();
-        HostsGroup::reboot_transactional(self, &map)
-            .await
-            .into_iter()
-            .filter_map(|(host, outcome)| {
-                let e = outcome.err()?;
-                Some(RebootFailure {
-                    host,
-                    cause: reboot_failure_cause(&e),
-                    reason: e.to_string(),
-                })
-            })
-            .collect()
+        HostsGroup::reboot_transactional(self, &map).await
     }
 
     async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
@@ -2096,6 +2447,7 @@ mod tests {
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
+    use crate::connection::Connection;
     use crate::connection::MockConnection;
     use crate::target::TARGET_LOCK_PATH;
 
@@ -2855,7 +3207,10 @@ mod tests {
 
         let all: std::collections::BTreeSet<String> =
             ["h1".to_owned(), "h2".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
 
         // Each host was sent the reboot fire-and-forget and reconnected once.
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
@@ -2889,7 +3244,10 @@ mod tests {
         );
 
         let only_h1: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &only_h1).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &only_h1)
+            .await
+            .outcomes;
 
         // h1 was rebooted and reconnected; h2 was left entirely untouched.
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
@@ -2923,6 +3281,881 @@ mod tests {
         assert_eq!(h1.reconnect_count(), 1);
     }
 
+    /// #677: a reservation held across a reboot must be re-applied: the
+    /// reboot wipes `/var/lock` (emulated here by removing the file), so
+    /// without a re-take the host would be left unlocked.
+    #[tokio::test]
+    async fn reboot_reapplies_a_reservation_it_found() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        // The reboot wipes /var/lock (tmpfs); the mock filesystem does not.
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
+        assert!(outcomes["h1"].is_ok());
+
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("reservation re-applied");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(":operator hold"),
+            "reservation comment restored: {contents:?}"
+        );
+    }
+
+    /// #677: a pool claim held across a reboot must be re-applied.
+    #[tokio::test]
+    async fn reboot_reapplies_the_pool_claim_it_held() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        let rrid = "SUSE:Maintenance:1:2";
+        let comment = format!("mtui pool {rrid} [bob]");
+        g.get_mut("h1").unwrap().set_rrid(rrid);
+        assert!(
+            g.get_mut("h1")
+                .unwrap()
+                .pool_claim(&comment)
+                .await
+                .expect("pool_claim"),
+            "claim won"
+        );
+        h1.sftp_remove(std::path::Path::new(crate::target::POOL_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
+        assert!(outcomes["h1"].is_ok());
+
+        let contents = h1
+            .file_contents(crate::target::POOL_LOCK_PATH)
+            .expect("pool claim re-applied");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(&comment),
+            "pool claim comment restored: {contents:?}"
+        );
+    }
+
+    /// #677: a hold taken by someone else in the reboot gap is reported, not
+    /// overwritten — and never fails the reboot outcome. The loss surfaces in
+    /// the returned report (not only in `tracing`), and the stale in-memory
+    /// record is dropped, so a later plain `unlock` stops claiming the lock
+    /// instead of trying to release someone else's.
+    #[tokio::test]
+    async fn reboot_reports_a_hold_lost_to_another_owner() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+        // Another tester claims the host while it is down.
+        h1.sftp_write(
+            std::path::Path::new(crate::target::TARGET_LOCK_PATH),
+            b"1700000000:alice:4242:busy",
+            false,
+        )
+        .await
+        .expect("foreign claim");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "a lost hold warns, it does not fail the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "the lost hold must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::OperationLock);
+        assert_eq!(loss.comment, "operator hold");
+        assert!(
+            loss.reason.contains("alice"),
+            "the loss names the other owner: {}",
+            loss.reason
+        );
+        assert!(
+            loss.describe().contains("h1") && loss.describe().contains("operator hold"),
+            "the report line names the host and the hold: {}",
+            loss.describe()
+        );
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("foreign claim left in place");
+        assert!(
+            String::from_utf8_lossy(&contents).contains("alice"),
+            "never overwrite another owner's hold: {contents:?}"
+        );
+        // The confirmed loss drops the in-memory record: a plain `unlock`
+        // then skips instead of trying to release someone else's lock.
+        assert_eq!(g.get("h1").unwrap().held_lock_comment(), None);
+        let unlock = g.unlock_taken(&all).await;
+        assert!(
+            matches!(unlock["h1"], LockOutcome::Skipped(_)),
+            "no record left to release: {:?}",
+            unlock["h1"]
+        );
+    }
+
+    /// `describe` on an unproven loss never claims the reboot cleared the
+    /// hold: the re-take could not read the host, so no wipe is proven.
+    #[test]
+    fn lost_hold_describe_reports_retake_failed_for_an_unproven_loss() {
+        let loss = LostHold {
+            host: "h1".to_owned(),
+            kind: LostHoldKind::OperationLock,
+            comment: "operator hold".to_owned(),
+            reason: "open failed: /var/lock/mtui.lock; the host may be unlocked".to_owned(),
+            proof: LostHoldProof::Unproven,
+        };
+        assert_eq!(
+            loss.describe(),
+            "h1: re-take of the operation lock (operator hold) failed; \
+             open failed: /var/lock/mtui.lock; the host may be unlocked"
+        );
+    }
+
+    /// `describe` on a comment-less operation lock prints just "operation
+    /// lock": the update's own `lock("")` carries no comment, and a bare
+    /// noun with empty parens would misname it.
+    #[test]
+    fn lost_hold_describe_drops_the_noun_for_a_commentless_operation_lock() {
+        let loss = LostHold {
+            host: "h1".to_owned(),
+            kind: LostHoldKind::OperationLock,
+            comment: String::new(),
+            reason: "held by alice since Tuesday".to_owned(),
+            proof: LostHoldProof::Proven,
+        };
+        assert_eq!(
+            loss.describe(),
+            "h1: reboot cleared the operation lock; held by alice since Tuesday"
+        );
+    }
+
+    /// `describe` keeps the operation-lock noun (and the comment) when the
+    /// lost hold carries one — the same noun covers a reservation and a PI
+    /// testing lock.
+    #[test]
+    fn lost_hold_describe_keeps_the_noun_for_a_commented_operation_lock() {
+        let loss = LostHold {
+            host: "h1".to_owned(),
+            kind: LostHoldKind::OperationLock,
+            comment: "operator hold".to_owned(),
+            reason: "held by alice since Tuesday".to_owned(),
+            proof: LostHoldProof::Proven,
+        };
+        assert_eq!(
+            loss.describe(),
+            "h1: reboot cleared the operation lock (operator hold); \
+             held by alice since Tuesday"
+        );
+    }
+
+    /// #677: a pool claim taken by another template in the reboot gap is
+    /// reported, not overwritten — and never fails the reboot outcome.
+    #[tokio::test]
+    async fn reboot_reports_a_pool_claim_lost_to_another_owner() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        let rrid = "SUSE:Maintenance:1:2";
+        let comment = format!("mtui pool {rrid} [bob]");
+        g.get_mut("h1").unwrap().set_rrid(rrid);
+        assert!(
+            g.get_mut("h1")
+                .unwrap()
+                .pool_claim(&comment)
+                .await
+                .expect("pool_claim"),
+            "claim won"
+        );
+        h1.sftp_remove(std::path::Path::new(crate::target::POOL_LOCK_PATH))
+            .await
+            .expect("wipe");
+        // Another template claims the host while it is down (fresh, so the
+        // stale reap leaves it alone).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let foreign = format!("{now}:carol:4242:mtui pool SUSE:Maintenance:9:9 [carol]");
+        h1.sftp_write(
+            std::path::Path::new(crate::target::POOL_LOCK_PATH),
+            foreign.as_bytes(),
+            false,
+        )
+        .await
+        .expect("foreign claim");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "a lost pool claim warns, it does not fail the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "the lost claim must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::PoolClaim);
+        assert_eq!(loss.comment, comment);
+        assert!(
+            loss.reason.contains("carol"),
+            "the loss names the other owner: {}",
+            loss.reason
+        );
+        let contents = h1
+            .file_contents(crate::target::POOL_LOCK_PATH)
+            .expect("foreign claim left in place");
+        assert!(
+            String::from_utf8_lossy(&contents).contains("carol"),
+            "never overwrite another owner's claim: {contents:?}"
+        );
+        // The confirmed loss drops the in-memory record.
+        assert_eq!(g.get("h1").unwrap().held_pool_comment(), None);
+    }
+
+    /// A corrupt pool line is reported like a transport failure, keeping its
+    /// record: dropping it would make a later plain `unlock` skip the host
+    /// and strand the corrupt file, while the kept record surfaces the
+    /// corruption on the next release attempt. No mtime is scripted on
+    /// purpose — a stale invalid file would be reaped (and re-taken cleanly)
+    /// instead of reported.
+    #[tokio::test]
+    async fn reboot_keeps_the_pool_claim_when_the_retake_finds_a_corrupt_line() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        let rrid = "SUSE:Maintenance:1:2";
+        let comment = format!("mtui pool {rrid} [bob]");
+        g.get_mut("h1").unwrap().set_rrid(rrid);
+        assert!(
+            g.get_mut("h1")
+                .unwrap()
+                .pool_claim(&comment)
+                .await
+                .expect("pool_claim"),
+            "claim won"
+        );
+        h1.sftp_remove(std::path::Path::new(crate::target::POOL_LOCK_PATH))
+            .await
+            .expect("wipe");
+        h1.sftp_write(
+            std::path::Path::new(crate::target::POOL_LOCK_PATH),
+            b"not-a-lock-line",
+            false,
+        )
+        .await
+        .expect("corrupt line");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "a corrupt line never fails the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "a corrupt line must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::PoolClaim);
+        assert_eq!(loss.comment, comment);
+        assert_eq!(
+            loss.proof,
+            LostHoldProof::Unproven,
+            "a corrupt line keeps its record like a transport failure"
+        );
+        assert!(
+            loss.reason.contains("invalid"),
+            "the loss names the invalid file: {}",
+            loss.reason
+        );
+        assert!(
+            loss.reason.contains("may be unlocked"),
+            "the loss names the unlocked risk: {}",
+            loss.reason
+        );
+        assert!(
+            loss.describe().contains("re-take")
+                && loss.describe().contains("failed")
+                && !loss.describe().contains("cleared"),
+            "an unproven loss must not claim a wipe: {}",
+            loss.describe()
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_pool_comment().as_deref(),
+            Some(comment.as_str()),
+            "the unproven claim stays recorded"
+        );
+    }
+
+    /// The pool twin of the unreadable-hold test: a pool re-take that fails
+    /// with a transport error is reported without dropping its record. The
+    /// stale foreign claim forces the re-take into the remove path, which
+    /// fails; the claim is never proven gone, so the record stays.
+    #[tokio::test]
+    async fn reboot_keeps_the_pool_claim_when_the_retake_hits_a_transport_error() {
+        let m1 = rebooted_mock("h1").failing_sftp_remove();
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        let rrid = "SUSE:Maintenance:1:2";
+        let comment = format!("mtui pool {rrid} [bob]");
+        g.get_mut("h1").unwrap().set_rrid(rrid);
+        assert!(
+            g.get_mut("h1")
+                .unwrap()
+                .pool_claim(&comment)
+                .await
+                .expect("pool_claim"),
+            "claim won"
+        );
+        // Another template claimed the host while it was down, long enough
+        // ago that the re-take tries to reap it first. Overwriting (not
+        // wiping-then-claiming) reaches the same on-disk state.
+        h1.sftp_write(
+            std::path::Path::new(crate::target::POOL_LOCK_PATH),
+            b"0:carol:4242:mtui pool SUSE:Maintenance:9:9 [carol]",
+            false,
+        )
+        .await
+        .expect("stale foreign claim");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "an unreadable claim never fails the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "an unreadable pool re-take must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::PoolClaim);
+        assert_eq!(loss.comment, comment);
+        assert_eq!(
+            loss.proof,
+            LostHoldProof::Unproven,
+            "a transport failure proves no wipe"
+        );
+        assert!(
+            loss.reason.contains("may be unlocked"),
+            "the loss names the unlocked risk: {}",
+            loss.reason
+        );
+        assert!(
+            loss.describe().contains("h1")
+                && loss.describe().contains(&comment)
+                && loss.describe().contains("may be unlocked"),
+            "the report line names the host, the hold and the risk: {}",
+            loss.describe()
+        );
+        assert!(
+            loss.describe().contains("re-take")
+                && loss.describe().contains("failed")
+                && !loss.describe().contains("cleared"),
+            "an unproven loss must not claim a wipe: {}",
+            loss.describe()
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_pool_comment().as_deref(),
+            Some(comment.as_str()),
+            "the unproven claim stays recorded"
+        );
+    }
+
+    /// #677: the transactional reboot inside `update` re-applies holds too.
+    #[tokio::test]
+    async fn reboot_transactional_reapplies_a_reservation_it_found() {
+        use mtui_types::system::SystemProduct;
+
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(m1));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15", "x86_64"),
+                std::collections::BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        let mut g = HostsGroup::new(vec![t], false);
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let map: std::collections::BTreeMap<String, String> =
+            [("h1".to_owned(), "transactional-update --reboot".to_owned())]
+                .into_iter()
+                .collect();
+        let outcomes = g.reboot_transactional(&map).await.outcomes;
+        assert!(outcomes["h1"].is_ok());
+
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("reservation re-applied");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(":operator hold"),
+            "reservation comment restored: {contents:?}"
+        );
+    }
+
+    /// The re-apply gate is the reconnect, not the verified reboot: a host
+    /// that came back but whose boot id did not verify still holds a wiped
+    /// `/var/lock`, so its holds are re-taken even though the outcome stays
+    /// an error.
+    #[tokio::test]
+    async fn reboot_reapplies_holds_when_reconnected_despite_failed_verify() {
+        // Fixed boot id: pre- and post-reboot probes match, so the verify
+        // phase records RebootDidNotHappen even though dispatch+reconnect ran.
+        let m1 = reboot_mock("h1", "id-1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        // The reboot wipes /var/lock (tmpfs); the mock filesystem does not.
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(report.outcomes["h1"].is_err(), "failed verify must surface");
+        assert!(
+            report.lost_holds.is_empty(),
+            "a clean re-take is not a loss: {:?}",
+            report.lost_holds
+        );
+
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("hold re-taken after reconnect despite failed verify");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(":operator hold"),
+            "reservation comment restored: {contents:?}"
+        );
+    }
+
+    /// The re-apply gate: a host whose reconnect failed keeps its outcome and
+    /// its untouched holds — no re-take is attempted on a host that never
+    /// came back, and the in-memory record survives.
+    #[tokio::test]
+    async fn reboot_does_not_reapply_holds_when_reconnect_failed() {
+        // `failing_reconnect` models a host that went down and never came
+        // back; the reboot outcome records the reconnect failure.
+        let m1 = rebooted_mock("h1").failing_reconnect();
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        // The reboot wipes /var/lock (tmpfs); the mock filesystem does not.
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_err(),
+            "a failed reconnect must surface"
+        );
+        assert!(
+            report.lost_holds.is_empty(),
+            "nothing was attempted, so nothing was lost: {:?}",
+            report.lost_holds
+        );
+        assert!(
+            h1.file_contents(crate::target::TARGET_LOCK_PATH).is_none(),
+            "no re-take without a reconnect"
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            Some("operator hold"),
+            "the untouched hold stays recorded"
+        );
+    }
+
+    /// When `relock_comment` matches the snapshot, the relock phase must not
+    /// stamp the lock file: phase 5 re-takes exactly that comment, so the
+    /// file sees a single write.
+    #[tokio::test]
+    async fn reboot_relock_matching_snapshot_writes_the_lockfile_once() {
+        use crate::connection::MockSftpOp;
+
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("PI testing")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g
+            .reboot_selected("systemctl reboot", "PI testing", &all)
+            .await;
+        assert!(report.outcomes["h1"].is_ok());
+
+        let writes = h1
+            .sftp_ops()
+            .iter()
+            .filter(|op| {
+                matches!(op, MockSftpOp::Write { path, .. } if path == std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            })
+            .count();
+        // One for the initial `lock`, one for the phase-5 re-take; the
+        // relock phase skipped its redundant stamp of the same comment.
+        assert_eq!(writes, 2, "relock must not re-stamp the snapshot comment");
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("hold re-taken");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(":PI testing"),
+            "snapshot comment restored: {contents:?}"
+        );
+    }
+
+    /// When the snapshot already holds an operation lock, the relock phase
+    /// skips it: phase 5 re-takes exactly that comment, so the file sees a
+    /// single post-reboot write and never a brief PI stamp. An explicit
+    /// reservation survives a reboot that also carries a PI assignment lock.
+    #[tokio::test]
+    async fn reboot_reservation_survives_a_differing_pi_relock() {
+        let m1 = rebooted_mock("h1");
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g
+            .reboot_selected("systemctl reboot", "PI testing", &all)
+            .await;
+        assert!(report.outcomes["h1"].is_ok());
+
+        let writes = h1
+            .sftp_ops()
+            .iter()
+            .filter(|op| {
+                matches!(op, crate::connection::MockSftpOp::Write { path, .. } if path == std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            })
+            .count();
+        // One for the initial `lock`, one for the phase-5 re-take; the
+        // relock phase skips any host that already holds an operation lock,
+        // so no PI stamp lands before the reservation.
+        assert_eq!(writes, 2, "relock must not stamp a held host");
+        let contents = h1
+            .file_contents(crate::target::TARGET_LOCK_PATH)
+            .expect("hold re-taken");
+        assert!(
+            String::from_utf8_lossy(&contents).ends_with(":operator hold"),
+            "the reservation wins over the PI relock: {contents:?}"
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            Some("operator hold"),
+            "the record still names the reservation"
+        );
+    }
+
+    /// A re-take that fails with a transport error keeps the in-memory
+    /// record — the hold may still be ours — but it is reported: `/var/lock`
+    /// is already wiped, so the host may be unlocked while the record says
+    /// held, and only a `warn!` would leave an MCP caller silent.
+    #[tokio::test]
+    async fn reboot_keeps_the_hold_when_the_retake_cannot_read_the_host() {
+        let m1 = rebooted_mock("h1").with_open_error(crate::target::TARGET_LOCK_PATH);
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+        // Another tester claims the host while it is down; the re-take's
+        // reconciling read then fails with a transport error instead of
+        // proving the loss.
+        h1.sftp_write(
+            std::path::Path::new(crate::target::TARGET_LOCK_PATH),
+            b"1700000000:alice:4242:busy",
+            false,
+        )
+        .await
+        .expect("foreign claim");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "an unreadable hold never fails the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "an unreadable re-take must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::OperationLock);
+        assert_eq!(loss.comment, "operator hold");
+        assert_eq!(
+            loss.proof,
+            LostHoldProof::Unproven,
+            "a transport failure proves no wipe"
+        );
+        assert!(
+            loss.reason.contains("may be unlocked"),
+            "the loss names the unlocked risk: {}",
+            loss.reason
+        );
+        assert!(
+            loss.describe().contains("h1")
+                && loss.describe().contains("operator hold")
+                && loss.describe().contains("may be unlocked"),
+            "the report line names the host, the hold and the risk: {}",
+            loss.describe()
+        );
+        assert!(
+            loss.describe().contains("re-take")
+                && loss.describe().contains("failed")
+                && !loss.describe().contains("cleared"),
+            "an unproven loss must not claim a wipe: {}",
+            loss.describe()
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            Some("operator hold"),
+            "the unproven hold stays recorded"
+        );
+    }
+
+    /// A corrupt lock line is reported like a transport failure, keeping its
+    /// record: dropping it would make a later plain `unlock` skip the host
+    /// and strand the corrupt file, while the kept record makes the next
+    /// release attempt surface the corruption instead.
+    #[tokio::test]
+    async fn reboot_keeps_the_hold_when_the_retake_finds_a_corrupt_lock_line() {
+        // An old mtime settles the invalid file at once instead of polling
+        // the settle window; the op re-take never reaps, so it changes no
+        // outcome here.
+        let m1 = rebooted_mock("h1").with_mtime(crate::target::TARGET_LOCK_PATH, 0);
+        let mut h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        g.get_mut("h1")
+            .unwrap()
+            .lock("operator hold")
+            .await
+            .expect("lock");
+        h1.sftp_remove(std::path::Path::new(crate::target::TARGET_LOCK_PATH))
+            .await
+            .expect("wipe");
+        h1.sftp_write(
+            std::path::Path::new(crate::target::TARGET_LOCK_PATH),
+            b"not-a-lock-line",
+            false,
+        )
+        .await
+        .expect("corrupt line");
+
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+        assert!(
+            report.outcomes["h1"].is_ok(),
+            "a corrupt line never fails the reboot"
+        );
+        assert_eq!(
+            report.lost_holds.len(),
+            1,
+            "a corrupt line must surface in the report: {:?}",
+            report.lost_holds
+        );
+        let loss = &report.lost_holds[0];
+        assert_eq!(loss.host, "h1");
+        assert_eq!(loss.kind, LostHoldKind::OperationLock);
+        assert_eq!(loss.comment, "operator hold");
+        assert_eq!(
+            loss.proof,
+            LostHoldProof::Unproven,
+            "a corrupt line keeps its record like a transport failure"
+        );
+        assert!(
+            loss.reason.contains("invalid"),
+            "the loss names the invalid file: {}",
+            loss.reason
+        );
+        assert!(
+            loss.reason.contains("may be unlocked"),
+            "the loss names the unlocked risk: {}",
+            loss.reason
+        );
+        assert!(
+            loss.describe().contains("re-take")
+                && loss.describe().contains("failed")
+                && !loss.describe().contains("cleared"),
+            "an unproven loss must not claim a wipe: {}",
+            loss.describe()
+        );
+        assert_eq!(
+            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            Some("operator hold"),
+            "the unproven hold stays recorded"
+        );
+        let unlock = g.unlock_taken(&all).await;
+        assert!(
+            matches!(unlock["h1"], LockOutcome::Failed(_)),
+            "the kept record surfaces the corruption on release: {:?}",
+            unlock["h1"]
+        );
+    }
+
     #[tokio::test]
     async fn reboot_empty_group_is_noop() {
         let mut g = HostsGroup::new(vec![], false);
@@ -2931,6 +4164,7 @@ mod tests {
         assert!(
             g.reboot_selected("systemctl reboot", "relock", &none)
                 .await
+                .outcomes
                 .is_empty()
         );
         assert!(g.is_empty());
@@ -2952,7 +4186,10 @@ mod tests {
             false,
         );
         let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
         assert_eq!(h1.reconnect_count(), 1);
         // Reconnect succeeded but the boot id was unchanged -> recorded failure.
         assert!(
@@ -2979,7 +4216,10 @@ mod tests {
             false,
         );
         let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
         // An empty (unreadable) boot id could not confirm the reboot either way,
@@ -3006,7 +4246,10 @@ mod tests {
             false,
         );
         let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &all)
+            .await
+            .outcomes;
         assert_eq!(h1.reconnect_count(), 1);
         // A reconnect failure is recorded as the host's failure.
         assert!(
@@ -3032,7 +4275,7 @@ mod tests {
 
         // Only h1 is transactional -> only it appears in the reboot map.
         let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         // The healthy path, which nothing else asserts: a transactional host
         // that really rebooted must produce **no** failure. Discarding this
@@ -3075,7 +4318,7 @@ mod tests {
         );
 
         let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(failures.len(), 1, "{failures:?}");
@@ -3110,7 +4353,7 @@ mod tests {
         );
 
         let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(failures.len(), 1, "{failures:?}");
@@ -3137,7 +4380,10 @@ mod tests {
         );
 
         let only_h1: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let outcomes = g.reboot_selected("systemctl reboot", "", &only_h1).await;
+        let outcomes = g
+            .reboot_selected("systemctl reboot", "", &only_h1)
+            .await
+            .outcomes;
         assert!(
             matches!(&outcomes["h1"], Err(HostError::RebootNotDispatched { .. })),
             "{:?}",
@@ -3157,7 +4403,7 @@ mod tests {
             )],
             false,
         );
-        let failures = OperationGroup::reboot(&mut g, Vec::new()).await;
+        let failures = OperationGroup::reboot(&mut g, Vec::new()).await.failures();
         assert!(h1.fired_commands().is_empty());
         assert_eq!(h1.reconnect_count(), 0);
         assert!(failures.is_empty());
@@ -3189,7 +4435,7 @@ mod tests {
         );
 
         let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         assert!(
             h1.fired_commands().is_empty(),
@@ -3224,7 +4470,7 @@ mod tests {
             ("h1".to_owned(), "transactional-update reboot".to_owned()),
             ("h2".to_owned(), "transactional-update reboot".to_owned()),
         ];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         assert_eq!(
             h1.fired_commands(),
@@ -3253,7 +4499,7 @@ mod tests {
         );
 
         let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
-        let failures = OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await.failures();
 
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(failures.len(), 1);

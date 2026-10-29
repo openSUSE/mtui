@@ -132,6 +132,13 @@ pub struct MockConnection {
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
     reconnect_fails: bool,
     fire_and_forget_fails: bool,
+    /// File contents planted into the in-memory filesystem when
+    /// [`fire_and_forget`](Connection::fire_and_forget) dispatches, modelling
+    /// an external actor winning a race the reboot opens (e.g. another tester
+    /// claiming `/var/lock` while the host is down). Applied synchronously
+    /// inside the dispatch — after `update_lock`, before the post-reboot
+    /// re-take — so the test is deterministic with no sleep or poll.
+    fire_plants: HashMap<PathBuf, Vec<u8>>,
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, so a test can assert the
     /// caller passed the expected budget (reboot's `(retries, true)` vs. a
@@ -219,6 +226,7 @@ impl MockConnection {
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
             fire_and_forget_fails: false,
+            fire_plants: HashMap::new(),
             last_reconnect_args: Arc::new(Mutex::new(None)),
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
@@ -445,6 +453,25 @@ impl MockConnection {
     #[must_use]
     pub fn failing_fire_and_forget(mut self) -> Self {
         self.fire_and_forget_fails = true;
+        self
+    }
+
+    /// Scripts [`fire_and_forget`](Connection::fire_and_forget) to plant
+    /// `contents` at remote `path` on dispatch, overwriting whatever is there.
+    ///
+    /// Models another tester claiming a lock while the host is down: the plant
+    /// lands inside the reboot dispatch itself, so it is strictly after the
+    /// pre-reboot lock and strictly before the post-reboot re-take, with no
+    /// background task or timing involved. A failed dispatch plants nothing —
+    /// the host never went down, so there is no gap. The plant bypasses the
+    /// SFTP op log: it is someone else's write, not this session's.
+    #[must_use]
+    pub fn with_fire_and_forget_plant(
+        mut self,
+        path: impl Into<PathBuf>,
+        contents: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.fire_plants.insert(path.into(), contents.into());
         self
     }
 
@@ -865,6 +892,12 @@ impl Connection for MockConnection {
             .lock()
             .expect("mock fired lock")
             .push(command.to_owned());
+        if !self.fire_plants.is_empty() {
+            let mut files = self.files.lock().expect("mock files lock");
+            for (path, contents) in &self.fire_plants {
+                files.insert(path.clone(), contents.clone());
+            }
+        }
         self.active = false;
         *self.closed.lock().expect("mock closed lock") = true;
         Ok(())

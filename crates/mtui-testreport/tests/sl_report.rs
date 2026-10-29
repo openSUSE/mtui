@@ -223,7 +223,9 @@ async fn perform_install_runs_a_command_on_a_production_built_group() {
     let r = SlReport::new(config());
     let (mut group, handle) = production_sles_group();
 
-    let res = r.perform_install(&mut group, &["pkg-a".to_owned()]).await;
+    let res = r
+        .perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+        .await;
 
     assert_eq!(
         handle.commands(),
@@ -239,7 +241,11 @@ async fn perform_install_drives_installer_doer() {
     let (mut group, handle) = production_sles_group();
 
     let res = r
-        .perform_install(&mut group, &["pkg-a".to_owned(), "pkg-b".to_owned()])
+        .perform_install(
+            &mut group,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            &mut Vec::new(),
+        )
         .await;
     assert!(res.is_ok(), "a clean install returns Ok: {res:?}");
 
@@ -254,7 +260,9 @@ async fn perform_uninstall_drives_uninstaller_doer() {
     let r = SlReport::new(config());
     let (mut group, handle) = production_sles_group();
 
-    let res = r.perform_uninstall(&mut group, &["pkg".to_owned()]).await;
+    let res = r
+        .perform_uninstall(&mut group, &["pkg".to_owned()], &mut Vec::new())
+        .await;
     assert!(res.is_ok(), "a clean uninstall returns Ok: {res:?}");
 
     // The *uninstaller* table, not the installer: `rm`, not `in`.

@@ -364,6 +364,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that actually signed, and the server that refused, and says which request
   was refused: `/auth/ssh/verify` keeps the five-cause hint, while a write
   refused after a fresh mint says the cache was already refreshed (#730).
+- A reboot re-applies the operation lock and pool claim the session held,
+  in `reboot` and in the transactional reboot inside
+  `update`/`downgrade`/`prepare`/`install`/`uninstall`: `/var/lock` lives on
+  tmpfs, so a reservation or pool claim previously ended with the reboot
+  while the host stayed attached. A hold taken by someone else in the gap is
+  reported instead of failing the run — a display line from `reboot`, a
+  degradation diagnostic from
+  `update`/`prepare`/`downgrade`/`install`/`uninstall` — and its in-memory
+  record is dropped, so a later plain `unlock` skips it instead of trying to
+  release it. A re-take that fails with a transport error, or finds a corrupt
+  line, is reported the same way, keeping its record: the hold may still be
+  ours, and dropping a corrupt line would strand it under a later plain
+  `unlock`'s skip while the kept record surfaces it on release (#677).
 - `prepare` and `downgrade` abort before locking with the names of every
   transactional host they cannot resolve a command for — `host (Product
   version, transactional|non-transactional)` — instead of refusing the whole
