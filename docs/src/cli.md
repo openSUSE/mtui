@@ -638,7 +638,7 @@ Usage: set_timeout [OPTIONS] <timeout>
 
 Arguments:
   <timeout>
-          Timeout in seconds; "0" disables it
+          Timeout in seconds; must be positive
 
 Options:
   -t, --target <HOST>

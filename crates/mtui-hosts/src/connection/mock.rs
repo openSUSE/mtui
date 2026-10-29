@@ -16,7 +16,7 @@ use mtui_types::hostlog::CommandLog;
 #[cfg(feature = "shell")]
 use super::ShellChannel;
 use super::sftp_session::SftpSession;
-use super::{Connection, SftpRead};
+use super::{CommandTimeout, Connection, SftpRead};
 use crate::error::{HostError, Result};
 
 /// The outcome scripted for a command run against a [`MockConnection`].
@@ -111,6 +111,11 @@ pub struct MockConnection {
     run_delay: std::time::Duration,
     /// Whether the transport reports as active.
     active: bool,
+    /// The per-command no-output window, as last set via
+    /// [`set_command_timeout`](Connection::set_command_timeout). Shared so a
+    /// test holding a clone observes what the target pushed to the live
+    /// connection.
+    command_timeout: Arc<Mutex<CommandTimeout>>,
     /// Commands issued, in order. Shared so `Clone`d handles observe the same
     /// log: a `Box<dyn Connection>` may be moved but tests keep a handle.
     issued: Arc<Mutex<Vec<String>>>,
@@ -205,6 +210,7 @@ impl MockConnection {
             default: Outcome::Ok(CommandLog::new("", "", "", 0, 0)),
             run_delay: std::time::Duration::ZERO,
             active: true,
+            command_timeout: Arc::new(Mutex::new(CommandTimeout::default())),
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
             block_close: None,
@@ -550,6 +556,17 @@ impl MockConnection {
         *self.reconnects.lock().expect("mock reconnects lock")
     }
 
+    /// The per-command no-output window currently armed on this mock, as last
+    /// set via [`set_command_timeout`](Connection::set_command_timeout).
+    /// Returned as a plain [`Duration`](std::time::Duration) so tests outside
+    /// this crate can read it without reaching into [`CommandTimeout`].
+    pub fn command_timeout(&self) -> std::time::Duration {
+        self.command_timeout
+            .lock()
+            .expect("mock command_timeout lock")
+            .as_duration()
+    }
+
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, or `None` if never called.
     #[cfg(test)]
@@ -792,6 +809,13 @@ impl Connection for MockConnection {
 
     fn is_active(&self) -> bool {
         self.active
+    }
+
+    fn set_command_timeout(&mut self, timeout: CommandTimeout) {
+        *self
+            .command_timeout
+            .lock()
+            .expect("mock command_timeout lock") = timeout;
     }
 
     async fn close(&mut self) -> Result<()> {
