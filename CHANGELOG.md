@@ -109,6 +109,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   0` is refused: a zero window would give a headless run a deadline of now.
   Commands aborted by the timeout are now also recorded as timed out,
   instead of looking like any other failed command (#687).
+- `prepare` and `downgrade` abort before locking with the names of every
+  transactional host they cannot resolve a command for — `host (Product
+  version, transactional|non-transactional)` — instead of refusing the whole
+  group with a bare `missing preparer` / `missing downgrader`. The
+  `install`/`uninstall` message spells the key out the same way. `update`
+  resolves every eligible host's updater before its own lock and repo steps,
+  so a missing updater aborts with no lock taken and no repo added or removed —
+  even a host whose repo add would have failed aborts here first. With prepare
+  enabled the prepare step still runs first, so this gate is the first check
+  only under `--noprepare` (#682).
 
 ## [26.3.5] - 2026-10-27
 
