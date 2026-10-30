@@ -18,6 +18,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::log_capture::capture_logs;
+use crate::mock_agent::MockAgent;
 
 /// The fixed 64-hex nonce every "challenge 200" mock returns.
 const NONCE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -194,8 +195,9 @@ async fn malformed_nonce_fails_before_signing() {
     assert!(matches!(err, TeregenAuthError::Protocol(_)));
 }
 
-/// 6. verify 401 → `Unauthorized` whose hint names the indistinguishable
-///    causes.
+/// 6. verify 401 → `Unauthorized` naming the principal, the fingerprint of
+///    the key that actually signed, the server and the stage, with a hint
+///    naming the indistinguishable causes.
 #[tokio::test]
 async fn verify_401_is_unauthorized_with_a_hint() {
     let server = MockServer::start().await;
@@ -211,12 +213,184 @@ async fn verify_401_is_unauthorized_with_a_hint() {
 
     let auth = auth_for(&server, store_file);
     let err = auth.token().await.expect_err("401 refused");
-    let TeregenAuthError::Unauthorized { hint } = err else {
-        panic!("expected Unauthorized, got {err:?}");
+    let display = format!("{err}");
+    let TeregenAuthError::Unauthorized {
+        principal,
+        key,
+        stage,
+        base,
+        hint,
+        ..
+    } = err
+    else {
+        panic!("expected Unauthorized, got {display}");
     };
     for cause in ["unknown", "no key", "does not match", "invalid", "nonce"] {
         assert!(hint.contains(cause), "hint missing {cause:?}: {hint}");
     }
+    let expected_fp = ssh_key::PrivateKey::read_openssh_file(fixture("obs", "id_ed25519"))
+        .expect("fixture key reads")
+        .public_key()
+        .fingerprint(ssh_key::HashAlg::Sha256)
+        .to_string();
+    assert_eq!(principal, PRINCIPAL);
+    assert_eq!(
+        key, expected_fp,
+        "a file-backed key reports the fingerprint that signed, never a path"
+    );
+    assert_eq!(stage, mtui_datasources::teregen::AuthStage::Verify);
+    assert_eq!(base, server.uri());
+    assert!(display.contains(PRINCIPAL), "display names principal");
+    assert!(display.contains(&expected_fp), "display names the key");
+    assert!(
+        display.contains("/auth/ssh/verify"),
+        "display says which request"
+    );
+    assert!(display.contains(&server.uri()), "display names the server");
+    assert!(
+        !display.contains("id_ed25519"),
+        "display never prints a key path"
+    );
+}
+
+/// A `base` carrying userinfo never reaches the `Unauthorized` error: both
+/// construction sites store it already sanitized, so matching on the public
+/// `base` field and logging it cannot leak credentials — and `Display` needs
+/// no redaction of its own. Fails while the error stores the raw base.
+#[tokio::test]
+async fn userinfo_in_base_never_reaches_unauthorized_error() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": "unauthorized"})),
+        )
+        .mount(&server)
+        .await;
+
+    let base = server.uri().replacen("://", "://user:pass@", 1);
+    let auth = TeregenAuth::new(
+        base,
+        PRINCIPAL.to_owned(),
+        Some(fixture("obs", "id_ed25519")),
+        None,
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
+    )
+    .with_store(Some(TokenStore::at(store_file)));
+    let err = auth.token().await.expect_err("401 refused");
+    let TeregenAuthError::Unauthorized { base, .. } = &err else {
+        panic!("expected Unauthorized, got {err:?}");
+    };
+    assert!(!base.contains("user:pass"), "stored base: {base}");
+    assert!(
+        base.contains("127.0.0.1"),
+        "stored base keeps the host: {base}"
+    );
+    for rendered in [format!("{err}"), format!("{err:?}")] {
+        assert!(!rendered.contains("user:pass"), "leaked: {rendered}");
+    }
+}
+
+/// The same guarantee through the write-retry path: a `base` carrying
+/// userinfo never reaches the `WriteRetry` error either. Fails while that
+/// construction site stores the raw base.
+#[tokio::test]
+async fn userinfo_in_base_never_reaches_the_write_retry_error() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "a".repeat(64),
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let base = server.uri().replacen("://", "://user:pass@", 1);
+    let auth = TeregenAuth::new(
+        base,
+        PRINCIPAL.to_owned(),
+        Some(fixture("obs", "id_ed25519")),
+        None,
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
+    )
+    .with_store(Some(TokenStore::at(store_file)));
+    let url = format!("{}/schema", server.uri());
+    let err = auth
+        .authenticated_request(reqwest::Method::GET, &url)
+        .await
+        .expect_err("a second 401 is surfaced as an error");
+    let TeregenAuthError::Unauthorized { base, stage, .. } = &err else {
+        panic!("expected Unauthorized, got {err:?}");
+    };
+    assert_eq!(
+        *stage,
+        mtui_datasources::teregen::AuthStage::WriteRetry,
+        "a double 401 must say which request was refused"
+    );
+    assert!(!base.contains("user:pass"), "stored base: {base}");
+    assert!(
+        base.contains("127.0.0.1"),
+        "stored base keeps the host: {base}"
+    );
+    for rendered in [format!("{err}"), format!("{err:?}")] {
+        assert!(!rendered.contains("user:pass"), "leaked: {rendered}");
+    }
+}
+
+/// An agent-backed (fingerprint-configured) key reports the canonical
+/// `SHA256:…` fingerprint of the key that signed the verify request.
+#[tokio::test]
+async fn verify_401_names_the_signing_key_for_agent_backed_keys() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": "unauthorized"})),
+        )
+        .mount(&server)
+        .await;
+
+    let key = ssh_key::PrivateKey::read_openssh_file(fixture("obs", "id_ed25519"))
+        .expect("fixture key reads");
+    let fingerprint = key
+        .public_key()
+        .fingerprint(ssh_key::HashAlg::Sha256)
+        .to_string();
+    let auth = TeregenAuth::with_agent(
+        server.uri(),
+        PRINCIPAL.to_owned(),
+        None,
+        Some(fingerprint.clone()),
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
+        MockAgent::with(vec![key]),
+    )
+    .with_store(Some(TokenStore::at(store_file)));
+    let err = auth.token().await.expect_err("401 refused");
+    let TeregenAuthError::Unauthorized {
+        principal,
+        key,
+        stage,
+        base,
+        ..
+    } = err
+    else {
+        panic!("expected Unauthorized, got {err:?}");
+    };
+    assert_eq!(principal, PRINCIPAL);
+    assert_eq!(key, fingerprint);
+    assert_eq!(stage, mtui_datasources::teregen::AuthStage::Verify);
+    assert_eq!(base, server.uri());
 }
 
 /// 7. verify 200 with a missing `token` → `Protocol`; nothing written to the

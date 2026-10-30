@@ -27,13 +27,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::http::sanitize_url;
+
 /// The file name under the XDG data dir.
 const TOKEN_FILE_NAME: &str = "teregen-token.json";
 
 /// A minted teregen bearer token, cached on disk.
 ///
-/// [`Debug`] is hand-written to mask `token` — a `derive` would print it the
-/// first time anyone adds a `tracing::debug!("{cached:?}")` (P2-D7).
+/// [`Debug`] is hand-written to mask `token` and redact userinfo in `base` —
+/// a `derive` would print the former the first time anyone adds a
+/// `tracing::debug!("{cached:?}")` (P2-D7), and the latter whenever the base
+/// URL embeds credentials.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CachedToken {
     /// The teregen v2 base URL this token was minted against.
@@ -49,7 +53,7 @@ pub struct CachedToken {
 impl std::fmt::Debug for CachedToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CachedToken")
-            .field("base", &self.base)
+            .field("base", &sanitize_url(&self.base))
             .field("principal", &self.principal)
             .field("token", &"<redacted>")
             .field("minted_at", &self.minted_at)
@@ -187,5 +191,25 @@ mod tests {
         let rendered = format!("{cached:?}");
         assert!(!rendered.contains(&cached.token));
         assert!(rendered.contains("redacted"));
+    }
+
+    /// The manual [`Debug`] must also mask userinfo in `base`: the field is
+    /// public and the mint stores it raw, so a caller Debug-printing a loaded
+    /// token would otherwise leak credentials. Fails while `base` is printed
+    /// verbatim.
+    #[test]
+    fn debug_redacts_userinfo_in_base() {
+        let cached = CachedToken {
+            base: "https://user:pass@qam.example.invalid/api/v2".to_owned(),
+            principal: "alice".to_owned(),
+            token: "a".repeat(64),
+            minted_at: "2026-09-13T18:22:01Z".to_owned(),
+        };
+        let rendered = format!("{cached:?}");
+        assert!(!rendered.contains("user:pass"), "debug: {rendered}");
+        assert!(
+            rendered.contains("qam.example.invalid"),
+            "debug: {rendered}"
+        );
     }
 }

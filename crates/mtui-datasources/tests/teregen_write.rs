@@ -546,10 +546,44 @@ async fn second_401_is_unauthorized() {
         .upload_document(RRID, &minimal_document(RRID), &Precondition::Create)
         .await
         .unwrap_err();
-    assert!(matches!(
-        err,
-        TeregenV2WriteError::Auth(mtui_datasources::TeregenAuthError::Unauthorized { .. })
-    ));
+    let display = err.to_string();
+    let mtui_datasources::TeregenV2WriteError::Auth(
+        mtui_datasources::TeregenAuthError::Unauthorized {
+            principal,
+            key,
+            stage,
+            base,
+            hint,
+            ..
+        },
+    ) = err
+    else {
+        panic!("expected Auth(Unauthorized), got {err:?}");
+    };
+    assert_eq!(principal, PRINCIPAL);
+    let expected_fp = ssh_key::PrivateKey::read_openssh_file(fixture("obs", "id_ed25519"))
+        .expect("fixture key reads")
+        .public_key()
+        .fingerprint(ssh_key::HashAlg::Sha256)
+        .to_string();
+    assert_eq!(
+        key, expected_fp,
+        "the write retry names the key that signed the fresh mint"
+    );
+    assert_eq!(base, server.uri());
+    assert_eq!(
+        stage,
+        mtui_datasources::teregen::AuthStage::WriteRetry,
+        "write-after-remint 401 must say which request was refused"
+    );
+    assert!(
+        hint.contains("not a stale cache"),
+        "write hint must differ from the verify hint: {hint}"
+    );
+    assert!(
+        display.contains("the write after a fresh mint"),
+        "display says which request was refused: {display}"
+    );
 }
 
 // --- pre-flight: zero requests ---

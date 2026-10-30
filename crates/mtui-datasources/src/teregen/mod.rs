@@ -38,7 +38,7 @@ pub mod auth;
 pub mod document;
 pub mod tokens;
 
-pub use auth::{DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
+pub use auth::{AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
     ArtifactEntry, ArtifactOrigin, ArtifactStored, ArtifactUploadError, DocumentFetch,
     Precondition, TeregenV2, TeregenV2Error, TeregenV2WriteError, UploadOutcome,
