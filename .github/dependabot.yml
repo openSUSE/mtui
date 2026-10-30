@@ -32,3 +32,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # The Dockerfile base tags would otherwise rot
+  # silently between manual refreshes.
+  - package-ecosystem: "docker"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
