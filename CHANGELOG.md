@@ -357,6 +357,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Session-level `list_refhosts`/`updates` (and the other template-free
+  commands) no longer hold the active template's entry for the call, so a
+  concurrent call on that template no longer fails `template busy` (#666).
 - `prepare` and `downgrade` abort before locking with the names of every
   transactional host they cannot resolve a command for — `host (Product
   version, transactional|non-transactional)` — instead of refusing the whole
