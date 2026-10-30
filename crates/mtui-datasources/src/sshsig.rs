@@ -264,6 +264,20 @@ impl<A: AgentKeys> Signer<A> {
         }
     }
 
+    /// The non-secret key locator for diagnostics: the `SHA256:…`
+    /// fingerprint when configured, else `file key` (never a path, so home
+    /// directories stay off the MCP surface). A bare fingerprint without the
+    /// prefix (which signing accepts) is normalised to the canonical form
+    /// that `verify()` records from the signature.
+    #[must_use]
+    pub fn key_descriptor(&self) -> String {
+        match self.sshkey_fingerprint.as_deref() {
+            Some(fingerprint) if fingerprint.contains(':') => fingerprint.to_owned(),
+            Some(bare) => format!("SHA256:{bare}"),
+            None => "file key".to_owned(),
+        }
+    }
+
     /// Resolve the configured locator to a key and sign `msg` under
     /// `namespace`.
     ///

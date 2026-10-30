@@ -5,8 +5,9 @@
 //! crate + its heavy deps are linked once, not once per file. Add new
 //! integration tests as a module here, not as a new top-level `tests/*.rs`.
 //!
-//! `log_capture` is shared test support rather than a test module: it installs
-//! one process-global tracing subscriber, which cannot be done per file.
+//! `log_capture` and `mock_agent` are shared test support rather than test
+//! modules: the former installs one process-global tracing subscriber, which
+//! cannot be done per file.
 
 #[path = "gitea.rs"]
 mod gitea;
@@ -16,6 +17,8 @@ mod http_client;
 mod keepalive_host;
 #[path = "log_capture.rs"]
 mod log_capture;
+#[path = "mock_agent.rs"]
+mod mock_agent;
 #[path = "obs_auth.rs"]
 mod obs_auth;
 #[path = "obs_client.rs"]

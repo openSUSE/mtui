@@ -25,6 +25,7 @@ use thiserror::Error;
 use crate::error::HttpError;
 use crate::http::{
     HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
+    sanitize_url,
 };
 use crate::teregen::auth::{TeregenAuth, TeregenAuthError};
 
@@ -223,11 +224,24 @@ pub enum TeregenV2WriteError {
 }
 
 /// Read/write v2 client for TeReGen's JSON report document API.
-#[derive(Debug)]
 pub struct TeregenV2 {
     base: String,
     http: HttpClient,
     auth: Option<TeregenAuth>,
+}
+
+impl std::fmt::Debug for TeregenV2 {
+    /// Manual impl so `base` redacts embedded userinfo: the field holds the
+    /// raw apiurl used for request construction, and a derive would echo
+    /// `scheme://user:pass@host` into logs and MCP output. Field order
+    /// matches declaration order, so output for a clean base is unchanged.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeregenV2")
+            .field("base", &sanitize_url(&self.base))
+            .field("http", &self.http)
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 impl TeregenV2 {
@@ -776,5 +790,26 @@ fn error_detail(bytes: &[u8]) -> String {
         detail[..MAX_DETAIL_LEN].to_owned()
     } else {
         detail
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `TeregenV2`'s `Debug` must mask userinfo in `base`: the field holds
+    /// the raw apiurl used for request construction, so a derive would echo
+    /// `scheme://user:pass@host` into logs and MCP output. Fails while the
+    /// impl is derived.
+    #[test]
+    fn debug_redacts_userinfo_in_base() {
+        let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+        let client = TeregenV2::with_client(http, "https://user:pass@qam.example.invalid/api/v2");
+        let rendered = format!("{client:?}");
+        assert!(!rendered.contains("user:pass"), "debug: {rendered}");
+        assert!(
+            rendered.contains("qam.example.invalid"),
+            "debug: {rendered}"
+        );
     }
 }

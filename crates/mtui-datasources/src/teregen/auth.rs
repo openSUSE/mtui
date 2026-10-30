@@ -55,6 +55,32 @@ const UNAUTHORIZED_HINT: &str = "the server does not distinguish these, but a 40
      nonce was stale/already consumed (nonces are single-use and expire after \
      60s)";
 
+/// A hint for a `401` on the write itself after a fresh mint: the cached
+/// token was discarded and a new one minted, yet the write was still
+/// refused, so none of the stale-cache causes applies.
+const WRITE_AFTER_REMINT_HINT: &str = "the cached token was discarded and a fresh one minted, \
+     yet the write was still refused (401): not a stale cache — check the \
+     principal/key mapping or a server-side revocation";
+
+/// Which request a [`TeregenAuthError::Unauthorized`] answers for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthStage {
+    /// `POST /auth/ssh/verify` refused the mint.
+    Verify,
+    /// The write was refused after a fresh mint (the retry-once path).
+    WriteRetry,
+}
+
+impl std::fmt::Display for AuthStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthStage::Verify => write!(f, "/auth/ssh/verify"),
+            AuthStage::WriteRetry => write!(f, "the write after a fresh mint"),
+        }
+    }
+}
+
 /// Errors from teregen SSH-signature auth.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -67,9 +93,26 @@ pub enum TeregenAuthError {
     )]
     RateLimited,
 
-    /// `/auth/ssh/verify` returned `401` — every failure reason folds here.
-    #[error("teregen auth was refused (401): {hint}")]
+    /// A `401` — either from `/auth/ssh/verify` or from the write itself
+    /// after a fresh mint. The principal, key and server are the non-secret
+    /// locators that decide among the indistinguishable causes.
+    #[error(
+        "teregen auth was refused (401) for principal \"{principal}\", key {key}, at {stage} on {base}: {hint}"
+    )]
+    #[non_exhaustive]
     Unauthorized {
+        /// The oscrc principal that was sent.
+        principal: String,
+        /// The `SHA256:…` fingerprint of the key that actually signed.
+        key: String,
+        /// Which request was refused.
+        stage: AuthStage,
+        /// The sanitized teregen base URL that refused: both construction
+        /// sites run it through [`sanitize_url`], so [`Display`](std::fmt::Display)
+        /// and [`Debug`](std::fmt::Debug) print it verbatim and a caller
+        /// matching on this public field cannot leak embedded credentials by
+        /// logging it.
+        base: String,
         /// Names the indistinguishable possible causes.
         hint: String,
     },
@@ -132,6 +175,13 @@ pub struct TeregenAuth<A: AgentKeys = RusshAgent> {
     signer: Signer<A>,
     store: Option<TokenStore>,
     http: HttpClient,
+    /// The fingerprint of the key that last signed a verify request, so a
+    /// `401` names the key that actually signed rather than the configured
+    /// locator (file-backed setups have no fingerprint configured). Sharing
+    /// across concurrent calls is benign: the signer is fixed per instance,
+    /// so every writer records the same key, and every read follows a
+    /// signature on the same path.
+    last_key: std::sync::Mutex<Option<String>>,
 }
 
 impl<A: AgentKeys> std::fmt::Debug for TeregenAuth<A> {
@@ -140,7 +190,7 @@ impl<A: AgentKeys> std::fmt::Debug for TeregenAuth<A> {
     /// `HttpClient`/store internals for no reader benefit.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TeregenAuth")
-            .field("base", &self.base)
+            .field("base", &sanitize_url(&self.base))
             .field("principal", &self.principal)
             .field("namespace", &self.namespace)
             .finish_non_exhaustive()
@@ -186,6 +236,7 @@ impl<A: AgentKeys> TeregenAuth<A> {
             signer: Signer::with_agent(sshkey_path, sshkey_fingerprint, CONTEXT, agent),
             store: TokenStore::new(),
             http,
+            last_key: std::sync::Mutex::new(None),
         }
     }
 
@@ -209,6 +260,25 @@ impl<A: AgentKeys> TeregenAuth<A> {
     #[must_use]
     pub fn principal(&self) -> &str {
         &self.principal
+    }
+
+    /// The non-secret signing-key locator (see [`Signer::key_descriptor`]):
+    /// the [`signed_key`](Self::signed_key) fallback when nothing has signed
+    /// yet.
+    #[must_use]
+    fn key_descriptor(&self) -> String {
+        self.signer.key_descriptor()
+    }
+
+    /// The fingerprint of the key that last signed a verify request, falling
+    /// back to the configured locator when nothing has signed yet. Every
+    /// `401` below follows a signature, so the fallback is defense-in-depth.
+    fn signed_key(&self) -> String {
+        self.last_key
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(|| self.key_descriptor())
     }
 
     /// `POST {base}/auth/ssh/challenge`: request a fresh nonce.
@@ -283,6 +353,16 @@ impl<A: AgentKeys> TeregenAuth<A> {
 
         let sig = self.signer.sign(&self.namespace, nonce.as_bytes()).await?;
         let armored = crate::sshsig::encode_pem(&sig)?;
+        // Record what actually signed, so a `401` names it even for
+        // file-backed setups with no fingerprint configured. Canonical
+        // `SHA256:…` form, normalising the optional-prefix configured case.
+        if let Ok(mut guard) = self.last_key.lock() {
+            *guard = Some(
+                sig.public_key()
+                    .fingerprint(ssh_key::HashAlg::Sha256)
+                    .to_string(),
+            );
+        }
 
         let url = format!("{}/auth/ssh/verify", self.base);
         tracing::debug!("teregen auth: verifying at {}", sanitize_url(&url));
@@ -318,6 +398,10 @@ impl<A: AgentKeys> TeregenAuth<A> {
                     })
             }
             401 => Err(TeregenAuthError::Unauthorized {
+                principal: self.principal.clone(),
+                key: self.signed_key(),
+                stage: AuthStage::Verify,
+                base: sanitize_url(&self.base),
                 hint: UNAUTHORIZED_HINT.to_owned(),
             }),
             400 => Err(TeregenAuthError::Protocol(
@@ -453,7 +537,11 @@ impl<A: AgentKeys> TeregenAuth<A> {
         let response = self.bearer_request(method, url, &token, &customize).await?;
         if response.status().as_u16() == 401 {
             return Err(TeregenAuthError::Unauthorized {
-                hint: UNAUTHORIZED_HINT.to_owned(),
+                principal: self.principal.clone(),
+                key: self.signed_key(),
+                stage: AuthStage::WriteRetry,
+                base: sanitize_url(&self.base),
+                hint: WRITE_AFTER_REMINT_HINT.to_owned(),
             });
         }
         Ok(response)
@@ -578,6 +666,68 @@ mod tests {
             assert!(
                 UNAUTHORIZED_HINT.contains(cause),
                 "hint missing {cause:?}: {UNAUTHORIZED_HINT}"
+            );
+        }
+        assert!(
+            WRITE_AFTER_REMINT_HINT.contains("not a stale cache"),
+            "write hint must say the cache was already refreshed: {WRITE_AFTER_REMINT_HINT}"
+        );
+        assert_ne!(UNAUTHORIZED_HINT, WRITE_AFTER_REMINT_HINT);
+    }
+
+    /// Before any signature the 401 key falls back to the configured locator
+    /// (defense-in-depth: every 401 below follows a signature, so production
+    /// never takes this path).
+    #[test]
+    fn signed_key_falls_back_to_the_configured_locator_before_any_signature() {
+        let auth = TeregenAuth::new(
+            "https://qam.example.invalid/api/v2".to_owned(),
+            "alice".to_owned(),
+            None,
+            Some("SHA256:abc".to_owned()),
+            HttpClient::new(crate::http::VerifyPolicy::Default(true)).unwrap(),
+        );
+        assert_eq!(auth.principal(), "alice");
+        assert_eq!(auth.signed_key(), "SHA256:abc");
+    }
+
+    #[test]
+    fn signer_key_descriptor_names_fingerprint_or_file() {
+        use crate::sshsig::Signer;
+        let with_fp: Signer = Signer::new(None, Some("SHA256:abc".to_owned()), "teregen auth");
+        assert_eq!(with_fp.key_descriptor(), "SHA256:abc");
+        let bare_fp: Signer = Signer::new(None, Some("abc".to_owned()), "teregen auth");
+        assert_eq!(bare_fp.key_descriptor(), "SHA256:abc");
+        let file_backed: Signer = Signer::new(
+            Some(std::path::PathBuf::from("/home/user/.ssh/id_ed25519")),
+            None,
+            "teregen auth",
+        );
+        assert_eq!(file_backed.key_descriptor(), "file key");
+    }
+
+    /// `Unauthorized`'s `base` is stored already sanitized (both
+    /// construction sites run it through [`sanitize_url`]), so `Display` and
+    /// `Debug` print it verbatim: build the error the way the constructors do
+    /// and check both renderings keep the host while dropping credentials.
+    /// The end-to-end half — constructors really sanitize — is
+    /// `userinfo_in_base_never_reaches_unauthorized_error` in
+    /// `tests/teregen_auth.rs`.
+    #[test]
+    fn unauthorized_base_is_stored_sanitized() {
+        // Exhaustive on purpose: a new field must revisit this discipline.
+        let err = TeregenAuthError::Unauthorized {
+            principal: "alice".to_owned(),
+            key: "SHA256:abc".to_owned(),
+            stage: AuthStage::Verify,
+            base: sanitize_url("https://user:pass@qam.example.invalid/api/v2"),
+            hint: "hint".to_owned(),
+        };
+        for rendered in [format!("{err}"), format!("{err:?}")] {
+            assert!(!rendered.contains("user:pass"), "leaked: {rendered}");
+            assert!(
+                rendered.contains("qam.example.invalid"),
+                "host missing: {rendered}"
             );
         }
     }

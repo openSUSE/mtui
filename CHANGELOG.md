@@ -357,6 +357,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A teregen `401` names the principal, the `SHA256:…` fingerprint of the key
+  that actually signed, and the server that refused, and says which request
+  was refused: `/auth/ssh/verify` keeps the five-cause hint, while a write
+  refused after a fresh mint says the cache was already refreshed (#730).
 - `prepare` and `downgrade` abort before locking with the names of every
   transactional host they cannot resolve a command for — `host (Product
   version, transactional|non-transactional)` — instead of refusing the whole
