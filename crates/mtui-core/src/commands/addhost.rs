@@ -108,7 +108,7 @@ impl Command for AddHost {
             }
             Ok(())
         } else {
-            session.add_named_hosts(hosts.clone()).await;
+            let refused = session.add_named_hosts(hosts.clone()).await;
             let after: std::collections::HashSet<String> =
                 session.targets().names().into_iter().collect();
             let mut added: Vec<String> = hosts
@@ -116,9 +116,11 @@ impl Command for AddHost {
                 .filter(|h| !before.contains(*h) && after.contains(*h))
                 .cloned()
                 .collect();
+            let refused_names: std::collections::HashSet<&String> =
+                refused.iter().map(|(h, _)| h).collect();
             let mut skipped: Vec<String> = hosts
                 .iter()
-                .filter(|h| !added.contains(h))
+                .filter(|h| !added.contains(h) && !refused_names.contains(h))
                 .cloned()
                 .collect();
             added.sort();
@@ -127,10 +129,30 @@ impl Command for AddHost {
             // Zero added must be an error, or the caller (and via MCP the LLM)
             // is told a phantom success.
             if added.is_empty() {
+                // The error names every requested host with its reason, so
+                // no per-host display line here: with nothing added the
+                // lines would duplicate the error (MCP carries both stdout
+                // and stderr).
+                let mut missing: Vec<String> = skipped;
+                missing.extend(
+                    refused
+                        .iter()
+                        .map(|(h, failure)| format!("{h} ({})", failure.render())),
+                );
+                missing.sort();
                 return Err(CommandError::Other(format!(
                     "could not connect any requested host: {}",
-                    skipped.join(", ")
+                    missing.join(", ")
                 )));
+            }
+            // Partial success: each refused host names its holder on its own
+            // display line instead of vanishing into the skipped list.
+            for (host, failure) in &refused {
+                session.display.println(
+                    &session
+                        .display
+                        .yellow(&format!("skipped {host}: {}", failure.render())),
+                );
             }
             let mut msg = format!("added {}", added.join(", "));
             if !skipped.is_empty() {
@@ -216,13 +238,17 @@ mod tests {
 
     /// One bad host never disturbs the group: an `add_host` of a different,
     /// unreachable host errors but leaves the existing member untouched.
+    ///
+    /// Each connect-failure test below names its own unresolvable host:
+    /// `templates.add` wires the process-global arbiter, so one shared
+    /// hostname would arbitrate across parallel tests.
     #[tokio::test]
     async fn existing_mock_host_survives_a_failed_add() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         use_path_refhosts(&mut session);
         add_mock_host(&mut session, "h2");
         let before = session.targets().len();
-        let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
+        let args = matches(&AddHost, &["-t", "unreachable-survivor.invalid"]);
         let err = AddHost.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
         assert_eq!(session.targets().len(), before);
@@ -236,7 +262,7 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
-        let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
+        let args = matches(&AddHost, &["-t", "unreachable-switch.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
     }
@@ -247,7 +273,7 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
-        let args = matches(&AddHost, &["-t", "unreachable.invalid", "-k"]);
+        let args = matches(&AddHost, &["-t", "unreachable-keep.invalid", "-k"]);
         let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Auto);
     }
@@ -258,7 +284,7 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Manual);
-        let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
+        let args = matches(&AddHost, &["-t", "unreachable-manual.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
     }
@@ -292,6 +318,138 @@ mod tests {
             buf.contents().contains(": unreachable"),
             "{:?}",
             buf.contents()
+        );
+    }
+
+    /// A `-t` host held by another template names its holder instead of
+    /// attaching silently; with nothing else attached the call still errors.
+    #[tokio::test]
+    async fn named_host_held_by_another_template_names_its_holder() {
+        use mtui_hosts::{HostArbiter, Owner};
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        {
+            let base = session.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner);
+        }
+        assert!(arbiter.try_acquire("h2", &other));
+
+        let args = matches(&AddHost, &["-t", "h2"]);
+        let err = AddHost.call(&mut session, &args).await.unwrap_err();
+        let msg = match &err {
+            CommandError::Other(m) => m.clone(),
+            other => panic!("expected refusal, got {other:?}"),
+        };
+        assert!(
+            msg.contains("could not connect any requested host"),
+            "{err:?}"
+        );
+        assert!(
+            msg.contains("h2") && msg.contains("SUSE:Maintenance:2:2"),
+            "the error names the refused host and its holder: {err:?}"
+        );
+        assert!(
+            buf.contents().is_empty(),
+            "with nothing added the error carries the refusal; no duplicate display line: {:?}",
+            buf.contents()
+        );
+        assert_eq!(session.targets().len(), 1);
+    }
+
+    /// A `-t` host whose remote pool claim another template holds is refused
+    /// with its holder named and nothing attaches: a fresh remote claim
+    /// blocks `-t` with no override on that template. The holding template's
+    /// `unlock --pool --force [host]` clears the claim and unblocks a retry.
+    #[tokio::test]
+    async fn named_host_with_remote_claim_is_blocked_naming_its_holder() {
+        use mtui_hosts::{HostArbiter, Owner, POOL_LOCK_PATH};
+
+        use crate::commands::HostsUnlock;
+        use crate::commands::testkit::session_with_targets;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        use_path_refhosts(&mut session);
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = session.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let foreign =
+            format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:2:2 [bob]").into_bytes();
+        // Kept by handle: the holding template below dials through a clone
+        // sharing the same mock files, so its unlock is observable here.
+        let holder_conn =
+            MockConnection::new("remote-h2").with_file(POOL_LOCK_PATH, foreign.clone());
+        session.inject_mock_connection("remote-h2", holder_conn.clone());
+
+        let args = matches(&AddHost, &["-t", "remote-h2"]);
+        let err = AddHost.call(&mut session, &args).await.unwrap_err();
+        let msg = match &err {
+            CommandError::Other(m) => m.clone(),
+            other => panic!("expected refusal, got {other:?}"),
+        };
+        assert!(
+            msg.contains("remote-h2") && msg.contains("SUSE:Maintenance:2:2"),
+            "the error names the blocked host and its holder: {err:?}"
+        );
+        assert!(
+            buf.contents().is_empty(),
+            "with nothing added the error carries the refusal; no duplicate display line: {:?}",
+            buf.contents()
+        );
+        assert_eq!(session.targets().len(), 1);
+
+        // The refused template cannot clear the claim itself: `unlock`
+        // resolves names against its own group, which the refused host never
+        // joined.
+        let unlock_args = matches(&HostsUnlock, &["-p", "-f", "-t", "remote-h2"]);
+        let unlock_err = HostsUnlock
+            .call(&mut session, &unlock_args)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&unlock_err, CommandError::Other(m) if m.contains("remote-h2") && m.contains("not connected")),
+            "{unlock_err:?}"
+        );
+        assert!(holder_conn.file_contents(POOL_LOCK_PATH).is_some());
+
+        // The documented remedy runs where the host is attached: the holding
+        // template force-removes the claim, and the retry attaches.
+        let mut holder_target = Target::with_connection(
+            "remote-h2",
+            TargetState::Enabled,
+            Box::new(holder_conn.clone()),
+        );
+        holder_target.set_rrid("SUSE:Maintenance:2:2");
+        let (mut holder, holder_buf) =
+            session_with_targets("SUSE:Maintenance:2:2", vec![holder_target]);
+        let holder_args = matches(&HostsUnlock, &["-p", "-f", "-t", "remote-h2"]);
+        HostsUnlock.call(&mut holder, &holder_args).await.unwrap();
+        assert!(
+            holder_buf
+                .contents()
+                .contains("remote-h2: pool claim removed"),
+            "{:?}",
+            holder_buf.contents()
+        );
+        assert!(holder_conn.file_contents(POOL_LOCK_PATH).is_none());
+
+        let retry_args = matches(&AddHost, &["-t", "remote-h2"]);
+        AddHost.call(&mut session, &retry_args).await.unwrap();
+        assert!(
+            session.targets().names().contains(&"remote-h2".to_owned()),
+            "the retry attaches once the holder clears the claim"
         );
     }
 }
