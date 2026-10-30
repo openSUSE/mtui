@@ -357,6 +357,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Session-level `list_refhosts`/`updates` (and the other template-free
+  commands) no longer hold the active template's entry for the call, so a
+  concurrent call on that template no longer fails `template busy` (#666).
 - A teregen `401` names the principal, the `SHA256:…` fingerprint of the key
   that actually signed, and the server that refused, and says which request
   was refused: `/auth/ssh/verify` keeps the five-cause hint, while a write

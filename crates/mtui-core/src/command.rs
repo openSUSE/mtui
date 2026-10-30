@@ -193,8 +193,8 @@ pub trait Command: Send + Sync {
     /// sentinel; under fan-out that refusal is that template's failure alone,
     /// and a contended entry is never mistaken for a host-less one and skipped.
     /// The exception is a command that addresses no template
-    /// ([`addresses_template`]): it ignores the one it was handed, so its
-    /// claim stays best-effort.
+    /// ([`addresses_template`]): it points the session but releases the entry
+    /// for the call.
     ///
     /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
     /// bails with [`CommandError::Cancelled`] before dispatching, and re-checks
@@ -239,6 +239,10 @@ pub trait Command: Send + Sync {
             {
                 restore_active(session, restore);
                 return Err(exc);
+            }
+            // Exempt commands never touch the handed report, so holding the guard would fail concurrent calls with `template busy` (#666).
+            if exempt && !self.repoints_active() {
+                session.release_active_guard();
             }
             let out = self.call(session, args).await;
             restore_active(session, restore);
@@ -647,6 +651,98 @@ mod tests {
                 .push(session.targets().len());
             Ok(())
         }
+    }
+
+    /// An exempt [`Scope::Single`] probe (addresses no template) whose body
+    /// blocks until released, so a test can observe the entry-guard state
+    /// mid-call from another task.
+    struct BlockingExempt {
+        entered: tokio::sync::mpsc::Sender<()>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl Command for BlockingExempt {
+        fn name(&self) -> &'static str {
+            "blocking_exempt_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        fn reads_resolved_report(&self) -> bool {
+            false
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            self.entered.send(()).await.expect("test listens");
+            self.release.notified().await;
+            Ok(())
+        }
+    }
+
+    /// An exempt command releases the active entry for its call: a concurrent
+    /// dispatch on the same template must acquire it instead of failing
+    /// `template busy` (#666).
+    #[tokio::test]
+    async fn exempt_single_releases_the_entry_for_the_call() {
+        let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        let entry = session.templates.handle(RRID).expect("seeded");
+        let (entered_tx, mut entered_rx) = tokio::sync::mpsc::channel(1);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let probe = BlockingExempt {
+            entered: entered_tx,
+            release: Arc::clone(&release),
+        };
+        let parser = crate::engine::command_parser(&probe);
+        let args = parser
+            .try_get_matches_from(Vec::<String>::new())
+            .expect("no argv");
+
+        let handle = tokio::spawn(async move {
+            let mut session = session;
+            probe.run(&mut session, &args).await
+        });
+        entered_rx.recv().await.expect("probe entered its call");
+        // The entry must be acquirable while the exempt call runs: the
+        // entered signal already proves claim+release happened.
+        let _held = entry
+            .try_lock_owned()
+            .expect("entry must not be held by an exempt call");
+        release.notify_one();
+        handle
+            .await
+            .expect("task ran")
+            .expect("exempt call succeeds");
+    }
+
+    /// The release above applies exactly to the session-level commands: a new
+    /// command joining this set must deliberately opt into guardless dispatch.
+    #[test]
+    fn exempt_commands_are_pinned() {
+        let registry = crate::register_all();
+        let mut exempt: Vec<&str> = registry
+            .names()
+            .filter(|n| {
+                let command = registry.get(n).expect("registered");
+                !addresses_template(command.as_ref())
+            })
+            .collect();
+        exempt.sort_unstable();
+        assert_eq!(
+            exempt,
+            vec![
+                "config",
+                "help",
+                "list_refhosts",
+                "list_templates",
+                "load_template",
+                "quit",
+                "set_log_level",
+                "switch",
+                "unload",
+                "updates",
+                "whoami",
+            ]
+        );
     }
 
     /// A fork racing the canonical session for the same entry (mechanism 2 of
