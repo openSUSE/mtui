@@ -41,6 +41,10 @@ authorization. HTTP session isolation is likewise not caller authentication.
 Keep the HTTP transport on its default loopback interface or place it behind an
 authenticated boundary trusted to operate the remaining maintenance tools.
 
+Tool calls can be recorded to a durable audit log and shipped to an
+OpenTelemetry collector — see [Shipping the audit
+log](docs/src/mcp.md#shipping-the-audit-log).
+
 ## Features
 
 - Parallel SSH command execution across reference hosts (`run`, `update`,
