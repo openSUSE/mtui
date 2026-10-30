@@ -3,11 +3,12 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, complete_fanout, page_output, select_names};
+use super::support::{add_hosts_arg, complete_fanout, hosts_arg, page_output, select_names};
 use crate::command::{Command, Scope};
 use crate::display::CommandPromptDisplay;
 use crate::error::{CommandError, CommandResult};
-use crate::session::Session;
+use crate::session::{LogEntry, Session};
+use mtui_types::enums::TargetState;
 
 /// Prints the command protocol (issued commands + output) from the hosts.
 ///
@@ -38,6 +39,13 @@ impl Command for ShowLog {
         false
     }
 
+    /// Opts into the driver's retained-log ownership: a template holding a
+    /// named `-t` host only as a removed host's retained log still dispatches,
+    /// so a detached-only fan-out answers instead of skipping everywhere.
+    fn includes_detached_hosts(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_hosts_arg(cmd)
             .arg(
@@ -58,50 +66,109 @@ impl Command for ShowLog {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        let rrid = session.templates.active_rrid().unwrap_or_default();
         complete_fanout(
             session,
             &[&["--offset"], &["--limit"]],
-            Vec::new(),
+            session.detached_hosts(rrid),
             line,
             text,
         )
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        let hosts = select_names(session.targets(), args, true)
-            .map_err(|e| CommandError::Other(e.to_string()))?;
+        // Live hosts plus removed ones with a retained log: `remove_host`
+        // keeps the verbatim protocol in the session until `unload`.
+        let rrid = session
+            .templates
+            .active_rrid()
+            .unwrap_or_default()
+            .to_owned();
+        let detached: std::collections::BTreeSet<String> =
+            session.detached_hosts(&rrid).into_iter().collect();
+        // Names only: whether a selected host reads live or detached is
+        // decided at render time from `session.targets()`, so a re-added host
+        // reads live and a racing `unload` still errors explicitly-named hosts.
+        let requested = hosts_arg(args);
+        let explicit = requested
+            .as_ref()
+            .is_some_and(|names| !names.is_empty() && !names.iter().any(|h| h == "all"));
+        let hosts: Vec<String> = if explicit {
+            let Some(names) = requested else {
+                unreachable!("explicit -t without hostnames");
+            };
+            let mut selected = Vec::new();
+            for name in names {
+                let live = session
+                    .targets()
+                    .get(&name)
+                    .is_some_and(|t| t.state() != TargetState::Disabled);
+                let gone_with_log = !session.targets().contains(&name) && detached.contains(&name);
+                if live || gone_with_log {
+                    selected.push(name);
+                } else if !session.targets().contains(&name) {
+                    return Err(CommandError::Other(
+                        mtui_hosts::HostError::NotConnected { host: name }.to_string(),
+                    ));
+                }
+                // Else live but disabled: keeps the old silent drop.
+            }
+            selected
+        } else {
+            let live = select_names(session.targets(), args, true)
+                .map_err(|e| CommandError::Other(e.to_string()))?;
+            // Detached hosts a re-add made live again read from the live
+            // group; only the still-gone ones extend the view.
+            live.into_iter()
+                .chain(
+                    detached
+                        .into_iter()
+                        .filter(|h| !session.targets().contains(h)),
+                )
+                .collect()
+        };
 
         // Selected before rendering: the MCP byte budget is spent at write time,
         // so a trailing host is only reachable if the window narrows the writes.
         let offset = args.get_one::<usize>("offset").copied().unwrap_or(1);
         let limit = args.get_one::<usize>("limit").copied();
         let windowed = offset != 1 || limit.is_some();
+        let start = offset.saturating_sub(1);
+        let end = limit.map_or(usize::MAX, |l| start.saturating_add(l));
 
         // Windowed against the live log, so only selected entries are cloned and
         // `--limit 0` clones none. `total` is the pre-window count for the header.
-        let per_host: Vec<(String, usize, Vec<(String, String, String, i32)>)> = hosts
-            .iter()
-            .filter_map(|name| {
-                session.targets().get(name).map(|t| {
+        // Attached hosts always read live: a disabled one keeps the
+        // select_names silent drop and must never resurface its stale retained
+        // log as detached. Only a truly gone host reads detached, and a
+        // detached entry lost to a racing `unload` still errors when
+        // explicitly named.
+        let mut per_host: Vec<(String, usize, Vec<LogEntry>)> = Vec::new();
+        for name in &hosts {
+            if session.targets().contains(name) {
+                if let Some(t) = session
+                    .targets()
+                    .get(name)
+                    .filter(|t| t.state() != TargetState::Disabled)
+                {
                     let log = t.out();
-                    let total = log.len();
-                    let start = offset.saturating_sub(1).min(total);
-                    let end = limit.map_or(total, |l| start.saturating_add(l).min(total));
-                    let entries = log[start..end]
-                        .iter()
-                        .map(|c| {
-                            (
-                                c.command.clone(),
-                                c.stdout.clone(),
-                                c.stderr.clone(),
-                                i32::from(c.exitcode),
-                            )
-                        })
-                        .collect();
-                    (name.clone(), total, entries)
-                })
-            })
-            .collect();
+                    let (total, entries) = windowed_log(log, offset, limit);
+                    per_host.push((name.clone(), total, entries));
+                }
+                continue;
+            }
+            match session.detached_window(&rrid, name, start, end) {
+                Some((total, entries)) => {
+                    per_host.push((format!("{name} (detached)"), total, entries))
+                }
+                None if explicit => {
+                    return Err(CommandError::Other(
+                        mtui_hosts::HostError::NotConnected { host: name.clone() }.to_string(),
+                    ));
+                }
+                None => {}
+            }
+        }
 
         let mut output: Vec<String> = Vec::new();
         for (name, total, entries) in &per_host {
@@ -119,14 +186,40 @@ impl Command for ShowLog {
     }
 }
 
+/// Slice a host log to the `--offset`/`--limit` window, returning the
+/// pre-window total for the header plus the cloned entries.
+fn windowed_log(
+    log: &mtui_types::hostlog::HostLog,
+    offset: usize,
+    limit: Option<usize>,
+) -> (usize, Vec<LogEntry>) {
+    let total = log.len();
+    let start = offset.saturating_sub(1).min(total);
+    let end = limit.map_or(total, |l| start.saturating_add(l).min(total));
+    let entries = log[start..end]
+        .iter()
+        .map(|c| {
+            (
+                c.command.clone(),
+                c.stdout.clone(),
+                c.stderr.clone(),
+                i32::from(c.exitcode),
+            )
+        })
+        .collect();
+    (total, entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::listversions::ListVersions;
+    use crate::commands::removehost::RemoveHost;
     use crate::commands::testkit::{
         Buffer, empty_session, fake_report, matches, session_scripting, session_scripting_hosts,
         session_scripting_multi, session_with_hosts,
     };
+    use crate::commands::unload::Unload;
 
     /// One host running `cmds` in order, so each log entry names its command.
     async fn scripted_session(cmds: &[(&str, &str)]) -> (Session, Buffer) {
@@ -135,6 +228,76 @@ mod tests {
             session.targets_mut().run(*cmd).await;
         }
         (session, buf)
+    }
+
+    /// A removed host's verbatim protocol survives for `show_log` until
+    /// `unload`, marked detached.
+    #[tokio::test]
+    async fn removed_host_log_survives_for_show_log() {
+        let (mut session, buf) =
+            scripted_session(&[("cmd-one", "one-out\n"), ("cmd-two", "two-out\n")]).await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert!(!session.targets().contains("h1"));
+
+        let args = matches(&ShowLog, &["-t", "h1"]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("log from h1 (detached):"), "{out}");
+        assert!(out.contains("cmd-one"), "{out}");
+        assert!(out.contains("cmd-two"), "{out}");
+    }
+
+    /// A re-added host reads live: the all-view must not duplicate it with
+    /// its own retained log.
+    #[tokio::test]
+    async fn readded_host_shows_live_once_in_all_view() {
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::TargetState;
+
+        let (mut session, buf) = scripted_session(&[("cmd-one", "one-out\n")]).await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts("SUSE:Maintenance:1:1"), ["h1"]);
+
+        session.targets_mut().add(Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1")),
+        ));
+        let args = matches(&ShowLog, &[]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("log from h1")).count(),
+            1,
+            "live host must render exactly once, never duplicated: {out}"
+        );
+        assert!(!out.contains("(detached)"), "{out}");
+        assert!(
+            !out.contains("cmd-one"),
+            "stale detached entries must not render for a live host: {out}"
+        );
+    }
+
+    /// `unload` drops the retained logs with the template.
+    #[tokio::test]
+    async fn unload_drops_retained_logs() {
+        let (mut session, _buf) = scripted_session(&[("cmd-one", "one-out\n")]).await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts("SUSE:Maintenance:1:1"), ["h1"]);
+
+        let args = matches(&Unload, &["SUSE:Maintenance:1:1"]);
+        Unload.call(&mut session, &args).await.unwrap();
+        assert!(session.detached_hosts("SUSE:Maintenance:1:1").is_empty());
+
+        let args = matches(&ShowLog, &["-t", "h1"]);
+        let err = ShowLog.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(err, CommandError::Other(_)) && err.to_string().contains("not connected"),
+            "{err:?}"
+        );
     }
 
     /// Three hosts at different log lengths — h1 three entries, h2 one, h3 none
@@ -391,6 +554,102 @@ mod tests {
         assert!(
             out.contains("log from h1") && out.contains("uname -a"),
             "{out}"
+        );
+    }
+
+    /// A template holding `-t h1` only as a retained log still answers a
+    /// `show_log` fan-out: the detached-host rule belongs to this command, so
+    /// the driver must not skip the template for it.
+    ///
+    /// Through `run()`, not `call()`: the skip lives in the fan-out driver.
+    #[tokio::test]
+    async fn detached_only_template_answers_named_fanout() {
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+        let (mut session, buf) = scripted_session(&[("cmd-one", "one-out\n")]).await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts("SUSE:Maintenance:1:1"), ["h1"]);
+        session.templates.add(fake_report(OTHER, &["h1"], "ok"));
+
+        let args = matches(&ShowLog, &["-t", "h1"]);
+        ShowLog.run(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("log from h1 (detached):"),
+            "the detached-only template must answer, not be skipped: {out}"
+        );
+        assert!(
+            out.contains("cmd-one"),
+            "the retained protocol must render: {out}"
+        );
+        assert_eq!(
+            out.lines().filter(|l| l.starts_with("log from h1")).count(),
+            2,
+            "both the detached and the live template answer: {out}"
+        );
+    }
+
+    /// An explicit `-t` naming one live and one removed host renders each
+    /// from its own source: live without the marker, detached with it.
+    /// Distinguishes the two render branches — collapsing either into the
+    /// other drops the marker or the entries.
+    #[tokio::test]
+    async fn explicit_mixed_live_and_detached_renders_each_source() {
+        let (mut session, buf) = session_scripting_hosts(
+            "SUSE:Maintenance:1:1",
+            &["h1", "h2"],
+            &[("cmd-live", "live-out\n"), ("cmd-gone", "gone-out\n")],
+        );
+        for pairs in [&[("h1", "cmd-live")][..], &[("h2", "cmd-gone")][..]] {
+            let map: std::collections::BTreeMap<String, String> = pairs
+                .iter()
+                .map(|(h, c)| ((*h).to_owned(), (*c).to_owned()))
+                .collect();
+            session.targets_mut().run(map).await;
+        }
+        let args = matches(&RemoveHost, &["-t", "h2"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert!(!session.targets().contains("h2"));
+
+        let args = matches(&ShowLog, &["-t", "h1", "-t", "h2"]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("log from h1:"), "{out}");
+        assert!(!out.contains("log from h1 (detached)"), "{out}");
+        assert!(out.contains("cmd-live"), "{out}");
+        assert!(out.contains("log from h2 (detached):"), "{out}");
+        assert!(out.contains("cmd-gone"), "{out}");
+    }
+
+    /// A live but disabled host with a retained log reads as no host at all —
+    /// like any disabled host — never its stale log labeled `(detached)`.
+    #[tokio::test]
+    async fn disabled_readded_host_never_shows_stale_detached() {
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::TargetState;
+
+        let (mut session, buf) = scripted_session(&[("cmd-one", "one-out\n")]).await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        session.targets_mut().add(Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            Box::new(MockConnection::new("h1")),
+        ));
+
+        let args = matches(&ShowLog, &["-t", "h1"]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        assert!(
+            !buf.contents().contains("(detached)"),
+            "an attached host must never show its stale log as detached: {}",
+            buf.contents()
+        );
+        let args = matches(&ShowLog, &[]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        assert!(
+            !buf.contents().contains("(detached)"),
+            "the all-view must not resurface it either: {}",
+            buf.contents()
         );
     }
 }
