@@ -183,6 +183,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   terminal-sanitised, and comments are capped to the newest five by timestamp
   per row with the omitted count marked; every other field still comes from
   the TeReGen queue listing, and `--json` stays the raw rows (#415).
+- Container image (`ghcr.io/opensuse/mtui`, mirrored to
+  `registry.opensuse.org/opensuse/mtui` once the mirror is configured):
+  openSUSE-based, non-root, ships both
+  binaries; see Installation for the credential bind-mounts and the
+  `mtui-mcp --transport http` run line (#469).
 
 - Audit records echo the client's W3C `tracestate` alongside `trace` when it
   validates (1..=512 bytes, `key=value` members with joined empties skipped
