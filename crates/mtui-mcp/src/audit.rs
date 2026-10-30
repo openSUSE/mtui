@@ -38,7 +38,8 @@
 //!   value attached to one (`-pSECRET`, `-U user%pass`); and anything passed by
 //!   environment variable, stdin, or a file the tool reads.
 //! * Secrets are **unrepresentable**, not filtered: [`sanitize_args`] never
-//!   records a `config_set` value at all, so a future secret attribute cannot
+//!   records a bare credential value at all — the `config_set` arm below drops
+//!   `value` for every attribute — so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
 //!   `content`/`content_b64`, `report_section_write`/`report_issue_write` `value`) never
 //!   land verbatim either: each records `{bytes, sha256}` over the original string, so a credentials file or SSH key uploaded via
@@ -703,12 +704,15 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 /// size-only reduction, overlong-key relocation), except the two shapes that
 /// can carry secrets in bulk:
 ///
-/// * `config_set` — the one tool that can carry a credential. Its `value` is
+/// * `config_set` — the one tool shape that can carry a credential as a bare
+///   value. Its `value` is
 ///   never recorded, for any attribute: the record type has no room for it,
 ///   so adding a future secret attribute cannot leak it by forgetting to
 ///   extend the classifier. [`is_secret_attr`](mtui_core::commands::is_secret_attr)
 ///   still marks whether the attribute *is* a secret, so a reader can tell a
-///   token rotation from a display-name change.
+///   token rotation from a display-name change. Retained after #410 denied
+///   `config_set` on the MCP surface: no current tool routes here, but any
+///   future credential-carrying tool must redact the same way.
 /// * File-body payloads — `put` `content`/`content_b64`,
 ///   `report_section_write`/`report_issue_write` `value`. Each records
 ///   `{bytes, sha256}` over the original string: correlatable across the file

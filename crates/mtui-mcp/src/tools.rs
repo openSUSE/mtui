@@ -34,7 +34,7 @@ use mtui_core::{Registry, command_parser};
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::deny::is_denied;
+use crate::deny::{is_denied, mcp_denied_args};
 use crate::schema::command_input_schema;
 use crate::session::{
     DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
@@ -80,12 +80,18 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
 /// Tool-call keys still accepted, and ignored, after their property left the
-/// tool's schema in 26.4 (#597): inert there, and a pinned client must not start
-/// failing on a minor release. Keyed by tool name, which equals the command name
-/// for every entry (`dispatch_tool` looks up `route.command`). Delete with the
+/// tool's schema in 26.4 (#597, #410): inert there, and a pinned client must
+/// not start failing on a minor release. Keyed by tool name; `dispatch_tool`
+/// looks the table up by the route's stored tool name. Delete with the
 /// 26.5 version bump; `deprecated_kwargs_expire_with_26_5` fails that bump until
 /// this is empty. `load_template` is absent on purpose: its `-T` failed the call
 /// before it ran, so its keys are refused outright.
+///
+/// The `openqa_*` rows are the #410 per-arg deny in its one-release shim form:
+/// the overrides stay hidden from the schemas (via `deny::MCP_DENIED_ARGS`) but
+/// a sent one is ignored, not refused, until 26.5. Unlike the #597 keys — which
+/// name no live `clap` arg, so argv reconstruction drops them on its own —
+/// these name live args, so `dispatch_tool` strips them before `kwargs_to_argv`.
 const DEPRECATED_KWARGS: &[(&str, &[&str])] = &[
     ("list_refhosts", &["template", "all_templates"]),
     ("list_templates", &["template", "all_templates"]),
@@ -94,6 +100,17 @@ const DEPRECATED_KWARGS: &[(&str, &[&str])] = &[
     ("unload", &["template", "all_templates"]),
     ("updates", &["template", "all_templates"]),
     ("whoami", &["template", "all_templates"]),
+    (
+        "openqa_overview",
+        &[
+            "url_openqa",
+            "url_dashboard_qam",
+            "url_qam",
+            "test_pattern",
+            "no_fetch",
+        ],
+    ),
+    ("openqa_jobs", &["url_openqa", "url_dashboard_qam"]),
 ];
 
 /// The deprecated keys of `tool` (empty for every other tool).
@@ -101,6 +118,16 @@ fn deprecated_kwargs(tool: &str) -> &'static [&'static str] {
     match DEPRECATED_KWARGS.iter().find(|(name, _)| *name == tool) {
         Some((_, keys)) => keys,
         None => &[],
+    }
+}
+
+/// Remove shimmed keys from dispatch kwargs before argv reconstruction, so an
+/// accepted-but-dropped key never reaches the engine. The #597 keys name no
+/// live arg and would drop out on their own; the #410 overrides name live
+/// args, so this is what keeps them from taking effect.
+fn strip_deprecated_kwargs(tool: &str, kwargs: &mut Map<String, Value>) {
+    for key in deprecated_kwargs(tool) {
+        kwargs.remove(*key);
     }
 }
 
@@ -122,6 +149,8 @@ pub struct ToolDescriptor {
 /// as the descriptors so a tool's schema and its dispatch cannot diverge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRoute {
+    /// The tool name as advertised (`config_show` for the fan-out).
+    name: String,
     /// The registry command name to dispatch (`config` for `config_show`).
     command: &'static str,
     /// Tokens prepended to the reconstructed argv (`["show"]` for `config_show`).
@@ -218,7 +247,7 @@ fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, Too
         }
 
         let parser = command_parser(command.as_ref());
-        let mut input_schema = command_input_schema(&parser);
+        let mut input_schema = command_input_schema(&parser, mcp_denied_args(name));
         let slow = SLOW_COMMANDS.contains(&name);
         if slow {
             add_background_property(&mut input_schema);
@@ -232,6 +261,7 @@ fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, Too
         routes.insert(
             name.to_owned(),
             ToolRoute {
+                name: name.to_owned(),
                 command: name,
                 argv_prefix: Vec::new(),
                 slow,
@@ -244,7 +274,9 @@ fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, Too
 }
 
 /// Register one tool per subcommand of a subparser command (`config`); the bare
-/// parent is not emitted, and `config` is not slow, so no `background`.
+/// parent is not emitted, and `config` is not slow, so no `background`. A
+/// fanned-out tool whose name is denied (`config_set`, #410) is skipped like a
+/// denied command: the parent-level check in [`synthesise`] cannot see it.
 fn fan_out_subparser(
     command: &dyn mtui_core::Command,
     name: &'static str,
@@ -255,6 +287,9 @@ fn fan_out_subparser(
     for sub in parser.get_subcommands() {
         let sub_name = sub.get_name().to_owned();
         let tool_name = format!("{name}_{sub_name}");
+        if is_denied(&tool_name) {
+            continue;
+        }
         let description = sub
             .get_about()
             .map(|s| s.to_string())
@@ -262,12 +297,13 @@ fn fan_out_subparser(
         descriptors.push(ToolDescriptor {
             name: tool_name.clone(),
             description,
-            input_schema: command_input_schema(sub),
+            input_schema: command_input_schema(sub, mcp_denied_args(&tool_name)),
             read_only: is_read_only(&tool_name),
         });
         routes.insert(
-            tool_name,
+            tool_name.clone(),
             ToolRoute {
+                name: tool_name,
                 command: name,
                 argv_prefix: vec![sub_name],
                 slow: false,
@@ -278,11 +314,14 @@ fn fan_out_subparser(
 
 /// Warn (do not fail) if a deny-listed name is absent from the live registry — a
 /// renamed/removed command should surface at boot rather than silently leak.
+/// A fanned-out sub-tool name (`config_set`) is never a registry name: it
+/// resolves through its parent's subcommands, so it is exempt here and pinned
+/// by `config_fan_out_denies_set_keeps_show` instead.
 fn warn_on_deny_drift(registry: &Registry) {
     let missing: Vec<&str> = crate::deny::MCP_DENYLIST
         .iter()
         .copied()
-        .filter(|name| !registry.contains(name))
+        .filter(|name| !registry.contains(name) && !is_fanned_out_subtool(registry, name))
         .collect();
     if !missing.is_empty() {
         tracing::warn!(
@@ -291,6 +330,23 @@ fn warn_on_deny_drift(registry: &Registry) {
              the stale entries in mtui_core::MCP_DENYLIST",
         );
     }
+}
+
+/// `true` iff `name` is a live subcommand of a registered subparser command
+/// (`config_set` → `config`'s `set`), so a deny-list entry for it is not drift.
+fn is_fanned_out_subtool(registry: &Registry, name: &str) -> bool {
+    let Some((parent, sub)) = name.split_once('_') else {
+        return false;
+    };
+    if !SUBPARSER_COMMANDS.contains(&parent) {
+        return false;
+    }
+    let Some(command) = registry.get(parent) else {
+        return false;
+    };
+    command_parser(command.as_ref())
+        .get_subcommands()
+        .any(|s| s.get_name() == sub)
 }
 
 /// Build the synthesised command-tool descriptors, sorted by name: deny-listed
@@ -351,10 +407,18 @@ pub(crate) async fn dispatch_tool(
     // The allowed keys are the callable args of the parser layer that produced
     // this tool's schema — for a fanned-out tool (`config_show`) the *subcommand*,
     // where its args live, not the parent. `background` was popped above.
+    // Minus the per-arg MCP deny (#410): the overrides stay on the live `clap`
+    // args, so schema-only hiding would sail a sent value through to the
+    // engine. Denied keys leave the allowed set here; the ones still covered
+    // by their `DEPRECATED_KWARGS` shim are re-admitted below and stripped
+    // before argv reconstruction instead of refused.
     let arg_source = subparser_layer(&parser, &route.argv_prefix).unwrap_or(&parser);
-    // Deprecated keys stay accepted for one release; `kwargs_to_argv` walks the
-    // parser's args, so they never reach argv.
-    let deprecated = deprecated_kwargs(route.command);
+    let denied = mcp_denied_args(&route.name);
+    // Deprecated keys stay accepted for one release. The #597 keys name no
+    // live arg, so reconstruction would drop them on its own; the #410
+    // overrides name live args, so the strip below is what keeps them from
+    // reaching argv.
+    let deprecated = deprecated_kwargs(&route.name);
     let sent: Vec<&str> = deprecated
         .iter()
         .copied()
@@ -362,19 +426,21 @@ pub(crate) async fn dispatch_tool(
         .collect();
     if !sent.is_empty() {
         tracing::warn!(
-            tool = route.command,
+            tool = route.name.as_str(),
             keys = ?sent,
-            "ignoring deprecated tool-call keys: dropped from the schema in 26.4, refused from 26.5 (#597)"
+            "ignoring deprecated tool-call keys: dropped from the schema in 26.4, refused from 26.5 (#597, #410)"
         );
     }
     let allowed = arg_source
         .get_arguments()
         .filter(|a| !crate::schema::is_clap_builtin(a))
         .map(|a| a.get_id().as_str())
+        .filter(|id| !denied.contains(id))
         .chain(deprecated.iter().copied());
     if let Err(err) = reject_unknown_kwargs(&kwargs, allowed) {
         return Err::<String, _>(err).into();
     }
+    strip_deprecated_kwargs(&route.name, &mut kwargs);
 
     // The same layer, or reconstruction drops every kwarg the parent does not
     // declare: `config set` emitted a bare `["set"]` and clap rejected it for the
@@ -854,24 +920,38 @@ mod tests {
         assert!(tool_routes(&registry).is_empty());
     }
 
+    /// `config` is fanned out; the bare `config` tool is absent. `config_show`
+    /// stays exposed for verification, while `config_set` is denied (#410):
+    /// it writes operator config with no operator-visible artifact.
+    /// `tools_allow` cannot restore it — it is never synthesised (see
+    /// `server.rs`).
     #[test]
-    fn config_is_fanned_out_bare_config_absent() {
-        let tools = build_tools(&register_all());
+    fn config_fan_out_denies_set_keeps_show() {
+        let registry = register_all();
+        let tools = build_tools(&registry);
+        let routes = tool_routes(&registry);
         let ns = names(&tools);
         assert!(!ns.contains(&"config"), "bare config must not be a tool");
         assert!(ns.contains(&"config_show"), "config_show missing");
-        assert!(ns.contains(&"config_set"), "config_set missing");
+        assert!(
+            !ns.contains(&"config_set"),
+            "config_set must be denied from tools"
+        );
+        assert!(
+            routes.contains_key("config_show"),
+            "config_show route missing"
+        );
+        assert!(
+            !routes.contains_key("config_set"),
+            "config_set must be denied from routes"
+        );
     }
 
-    /// A fanned-out tool's description is its subcommand's `about`, so `config
-    /// show`/`config set` must carry one or the client sees the bare tool name;
-    /// `set`'s positionals are described too (#597).
+    /// `config_show`'s description is its subcommand's `about`, so the client
+    /// never sees the bare tool name (#597).
     #[test]
-    fn config_tools_are_described() {
+    fn config_show_is_described() {
         let tools = build_tools(&register_all());
-        let set = descriptor(&tools, "config_set");
-        assert_ne!(set.description, "config_set");
-        assert!(set.description.starts_with("Sets"), "{:?}", set.description);
         let show = descriptor(&tools, "config_show");
         assert_ne!(show.description, "config_show");
         assert!(
@@ -879,24 +959,6 @@ mod tests {
             "{:?}",
             show.description
         );
-        for prop in ["attribute", "value"] {
-            assert!(!prop_description(&tools, "config_set", prop).is_empty());
-        }
-    }
-
-    #[test]
-    fn config_set_schema_requires_attribute_and_value() {
-        let tools = build_tools(&register_all());
-        let set = descriptor(&tools, "config_set");
-        let required = set.input_schema.get("required").expect("required present");
-        let required: Vec<&str> = required
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert!(required.contains(&"attribute"), "attribute required");
-        assert!(required.contains(&"value"), "value required");
     }
 
     fn prop_names(tools: &[ToolDescriptor], name: &str) -> Vec<String> {
@@ -1152,10 +1214,10 @@ mod tests {
         assert_eq!(err.exit_code, 1);
     }
 
-    /// Every shimmed row names a live tool that routes straight to the command
-    /// of the same name, and whose schema really has dropped the key. Kills a
-    /// renamed tool leaving a dead row, and a property re-added while the shim
-    /// still exempts it (#597).
+    /// Every shimmed row names a live tool carrying that same name on its
+    /// route, and whose schema really has dropped the key. Kills a renamed
+    /// tool leaving a dead row, and a property re-added while the shim still
+    /// exempts it (#597).
     #[test]
     fn deprecated_kwargs_name_live_tools_and_absent_properties() {
         let registry = register_all();
@@ -1169,9 +1231,9 @@ mod tests {
             let route = routes
                 .get(*tool)
                 .unwrap_or_else(|| panic!("{tool} is not a synthesised tool"));
-            // `dispatch_tool` looks the table up by `route.command`, so a tool
-            // whose name differs from its command would never be shimmed.
-            assert_eq!(route.command, *tool, "{tool} routes to {}", route.command);
+            // `dispatch_tool` looks the table up by the route's stored tool
+            // name, so a route carrying any other name would never be shimmed.
+            assert_eq!(route.name, *tool, "{tool} routes as {}", route.name);
             assert!(
                 route.argv_prefix.is_empty(),
                 "{tool}: {:?}",
@@ -1188,8 +1250,39 @@ mod tests {
         }
     }
 
+    /// #410: the per-arg deny and its one-release shim cannot drift apart.
+    /// Every denied key stays accepted (shimmed) until 26.5, and no shimmed
+    /// key outlives its deny: dropping a key from `MCP_DENIED_ARGS` while the
+    /// shim still admits it would sail the value through to the engine (the
+    /// #410 overrides name live `clap` args, so only the strip stops them),
+    /// and dropping a shim row early would refuse a pinned client.
+    #[test]
+    fn denied_args_match_their_deprecation_shim() {
+        use std::collections::BTreeSet;
+
+        use crate::deny::MCP_DENIED_ARGS;
+
+        for (tool, args) in MCP_DENIED_ARGS {
+            let denied: BTreeSet<&str> = args.iter().copied().collect();
+            let shimmed: BTreeSet<&str> = deprecated_kwargs(tool).iter().copied().collect();
+            assert_eq!(denied, shimmed, "{tool}: deny and shim drifted apart");
+        }
+        // The #597 rows shim keys with no deny; a #410 key must never hide there.
+        for (tool, keys) in DEPRECATED_KWARGS {
+            if MCP_DENIED_ARGS.iter().any(|(name, _)| name == tool) {
+                continue;
+            }
+            for key in *keys {
+                assert!(
+                    !MCP_DENIED_ARGS.iter().any(|(_, args)| args.contains(key)),
+                    "{tool}.{key}: shimmed without a deny"
+                );
+            }
+        }
+    }
+
     /// The removal release, made enforceable: the version bump to 26.5 fails
-    /// until the shim is gone (#597).
+    /// until the shim is gone (#597, #410).
     #[test]
     fn deprecated_kwargs_expire_with_26_5() {
         let mut parts = env!("CARGO_PKG_VERSION").split('.');
@@ -1197,14 +1290,19 @@ mod tests {
         let minor: u32 = parts.next().and_then(|p| p.parse().ok()).expect("minor");
         assert!(
             (major, minor) < (26, 5) || DEPRECATED_KWARGS.is_empty(),
-            "26.5 is here, so delete the one-release shim (#597). In \
+            "26.5 is here, so delete the one-release shim (#597, #410). In \
              crates/mtui-mcp/src/tools.rs: the `DEPRECATED_KWARGS` table, the \
-             `deprecated_kwargs` helper, and in `dispatch_tool` the `deprecated`/`sent` \
-             block plus the `.chain(deprecated.iter().copied())` on `allowed`. Then \
+             `deprecated_kwargs` helper, the `strip_deprecated_kwargs` helper and \
+             its call in `dispatch_tool`, and in `dispatch_tool` the `deprecated`/`sent` \
+             block plus the `.chain(deprecated.iter().copied())` on `allowed`. In \
+             crates/mtui-mcp/src/deny.rs: the `MCP_DENIED_ARGS` doc paragraph promising \
+             the accept-and-ignore shim. Then \
              these tests: `deprecated_template_kwargs_are_ignored_on_session_level_tools`, \
              `regenerate_all_templates_kwarg_is_ignored`, \
              `typo_keys_are_still_refused_on_a_shimmed_tool`, \
-             `deprecated_kwargs_name_live_tools_and_absent_properties` and this one. \
+             `deprecated_kwargs_name_live_tools_and_absent_properties`, \
+             `denied_args_match_their_deprecation_shim`, \
+             `dispatch_openqa_overrides_are_ignored_until_26_5` and this one. \
              Finally the CHANGELOG `### Deprecated` entry and the two-release sentence \
              in AGENTS.md's MCP contracts bullet."
         );
@@ -1365,51 +1463,234 @@ mod tests {
         );
     }
 
-    /// The path a real client takes: `server.rs` calls `dispatch_tool`, which
-    /// reconstructs argv from kwargs. `session.rs` pins the gate through
-    /// `command_lock`/`run_command` on a hand-built argv, so it cannot see a
-    /// reconstruction that drops both positionals (#523).
+    /// #410: the openQA operator overrides retarget trust with no
+    /// operator-visible artifact, so the MCP tools hide them from the schema
+    /// while the REPL keeps every flag (never `clap .hide(true)`). Hiding must
+    /// narrow, not gut: the kept surface is pinned alongside.
+    #[test]
+    fn openqa_override_args_are_hidden_from_mcp_schemas() {
+        let tools = build_tools(&register_all());
+        let overview = prop_names(&tools, "openqa_overview");
+        for denied in [
+            "url_openqa",
+            "url_dashboard_qam",
+            "url_qam",
+            "test_pattern",
+            "no_fetch",
+        ] {
+            assert!(
+                !overview.contains(&denied.to_owned()),
+                "openqa_overview.{denied} exposed: {overview:?}"
+            );
+        }
+        for kept in ["days", "export", "aggregated_groups", "no_aggregated"] {
+            assert!(
+                overview.contains(&kept.to_owned()),
+                "openqa_overview.{kept} missing: {overview:?}"
+            );
+        }
+        let jobs = prop_names(&tools, "openqa_jobs");
+        for denied in ["url_openqa", "url_dashboard_qam"] {
+            assert!(
+                !jobs.contains(&denied.to_owned()),
+                "openqa_jobs.{denied} exposed: {jobs:?}"
+            );
+        }
+        for kept in ["arch", "test", "failed", "limit", "offset"] {
+            assert!(
+                jobs.contains(&kept.to_owned()),
+                "openqa_jobs.{kept} missing: {jobs:?}"
+            );
+        }
+    }
+
+    /// #410: the hidden openQA overrides stay accepted and inert for one
+    /// release per the MCP schema contract (`DEPRECATED_KWARGS`, refused from
+    /// 26.5). Drives real `dispatch_tool` past `require_update` against a
+    /// mock server: the configured endpoint answers, the sent override names
+    /// an unroutable address, so a leaked override fails the call while a
+    /// stripped one succeeds with the same output as omitting it.
+    ///
+    /// Every row below pins the `strip_deprecated_kwargs` call in
+    /// `dispatch_tool` except the `no_fetch` one: a leaked `url_*` fails its
+    /// fetch, a leaked `test_pattern` reshapes the build-check matches (the
+    /// fixture serves one log whose digit-free lines the default heuristic
+    /// skips but `".*"` keeps), and a leaked `url_openqa` turns the
+    /// single-incidents PASSED row the fixture's Core group yields into a
+    /// failed one. `no_fetch` is a deferred no-op (warns, fetches anyway), so
+    /// no fixture can make it observe the strip — its row pins shim
+    /// acceptance only. The old shape (both probes failing at
+    /// `require_update`) could pin neither.
     #[tokio::test]
-    async fn dispatch_config_set_mutates_the_canonical_session() {
+    async fn dispatch_openqa_overrides_are_ignored_until_26_5() {
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
+        use wiremock::matchers::{method, path, path_regex, query_param, query_param_is_missing};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        let mut config = Config::default();
-        config.session_user = "before".to_owned();
-        let session = McpSession::new(config);
-        // One loaded template: the state in which the gate's scoped arm forks.
-        {
-            let rrid = "SUSE:Maintenance:1:1";
-            let mut guard = session.session().lock().await;
-            let mut report = ObsReport::new(guard.config.clone());
-            report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
-            guard.templates.add(Box::new(report));
-            guard.templates.set_active(rrid);
+        // Unroutable, so a leaked override fails fast instead of hanging on DNS.
+        const EVIL: &str = "http://127.0.0.1:1/";
+
+        // Dashboard build lookup + openQA answers on one server, mirroring the
+        // `openqa_overview`/`openqa_jobs` core-test fixtures.
+        async fn configured_server() -> MockServer {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path_regex(r"^/api/incident_settings/.*$"))
+                .and(query_param("project", "SUSE:Maintenance:1"))
+                .and(query_param("type", "smelt"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"version": "15-SP5",
+                     "settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
+                ])))
+                .mount(&server)
+                .await;
+            // `openqa_jobs` pages the job list; the follow-up page is empty.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/jobs"))
+                .and(query_param("build", "BUILD-42"))
+                .and(query_param_is_missing("before"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "jobs": [
+                        {"id": 1, "test": "install", "arch": "x86_64",
+                         "result": "passed", "state": "done", "clone_id": null},
+                    ]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/jobs"))
+                .and(|req: &wiremock::Request| req.url.query_pairs().any(|(k, _)| k == "before"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "jobs": [] })))
+                .mount(&server)
+                .await;
+            // One Core group, so the single-incidents section renders a PASSED
+            // row for 15-SP5 and a leaked `url_openqa` turns it into a failed
+            // one; the status probes read `/api/v1/jobs/overview` (empty: a
+            // clean build). Mounted before the catch-all below, which would
+            // otherwise answer JobGroups `[]` and hide the group.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/job_groups"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"id": 7, "name": "SLE 15 SP5 Core Incidents", "template": "sle-15"}
+                ])))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/jobs/overview"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+            // One build-check log matching the incident packages, with
+            // digit-free lines the default heuristic skips but `".*"` keeps —
+            // so a leaked `test_pattern` reshapes the rendered matches.
+            Mock::given(method("GET"))
+                .and(path("/testreports/SUSE:Maintenance:1:1/build_checks"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(
+                    "<html><body><a href=\"BUILD-42-build.log\">BUILD-42-build.log</a></body></html>",
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/testreports/SUSE:Maintenance:1:1/build_checks/BUILD-42-build.log",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string("build-check log preamble\nno test summary here\n"),
+                )
+                .mount(&server)
+                .await;
+            // `openqa_overview`'s version/group/build-check fetches.
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "JobGroups": [], "jobs": []
+                })))
+                .mount(&server)
+                .await;
+            server
         }
 
+        // One loaded template, so dispatch runs the engine instead of failing
+        // at `require_update`; every endpoint is the mock above.
+        async fn loaded_session(uri: &str) -> Arc<McpSession> {
+            let mut config = Config::default();
+            config.openqa_instance = uri.to_owned();
+            config.qem_dashboard_api = format!("{uri}/api");
+            config.reports_url = format!("{uri}/testreports");
+            let session = McpSession::new(config);
+            {
+                let mut guard = session.session().lock().await;
+                let mut report = ObsReport::new(guard.config.clone());
+                report.base_mut().rrid =
+                    Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+                guard.templates.add(Box::new(report));
+                guard.templates.set_active("SUSE:Maintenance:1:1");
+            }
+            session
+        }
+
+        let server = configured_server().await;
+        let session = loaded_session(&server.uri()).await;
         let registry = Arc::new(register_all());
         let routes = tool_routes(&registry);
-        let route = routes.get("config_set").expect("config_set route");
-        let kwargs = json!({ "attribute": "session_user", "value": "via-tool" });
-        let out = completed(
-            dispatch_tool(
-                &registry,
-                &session,
-                route,
-                kwargs.as_object().unwrap(),
-                None,
-                None,
+        for (tool, kwargs, marker) in [
+            ("openqa_overview", json!({"url_openqa": EVIL}), "OpenQA:"),
+            (
+                "openqa_overview",
+                json!({"url_dashboard_qam": EVIL, "url_qam": EVIL}),
+                "OpenQA:",
+            ),
+            ("openqa_overview", json!({"test_pattern": ".*"}), "OpenQA:"),
+            // Acceptance-only (see doc): `no_fetch` warns and fetches anyway.
+            ("openqa_overview", json!({"no_fetch": true}), "OpenQA:"),
+            (
+                "openqa_jobs",
+                json!({"url_openqa": EVIL}),
+                "openQA jobs for build BUILD-42",
+            ),
+            (
+                "openqa_jobs",
+                json!({"url_dashboard_qam": EVIL}),
+                "openQA jobs for build BUILD-42",
+            ),
+        ] {
+            let route = routes.get(tool).unwrap_or_else(|| panic!("{tool} route"));
+            // Accepted, never refused as unknown — and past `require_update`,
+            // so success means the override never reached the engine: with the
+            // strip deleted the unroutable URL fails the fetch instead.
+            let overridden = completed(
+                dispatch_tool(
+                    &registry,
+                    &session,
+                    route,
+                    kwargs.as_object().unwrap(),
+                    None,
+                    None,
+                )
+                .await
+                .outcome,
             )
-            .await
-            .outcome,
-        )
-        .expect("config set succeeds");
-        assert_eq!(out.trim(), "option: session_user set to value : via-tool");
-        assert_eq!(
-            session.session().lock().await.config.session_user,
-            "via-tool",
-            "the write must survive the call"
-        );
+            .unwrap_or_else(|err| {
+                panic!("{tool} with {kwargs}: the override leaked to the engine: {err:?}")
+            });
+            assert!(
+                overridden.contains(marker),
+                "{tool} with {kwargs}: {overridden:?}"
+            );
+            assert!(
+                !overridden.contains("127.0.0.1:1"),
+                "{tool} with {kwargs}: {overridden:?}"
+            );
+            // Inert: byte-identical to omitting the override.
+            let plain = completed(
+                dispatch_tool(&registry, &session, route, &Map::new(), None, None)
+                    .await
+                    .outcome,
+            )
+            .expect("baseline succeeds");
+            assert_eq!(overridden, plain, "{tool} with {kwargs}");
+        }
     }
 
     #[tokio::test]

@@ -88,25 +88,41 @@ impl Registry {
 
 /// Commands that must not be synthesised into MCP tools.
 ///
-/// They either drive the interactive shell / need a controlling terminal, or are
-/// replaced by richer hand-written tools: `edit` → the `report_*` document tools, and
-/// `get`/`put` → the in-band transfer tools (#434), because their synthesised
-/// forms exchange server-local paths a remote `--transport http` client cannot
-/// reach. Neither local process execution nor terminal launching is a category
-/// here: `lrun` and `terms` were removed outright rather than denied.
+/// MCP exposes only what a headless model needs to operate an already-scoped
+/// session; permanently denied is anything that (a) needs a TTY or exits the
+/// process, (b) retargets trust — endpoints, credentials, identity, timeouts —
+/// with no operator-visible artifact, or (c) exchanges server-local paths a
+/// remote client cannot reach (re-served in-band instead). Everything else
+/// side-effecting stays callable but default-narrow via profile/tools_deny;
+/// read-only stays. Concretely, the entries below either need a controlling
+/// terminal or exit the process, retarget trust with no operator-visible
+/// artifact, or are replaced by richer hand-written tools: `edit` → the
+/// `report_*` document tools, and `get`/`put` → the in-band transfer tools
+/// (#434), because their synthesised forms exchange server-local paths a
+/// remote `--transport http` client cannot reach. Neither local process
+/// execution nor terminal launching is a category here: `lrun` and `terms`
+/// were removed outright rather than denied.
+///
+/// `config_set` is denied as a fanned-out tool name (#410): it writes operator
+/// config — endpoints, credentials, identity, timeouts — retargeting the
+/// infrastructure the session trusts, with no operator-visible artifact.
+/// `config_show` stays exposed for verification.
 ///
 /// The synthesiser skips every registry command whose name or alias appears
 /// here and warns at boot if an entry no longer resolves; the
 /// `mcp_denylist_is_consistent` test pins the exact expected set. Kept beside
 /// [`register_all`] so the list and the surface it filters live in one place.
 pub const MCP_DENYLIST: &[&str] = &[
-    "quit", "exit", "EOF",    // session exit (Wave 2)
+    "quit",
+    "exit",
+    "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
     "shell",  // interactive PTY attach, REPL-only (Wave 2)
     "help",   // registry listing / per-command help, REPL-only
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only
     "get",
     "put", // path-based SFTP transfers; replaced by hand-written in-band MCP tools (#434)
+    "config_set", // operator-config write, no artifact; `config_show` stays (#410)
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
@@ -464,13 +480,30 @@ mod tests {
     #[test]
     fn mcp_denylist_is_consistent() {
         // The loop only rules out duplicates; that every entry resolves is
-        // asserted below against the full expected list.
+        // asserted below against the full expected list. `config_set` is the
+        // one entry that is not a registry name: it is a fanned-out sub-tool
+        // of `config`, denied after the fan-out (#410).
         let r = register_all();
         let mut seen = std::collections::HashSet::new();
         for name in MCP_DENYLIST {
             assert!(seen.insert(*name), "duplicate deny-list entry: {name}");
             let _reserved_or_registered = r.contains(name);
         }
+        assert_eq!(
+            MCP_DENYLIST,
+            &[
+                "quit",
+                "exit",
+                "EOF",
+                "switch",
+                "shell",
+                "help",
+                "edit",
+                "get",
+                "put",
+                "config_set"
+            ]
+        );
         // The REPL-only set (quit+aliases, switch, shell, help, edit) plus the
         // transfer pair re-served as in-band MCP tools (#434).
         let registered_denied: Vec<&str> = MCP_DENYLIST

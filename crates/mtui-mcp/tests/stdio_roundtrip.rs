@@ -68,7 +68,7 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
         // Command tools synthesised from the registry.
-        for expected in ["whoami", "run", "config_show", "config_set"] {
+        for expected in ["whoami", "run", "config_show"] {
             assert!(
                 names.contains(&expected),
                 "expected `{expected}` in tools/list, got: {names:?}"
@@ -82,9 +82,20 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
             );
         }
         // Deny-listed commands must never surface, nor the removed `lrun` and
-        // `terms`, nor the bare `config` (fanned out into config_show/config_set).
+        // `terms`, nor the bare `config` (fanned out; only `config_show`
+        // survives — `config_set` is denied, #410).
         for denied in [
-            "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch", "config",
+            "quit",
+            "exit",
+            "EOF",
+            "edit",
+            "shell",
+            "lrun",
+            "help",
+            "terms",
+            "switch",
+            "config",
+            "config_set",
         ] {
             assert!(
                 !names.contains(&denied),
@@ -154,6 +165,81 @@ async fn call_denied_tool_is_method_not_found() {
                 || msg.to_lowercase().contains("not found")
                 || msg.contains("-32601"),
             "expected a method-not-found error, got: {msg}"
+        );
+    })
+    .await;
+}
+
+/// #410, dispatch half: `config_set` is denied, so the call is
+/// `method_not_found` (-32601) — not a command error.
+#[tokio::test]
+async fn call_config_set_is_method_not_found() {
+    with_client(|client| async move {
+        let err = client
+            .call_tool(
+                CallToolRequestParams::new("config_set").with_arguments(
+                    serde_json::json!({"attribute": "session_user", "value": "x"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ),
+            )
+            .await
+            .expect_err("denied tool must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("-32601"),
+            "expected a method-not-found error, got: {msg}"
+        );
+    })
+    .await;
+}
+
+/// #410, dispatch half: an openQA operator override is accepted and reaches
+/// the engine — the call answers with an error payload carrying the
+/// `require_update` refusal (`load_template`), not a protocol error, and
+/// never an unknown-argument refusal.
+///
+/// Non-goal, stated so this is not mistaken for wiring coverage: with no
+/// report loaded both probes fail at `require_update` before the override is
+/// read, so this passes with the dispatch strip deleted too. Engine-inertness
+/// is pinned by `dispatch_openqa_overrides_are_ignored_until_26_5` in
+/// `crates/mtui-mcp/src/tools.rs`, which drives dispatch past
+/// `require_update` against a mock server.
+#[tokio::test]
+async fn call_openqa_override_is_ignored() {
+    with_client(|client| async move {
+        let plain = client
+            .call_tool(CallToolRequestParams::new("openqa_overview"))
+            .await
+            .expect("the call answers");
+        let overridden = client
+            .call_tool(
+                CallToolRequestParams::new("openqa_overview").with_arguments(
+                    serde_json::json!({"url_openqa": "http://evil.example/"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ),
+            )
+            .await
+            .expect("a shimmed kwarg answers too");
+        for out in [&plain, &overridden] {
+            assert_eq!(out.is_error, Some(true));
+            let text = format!("{:?}", out.content);
+            assert!(
+                text.contains("load_template"),
+                "the call must reach the engine's require_update refusal: {text}"
+            );
+            assert!(
+                !text.contains("unknown argument"),
+                "the override must be ignored, not refused: {text}"
+            );
+        }
+        assert_eq!(
+            format!("{:?}", plain.content),
+            format!("{:?}", overridden.content),
+            "the override changes nothing"
         );
     })
     .await;

@@ -922,6 +922,51 @@ mod tests {
         assert!(!server.routes.contains_key("shell"));
     }
 
+    /// #410: `config_set` is permanently denied — absent from the listing and
+    /// from dispatch. `config_show` (the verification half) stays.
+    #[test]
+    fn config_set_is_absent_from_surface_and_dispatch() {
+        let server = server_with(Config::default());
+        let names = tool_names(&server);
+        assert!(names.iter().any(|n| n == "config_show"));
+        assert!(!names.iter().any(|n| n == "config_set"));
+        assert!(server.routes.contains_key("config_show"));
+        assert!(!server.routes.contains_key("config_set"));
+    }
+
+    /// #410: `tools_allow` cannot restore a never-synthesised tool — the
+    /// allow-set only re-adds names the synthesis produced, so `config_set`
+    /// stays absent from the wire list and refused at dispatch. This is the
+    /// one dispatch-level pin for the refusal (as `method_not_found`,
+    /// `-32601`, since no route was synthesised).
+    #[tokio::test]
+    async fn tools_allow_cannot_restore_config_set() {
+        let mut config = Config::default();
+        config.mcp_tools_allow = vec!["config_set".to_owned()];
+        let server = server_with(config);
+
+        assert!(!tool_names(&server).iter().any(|n| n == "config_set"));
+        assert!(!server.routes.contains_key("config_set"));
+
+        let err = server
+            .dispatch_audited(
+                "config_set",
+                &serde_json::json!({"attribute": "session_user", "value": "x"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                None,
+                &CancellationToken::new(),
+                None,
+            )
+            .await
+            .expect_err("denied tool is rejected");
+        assert!(
+            err.to_string().contains("-32601"),
+            "method-not-found keeps its code: {err}"
+        );
+    }
+
     #[test]
     fn http_factory_server_denies_shell() {
         let registry = SessionRegistry::new(Arc::new(register_all()), Config::default());
@@ -971,13 +1016,7 @@ mod tests {
                     "get",
                     "report_issue_read",
                 ],
-                [
-                    "run",
-                    "job_cancel",
-                    "put",
-                    "config_set",
-                    "report_issue_write",
-                ],
+                ["run", "job_cancel", "put", "unload", "report_issue_write"],
             ),
             (
                 "core",
@@ -1376,20 +1415,16 @@ mod tests {
     #[tokio::test]
     async fn audit_failing_call_records_error() {
         let (server, _session, _dir, path) = audited_server();
-        // Unknown attribute: the engine fails the call, but MCP still answers
+        // Unknown RRID: the engine fails the call, but MCP still answers
         // Ok with an error payload — the failure lives in the record.
-        audited_call(
-            &server,
-            "config_set",
-            json!({"attribute": "no_such_attr", "value": "x"}),
-        )
-        .await
-        .expect("failing calls answer with an error payload, not a protocol error");
+        audited_call(&server, "unload", json!({"rrid": "SUSE:Maintenance:9:9"}))
+            .await
+            .expect("failing calls answer with an error payload, not a protocol error");
 
         let records = audit_records(&path);
         assert_eq!(records.len(), 2, "a failing call still writes intent first");
         assert_eq!(records[0]["event"], json!("intent"));
-        assert_eq!(records[1]["tool"], json!("config_set"));
+        assert_eq!(records[1]["tool"], json!("unload"));
         assert_eq!(records[1]["outcome"], json!("error"));
         assert_eq!(records[1]["intent"], records[0]["seq"]);
     }
@@ -1418,17 +1453,25 @@ mod tests {
         assert_eq!(records[1]["hosts"], json!(Value::Array(vec![])));
     }
 
+    /// #410 denied `config_set` on this surface, so the secret-redaction seam
+    /// is now pinned two ways: the pure `sanitize_args` shape in `audit.rs`,
+    /// and here — a denied `config_set` call carrying a secret is refused as
+    /// an unknown tool, and the secret never reaches the sink in any record.
     #[tokio::test]
-    async fn audit_config_set_secret_leaves_no_trace() {
+    async fn audit_denied_config_set_records_unknown_tool_and_leaves_no_trace() {
         let (server, _session, _dir, path) = audited_server();
         let secret = "audit-secret-token-6f5e4d3c";
-        audited_call(
+        let err = audited_call(
             &server,
             "config_set",
             json!({"attribute": "gitea_token", "value": secret}),
         )
         .await
-        .expect("config_set succeeds");
+        .expect_err("denied tool is rejected");
+        assert!(
+            err.to_string().contains("-32601"),
+            "method-not-found keeps its code: {err}"
+        );
 
         let raw = std::fs::read_to_string(&path).expect("sink readable");
         assert!(
@@ -1436,12 +1479,12 @@ mod tests {
             "secret value must be unrepresentable in the record"
         );
         let records = audit_records(&path);
-        assert_eq!(records.len(), 2, "intent and outcome both redact");
-        for record in &records {
-            assert_eq!(record["args"]["attribute"], json!("gitea_token"));
-            assert_eq!(record["args"]["value"], json!("<redacted>"));
-            assert_eq!(record["args"]["secret"], json!(true));
-        }
+        assert_eq!(records.len(), 2, "a refused call produces both records");
+        assert_eq!(records[0]["event"], json!("intent"));
+        assert_eq!(records[0]["tool"], json!("config_set"));
+        assert_eq!(records[1]["tool"], json!("config_set"));
+        assert_eq!(records[1]["outcome"], json!("unknown-tool"));
+        assert_eq!(records[1]["intent"], records[0]["seq"]);
     }
 
     #[tokio::test]
@@ -1755,14 +1798,12 @@ mod tests {
 
     #[tokio::test]
     async fn audit_intent_and_outcome_pair_by_seq() {
-        let (server, _session, _dir, path) = audited_server();
-        audited_call(
-            &server,
-            "config_set",
-            json!({"attribute": "gitea_token", "value": "pair-secret-4b2c"}),
-        )
-        .await
-        .expect("config_set answers");
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        // A mutating call that really runs: `unload` of the seeded template.
+        audited_call(&server, "unload", json!({"rrid": AUDIT_RRID}))
+            .await
+            .expect("unload answers");
 
         let records = audit_records(&path);
         assert_eq!(
@@ -1779,10 +1820,10 @@ mod tests {
             "intent precedes its outcome: {intent} / {call}"
         );
         assert_eq!(intent["ts"], call["ts"], "both stamp the call's arrival");
-        assert_eq!(intent["tool"], json!("config_set"));
+        assert_eq!(intent["tool"], json!("unload"));
         assert_eq!(intent["session"], call["session"]);
-        assert_eq!(intent["args"]["value"], json!("<redacted>"));
-        assert_eq!(call["args"]["value"], json!("<redacted>"));
+        assert_eq!(intent["args"]["rrid"], json!(AUDIT_RRID));
+        assert_eq!(call["args"]["rrid"], json!(AUDIT_RRID));
         for absent in ["outcome", "duration_ms", "response_bytes", "rrids", "hosts"] {
             assert!(
                 intent.get(absent).is_none(),
@@ -2121,11 +2162,8 @@ mod tests {
         for (tool, kwargs) in [
             ("whoami", json!({})),
             // A mutating tool takes the intent path too, which must stay just
-            // as invisible on the wire.
-            (
-                "config_set",
-                json!({"attribute": "session_user", "value": "audited"}),
-            ),
+            // as invisible on the wire (an error payload either way).
+            ("unload", json!({"rrid": "SUSE:Maintenance:9:9"})),
         ] {
             let plain = call(tool, kwargs.clone(), None).await;
             let logged = call(
@@ -2344,15 +2382,15 @@ mod tests {
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(registry, session);
         assert!(
-            !server.read_only_tools.contains("config_set"),
-            "config_set mutates, so it writes an intent record"
+            !server.read_only_tools.contains("unload"),
+            "unload mutates, so it writes an intent record"
         );
 
         let lost_before = exporter.audit_lost();
         let (response, logs) = capture_logs(audited_call(
             &server,
-            "config_set",
-            json!({"attribute": "gitea_token", "value": "intent-export-secret"}),
+            "unload",
+            json!({"rrid": "SUSE:Maintenance:9:9"}),
         ))
         .await;
         response.expect("a collector outage never gates a mutating call either");
@@ -2389,9 +2427,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn otlp_config_set_body_redacted() {
-        // OTLP-only (no file): the exported protobuf body is the redacted
-        // JSONL line — the secret never reaches the collector.
+    async fn otlp_put_body_fingerprinted() {
+        // OTLP-only (no file): the exported protobuf body carries the
+        // fingerprinted file payload, never the bytes — a credentials file
+        // uploaded via `put` never reaches the collector verbatim. (The
+        // bare-credential `config_set` shape this used to drive is denied on
+        // this surface (#410); its redaction stays pinned in `audit.rs`.)
         let (mock, bodies) = otlp_mock().await;
         let endpoint = format!("{}/v1/logs", mock.uri());
         let exporter = otlp_exporter(&endpoint);
@@ -2404,11 +2445,11 @@ mod tests {
         let secret = "otlp-secret-token-9f8e7d6c5b4a";
         audited_call(
             &server,
-            "config_set",
-            json!({"attribute": "gitea_token", "value": secret}),
+            "put",
+            json!({"filename": "id_rsa", "content": secret}),
         )
         .await
-        .expect("config_set succeeds");
+        .expect("a refused upload still answers with an error payload");
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         let body = bodies.lock().expect("body").clone();
         assert!(!body.is_empty(), "OTLP-only must still export");
@@ -2417,9 +2458,8 @@ mod tests {
             "secret value absent from exported protobuf"
         );
         assert!(
-            body.windows(b"<redacted>".len())
-                .any(|w| w == b"<redacted>"),
-            "redaction marker present in exported protobuf"
+            body.windows(b"sha256".len()).any(|w| w == b"sha256"),
+            "fingerprint present in exported protobuf"
         );
         exporter.shutdown().await;
     }
@@ -2731,13 +2771,9 @@ mod tests {
         let start = Instant::now();
         // A mutating tool, so the two blocking opens under test are the intent
         // append and the outcome append.
-        audited_call(
-            &server,
-            "config_set",
-            json!({"attribute": "session_user", "value": "slow"}),
-        )
-        .await
-        .expect("slow sink still answers");
+        audited_call(&server, "unload", json!({"rrid": "SUSE:Maintenance:9:9"}))
+            .await
+            .expect("slow sink still answers");
         let ticks_during = ticks.load(Ordering::Relaxed);
         ticker.await.expect("ticker joins");
         let elapsed = start.elapsed();
