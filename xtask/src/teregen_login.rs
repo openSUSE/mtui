@@ -8,7 +8,7 @@
 use anyhow::{Context, Result, bail};
 use mtui_datasources::obs::auth::RusshAgent;
 use mtui_datasources::obs::oscrc;
-use mtui_datasources::teregen::{DEFAULT_NAMESPACE, TeregenAuth, TokenStore};
+use mtui_datasources::teregen::{DEFAULT_NAMESPACE, TeregenAuth, TokenStore, describe_age};
 use mtui_datasources::{HttpClient, VerifyPolicy};
 
 /// The default teregen v2 base — the same value `corpus_survey` uses.
@@ -63,18 +63,6 @@ impl LoginArgs {
             probe,
         })
     }
-}
-
-/// The elapsed time since `minted_at` (an RFC3339 timestamp), rendered as
-/// whole seconds. `None` if `minted_at` cannot be parsed.
-fn describe_age(minted_at: &str) -> Option<String> {
-    let minted = chrono::DateTime::parse_from_rfc3339(minted_at).ok()?;
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    let elapsed = i64::try_from(now_secs).unwrap_or(i64::MAX) - minted.timestamp();
-    Some(format!("{elapsed}s ago"))
 }
 
 /// Run `cargo xtask teregen-login`: resolve the oscrc identity, mint/reuse a

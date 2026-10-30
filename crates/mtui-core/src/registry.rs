@@ -100,13 +100,18 @@ impl Registry {
 /// `mcp_denylist_is_consistent` test pins the exact expected set. Kept beside
 /// [`register_all`] so the list and the surface it filters live in one place.
 pub const MCP_DENYLIST: &[&str] = &[
-    "quit", "exit", "EOF",    // session exit (Wave 2)
+    "quit",
+    "exit",
+    "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
     "shell",  // interactive PTY attach, REPL-only (Wave 2)
     "help",   // registry listing / per-command help, REPL-only
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only
     "get",
     "put", // path-based SFTP transfers; replaced by hand-written in-band MCP tools (#434)
+    // Every call spends a challenge (~20/60s per principal); a looping MCP
+    // client would lock the tester out of commit/approve.
+    "teregen_login",
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
@@ -185,6 +190,7 @@ pub fn register_all() -> Registry {
     // REPL-only command-surface additions.
     registry.register(Arc::new(commands::Help));
     registry.register(Arc::new(commands::Edit));
+    registry.register(Arc::new(commands::TeregenLogin));
     registry
 }
 
@@ -324,8 +330,8 @@ mod tests {
     fn register_all_command_count() {
         // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
         // (export, list_refhosts, load_template, list_locks) + reload_openqa +
-        // set_workflow + 2 REPL-only (help, edit) = 60.
-        assert_eq!(register_all().names().count(), 60);
+        // set_workflow + 3 REPL-only (help, edit, teregen_login) = 61.
+        assert_eq!(register_all().names().count(), 61);
     }
 
     #[test]
@@ -379,6 +385,14 @@ mod tests {
     }
 
     #[test]
+    fn teregen_login_is_mcp_denied() {
+        // Every call spends one of ~20 challenges/60s for the principal; a
+        // looping MCP client would lock the tester out of `commit`/`approve`.
+        // REPL-only, pinned here.
+        assert!(MCP_DENYLIST.contains(&"teregen_login"));
+    }
+
+    #[test]
     fn mcp_denylist_covers_wave2_repl_only_commands() {
         for name in ["quit", "exit", "EOF", "switch", "shell"] {
             assert!(
@@ -428,6 +442,7 @@ mod tests {
                 "quit",
                 "set_log_level",
                 "switch",
+                "teregen_login",
                 "unload",
                 "updates",
                 "whoami",
@@ -481,7 +496,16 @@ mod tests {
         assert_eq!(
             registered_denied,
             vec![
-                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "get", "put"
+                "quit",
+                "exit",
+                "EOF",
+                "switch",
+                "shell",
+                "help",
+                "edit",
+                "get",
+                "put",
+                "teregen_login"
             ]
         );
     }
