@@ -1553,6 +1553,158 @@ async fn reject_ignores_group() {
 // #594: the precondition GET reuses the injected client's pool               //
 // --------------------------------------------------------------------------- //
 
+// --------------------------------------------------------------------------- //
+// request_extras (the `updates -F` OBS fallback)                             //
+// --------------------------------------------------------------------------- //
+
+/// A request document carrying the fallback fields, plus its comments.
+fn extras_request_xml() -> String {
+    "<request id='56789'>\
+     <action type='maintenance_incident'>\
+     <source project='SUSE:Maintenance:1' package='glibc'/>\
+     <source project='SUSE:Maintenance:1' package='glibc-obsolete'/></action>\
+     <action type='maintenance_incident'>\
+     <source project='SUSE:Maintenance:1' package='glibc'/></action>\
+     <issue tracker='bnc' name='123'/><issue tracker='jsc' name='SLE-1'/>\
+     <state name='review'/></request>"
+        .to_owned()
+}
+
+fn extras_comments_xml() -> String {
+    "<comments>\
+     <comment who='carol' when='2024-01-01T00:00:00'>looks good</comment>\
+     </comments>"
+        .to_owned()
+}
+
+async fn mount_extras(server: &MockServer) {
+    mount_get_request(server, extras_request_xml()).await;
+    Mock::given(method("GET"))
+        .and(path("/comments/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(extras_comments_xml()))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn request_extras_serves_packages_issues_and_comments() {
+    // Kills a fallback that drops any of the three OBS-side fields, or that
+    // reads `codestreams`-shaped project ids instead of `src_package` names.
+    let server = MockServer::start().await;
+    mount_extras(&server).await;
+
+    let extras = qam::request_extras(&client_for(&server), &rrid())
+        .await
+        .unwrap();
+    assert_eq!(extras.src_packages, vec!["glibc", "glibc-obsolete"]);
+    assert_eq!(extras.issues, vec!["bnc#123", "jsc#SLE-1"]);
+    assert_eq!(extras.comments.len(), 1);
+    assert_eq!(extras.comments[0].who, "carol");
+    assert_eq!(extras.comments[0].body, "looks good");
+}
+
+#[tokio::test]
+async fn request_extras_request_failure_is_an_error() {
+    // Kills swallowing a missing/unparsable request document into empty
+    // extras: without the document there is nothing to serve.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let err = qam::request_extras(&client_for(&server), &rrid())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ObsError::Api { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn request_extras_comments_failure_degrades_to_empty() {
+    // Kills failing the whole row over chatter: a comments GET that errors
+    // still serves the packages and issues from the request document.
+    let server = MockServer::start().await;
+    mount_get_request(&server, extras_request_xml()).await;
+    Mock::given(method("GET"))
+        .and(path("/comments/request/56789"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let extras = qam::request_extras(&client_for(&server), &rrid())
+        .await
+        .unwrap();
+    assert_eq!(extras.src_packages, vec!["glibc", "glibc-obsolete"]);
+    assert_eq!(extras.issues, vec!["bnc#123", "jsc#SLE-1"]);
+    assert!(extras.comments.is_empty());
+}
+
+#[tokio::test]
+async fn request_extras_malformed_comments_degrade_to_empty() {
+    // Kills failing the whole row over malformed chatter: an unparseable
+    // comments document degrades exactly like a failed comments GET, keeping
+    // the packages and issues from the successful request document.
+    let server = MockServer::start().await;
+    mount_get_request(&server, extras_request_xml()).await;
+    Mock::given(method("GET"))
+        .and(path("/comments/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<comments><comment>oops"))
+        .mount(&server)
+        .await;
+
+    let extras = qam::request_extras(&client_for(&server), &rrid())
+        .await
+        .unwrap();
+    assert_eq!(extras.src_packages, vec!["glibc", "glibc-obsolete"]);
+    assert_eq!(extras.issues, vec!["bnc#123", "jsc#SLE-1"]);
+    assert!(extras.comments.is_empty());
+}
+
+#[tokio::test]
+async fn requests_extras_batch_preserves_order() {
+    // Kills a batch that reorders rows: two ids map back positionally.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(extras_request_xml()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/comments/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(extras_comments_xml()))
+        .mount(&server)
+        .await;
+
+    let ids = vec![rrid(), pi_rrid()];
+    let out = qam::requests_extras(&client_for(&server), &ids).await;
+    assert_eq!(out.len(), 2);
+    assert!(
+        out[0]
+            .as_ref()
+            .is_ok_and(|e| e.src_packages == vec!["glibc", "glibc-obsolete"])
+    );
+    assert!(out[1].as_ref().is_err());
+}
+
+#[tokio::test]
+async fn request_extras_fetches_without_full_history() {
+    // Extras need no review histories: the request GET omits withfullhistory,
+    // sparing the full-history payload on every shown row.
+    let server = MockServer::start().await;
+    mount_extras(&server).await;
+
+    qam::request_extras(&client_for(&server), &rrid())
+        .await
+        .unwrap();
+    let q = query_of(&server, wiremock::http::Method::GET, "/request/56789").await;
+    assert_eq!(query_val(&q, "withfullhistory"), None);
+}
+
 #[tokio::test]
 async fn precondition_get_rides_the_injected_clients_pooled_connection() {
     use super::keepalive_host::{counting_host, warm_pool};

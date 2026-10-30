@@ -20,18 +20,29 @@
 use mtui_types::report_document::Verdict;
 use mtui_types::{RequestKind, RequestReviewID};
 
+use futures::stream::{self, StreamExt};
+
 use crate::obs::client::ObsClient;
 use crate::obs::errors::ObsError;
 use crate::obs::hold::{GroupHold, group_hold};
 use crate::obs::inference::assignments_for_user;
+use crate::obs::models;
 use crate::obs::models::{
-    self, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, build_reject_reason_body, is_qam_group,
-    parse_group_directory, parse_reject_reason_values, parse_request, parse_request_collection,
+    ObsComment, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, build_reject_reason_body,
+    is_qam_group, parse_group_directory, parse_reject_reason_values, parse_request,
+    parse_request_collection, parse_request_comments,
 };
 
 use crate::teregen::document::TeregenV2;
 
 const PREFIX: &str = "[oscqam] ";
+
+/// Concurrent per-request reads in [`requests_extras`]: neither
+/// `[connection]` knob fits — `max_parallel` bounds SSH host fan-out
+/// (default 50: far too wide for two GETs per shown row against the shared
+/// OBS API), and `max_oqa_parallel` is scoped to the oqa-search overview —
+/// so the fan-out owns its bound.
+const REQUESTS_CONCURRENCY: usize = 8;
 
 fn verdict_label(verdict: Option<Verdict>) -> &'static str {
     match verdict {
@@ -80,6 +91,17 @@ async fn get_request(
     parse_request(&response)
 }
 
+/// GET `request/{id}` without history and parse it: the read path for fields
+/// that need no reviews (the `updates -F` fallback), sparing the
+/// full-history payload the mutate ops' inference requires.
+async fn get_request_bare(
+    client: &ObsClient,
+    rrid: &RequestReviewID,
+) -> Result<models::Request, ObsError> {
+    let response = client.get(&format!("request/{}", reqid(rrid)), &[]).await?;
+    parse_request(&response)
+}
+
 /// POST a `changereviewstate` (accept/decline) `by_user`.
 async fn changereviewstate(
     client: &ObsClient,
@@ -100,6 +122,99 @@ async fn changereviewstate(
         )
         .await?;
     Ok(())
+}
+
+// --------------------------------------------------------------------------- //
+// request_extras (the `updates -F` OBS fallback)                              //
+// --------------------------------------------------------------------------- //
+
+/// The OBS-side details `updates -F` cannot get from TeReGen's queue listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestExtras {
+    /// The distinct `action/source/@package` values in document order: the
+    /// `Package-Streams` set (bare names like `glibc`, never the
+    /// `codestreams` project identifiers TeReGen carries).
+    pub src_packages: Vec<String>,
+    /// The request's `<issue>` references as `tracker#name` (bare `name` when
+    /// OBS served no tracker).
+    pub issues: Vec<String>,
+    /// The `comments/request/{id}` comments in document order (empty when the
+    /// comments document is unreadable: chatter must not hide packages and
+    /// issues).
+    pub comments: Vec<ObsComment>,
+}
+
+/// Format one issue reference the way the queue renders it.
+fn format_issue(tracker: &str, name: &str) -> String {
+    if tracker.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{tracker}#{name}")
+    }
+}
+
+/// Fetch the OBS-side details `updates -F` falls back to for one request: the
+/// request document (the `src_package` set, the issue refs) plus its
+/// comments.
+///
+/// An unreadable comments document (transport failure or parse failure)
+/// degrades to no comments rather than failing the row; a failing request GET
+/// is an error (without the document nothing is served).
+///
+/// # Errors
+///
+/// Returns [`ObsError`] on a transport/API failure of the request GET, or when
+/// the request document fails to parse.
+pub async fn request_extras(
+    client: &ObsClient,
+    rrid: &RequestReviewID,
+) -> Result<RequestExtras, ObsError> {
+    let request = get_request_bare(client, rrid).await?;
+    let comments = match client
+        .get(&format!("comments/request/{}", reqid(rrid)), &[])
+        .await
+    {
+        Ok(body) => match parse_request_comments(&body) {
+            Ok(comments) => comments,
+            Err(e) => {
+                tracing::debug!("OBS comments for request {} unparseable: {e}", reqid(rrid));
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            tracing::debug!("OBS comments for request {} unreadable: {e}", reqid(rrid));
+            Vec::new()
+        }
+    };
+    let issues = request
+        .issues
+        .iter()
+        .map(|i| format_issue(&i.tracker, &i.name))
+        .collect();
+    Ok(RequestExtras {
+        src_packages: request.src_packages,
+        issues,
+        comments,
+    })
+}
+
+/// Fetch [`request_extras`] for many requests with bounded concurrency, in
+/// input order (position `i` of the output is position `i` of the input).
+/// One row's failure is its own `Err`, never a neighbour's.
+pub async fn requests_extras(
+    client: &ObsClient,
+    rrids: &[RequestReviewID],
+) -> Vec<Result<RequestExtras, ObsError>> {
+    // Bounded so a fifty-row `--limit` does not open fifty connections at
+    // once; `buffered` keeps the positional mapping.
+    let futures: Vec<_> = rrids
+        .iter()
+        .map(|rrid| request_extras(client, rrid))
+        .collect();
+    stream::iter(futures)
+        .buffered(REQUESTS_CONCURRENCY)
+        .collect()
+        .await
 }
 
 // --------------------------------------------------------------------------- //
@@ -551,5 +666,13 @@ mod tests {
     fn maintenance_still_requires_the_testreport() {
         let rrid = RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap();
         assert!(!skips_maintenance_testreport(&rrid));
+    }
+
+    #[test]
+    fn format_issue_without_tracker_is_the_bare_name() {
+        // Kills always rendering `tracker#name`, which prints `#1` for an
+        // untracked issue reference.
+        assert_eq!(format_issue("bnc", "1"), "bnc#1");
+        assert_eq!(format_issue("", "1"), "1");
     }
 }

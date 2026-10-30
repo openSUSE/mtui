@@ -282,11 +282,15 @@ updates --json                # the raw TeReGen rows, for scripting
 spaces, hyphens and underscores treated as equivalent: `ReviewRequestID`,
 `Incident Priority`, `Rating`, `Category`, `Status`, `Kind`, `Deadline`,
 `Assignee`, `Assigned Roles`, `Unassigned Roles`, `Title`, `URL`, `Products`,
-`SRCRPMs`, `Bugs`, `Creator`. Fields the
-TeReGen queue listing does not carry (`Package-Streams`, `Issues`, `Comments`) are named in the error
-rather than silently absent. `Unassigned Roles` renders `n/a` when it cannot
-be answered honestly: on SLFO rows (TeReGen does not expose review groups on
-them) and on any row served without assignment data, where "every group open"
-would be indistinguishable from the truth. `--json` and `-F` are mutually
+`SRCRPMs`, `Bugs`, `Creator`, `Package-Streams`, `Issues`, `Comments`. The
+last three are not in the TeReGen queue listing: they are read live from OBS
+per shown row (after `--limit`/`--offset`), so narrow large queues with
+`--limit`. SLFO rows render `n/a` there (their review ids are Gitea PR
+numbers, not OBS requests); comments are terminal-sanitised and capped to
+the newest five per row with the omitted count marked. `Unassigned Roles`
+renders `n/a` when it cannot be answered honestly: on SLFO rows (TeReGen
+does not expose review groups on them) and on any row served without
+assignment data, where "every group open" would be indistinguishable from
+the truth. `--json` and `-F` are mutually
 exclusive, and `Assignee`/`Assigned Roles` are refused under `--status all`,
 where TeReGen omits the assignment data they would render.
