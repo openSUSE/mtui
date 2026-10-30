@@ -152,6 +152,22 @@ impl TokenStore {
     }
 }
 
+/// The elapsed time since `minted_at` (an RFC3339 timestamp), rendered as
+/// whole seconds. `None` if `minted_at` cannot be parsed. A future timestamp
+/// (clock skew) clamps to zero rather than printing a negative age. Shared by
+/// the `teregen-login` xtask and the `whoami` / `teregen_login` commands so the
+/// age wording cannot drift.
+#[must_use]
+pub fn describe_age(minted_at: &str) -> Option<String> {
+    let minted = chrono::DateTime::parse_from_rfc3339(minted_at).ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let elapsed = now.saturating_sub(minted.timestamp().max(0) as u64);
+    Some(format!("{elapsed}s ago"))
+}
+
 /// Warn (Unix only) when the token file is group/world-accessible.
 ///
 /// Checks `st_mode & (S_IRWXG | S_IRWXO)`, mirroring

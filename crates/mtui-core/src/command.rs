@@ -764,6 +764,7 @@ mod tests {
                 "quit",
                 "set_log_level",
                 "switch",
+                "teregen_login",
                 "unload",
                 "updates",
                 "whoami",
