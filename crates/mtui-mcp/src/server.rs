@@ -340,11 +340,12 @@ impl ServerHandler for McpServer {
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
         // W3C trace correlation (SEP-414): strict lowercase 55-byte
-        // traceparent read from the canonical `context.meta` (the
-        // extensions-level `_meta` the service loop moves in; the typed
-        // params `meta` stays empty on receive, so `request.meta` would miss
-        // it). Absent (or invalid) otherwise.
-        let traceparent = context.meta.get_traceparent().map(str::to_owned);
+        // traceparent plus the bounded vendor tracestate, both read from the
+        // canonical `context.meta` (the extensions-level `_meta` the service
+        // loop moves in; the typed params `meta` stays empty on receive, so
+        // `request.meta` would miss them). Absent (or invalid) otherwise.
+        let traceparent = context.meta.get_traceparent();
+        let tracestate = context.meta.get_tracestate();
 
         // Heartbeats keep a slow foreground call from timing the client out.
         // Only built when the client supplied a `progressToken`; job-control
@@ -359,7 +360,7 @@ impl ServerHandler for McpServer {
                 });
         let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
 
-        self.dispatch_audited(&name, &kwargs, sink, &context.ct, traceparent.as_deref())
+        self.dispatch_audited(&name, &kwargs, sink, &context.ct, traceparent, tracestate)
             .await
     }
 }
@@ -398,6 +399,7 @@ impl McpServer {
         sink: Option<&dyn ProgressSink>,
         client_ct: &CancellationToken,
         traceparent: Option<&str>,
+        tracestate: Option<&str>,
     ) -> Result<CallToolResponse, McpError> {
         use crate::audit::{
             AUDIT_SCHEMA_VERSION, AuditEvent, AuditOutcome, refuse_error, sanitize_args,
@@ -413,6 +415,15 @@ impl McpServer {
         }
         // Echoed as the record's `trace` only when it parsed.
         let traced = trace.is_some().then_some(traceparent).flatten();
+        // Bounded vendor state: echoed as the record's `tracestate` only
+        // when it validates (1..=512 bytes, `key=value` members, at most
+        // 32); malformed or oversized values are dropped, never stored.
+        // Like `trace` it is an untrusted correlation key only: no dispatch
+        // or output effect.
+        let traced_state = tracestate.and_then(crate::otel::parse_tracestate);
+        if tracestate.is_some() && traced_state.is_none() {
+            tracing::debug!("ignoring invalid tracestate");
+        }
         let auditing = self.session.auditing();
         // The intent and outcome records carry the identical `args`, and
         // building them is not free — a `put` body is hashed — so sanitise once
@@ -445,6 +456,9 @@ impl McpServer {
             });
             if let Some(traceparent) = traced {
                 record["trace"] = serde_json::json!(traceparent);
+            }
+            if let Some(tracestate) = traced_state {
+                record["tracestate"] = serde_json::json!(tracestate);
             }
             if let Some(audit) = self.session.audit_log()
                 && let Err(err) = audit.append_async(record.clone()).await
@@ -627,6 +641,9 @@ impl McpServer {
             if let Some(traceparent) = traced {
                 record["trace"] = serde_json::json!(traceparent);
             }
+            if let Some(tracestate) = traced_state {
+                record["tracestate"] = serde_json::json!(tracestate);
+            }
             if let Some(bytes) = response_bytes {
                 record["response_bytes"] = serde_json::json!(bytes);
             }
@@ -664,6 +681,10 @@ impl McpServer {
     /// nothing more — `enqueue_audit` has already merged the seq into the gap
     /// it reports on recovery, so accounting it again here would double-count.
     /// The inert encode failure is the one arm that must account for itself.
+    ///
+    /// `tracestate` deliberately stays out of the indexed attributes: it
+    /// rides the verbatim JSONL body (which the `tracestate` record field is
+    /// part of) and is never a queryable `mtui.*` key.
     fn export_best_effort(
         &self,
         record: &Value,
@@ -957,6 +978,7 @@ mod tests {
                     .expect("object"),
                 None,
                 &CancellationToken::new(),
+                None,
                 None,
             )
             .await
@@ -1303,6 +1325,7 @@ mod tests {
                 kwargs.as_object().expect("kwargs object"),
                 None,
                 &CancellationToken::new(),
+                None,
                 None,
             )
             .await
@@ -2001,6 +2024,7 @@ mod tests {
             None,
             &ct,
             None,
+            None,
         );
         let cancel = async {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -2283,12 +2307,14 @@ mod tests {
         )
     }
 
-    /// Dispatch through the audited seam with an explicit traceparent.
+    /// Dispatch through the audited seam with an explicit traceparent and
+    /// tracestate, the way `call_tool` passes them from `context.meta`.
     async fn audited_call_traced(
         server: &McpServer,
         tool: &str,
         kwargs: Value,
         traceparent: Option<&str>,
+        tracestate: Option<&str>,
     ) -> Result<CallToolResponse, McpError> {
         server
             .dispatch_audited(
@@ -2297,6 +2323,7 @@ mod tests {
                 None,
                 &CancellationToken::new(),
                 traceparent,
+                tracestate,
             )
             .await
     }
@@ -2724,7 +2751,7 @@ mod tests {
         let server = McpServer::new(registry, session);
         let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
 
-        audited_call_traced(&server, "whoami", json!({}), Some(traceparent))
+        audited_call_traced(&server, "whoami", json!({}), Some(traceparent), None)
             .await
             .expect("traced call succeeds");
         let records = audit_records(&path);
@@ -2738,6 +2765,193 @@ mod tests {
             "trace_id bytes present in OTLP"
         );
         exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn trace_pair_flows_to_intent_and_outcome_identically() {
+        // A mutating tool writes both records; the pair must carry the
+        // identical trace context. `unload` mutates (and is not denied),
+        // so it writes intent then outcome even for an unloaded RRID.
+        let (server, _session, _dir, path) = audited_server();
+        assert!(
+            !server.read_only_tools.contains("unload"),
+            "unload mutates, so it writes intent then outcome"
+        );
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
+        let tracestate = "rojo=00f067aa0ca902b7,congo=t61rcWkgMzE";
+
+        audited_call_traced(
+            &server,
+            "unload",
+            json!({"rrid": "SUSE:Maintenance:9:9"}),
+            Some(traceparent),
+            Some(tracestate),
+        )
+        .await
+        .expect("traced call answers");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "intent then outcome: {records:?}");
+        assert_eq!(records[0]["event"], json!("intent"));
+        for record in &records {
+            assert_eq!(record["trace"], json!(traceparent));
+            assert_eq!(record["tracestate"], json!(tracestate));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_trace_context_is_dropped_not_stored() {
+        // Every malformed or oversized variant leaves the keys absent while
+        // the call still succeeds — never an error, never a refusal.
+        let valid = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
+        let long = format!("a={}", "x".repeat(600));
+        let over: Vec<String> = (0..33).map(|i| format!("k{i:02}=v")).collect();
+        let cases: Vec<(Option<String>, Option<String>)> = vec![
+            (
+                Some("01-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01".to_owned()),
+                None,
+            ),
+            (Some(valid.to_uppercase()), None),
+            (
+                Some("00-00000000000000000000000000000000-00f067aa0ca902b7-01".to_owned()),
+                None,
+            ),
+            (
+                Some("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01".to_owned()),
+                None,
+            ),
+            (None, Some(long)),
+            (None, Some("UPPER=1".to_owned())),
+            (None, Some("a=,b=2".to_owned())),
+            (None, Some("a.b=1".to_owned())),
+            (None, Some("9key=1".to_owned())),
+            (None, Some("a@b@c=1".to_owned())),
+            (None, Some(over.join(","))),
+        ];
+        for (traceparent, tracestate) in &cases {
+            let (server, _session, _dir, path) = audited_server();
+            audited_call_traced(
+                &server,
+                "whoami",
+                json!({}),
+                traceparent.as_deref(),
+                tracestate.as_deref(),
+            )
+            .await
+            .expect("a dropped context never fails the call");
+            let records = audit_records(&path);
+            assert_eq!(records.len(), 1, "one outcome record");
+            assert!(
+                records[0].get("trace").is_none(),
+                "no unvalidated trace: {}",
+                records[0]
+            );
+            assert!(
+                records[0].get("tracestate").is_none(),
+                "no unvalidated tracestate: {}",
+                records[0]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_validity_trace_context_records_only_the_valid_half() {
+        // Validity is per field: a good traceparent survives a bad tracestate
+        // and vice versa, with the surviving half verbatim.
+        let valid_tp = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
+        let valid_ts = "rojo=00f067aa0ca902b7";
+        for (traceparent, tracestate, want_trace, want_state) in [
+            (Some(valid_tp), Some("UPPER=1"), true, false),
+            (
+                Some("01-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01"),
+                Some(valid_ts),
+                false,
+                true,
+            ),
+        ] {
+            let (server, _session, _dir, path) = audited_server();
+            audited_call_traced(&server, "whoami", json!({}), traceparent, tracestate)
+                .await
+                .expect("a half-dropped context never fails the call");
+            let records = audit_records(&path);
+            assert_eq!(records.len(), 1, "one outcome record");
+            assert_eq!(
+                records[0].get("trace").is_some(),
+                want_trace,
+                "trace presence: {}",
+                records[0]
+            );
+            assert_eq!(
+                records[0].get("tracestate").is_some(),
+                want_state,
+                "tracestate presence: {}",
+                records[0]
+            );
+            if want_trace {
+                assert_eq!(records[0]["trace"], json!(traceparent));
+            }
+            if want_state {
+                assert_eq!(records[0]["tracestate"], json!(tracestate));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_trace_context_leaves_no_intent_record_trace() {
+        // A mutating tool writes both records; a dropped context must stay
+        // out of the intent one too, not just the outcome.
+        let (server, _session, _dir, path) = audited_server();
+        assert!(
+            !server.read_only_tools.contains("unload"),
+            "unload mutates, so it writes intent then outcome"
+        );
+        audited_call_traced(
+            &server,
+            "unload",
+            json!({"rrid": "SUSE:Maintenance:9:9"}),
+            Some("01-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01"),
+            Some("UPPER=1"),
+        )
+        .await
+        .expect("a dropped context never fails the call");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "intent then outcome: {records:?}");
+        assert_eq!(records[0]["event"], json!("intent"));
+        for record in &records {
+            assert!(
+                record.get("trace").is_none(),
+                "no unvalidated trace: {record}"
+            );
+            assert!(
+                record.get("tracestate").is_none(),
+                "no unvalidated tracestate: {record}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn traced_and_untraced_replies_are_byte_identical() {
+        // Presence of trace context must not change a response byte: the
+        // same shape pin as `audit_unset_sink_is_byte_identical`.
+        async fn reply(traceparent: Option<&str>, tracestate: Option<&str>) -> CallToolResult {
+            let (server, _session, _dir, _path) = audited_server();
+            let response =
+                audited_call_traced(&server, "whoami", json!({}), traceparent, tracestate)
+                    .await
+                    .expect("whoami succeeds");
+            complete_result(&response).clone()
+        }
+
+        let plain = reply(None, None).await;
+        let traced = reply(
+            Some("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01"),
+            Some("rojo=00f067aa0ca902b7"),
+        )
+        .await;
+        assert_eq!(
+            plain, traced,
+            "trace context must not change a response byte"
+        );
     }
 
     #[tokio::test]

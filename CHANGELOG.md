@@ -169,6 +169,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the server cannot be read until teregen can serve them. **MCP schema note:**
   additive only — two new tools, both in the `core` profile.
 
+- Audit records echo the client's W3C `tracestate` alongside `trace` when it
+  validates (1..=512 bytes, `key=value` members with joined empties skipped
+  and at most 32 kept, keys at most 256 characters — tenant id 241, system
+  id 14 — values at most 256, read from the canonical `context.meta`);
+  malformed or oversized values are dropped, never stored, and a background
+  job's terminal record carries neither. **MCP schema note:** additive only
+  — an optional record field, no version bump (#413).
+
 ### Changed
 
 - `openqa_jobs` lists only the newest non-obsoleted attempt of each scenario

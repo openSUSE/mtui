@@ -823,6 +823,10 @@ impl McpSession {
     /// without a sink; a failed write only warns — the dispatch already
     /// answered, so there is nothing left to refuse. OTLP enqueue is equally
     /// best-effort, as it is everywhere: export never refuses a call.
+    ///
+    /// Trace-free by design: the job outlives the call context that carried
+    /// `traceparent`/`tracestate`, so a terminal record carries neither — it
+    /// joins its dispatch by `job_id`.
     async fn audit_terminal(
         &self,
         tool: &str,
