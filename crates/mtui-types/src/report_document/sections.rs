@@ -135,6 +135,8 @@ pub enum SectionWriteError {
     },
     #[error("no issue {0:?} in this report")]
     UnknownIssue(String),
+    #[error("issue {0:?} is already in this report")]
+    DuplicateIssue(String),
     #[error(transparent)]
     BadIssueKey(#[from] IssueKeyParseError),
 }
@@ -267,6 +269,34 @@ impl ReportDocument {
         let mut candidate = self.to_value();
         if let Some(issues) = candidate.get_mut("issues").and_then(Value::as_object_mut) {
             issues.insert(key.as_str().to_owned(), value);
+        }
+        validated(candidate)
+    }
+
+    /// A copy of this document with a tester-filed issue `issue_id` added
+    /// with `value`.
+    ///
+    /// The entry is forced to `new: true` (the schema's marker for a bug a
+    /// tester filed during validation) however `value` states it; `title`
+    /// stays required and validated like any other write.
+    ///
+    /// # Errors
+    ///
+    /// Refused when `issue_id` is malformed or already names an issue in
+    /// this document, or for the same validation reasons as
+    /// [`with_section`](Self::with_section).
+    pub fn with_new_issue(&self, issue_id: &str, value: Value) -> Result<Self, SectionWriteError> {
+        let key: IssueKey = issue_id.parse()?;
+        if self.issues.contains_key(&key) {
+            return Err(SectionWriteError::DuplicateIssue(issue_id.to_owned()));
+        }
+        let mut candidate = self.to_value();
+        if let Some(issues) = candidate.get_mut("issues").and_then(Value::as_object_mut) {
+            let mut entry = value;
+            if let Some(map) = entry.as_object_mut() {
+                map.insert("new".to_owned(), Value::Bool(true));
+            }
+            issues.insert(key.as_str().to_owned(), entry);
         }
         validated(candidate)
     }
@@ -710,6 +740,83 @@ mod tests {
         let err = before.with_issue(&key, issue).unwrap_err();
         match err {
             SectionWriteError::Invalid(e) => assert_eq!(e.pointer, format!("/issues/{key}/status")),
+            other => panic!("expected Invalid, got {other}"),
+        }
+    }
+
+    // --- with_new_issue ---
+
+    fn new_issue_value() -> serde_json::Value {
+        json!({
+            "title": "regression found during validation",
+            "reproducer": null,
+            "status": null,
+            "comment": null,
+        })
+    }
+
+    #[test]
+    fn a_new_issue_is_added_with_new_forced() {
+        let before = doc(MAXIMAL);
+        let after = before.with_new_issue("bsc#999", new_issue_value()).unwrap();
+        let issues = section_of(&after, Section::Issues);
+        assert_eq!(issues["bsc#999"]["new"], json!(true));
+        assert_eq!(
+            issues["bsc#999"]["title"],
+            json!("regression found during validation")
+        );
+        let (mut a, b) = (
+            section_of(&after, Section::Issues),
+            section_of(&before, Section::Issues),
+        );
+        a.as_object_mut().unwrap().remove("bsc#999");
+        assert_eq!(
+            serde_json::to_vec(&a).unwrap(),
+            serde_json::to_vec(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_new_issue_value_saying_new_false_still_lands_true() {
+        let before = doc(MAXIMAL);
+        let mut value = new_issue_value();
+        value["new"] = json!(false);
+        let after = before.with_new_issue("bsc#999", value).unwrap();
+        assert_eq!(
+            section_of(&after, Section::Issues)["bsc#999"]["new"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn a_duplicate_issue_is_refused() {
+        let before = doc(MAXIMAL);
+        let key = before.issues.keys().next().unwrap().to_string();
+        let err = before.with_new_issue(&key, new_issue_value()).unwrap_err();
+        assert!(
+            matches!(err, SectionWriteError::DuplicateIssue(ref id) if id == &key),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_new_issue_with_a_bad_key_is_refused() {
+        let err = doc(MAXIMAL)
+            .with_new_issue("cve#1", new_issue_value())
+            .unwrap_err();
+        assert!(matches!(err, SectionWriteError::BadIssueKey(_)), "{err}");
+    }
+
+    #[test]
+    fn a_new_issue_without_a_title_is_refused() {
+        let mut value = new_issue_value();
+        value.as_object_mut().unwrap().remove("title");
+        let err = doc(MAXIMAL).with_new_issue("bsc#999", value).unwrap_err();
+        match err {
+            // A missing required member points at its object.
+            SectionWriteError::Invalid(e) => {
+                assert_eq!(e.pointer, "/issues/bsc#999".to_owned())
+            }
             other => panic!("expected Invalid, got {other}"),
         }
     }

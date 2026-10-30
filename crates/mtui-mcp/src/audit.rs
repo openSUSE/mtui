@@ -40,7 +40,8 @@
 //! * Secrets are **unrepresentable**, not filtered: [`sanitize_args`] never
 //!   records a `config_set` value at all, so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
-//!   `content`/`content_b64`, `report_section_write`/`report_issue_write` `value`) never
+//!   `content`/`content_b64`, `report_section_write`/`report_issue_write`/
+//!   `report_issue_add` `value`) never
 //!   land verbatim either: each records `{bytes, sha256}` over the original string, so a credentials file or SSH key uploaded via
 //!   `put` is correlatable without being persisted.
 //!
@@ -710,7 +711,8 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 ///   still marks whether the attribute *is* a secret, so a reader can tell a
 ///   token rotation from a display-name change.
 /// * File-body payloads — `put` `content`/`content_b64`,
-///   `report_section_write`/`report_issue_write` `value`. Each records
+///   `report_section_write`/`report_issue_write`/`report_issue_add` `value`.
+///   Each records
 ///   `{bytes, sha256}` over the original string: correlatable across the file
 ///   and OTLP bodies without persisting a credentials file or SSH key.
 ///   Always fingerprinted, never verbatim regardless of size, so small secrets
@@ -748,7 +750,7 @@ pub(crate) fn sanitize_args(tool: &str, kwargs: &Map<String, Value>) -> Value {
 fn payload_keys_for(tool: &str) -> Option<&'static [&'static str]> {
     match tool {
         "put" => Some(&["content", "content_b64"]),
-        "report_section_write" | "report_issue_write" => Some(&["value"]),
+        "report_section_write" | "report_issue_write" | "report_issue_add" => Some(&["value"]),
         _ => None,
     }
 }
@@ -1513,7 +1515,11 @@ mod tests {
     #[test]
     fn sanitize_report_document_values_are_fingerprinted_not_stored() {
         let note = "SECRET-TESTER-FREE-TEXT";
-        for tool in ["report_section_write", "report_issue_write"] {
+        for tool in [
+            "report_section_write",
+            "report_issue_write",
+            "report_issue_add",
+        ] {
             let kwargs: Map<String, Value> = serde_json::from_value(
                 json!({"value": {"comment": note}, "template": "SUSE:Maintenance:1:1"}),
             )

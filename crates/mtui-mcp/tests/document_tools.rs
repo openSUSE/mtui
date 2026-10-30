@@ -223,6 +223,10 @@ async fn a_report_without_a_document_refuses_every_tool() {
             "report_issue_write",
             json!({"issue_id": "bsc#1", "value": {}}),
         ),
+        (
+            "report_issue_add",
+            json!({"issue_id": "bsc#1", "value": {}}),
+        ),
         ("report_files", json!({})),
         ("report_file_read", json!({"path": "checkers.log"})),
     ] {
@@ -336,6 +340,56 @@ async fn an_issue_write_to_an_unknown_issue_is_refused_and_clean() {
     .await;
 
     assert!(msg.contains("no issue"), "{msg}");
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn an_issue_add_inserts_one_entry_with_new_true_and_marks_dirty() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+
+    let added = call(
+        &session,
+        "report_issue_add",
+        json!({
+            "issue_id": "bsc#999",
+            "value": {
+                "title": "regression found during validation",
+                "reproducer": null,
+                "status": null,
+                "comment": null,
+            },
+        }),
+    )
+    .await;
+    assert_eq!(added["dirty"], true);
+
+    let back = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert_eq!(back["issue"]["new"], true);
+    assert_eq!(back["issue"]["title"], "regression found during validation");
+
+    let index = call(&session, "report_issue_read", json!({})).await;
+    assert_eq!(index["issues"].as_array().unwrap().len(), 2);
+    assert!(state(&session, RRID).await.1);
+}
+
+#[tokio::test]
+async fn an_issue_add_of_an_existing_key_is_refused_and_clean() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    let msg = refusal(
+        &session,
+        "report_issue_add",
+        json!({"issue_id": "bnc#1276308", "value": {}}),
+    )
+    .await;
+
+    assert!(msg.contains("already"), "{msg}");
     assert_eq!(state(&session, RRID).await, (document, false));
 }
 

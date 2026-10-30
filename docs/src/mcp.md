@@ -396,6 +396,15 @@ shrink. Validated and applied exactly like `report_section_write`.
 - Parameters (required): `issue_id`, `value`. Plus optional `template`.
 - Returns `{ "id", "issue_id", "dirty": true }`.
 
+### `report_issue_add`
+
+Adds one tester-filed issue under `issue_id`; the entry is forced to
+`new: true` and `title` is required (`reproducer`/`status`/`comment` may be
+null until answered). Refuses a key that is malformed or already present.
+
+- Parameters (required): `issue_id`, `value`. Plus optional `template`.
+- Returns `{ "id", "issue_id", "dirty": true }`.
+
 ### `report_files` (read-only)
 
 Lists the report directory's files — `build_checks/`, the `install_logs`

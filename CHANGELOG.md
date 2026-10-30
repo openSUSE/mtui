@@ -10,6 +10,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- A new `report_issue_add` MCP tool records a bug filed during validation as
+  an `issues` entry: the key must be new and well-formed, `title` is
+  required, and the entry is forced to `new: true` (#669).
 - `openqa_jobs` filters by `--test <GLOB>`, `--flavor` and `--version`, pages
   with `--offset`/`--limit`, and shows each job's VERSION, FLAVOR and MACHINE.
   Over 100 rows the listing is capped by the shared row budget like `updates`

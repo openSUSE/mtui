@@ -130,6 +130,32 @@ expression: pretty
     "read_only": false
   },
   {
+    "description": "Add one tester-filed issue to the report document under `issue_id`; the entry is forced to `new: true` and `title` is required. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {
+          "description": "Key of the new issue, such as `bsc#1234567`.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        },
+        "value": {
+          "description": "The issue's JSON value, shaped as report_issue_read returns it; `title` is required, `reproducer`/`status`/`comment` may be null."
+        }
+      },
+      "required": [
+        "issue_id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "report_issue_add",
+    "read_only": false
+  },
+  {
     "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: they cannot be read yet. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,

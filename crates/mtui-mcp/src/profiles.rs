@@ -62,6 +62,7 @@ pub const CORE: &[&str] = &[
     "report_section_write",
     "report_issue_read",
     "report_issue_write",
+    "report_issue_add",
     "report_files",
     "report_file_read",
     "job_list",

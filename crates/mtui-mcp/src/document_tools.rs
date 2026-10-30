@@ -198,6 +198,33 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         read_only: false,
     };
 
+    let issue_add = ToolDescriptor {
+        name: "report_issue_add".to_owned(),
+        description: format!(
+            "Add one tester-filed issue to the report document under `issue_id`; \
+             the entry is forced to `new: true` and `title` is required. \
+             {WRITE_NOTE} {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "issue_id",
+                    issue_id_prop("Key of the new issue, such as `bsc#1234567`."),
+                ),
+                (
+                    "value",
+                    value_prop(
+                        "The issue's JSON value, shaped as report_issue_read returns it; \
+                         `title` is required, `reproducer`/`status`/`comment` may be null.",
+                    ),
+                ),
+                ("template", template_prop()),
+            ],
+            &["issue_id", "value"],
+        ),
+        read_only: false,
+    };
+
     let files = ToolDescriptor {
         name: "report_files".to_owned(),
         description: format!(
@@ -248,6 +275,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         section_write,
         issue_read,
         issue_write,
+        issue_add,
         files,
         file_read,
     ]
@@ -309,6 +337,12 @@ async fn dispatch_document_tool_inner(
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
             let value = value_arg(kwargs)?;
             report_issue_write(session, issue_id, value, template).await?
+        }
+        "report_issue_add" => {
+            let issue_id =
+                opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
+            let value = value_arg(kwargs)?;
+            report_issue_add(session, issue_id, value, template).await?
         }
         "report_files" => report_files(session, template).await?,
         "report_file_read" => {
@@ -644,6 +678,23 @@ async fn report_issue_write(
     write_base(session, template, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let updated = doc.with_issue(issue_id, value).map_err(write_refusal)?;
+        let id = updated.id.clone();
+        base.document = Some(updated);
+        base.mark_document_authored(&[&format!("/issues/{issue_id}")]);
+        Ok(json!({ "id": id, "issue_id": issue_id, "dirty": true }))
+    })
+    .await
+}
+
+async fn report_issue_add(
+    session: &McpSession,
+    issue_id: &str,
+    value: Value,
+    template: Option<&str>,
+) -> Result<Value, McpCommandError> {
+    write_base(session, template, |base| {
+        let doc = base.document.as_ref().ok_or_else(no_document)?;
+        let updated = doc.with_new_issue(issue_id, value).map_err(write_refusal)?;
         let id = updated.id.clone();
         base.document = Some(updated);
         base.mark_document_authored(&[&format!("/issues/{issue_id}")]);
