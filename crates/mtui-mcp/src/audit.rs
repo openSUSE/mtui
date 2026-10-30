@@ -51,26 +51,28 @@
 //! own record):
 //!
 //! * `intent`: a call about to run — `v`, `ts`, `seq`, `session`,
-//!   `transport`, `principal`, `event`, `tool`, `args`, plus `trace` when the
-//!   client supplied one. No outcome, duration, scope or size: none of it
-//!   exists yet.
+//!   `transport`, `principal`, `event`, `tool`, `args`, plus
+//!   `trace`/`tracestate` when the client supplied valid ones. No outcome,
+//!   duration, scope or size: none of it exists yet.
 //!   An `intent` no later record points back at (via `intent`) reads as
 //!   "started, outcome not recorded" — a crash or kill, or a lost outcome
 //!   write the client was told about in band.
 //! * `call`: a foreground call — `v`, `ts` (epoch millis), `session`,
 //!   `principal`, `tool`, `args`, `outcome` (`ok`/`error`/`unknown-tool`),
 //!   `duration_ms`, `rrids`, `hosts`, plus `intent` (the seq of its intent
-//!   record) when one was written. `duration_ms` is measured from arrival like
-//!   `ts`, so for a mutating tool it includes the intent record's own open and
+//!   record) when one was written, plus `trace`/`tracestate` when the client
+//!   supplied valid ones. `duration_ms` is measured from arrival like `ts`,
+//!   so for a mutating tool it includes the intent record's own open and
 //!   fsync.
 //! * `dispatch`: a backgrounded start — as `call`, plus the started `job_ids`.
 //! * `terminal`: a background job reaching Done/Failed/Cancelled — `v`, `ts`,
 //!   `session`, `principal`, `tool`, `job_id`, `job_state`, `outcome`,
 //!   `duration_ms`, `rrids`, `hosts`. No `args`: the dispatch record already
 //!   carries them, and omitting them keeps a secret out of reach by
-//!   construction. No `intent` either: it joins its dispatch by `job_id`. A
-//!   terminal record's seq is not ordered against the calls around it in
-//!   either direction — neither its own dispatch record, since a job that
+//!   construction. No `intent` either: it joins its dispatch by `job_id`. No
+//!   trace context either: the job outlives the call whose `_meta` supplied
+//!   it. A terminal record's seq is not ordered against the calls around it
+//!   in either direction — neither its own dispatch record, since a job that
 //!   settles at once can be minted first, nor a parked `wait_seconds` reply —
 //!   so `job_id` is the join, never `seq`.
 //!

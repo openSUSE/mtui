@@ -736,8 +736,8 @@ async fn principal_stays_null_for_wire_identity() {
 /// #413: trace context on the wire (`params._meta`) reaches the audit
 /// record.
 ///
-/// Sends a raw `tools/call` carrying `traceparent` in `params._meta` — the
-/// SEP-414 wire shape — and proves it lands on the record. This drives the
+/// Sends a raw `tools/call` carrying `traceparent` + `tracestate` in
+/// `params._meta` — the SEP-414 wire shape — and proves both land on the
 /// real `call_tool`, so it pins the *source*: the service loop moves wire
 /// `_meta` into `context.meta` while the typed `request.meta` stays empty,
 /// and reading the latter leaves the key absent. Reverting `call_tool` to
@@ -782,6 +782,7 @@ async fn trace_context_flows_from_wire_meta_to_audit_record() {
     .await;
 
     let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
+    let tracestate = "rojo=00f067aa0ca902b7,congo=t61rcWkgMzE";
     send_line(
         &mut write_half,
         serde_json::json!({
@@ -791,7 +792,7 @@ async fn trace_context_flows_from_wire_meta_to_audit_record() {
             "params": {
                 "name": "whoami",
                 "arguments": {},
-                "_meta": { "traceparent": traceparent },
+                "_meta": { "traceparent": traceparent, "tracestate": tracestate },
             }
         }),
     )
@@ -814,6 +815,7 @@ async fn trace_context_flows_from_wire_meta_to_audit_record() {
     );
     assert_eq!(record["event"], "call");
     assert_eq!(record["trace"], traceparent);
+    assert_eq!(record["tracestate"], tracestate);
 
     drop(reader);
     drop(write_half);

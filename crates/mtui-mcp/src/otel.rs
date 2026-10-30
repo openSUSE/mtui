@@ -318,6 +318,118 @@ pub(crate) fn parse_traceparent(value: &str) -> Option<([u8; 16], [u8; 8], u8)> 
     Some((trace, span, flags))
 }
 
+/// W3C `tracestate` validation (SEP-414): returns the input unchanged when
+/// valid, else `None`. Bounded to 1..=512 bytes of printable ASCII (plus
+/// HTAB member OWS); comma-separated `key=value` members, at most 32.
+/// Empty and whitespace-only members are skipped, never refused: they appear
+/// when several `tracestate` headers are joined, and W3C trace-context
+/// §3.3.1.1 requires vendors to accept them. Keys are the §3.3.1.3.1
+/// `simple-key` / `multi-tenant-key` shape — lowercase only, no `.`, at most
+/// one `@`; a simple key starts with a lowercase letter, a tenant id with a
+/// lowercase letter or digit, a system id with a lowercase letter — and
+/// values are printable ASCII minus `,`/`=` (§3.3.1.3.2). Lengths follow
+/// §3.3.1.3: simple keys at most 256 characters, tenant ids at most 241,
+/// system ids at most 14, values at most 256. Never errors:
+/// absent or malformed context is an absent field, never a refusal.
+pub(crate) fn parse_tracestate(value: &str) -> Option<&str> {
+    if value.is_empty() || value.len() > 512 {
+        return None;
+    }
+    if !value
+        .bytes()
+        .all(|b| b == b'\t' || (0x20..=0x7E).contains(&b))
+    {
+        return None;
+    }
+    let mut members = 0;
+    for member in value.split(',') {
+        let member = member.trim_matches(|c| c == ' ' || c == '\t');
+        if member.is_empty() {
+            continue;
+        }
+        members += 1;
+        if members > 32 {
+            return None;
+        }
+        let (key, val) = member.split_once('=')?;
+        if key.is_empty() || val.is_empty() {
+            return None;
+        }
+        if !valid_tracestate_key(key) {
+            return None;
+        }
+        if val.len() > 256 {
+            return None;
+        }
+        if !val
+            .bytes()
+            .all(|b| (0x20..=0x7E).contains(&b) && b != b',' && b != b'=')
+        {
+            return None;
+        }
+    }
+    (members > 0).then_some(value)
+}
+
+/// One §3.3.1.3.1 key: `simple-key`, or `tenant-id@system-id` with exactly
+/// one `@`.
+fn valid_tracestate_key(key: &str) -> bool {
+    match key.split_once('@') {
+        None => valid_simple_key(key),
+        Some((tenant, system)) => {
+            if system.contains('@') || tenant.is_empty() || system.is_empty() {
+                return false;
+            }
+            valid_tenant_id(tenant) && valid_system_id(system)
+        }
+    }
+}
+
+/// `simple-key = lcalpha 0*255( lcalpha / DIGIT / "_" / "-" / "*" / "/" )`:
+/// at most 256 characters.
+fn valid_simple_key(key: &str) -> bool {
+    if key.len() > 256 {
+        return false;
+    }
+    let mut bytes = key.bytes();
+    if !matches!(bytes.next(), Some(b'a'..=b'z')) {
+        return false;
+    }
+    bytes.all(is_tracestate_key_char)
+}
+
+/// `tenant-id = ( lcalpha / DIGIT ) 0*240( ... )`: the one key part that
+/// may start with a digit; at most 241 characters.
+fn valid_tenant_id(tenant: &str) -> bool {
+    if tenant.len() > 241 {
+        return false;
+    }
+    let mut bytes = tenant.bytes();
+    if !matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9')) {
+        return false;
+    }
+    bytes.all(is_tracestate_key_char)
+}
+
+/// `system-id = lcalpha 0*13( ... )`: at most 14 characters.
+fn valid_system_id(system: &str) -> bool {
+    if system.len() > 14 {
+        return false;
+    }
+    let mut bytes = system.bytes();
+    if !matches!(bytes.next(), Some(b'a'..=b'z')) {
+        return false;
+    }
+    bytes.all(is_tracestate_key_char)
+}
+
+fn is_tracestate_key_char(b: u8) -> bool {
+    matches!(
+        b,
+        b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'*' | b'/'
+    )
+}
+
 fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
     if hex.len() != N * 2 {
         return None;
@@ -1459,6 +1571,150 @@ mod tests {
 
     fn hex_of(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn tracestate_validates_bounded_members() {
+        let valid = "rojo=00f067aa0ca902b7,congo=t61rcWkgMzE";
+        assert_eq!(parse_tracestate(valid), Some(valid));
+        // Empty and oversized rejected (1..=512 bytes).
+        assert!(parse_tracestate("").is_none());
+        assert!(parse_tracestate(",").is_none());
+        assert!(parse_tracestate(" , ").is_none());
+        assert!(parse_tracestate(&format!("a={}", "x".repeat(600))).is_none());
+        assert!(parse_tracestate(&format!("{}={}", "k".repeat(256), "x".repeat(255))).is_some());
+        assert!(parse_tracestate(&format!("{}={}", "k".repeat(256), "x".repeat(256))).is_none());
+        // Controls and non-ASCII rejected.
+        assert!(parse_tracestate("a=b\x01c").is_none());
+        assert!(parse_tracestate("a=béc").is_none());
+        assert!(parse_tracestate("a=b\nc").is_none());
+        assert!(parse_tracestate("a=b\rc").is_none());
+        assert!(parse_tracestate("a=b\x7fc").is_none());
+        // No empty key or value, no uppercase key, no `=` in the value.
+        assert!(parse_tracestate("a=,b=2").is_none());
+        assert!(parse_tracestate("=1").is_none());
+        assert!(parse_tracestate("UPPER=1").is_none());
+        assert!(parse_tracestate("a=b=c").is_none());
+        // Uppercase values are legal; member OWS is tolerated.
+        assert!(parse_tracestate("a=ABC-123_~").is_some());
+        assert!(parse_tracestate("a=1, b=2").is_some());
+        assert!(parse_tracestate("a=1,\tb=2").is_some());
+        // Interior tabs are not OWS: rejected by the key/value checks.
+        assert!(parse_tracestate("a\t=1").is_none());
+        assert!(parse_tracestate("a=1\t2").is_none());
+    }
+
+    /// W3C trace-context §3.3.1.1: empty list members are allowed — they
+    /// appear when several `tracestate` headers are joined — so vendors must
+    /// accept (skip) them rather than drop the whole value.
+    #[test]
+    fn tracestate_accepts_joined_empty_members() {
+        let joined = "a=1,,b=2";
+        assert_eq!(parse_tracestate(joined), Some(joined));
+        assert!(parse_tracestate("a=1,").is_some());
+        assert!(parse_tracestate(",a=1").is_some());
+        assert!(parse_tracestate("a=1, ,b=2").is_some());
+        assert!(parse_tracestate("a=1,\t,b=2").is_some());
+    }
+
+    /// W3C trace-context §3.3.1.3.1: `.` is in neither the simple-key nor
+    /// the multi-tenant-key charset.
+    #[test]
+    fn tracestate_rejects_dot_in_keys() {
+        assert!(parse_tracestate("a.b=1").is_none());
+        assert!(parse_tracestate("a=1,b.c=2").is_none());
+        assert!(parse_tracestate("te.nant@sys=1").is_none());
+        assert!(parse_tracestate("tenant@sys.tem=1").is_none());
+    }
+
+    /// W3C trace-context §3.3.1.3.1: a simple key starts with a lowercase
+    /// letter, a system id too; only the tenant id may start with a digit.
+    #[test]
+    fn tracestate_rejects_non_letter_leading_keys() {
+        for key in ["9key", "_key", "-key", "*key", "/key", "@sys"] {
+            assert!(
+                parse_tracestate(&format!("{key}=1")).is_none(),
+                "{key} must not validate"
+            );
+        }
+        assert!(parse_tracestate("tenant@9sys=1").is_none());
+        // The digit-leading tenant id is the one exception.
+        assert!(parse_tracestate("9tenant@sys=1").is_some());
+        assert!(parse_tracestate("t3nant@sys=1").is_some());
+    }
+
+    /// W3C trace-context §3.3.1.3.1: a multi-tenant key carries exactly one
+    /// `@`; a second one is outside both grammars.
+    #[test]
+    fn tracestate_rejects_multiple_at_signs() {
+        assert!(parse_tracestate("a@b@c=1").is_none());
+        assert!(parse_tracestate("a@b@c@d=1").is_none());
+        assert!(parse_tracestate("@sys=1").is_none());
+        assert!(parse_tracestate("tenant@=1").is_none());
+        assert!(parse_tracestate("_tenant@sys=1").is_none());
+        assert!(parse_tracestate("tenant@_sys=1").is_none());
+        // One `@` with both halves well-formed validates.
+        assert!(parse_tracestate("tenant@sys=1").is_some());
+    }
+
+    /// W3C trace-context §3.3.1.3.1: `simple-key = lcalpha 0*255(...)` — at
+    /// most 256 characters. A 300-character key passes the 512-byte cap but
+    /// must still fail.
+    #[test]
+    fn tracestate_caps_simple_key_at_256() {
+        let ok = format!("a{}", "b".repeat(255));
+        assert_eq!(ok.len(), 256);
+        assert!(parse_tracestate(&format!("{ok}=1")).is_some());
+        let long = format!("a{}", "b".repeat(299));
+        assert_eq!(long.len(), 300);
+        assert!(
+            parse_tracestate(&format!("{long}=1")).is_none(),
+            "300-char key must fail"
+        );
+    }
+
+    /// W3C trace-context §3.3.1.3.1: `tenant-id` is at most 241 characters,
+    /// `system-id` at most 14. A 20-character system id passes the 512-byte
+    /// cap but must still fail.
+    #[test]
+    fn tracestate_caps_tenant_and_system_ids() {
+        let tenant_ok = format!("1{}", "t".repeat(240));
+        assert_eq!(tenant_ok.len(), 241);
+        assert!(parse_tracestate(&format!("{tenant_ok}@sys=1")).is_some());
+        let tenant_long = format!("1{}", "t".repeat(241));
+        assert_eq!(tenant_long.len(), 242);
+        assert!(parse_tracestate(&format!("{tenant_long}@sys=1")).is_none());
+        let system_ok = format!("s{}", "y".repeat(13));
+        assert_eq!(system_ok.len(), 14);
+        assert!(parse_tracestate(&format!("t@{system_ok}=1")).is_some());
+        let system_long = "s".repeat(20);
+        assert!(
+            parse_tracestate(&format!("t@{system_long}=1")).is_none(),
+            "20-char system id must fail"
+        );
+    }
+
+    /// W3C trace-context §3.3.1.3.2: `value = 0*255(chr) nblk-chr` — at most
+    /// 256 characters.
+    #[test]
+    fn tracestate_caps_value_at_256() {
+        let ok = "v".repeat(256);
+        assert!(parse_tracestate(&format!("a={ok}")).is_some());
+        let long = "v".repeat(257);
+        assert!(parse_tracestate(&format!("a={long}")).is_none());
+    }
+
+    /// W3C trace-context §3.3.1.1: `list = list-member 0*31( ... )` — at
+    /// most 32 members. Empty members do not count.
+    #[test]
+    fn tracestate_caps_members_at_32() {
+        let members: Vec<String> = (0..32).map(|i| format!("k{i:02}=v")).collect();
+        let full = members.join(",");
+        assert_eq!(parse_tracestate(&full), Some(full.as_str()));
+        let over: Vec<String> = (0..33).map(|i| format!("k{i:02}=v")).collect();
+        assert!(parse_tracestate(&over.join(",")).is_none());
+        // Joined empties pad without counting.
+        assert!(parse_tracestate(&format!("{full},,")).is_some());
     }
 
     #[test]

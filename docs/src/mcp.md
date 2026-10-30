@@ -592,11 +592,19 @@ A tool that is **not** advertised `readOnlyHint` writes an `intent` record
 before it runs — schema version, arrival timestamp, sequence number, session,
 transport, reserved `principal: null` (see [Audit log](#audit-log)),
 `event: "intent"`, tool, (redacted) arguments, and the `trace` correlation
-when the client supplied one. Nothing else, because nothing else
-exists yet. Its outcome record then carries `intent: <seq>`, and its
+when the client supplied one. The bounded vendor `tracestate` rides alongside
+when it validates (1..=512 bytes, `key=value` members, at most 32; keys at
+most 256 characters — tenant 241, system 14 — values at most 256); malformed
+or oversized values are dropped, never stored. Nothing else, because nothing
+else exists yet. Its outcome record then carries `intent: <seq>`, and its
 `duration_ms` — measured from arrival, like `ts` — includes the intent record's
 own write. Read-only tools skip the intent and write only the outcome record, so
 a poll loop still costs one record per call.
+
+Both fields are an untrusted correlation key only: whatever the client
+sent, never an identity or an authorisation, reaching no shell and changing
+no dispatch or output byte — the same call with and without them answers
+identically, and the records differ only by those fields.
 
 A backgrounded call therefore writes three records: the `intent`, a `dispatch`
 record naming the started `job_ids`, and a `terminal` record when the job reaches
@@ -606,7 +614,8 @@ matters because a `terminal` record's `seq` is not ordered against the calls
 around it in either direction: neither against its own `dispatch` record, since
 a job that settles at once can be minted first, nor against a
 `job_result(wait_seconds)` reply that waited for it. Join by `job_id`, never by
-`seq`.
+`seq`. The terminal record also carries no trace context: the job outlives
+the call whose `_meta` supplied it.
 
 A configured sink is probed once at start-up, before the OTLP probe: if it
 cannot be opened the server refuses to start and names the path on stderr,
@@ -688,7 +697,9 @@ Each record carries closed `mtui.*` attributes (`tool`, `event`, `seq`,
 `transport`, `session.id`, plus `outcome` when there is one, `response_bytes`
 when sized, and allowlisted kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
 55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
-`session.id` stays server-minted). A startup probe posts one real diagnostics
+`session.id` stays server-minted). A valid `tracestate` rides the verbatim
+JSONL body as the record's `tracestate` field but is never an indexed
+attribute. A startup probe posts one real diagnostics
 record (~5x500 ms) before serving and latches export health; failed batches
 merge into a pending `audit_gap` sent on recovery. Batching: 2048/stream cap,
 512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown flush, redirects
