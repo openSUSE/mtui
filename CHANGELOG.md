@@ -159,6 +159,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `report_file_read` pages one of them by line window. Files that exist only on
   the server cannot be read until teregen can serve them. **MCP schema note:**
   additive only — two new tools, both in the `core` profile.
+- Container image (`ghcr.io/opensuse/mtui`, mirrored to
+  `registry.opensuse.org/opensuse/mtui`): openSUSE-based, non-root, ships both
+  binaries; see Installation for the credential bind-mounts and the
+  `mtui-mcp --transport http` run line (#469).
 
 ### Changed
 

@@ -32,3 +32,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # The Containerfile base tags (+ their digest pins) would otherwise rot
+  # silently between manual refreshes.
+  - package-ecosystem: "docker"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
