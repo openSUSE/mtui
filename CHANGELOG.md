@@ -119,6 +119,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   even a host whose repo add would have failed aborts here first. With prepare
   enabled the prepare step still runs first, so this gate is the first check
   only under `--noprepare` (#682).
+- Session-level `list_refhosts`/`updates` (and the other template-free
+  commands) no longer hold the active template's entry for the call, so a
+  concurrent call on that template no longer fails `template busy` (#666).
 
 ## [26.3.5] - 2026-10-27
 
