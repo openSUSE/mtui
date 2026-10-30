@@ -331,6 +331,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- MCP: the `config_set` tool is permanently denied (#410). It wrote operator
+  config — endpoints, credentials, identity, timeouts — retargeting the
+  infrastructure the session trusts with no operator-visible artifact, so it no
+  longer appears in `tools/list`, a call is refused as an unknown tool
+  (`-32601`), and `[mcp] tools_allow` cannot restore it. `config_show` stays
+  exposed for verification and the REPL `config set` is unchanged. This
+  completes #410: the headless `config show` filtering (bulk dump and
+  operator-local values refused, endpoint URLs userinfo-stripped) already
+  landed. The `openqa_overview` and `openqa_jobs` tools also lose their
+  operator override arguments (`url_openqa`, `url_dashboard_qam`, `url_qam`,
+  `test_pattern`, `no_fetch`): absent from the schemas at once, while a sent
+  one stays accepted and ignored for one release per the MCP schema contract
+  (refused as `unknown argument(s)` from 26.5); the REPL keeps every flag.
+  **MCP schema note:** one tool gone; five properties gone from
+  `openqa_overview`, two from `openqa_jobs`; the full surface is 64 tools.
 - The SVN load and commit path, and with it `svn` as a runtime dependency of
   the code: no command checks out, updates or commits a working copy, and the
   text template (`log`, `metadata.json`, `project.xml`) is no longer read or

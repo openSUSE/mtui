@@ -11,7 +11,6 @@ checkers read_only=false
 checkout read_only=false
 comment read_only=false
 commit read_only=false
-config_set read_only=false
 config_show read_only=false
 downgrade read_only=false
 export read_only=false

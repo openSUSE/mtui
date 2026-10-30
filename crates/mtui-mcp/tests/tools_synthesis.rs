@@ -17,21 +17,90 @@ use serde_json::{Value, json};
 fn deny_list_is_filtered() {
     let tools = build_tools(&register_all());
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    for denied in ["quit", "exit", "EOF", "edit", "shell", "help", "switch"] {
+    for denied in [
+        "quit",
+        "exit",
+        "EOF",
+        "edit",
+        "shell",
+        "help",
+        "switch",
+        "config_set",
+    ] {
         assert!(!names.contains(&denied), "{denied} leaked into tools");
     }
-    // A representative exposed command is present.
-    assert!(names.contains(&"run"), "run should be a tool");
+    // Representative exposed commands are present.
+    for exposed in ["run", "config_show"] {
+        assert!(names.contains(&exposed), "{exposed} should be a tool");
+    }
 }
 
-/// `config` is fanned out; the bare `config` tool is absent.
+/// `config` is fanned out; the bare `config` tool is absent, `config_show`
+/// stays for verification, and `config_set` is denied (#410).
 #[test]
 fn config_fan_out() {
     let tools = build_tools(&register_all());
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(!names.contains(&"config"), "bare config must be absent");
     assert!(names.contains(&"config_show"));
-    assert!(names.contains(&"config_set"));
+    assert!(
+        !names.contains(&"config_set"),
+        "config_set must be denied: {names:?}"
+    );
+}
+
+/// #410, listing half: the openQA operator overrides are absent from the
+/// synthesised schemas, while the kept surface is intact.
+#[test]
+fn openqa_override_args_are_absent_from_schemas() {
+    use serde_json::Value;
+
+    let tools = build_tools(&register_all());
+    let props = |name: &str| {
+        tools
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let overview = props("openqa_overview");
+    for denied in [
+        "url_openqa",
+        "url_dashboard_qam",
+        "url_qam",
+        "test_pattern",
+        "no_fetch",
+    ] {
+        assert!(
+            !overview.contains(&denied.to_owned()),
+            "openqa_overview.{denied} exposed: {overview:?}"
+        );
+    }
+    for kept in ["days", "export", "aggregated_groups", "no_aggregated"] {
+        assert!(
+            overview.contains(&kept.to_owned()),
+            "openqa_overview.{kept} missing: {overview:?}"
+        );
+    }
+    let jobs = props("openqa_jobs");
+    for denied in ["url_openqa", "url_dashboard_qam"] {
+        assert!(
+            !jobs.contains(&denied.to_owned()),
+            "openqa_jobs.{denied} exposed: {jobs:?}"
+        );
+    }
+    for kept in ["arch", "test", "failed", "limit", "offset"] {
+        assert!(
+            jobs.contains(&kept.to_owned()),
+            "openqa_jobs.{kept} missing: {jobs:?}"
+        );
+    }
 }
 
 /// Snapshot the synthesised surface — tool name + read_only flag — plus the job

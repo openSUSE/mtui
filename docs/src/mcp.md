@@ -56,7 +56,7 @@ Fine-tune with `[mcp] tools_allow` (add specific tools on top of the profile) an
 in [Configuration](configuration.md) for these and the resource caps
 (`max_output_bytes`, `max_active_jobs`, session budget, …).
 
-Agent clients should prefer **`core`**: the full surface (65 tools) is sent on
+Agent clients should prefer **`core`**: the full surface (64 tools) is sent on
 every request, while `core` (36 tools) covers the everyday flow — load →
 inspect → run/install → fill the report → approve/reject — without the host
 bookkeeping and server-tuning tail. If a workflow never lists the queue or
@@ -79,11 +79,19 @@ maintenance tools.
 ### Permanent deny-list
 
 Some commands are **never** synthesised into MCP tools, under every profile — this
-cannot be re-enabled with `[mcp] tools_allow`:
+cannot be re-enabled with `[mcp] tools_allow`. The permanent-deny criterion is
+stated once, beside the list it governs — see the `MCP_DENYLIST` docs in
+`crates/mtui-core/src/registry.rs` — and each entry below names the reason it
+meets it.
 
 - The interactive/REPL-only commands, which require a controlling terminal or
   have no headless meaning: `quit`, `exit`, `EOF`, `switch`, `shell`, `help`,
   `edit`.
+- `config_set`: it writes operator config — endpoints, credentials, identity,
+  timeouts — retargeting the infrastructure the session trusts, with no
+  operator-visible artifact. `config_show` stays exposed, so a client can still
+  verify the posture it operates under. A `config_set` call is refused as an
+  unknown tool.
 - The path-based transfer commands `get` and `put`, replaced by the
   hand-written in-band tools of the same names (#434): their synthesized forms
   exchanged server-local paths a remote client cannot read or create. (Only
@@ -153,7 +161,7 @@ set, and each template keeps its own test report and SSH host group.
 Every command that acts on a loaded template carries the shared `-T/--template`
 and `--all-templates` flags, so its synthesised tool exposes two optional
 parameters. The session-level tools — `load_template`, `unload`,
-`list_templates`, `list_refhosts`, `updates`, `config_show`/`config_set`,
+`list_templates`, `list_refhosts`, `updates`, `config_show`,
 `whoami`, `set_log_level` — expose neither, and `regenerate` exposes only
 `template`:
 
@@ -166,7 +174,7 @@ parameters. The session-level tools — `load_template`, `unload`,
 A client still sending `template`/`all_templates` to `unload`, `list_templates`,
 `list_refhosts`, `updates`, `whoami` or `set_log_level`, or `all_templates` to
 `regenerate`, has them ignored with a server-log warning until 26.5.
-`load_template` refuses them now; `config_show`/`config_set` never took them.
+`load_template` refuses them now; `config_show` never took them.
 
 Omitting both parameters resolves per command: a read/annotate tool
 (`list_*` other than the session-level ones above, `show_*`, `openqa_*`,
@@ -277,6 +285,11 @@ and nothing is written there.
 
 ## Command behaviour notes
 
+- The `openqa_overview` and `openqa_jobs` tools hide their operator override
+  flags (`--url-openqa`, `--url-dashboard-qam`, `--url-qam`, `--test-pattern`,
+  `--no-fetch`, #410): a headless client uses the operator's configured
+  endpoints, and a sent one is ignored with a server-log warning until 26.5.
+  The REPL keeps every flag.
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command
   could be built for a connected host (#396), so automation keying on
@@ -544,8 +557,8 @@ same arguments, and nothing that only exists afterwards. A **`terminal`**
 record carries no arguments at all.
 
 Host names on a record are **best-effort**: they are empty when the session is
-busy with an exclusive background job (a backgrounded `load_template`,
-`add_host` or `config_set`), because a record write never waits on the work it
+busy with an exclusive background job (a backgrounded `load_template` or
+`add_host`), because a record write never waits on the work it
 records; `rrids` are always recorded.
 
 **`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
@@ -608,11 +621,10 @@ Reading the log back: an `intent` that no later record points at means "started,
 outcome not recorded" — a crash or a kill, or a lost outcome write whose client
 was told in band (and which the OTLP stream may still hold).
 
-`config_set` never records the value for any attribute, so a future
-secret attribute cannot leak by omission; the record marks whether the attribute
-is a known secret. File-body payloads (`put` `content`/`content_b64`,
-`report_section_write`/`report_issue_write` `value`) never land
-verbatim either: each records `{bytes, sha256}` over the original string, so a
+No tool argument carrying a credential in bulk lands verbatim. File-body
+payloads (`put` `content`/`content_b64`,
+`report_section_write`/`report_issue_write` `value`) each record
+`{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
 persisted. Always fingerprinted, never inline, regardless of size — the same
 redaction feeds the file body, the OTLP body, and the size accounting, and no

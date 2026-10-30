@@ -40,12 +40,17 @@ pub(crate) fn is_clap_builtin(arg: &Arg) -> bool {
 
 /// Build the JSON-Schema `object` describing `cmd`'s callable inputs.
 ///
-/// Walks `cmd.get_arguments()`, skipping the auto `--help`/`--version` args, and
-/// emits one property per remaining arg plus a top-level `required` list. The
-/// result is the `inputSchema` for the tool `rmcp` synthesises from this
+/// Walks `cmd.get_arguments()`, skipping the auto `--help`/`--version` args,
+/// and emits one property per remaining arg plus a top-level `required` list.
+/// The result is the `inputSchema` for the tool `rmcp` synthesises from this
 /// command. `required` is omitted entirely when empty.
+///
+/// `denied` omits arg ids from both halves: the MCP per-arg deny
+/// (`deny::MCP_DENIED_ARGS`) hides operator overrides from a tool's schema
+/// while the REPL keeps every flag, so a denied required arg cannot leave a
+/// required-but-absent key behind.
 #[must_use]
-pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
+pub(crate) fn command_input_schema(cmd: &clap::Command, denied: &[&str]) -> Map<String, Value> {
     let mut properties = Map::new();
     let mut required: Vec<Value> = Vec::new();
 
@@ -55,6 +60,9 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
             continue;
         }
         let id = arg.get_id().as_str();
+        if denied.contains(&id) {
+            continue;
+        }
 
         let (schema, is_required) = arg_to_property(arg);
         properties.insert(id.to_owned(), schema);
@@ -380,7 +388,7 @@ mod tests {
             .get(command)
             .unwrap_or_else(|| panic!("command not registered: {command}"));
         let parser = cmd.configure(clap::Command::new(cmd.name()).no_binary_name(true));
-        command_input_schema(&parser)
+        command_input_schema(&parser, &[])
     }
 
     fn props(schema: &Map<String, Value>) -> &Map<String, Value> {
@@ -437,7 +445,7 @@ mod tests {
             .get("list_products")
             .expect("list_products is registered");
         let parser = mtui_core::command_parser(cmd.as_ref());
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         let all_templates = &props(&schema)["all_templates"];
         assert_eq!(all_templates["type"], "boolean");
         assert!(all_templates.get("default").is_none());
@@ -469,7 +477,7 @@ mod tests {
                 .action(ArgAction::SetFalse)
                 .help("disable color output"),
         );
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         let color = &props(&schema)["color"];
         assert_eq!(color["type"], "boolean");
         assert_eq!(color["default"], Value::Bool(true));
@@ -526,7 +534,7 @@ mod tests {
                 .num_args(2)
                 .help("two values"),
         );
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         let pair = &props(&schema)["pair"];
         assert_eq!(pair["type"], "array");
         assert_eq!(pair["minItems"], json!(2));
@@ -541,7 +549,7 @@ mod tests {
                 .num_args(1..)
                 .help("one or more"),
         );
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         let many = &props(&schema)["many"];
         assert_eq!(many["type"], "array");
         assert_eq!(many["minItems"], json!(1));
@@ -566,7 +574,7 @@ mod tests {
         let parser = clap::Command::new("probe")
             .no_binary_name(true)
             .arg(clap::Arg::new("note").long("note").help("free-form note"));
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         let note = &props(&schema)["note"];
         // Description hoisted to the outer nullable wrapper.
         assert_eq!(note["description"], "free-form note");
@@ -619,6 +627,7 @@ mod tests {
             &clap::Command::new("probe")
                 .no_binary_name(true)
                 .disable_help_flag(true),
+            &[],
         );
         assert_eq!(empty["additionalProperties"], Value::Bool(false));
     }
@@ -627,7 +636,7 @@ mod tests {
     fn help_and_version_args_are_skipped() {
         // The clap-injected `help` arg must never surface as a property.
         let parser = clap::Command::new("probe").arg(clap::Arg::new("real").long("real"));
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         assert!(!props(&schema).contains_key("help"));
         assert!(props(&schema).contains_key("real"));
     }
@@ -652,7 +661,7 @@ mod tests {
             .arg(clap::Arg::new("real").long("real"));
         parser.build();
         assert!(parser.get_arguments().any(is_clap_builtin));
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         assert!(!props(&schema).contains_key("help"));
         assert!(!props(&schema).contains_key("version"));
         assert!(props(&schema).contains_key("real"));
@@ -663,9 +672,28 @@ mod tests {
         let parser = clap::Command::new("probe")
             .no_binary_name(true)
             .disable_help_flag(true);
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         assert!(schema.get("required").is_none());
         assert!(props(&schema).is_empty());
+    }
+
+    #[test]
+    fn denied_ids_leave_properties_and_required_together() {
+        // A denied id vanishes from both halves: a required-but-absent key
+        // would fail every client-side validation of the schema.
+        let parser = clap::Command::new("probe").no_binary_name(true).arg(
+            clap::Arg::new("drop")
+                .long("drop")
+                .required(true)
+                .help("denied"),
+        );
+        let denied = command_input_schema(&parser, &["drop"]);
+        assert!(!props(&denied).contains_key("drop"));
+        assert!(!required(&denied).contains(&"drop"));
+        // Undenied, the same arg is a required property as clap declares.
+        let open = command_input_schema(&parser, &[]);
+        assert!(props(&open).contains_key("drop"));
+        assert!(required(&open).contains(&"drop"));
     }
 
     #[test]
@@ -683,7 +711,7 @@ mod tests {
                     },
                 )),
         );
-        let schema = command_input_schema(&parser);
+        let schema = command_input_schema(&parser, &[]);
         // Optional scalar with no default → nullable string alternative.
         let w = &props(&schema)["w"];
         let alts = w["anyOf"].as_array().unwrap();

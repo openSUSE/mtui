@@ -232,28 +232,6 @@ expression: pretty
     "input_schema": {
       "additionalProperties": false,
       "properties": {
-        "attribute": {
-          "description": "Attribute to set, one of the names `config show` lists (some are read-only)",
-          "type": "string"
-        },
-        "value": {
-          "description": "New value; booleans accept true/false, yes/no, on/off, 1/0",
-          "type": "string"
-        }
-      },
-      "required": [
-        "attribute",
-        "value"
-      ],
-      "type": "object"
-    },
-    "name": "config_set",
-    "read_only": false
-  },
-  {
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
         "attributes": {
           "description": "Attribute(s) to show; all when omitted",
           "items": {
@@ -864,14 +842,6 @@ expression: pretty
           "description": "only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'",
           "type": "string"
         },
-        "url_dashboard_qam": {
-          "description": "Override QAM Dashboard base URL (default: derived from config)",
-          "type": "string"
-        },
-        "url_openqa": {
-          "description": "Override openQA URL (default: config openqa_instance)",
-          "type": "string"
-        },
         "version": {
           "description": "only jobs with this VERSION setting, e.g. 15-SP6",
           "type": "string"
@@ -919,29 +889,8 @@ expression: pretty
           "description": "Skip the Aggregated Updates section",
           "type": "boolean"
         },
-        "no_fetch": {
-          "default": false,
-          "description": "(deferred) reuse cached overview; currently fetches anyway",
-          "type": "boolean"
-        },
         "template": {
           "description": "RRID of a single loaded template to act on",
-          "type": "string"
-        },
-        "test_pattern": {
-          "description": "Custom regex to extract test results from build-check logs",
-          "type": "string"
-        },
-        "url_dashboard_qam": {
-          "description": "Override QAM Dashboard base URL (default: derived from config)",
-          "type": "string"
-        },
-        "url_openqa": {
-          "description": "Override openQA URL (default: config openqa_instance)",
-          "type": "string"
-        },
-        "url_qam": {
-          "description": "Override QAM base URL (default: derived from config reports_url)",
           "type": "string"
         }
       },
