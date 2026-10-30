@@ -733,6 +733,93 @@ async fn principal_stays_null_for_wire_identity() {
     let _ = server_task.await;
 }
 
+/// #413: trace context on the wire (`params._meta`) reaches the audit
+/// record.
+///
+/// Sends a raw `tools/call` carrying `traceparent` in `params._meta` — the
+/// SEP-414 wire shape — and proves it lands on the record. This drives the
+/// real `call_tool`, so it pins the *source*: the service loop moves wire
+/// `_meta` into `context.meta` while the typed `request.meta` stays empty,
+/// and reading the latter leaves the key absent. Reverting `call_tool` to
+/// `request.meta` fails here.
+///
+/// A real `RequestContext` is not constructible in tests (`Peer::new` is
+/// rmcp-private and `RequestContext` is `#[non_exhaustive]` — the reason the
+/// unit tests drive the `dispatch_audited` seam directly), so the wire is the
+/// only way to reach `call_tool` with a context.
+#[tokio::test]
+async fn trace_context_flows_from_wire_meta_to_audit_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("audit.jsonl");
+    let mut config = Config::default();
+    config.session_user = "testuser".to_owned();
+    config.mcp_audit_log = Some(path.clone());
+    let (mut reader, mut write_half, server_task) = spawn_raw_server_with_config(config);
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "stdio-roundtrip", "version": "0" },
+            }
+        }),
+    )
+    .await;
+    let init = recv_line(&mut reader).await;
+    assert_eq!(
+        init["result"]["protocolVersion"], "2025-11-25",
+        "the server must negotiate the requested revision: {init}"
+    );
+    send_line(
+        &mut write_half,
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+
+    let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "whoami",
+                "arguments": {},
+                "_meta": { "traceparent": traceparent },
+            }
+        }),
+    )
+    .await;
+
+    let call = recv_line(&mut reader).await;
+    assert!(
+        call.get("error").is_none(),
+        "the traced call must succeed: {call}"
+    );
+
+    // The outcome record is awaited before the reply, so it is on disk now.
+    let text = std::fs::read_to_string(&path).expect("sink readable");
+    let mut lines = text.lines();
+    let record: serde_json::Value =
+        serde_json::from_str(lines.next().expect("one record")).expect("one object");
+    assert!(
+        lines.next().is_none(),
+        "whoami is read-only: one record, got: {text}"
+    );
+    assert_eq!(record["event"], "call");
+    assert_eq!(record["trace"], traceparent);
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}
+
 /// A test-only command whose body blocks until its gate is released.
 struct GatedProbe(Arc<tokio::sync::Notify>);
 

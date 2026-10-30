@@ -381,6 +381,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Audit records now carry the client's W3C `traceparent` when it arrives on
+  the wire (`params._meta`): the server read the typed params `meta`, which
+  stays empty on receive, so a wire `traceparent` never reached the record.
+  The record's `trace` field is now populated from the canonical
+  `context.meta` (#413).
 - Session-level `list_refhosts`/`updates` (and the other template-free
   commands) no longer hold the active template's entry for the call, so a
   concurrent call on that template no longer fails `template busy` (#666).

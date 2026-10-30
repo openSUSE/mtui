@@ -340,13 +340,11 @@ impl ServerHandler for McpServer {
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
         // W3C trace correlation (SEP-414): strict lowercase 55-byte
-        // traceparent via `_meta` when the client supplied one; absent (or
-        // invalid) otherwise. Documented as absent when unreachable.
-        let traceparent = request
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get_traceparent())
-            .map(str::to_owned);
+        // traceparent read from the canonical `context.meta` (the
+        // extensions-level `_meta` the service loop moves in; the typed
+        // params `meta` stays empty on receive, so `request.meta` would miss
+        // it). Absent (or invalid) otherwise.
+        let traceparent = context.meta.get_traceparent().map(str::to_owned);
 
         // Heartbeats keep a slow foreground call from timing the client out.
         // Only built when the client supplied a `progressToken`; job-control
