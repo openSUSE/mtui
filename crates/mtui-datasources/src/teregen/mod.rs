@@ -44,7 +44,7 @@ pub use document::{
     Precondition, TeregenV2, TeregenV2Error, TeregenV2WriteError, UploadOutcome,
     is_valid_artifact_name,
 };
-pub use tokens::{CachedToken, TokenStore};
+pub use tokens::{CachedToken, TokenStore, describe_age};
 
 /// The result of a regenerate-and-wait attempt (see
 /// [`TeReGen::regenerate_and_wait`]).
