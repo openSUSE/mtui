@@ -168,6 +168,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `report_file_read` pages one of them by line window. Files that exist only on
   the server cannot be read until teregen can serve them. **MCP schema note:**
   additive only — two new tools, both in the `core` profile.
+- `updates -F` now serves `Package-Streams`, `Issues` and `Comments`, read
+  live from OBS per shown row (after `--limit`/`--offset`, so narrow large
+  queues with `--limit`); non-OBS (SLFO) rows render `n/a`, a row OBS refuses
+  renders `unavailable` in all three (an unreadable comments document marks
+  `Comments` alone), all three are
+  terminal-sanitised, and comments are capped to the newest five by timestamp
+  per row with the omitted count marked; every other field still comes from
+  the TeReGen queue listing, and `--json` stays the raw rows (#415).
 
 - Audit records echo the client's W3C `tracestate` alongside `trace` when it
   validates (1..=512 bytes, `key=value` members with joined empties skipped

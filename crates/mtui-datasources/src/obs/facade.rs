@@ -91,6 +91,27 @@ impl Osc {
         }
     }
 
+    /// Fetch [`qam::RequestExtras`] for many requests with bounded
+    /// concurrency, in input order — the `updates -F` OBS fan-out, whose
+    /// caller has many RRIDs and no single [`RequestReviewID`] for the seam.
+    /// This is the production client-building path, so credential handling
+    /// cannot drift from the per-request seam.
+    ///
+    /// A credential failure is the outer [`Err`] (nothing was read); one
+    /// row's fetch failure is its own inner [`Err`], never a neighbour's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObsError::Config`] when the oscrc credentials cannot be read.
+    pub async fn extras_for_many(
+        config: &Config,
+        http: HttpClient,
+        rrids: &[RequestReviewID],
+    ) -> Result<Vec<Result<qam::RequestExtras, ObsError>>, ObsError> {
+        let (client, _) = build_client(config, &http)?;
+        Ok(qam::requests_extras(&client, rrids).await)
+    }
+
     /// Run a native OBS operation, folding any failure into a logged `Err`.
     ///
     /// Everything fallible — reading oscrc, building the client, the
