@@ -139,6 +139,18 @@ pub trait Command: Send + Sync {
         true
     }
 
+    /// Whether the fan-out driver treats retained removed-host logs as
+    /// ownership when skipping a template that owns none of the named `-t`
+    /// hosts.
+    ///
+    /// `false` by default: a removed host is gone, so a host-action command
+    /// must skip the template rather than fail it with `HostNotConnected`.
+    /// `show_log` answers removed hosts from their retained log and opts in,
+    /// so a detached-only template still dispatches for it.
+    fn includes_detached_hosts(&self) -> bool {
+        false
+    }
+
     /// Whether this command's body deliberately repoints the active template,
     /// so [`run`](Self::run) must keep the move instead of restoring the
     /// pre-dispatch pointer.
@@ -275,6 +287,15 @@ pub trait Command: Send + Sync {
         // would make that entry unreadable. Each iteration re-activates. This
         // sheds only *our* guard; a foreign holder is the `None` case below.
         session.release_active_guard();
+        // Retained-log ownership for commands that read detached logs (see
+        // [`Command::includes_detached_hosts`]): snapshotted once, under one
+        // lock, before the loop — never per host. Any other command skips a
+        // template owning none of the named hosts outright.
+        let detached = if self.includes_detached_hosts() {
+            session.detached_snapshot(&resolved)
+        } else {
+            std::collections::BTreeMap::new()
+        };
         let mut failures: Vec<(String, CommandError)> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
 
@@ -307,14 +328,19 @@ pub trait Command: Send + Sync {
             // `claim` and be refused, never be mistaken for one that simply
             // does not own the named host.
             if skippable_unowned && session.owns_none_of(rrid, &named) == Some(true) {
-                tracing::warn!(
-                    command = self.name(),
-                    rrid = %rrid,
-                    hosts = ?named,
-                    "skipped: none of the named hosts belong to this template"
-                );
-                skipped.push(rrid.clone());
-                continue;
+                let retained = detached
+                    .get(rrid)
+                    .is_some_and(|hosts| named.iter().any(|h| hosts.contains(h)));
+                if !retained {
+                    tracing::warn!(
+                        command = self.name(),
+                        rrid = %rrid,
+                        hosts = ?named,
+                        "skipped: none of the named hosts belong to this template"
+                    );
+                    skipped.push(rrid.clone());
+                    continue;
+                }
             }
             // A template that cannot be claimed is this fan-out's failure, not
             // the whole command's: bank it and keep going, like any other

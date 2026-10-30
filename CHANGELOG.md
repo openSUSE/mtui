@@ -10,6 +10,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `show_log` still answers for removed hosts: `remove_host` keeps their
+  verbatim command protocol in the session (marked `detached`) until
+  `unload` — or a reload of the same template — drops it with the template
+  (#632). The retained log only keeps `show_log` from skipping the template
+  in a `-t` fan-out; other commands skip a template holding just the log.
 - `openqa_jobs` filters by `--test <GLOB>`, `--flavor` and `--version`, pages
   with `--offset`/`--limit`, and shows each job's VERSION, FLAVOR and MACHINE.
   Over 100 rows the listing is capped by the shared row budget like `updates`

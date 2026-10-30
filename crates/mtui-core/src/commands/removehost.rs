@@ -87,6 +87,14 @@ impl Command for RemoveHost {
                 ));
             }
         }
+        // Keep the verbatim protocol before the targets drop: `show_log`
+        // answers removed hosts from here until `unload`. Nothing is loaded
+        // in the null-report group, so there is no lifecycle to end the
+        // retention — skip it there rather than leaking entries no `unload`
+        // can ever drop.
+        if let Some(rrid) = session.templates.active_rrid() {
+            session.retain_detached_logs(rrid, &doomed);
+        }
         drop(doomed);
         *session.targets_mut() = rest;
 
@@ -112,7 +120,9 @@ mod tests {
 
     use super::*;
     use crate::commands::testkit;
-    use crate::commands::testkit::{matches, session_with_hosts, session_with_targets};
+    use crate::commands::testkit::{
+        matches, session_host_no_template, session_with_hosts, session_with_targets,
+    };
 
     /// A target on a mock that stays *locally* active — the shape of a peer that
     /// vanished without closing its SSH link.
@@ -366,6 +376,98 @@ mod tests {
         assert_eq!(
             RemoveHost.complete(&session, "h", "remove_host h"),
             vec!["h1".to_owned()]
+        );
+    }
+
+    /// Removing from the null group (nothing loaded) retains nothing: with no
+    /// template lifecycle no `unload` could ever release the entry.
+    #[tokio::test]
+    async fn null_group_removal_retains_nothing() {
+        const RRID: &str = "SUSE:Maintenance:1:1";
+        let (mut session, buf) = session_host_no_template(&["h1"], "ok");
+        // Anti-vacuity: the log is non-empty, so the old code retained it.
+        session.targets_mut().run("true").await;
+        assert!(
+            !session
+                .targets()
+                .get("h1")
+                .expect("h1 attached")
+                .out()
+                .is_empty()
+        );
+
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert!(session.targets().is_empty());
+        assert!(
+            session.detached_hosts("").is_empty(),
+            "no entry may be retained under the empty RRID"
+        );
+        assert!(session.detached_hosts(RRID).is_empty());
+        assert!(buf.contents().contains("Removed h1"), "{}", buf.contents());
+    }
+
+    /// A second removal overwrites the retained log: the newest generation
+    /// wins, so `show_log` never resurrects a prior protocol.
+    #[tokio::test]
+    async fn second_remove_replaces_retained_log() {
+        use mtui_types::hostlog::CommandLog;
+
+        const RRID: &str = "SUSE:Maintenance:1:1";
+        let (mut session, _buf) = crate::commands::testkit::session_scripting_multi(
+            RRID,
+            "h1",
+            &[("cmd-one", "one-out\n"), ("cmd-two", "two-out\n")],
+        );
+        session.targets_mut().run("cmd-one").await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts(RRID), ["h1"]);
+
+        session.targets_mut().add(Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(
+                MockConnection::new("h1")
+                    .with_response("cmd-two", CommandLog::new("cmd-two", "two-out\n", "", 0, 0)),
+            ),
+        ));
+        session.targets_mut().run("cmd-two").await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+
+        let (_, entries) = session
+            .detached_window(RRID, "h1", 0, usize::MAX)
+            .expect("retained log survives the second removal");
+        let cmds: Vec<&str> = entries.iter().map(|(c, _, _, _)| c.as_str()).collect();
+        assert_eq!(cmds, ["cmd-two"], "the newest generation wins");
+    }
+
+    /// Removing a re-added host with an empty log drops the retained entry
+    /// instead of keeping the prior generation's protocol.
+    #[tokio::test]
+    async fn empty_second_remove_drops_retained_log() {
+        const RRID: &str = "SUSE:Maintenance:1:1";
+        let (mut session, _buf) = crate::commands::testkit::session_scripting_multi(
+            RRID,
+            "h1",
+            &[("cmd-one", "one-out\n")],
+        );
+        session.targets_mut().run("cmd-one").await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts(RRID), ["h1"]);
+
+        session.targets_mut().add(Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1")),
+        ));
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert!(
+            session.detached_hosts(RRID).is_empty(),
+            "an empty second removal must drop the stale entry"
         );
     }
 }

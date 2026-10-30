@@ -272,7 +272,7 @@ fn roll_entry(name: &str, exit: Option<i16>) -> String {
 mod tests {
     use super::*;
     use crate::commands::testkit::{
-        empty_session, matches, session_scripting_multi, session_with_hosts,
+        empty_session, fake_report, matches, session_scripting_multi, session_with_hosts,
     };
 
     #[test]
@@ -1082,5 +1082,35 @@ mod tests {
         let args = matches(&Run, &["true"]);
         Run.call(&mut session, &args).await.unwrap();
         insta::assert_snapshot!(buf.contents());
+    }
+
+    /// A template holding `-t h1` only as a retained removed-host log is
+    /// skipped by a host-action fan-out, not failed with `HostNotConnected`.
+    ///
+    /// Through `run()`, not `call()`: the skip lives in the fan-out driver,
+    /// and `show_log`'s detached-host rule must not leak into it.
+    #[tokio::test]
+    async fn removed_host_template_skipped_in_named_fanout() {
+        use crate::commands::removehost::RemoveHost;
+
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+        let (mut session, _buf) =
+            session_scripting_multi("SUSE:Maintenance:1:1", "h1", &[("c1", "one\n")]);
+        session.targets_mut().run("c1").await;
+        session.templates.add(fake_report(OTHER, &["h1"], "ok"));
+        assert!(session.activate(OTHER).is_active());
+        session.targets_mut().run("c1").await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        // Anti-vacuity: without a retained log the skip needs no limit.
+        assert_eq!(session.detached_hosts(OTHER), ["h1"]);
+
+        let parser = crate::engine::command_parser(&Run);
+        let args = parser
+            .try_get_matches_from(["-t", "h1", "--all-templates", "c1"])
+            .expect("argv should parse");
+        Run.run(&mut session, &args)
+            .await
+            .expect("a template holding h1 only as a retained log must be skipped");
     }
 }

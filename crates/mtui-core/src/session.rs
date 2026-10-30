@@ -8,7 +8,7 @@
 //! the active report, so command bodies keep a scalar surface as the registry
 //! grows past one entry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,7 @@ use mtui_hosts::{
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
+use mtui_types::hostlog::HostLog;
 use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -44,6 +45,13 @@ type HttpClientCache = Arc<Mutex<Option<(VerifyPolicy, HttpClient)>>>;
 /// Cache slot for [`Session::openqa_transport`], shared across
 /// [`fork_for_call`](Session::fork_for_call).
 type OpenqaTransportCache = Arc<Mutex<Option<(VerifyPolicy, reqwest::Client)>>>;
+
+/// Command logs kept after their host was removed, keyed by
+/// `(rrid, hostname)`.
+type DetachedLogs = BTreeMap<(String, String), Arc<HostLog>>;
+
+/// One command-log entry mapped for display: `(command, stdout, stderr, exit)`.
+pub(crate) type LogEntry = (String, String, String, i32);
 
 /// The explicitly-passed state every command operates on.
 pub struct Session {
@@ -148,6 +156,16 @@ pub struct Session {
     /// [`http_client`](Self::http_client) so back-to-back openQA connectors
     /// (`reload_openqa`'s primary + baremetal instances) share one pool.
     openqa_transport: OpenqaTransportCache,
+    /// Command logs kept after their host was removed, keyed by
+    /// `(rrid, hostname)`, so `show_log` still answers until `unload`.
+    ///
+    /// A `Target` owns the only verbatim record of what ran on it; dropping
+    /// the target (via `remove_host`) must not destroy the session's copy.
+    /// Shared with every [`fork_for_call`](Self::fork_for_call) like the
+    /// transports, so headless reads see removals made on the canonical
+    /// session. Entries are short-lived (bounded by hosts × commands) and
+    /// dropped with their template by [`forget_detached_logs`](Self::forget_detached_logs).
+    detached_logs: Arc<Mutex<DetachedLogs>>,
     /// The registry through which every target in this process sees the
     /// operation locks its siblings hold.
     ///
@@ -386,6 +404,7 @@ impl Session {
             cancel: CancellationToken::new(),
             http_client: Arc::new(Mutex::new(None)),
             openqa_transport: Arc::new(Mutex::new(None)),
+            detached_logs: Arc::new(Mutex::new(BTreeMap::new())),
             op_lock_holders: OpLockHolders::default(),
             #[cfg(test)]
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -414,6 +433,7 @@ impl Session {
             cancel: CancellationToken::new(),
             http_client: Arc::new(Mutex::new(None)),
             openqa_transport: Arc::new(Mutex::new(None)),
+            detached_logs: Arc::new(Mutex::new(BTreeMap::new())),
             op_lock_holders: OpLockHolders::default(),
             #[cfg(test)]
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -477,6 +497,7 @@ impl Session {
             // Shared with the parent, not reset — see the doc comment above.
             http_client: Arc::clone(&self.http_client),
             openqa_transport: Arc::clone(&self.openqa_transport),
+            detached_logs: Arc::clone(&self.detached_logs),
             op_lock_holders: self.op_lock_holders.clone(),
             #[cfg(test)]
             http_builds: Arc::clone(&self.http_builds),
@@ -868,6 +889,12 @@ impl Session {
     /// the entry is held elsewhere. The guard-aware counterpart of
     /// [`TemplateRegistry::owns_none_of`](crate::TemplateRegistry::owns_none_of),
     /// exactly like [`is_hostless`](Self::is_hostless) above.
+    ///
+    /// Live hosts only: a removed host is gone even while its log is retained
+    /// for [`show_log`](crate::commands::ShowLog). Commands reading detached
+    /// logs consult [`detached_snapshot`](Self::detached_snapshot) through
+    /// their [`Command::includes_detached_hosts`](crate::Command::includes_detached_hosts)
+    /// opt-in instead, so the fan-out skip stays a live-membership test.
     #[must_use]
     pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
         if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
@@ -879,6 +906,26 @@ impl Session {
         } else {
             self.templates.owns_none_of(rrid, named)
         }
+    }
+
+    /// Retained-log hosts per RRID in `rrids`, under a single lock.
+    ///
+    /// The fan-out driver's one-shot ownership snapshot for commands that read
+    /// detached logs: taken before the template loop so a `-t` fan-out pays
+    /// one lock, not one per host.
+    #[must_use]
+    pub(crate) fn detached_snapshot(&self, rrids: &[String]) -> BTreeMap<String, BTreeSet<String>> {
+        let logs = self.logs_or_recovered();
+        let mut snapshot: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (rrid, host) in logs.keys() {
+            if rrids.iter().any(|r| r == rrid) {
+                snapshot
+                    .entry(rrid.clone())
+                    .or_default()
+                    .insert(host.clone());
+            }
+        }
+        snapshot
     }
 
     /// A `list_templates` row for `rrid`, or `None` if it is not loaded.
@@ -1026,6 +1073,95 @@ impl Session {
         self.restore_targets(selected);
     }
 
+    /// Keeps the command logs of `group`'s hosts under `rrid` after the group
+    /// is dropped, so `show_log` still answers for removed hosts.
+    ///
+    /// Called with the doomed group before it drops; entries live until
+    /// [`forget_detached_logs`](Self::forget_detached_logs) drops their
+    /// template's. An empty log drops its key instead of retaining, so a
+    /// remove → re-add → remove cycle cannot resurrect a prior generation's
+    /// protocol; a non-empty second removal overwrites (the newest generation
+    /// wins). Snapshots are built before taking the lock; the lock is
+    /// never held across an await.
+    pub(crate) fn retain_detached_logs(&self, rrid: &str, group: &HostsGroup) {
+        let mut keep = Vec::new();
+        let mut drop_keys = Vec::new();
+        for target in group.targets() {
+            let name = target.hostname().to_owned();
+            if target.out().is_empty() {
+                drop_keys.push(name);
+            } else {
+                keep.push((name, Arc::new(target.out().clone())));
+            }
+        }
+        let mut logs = self.logs_or_recovered();
+        for (name, log) in keep {
+            logs.insert((rrid.to_owned(), name), log);
+        }
+        for name in drop_keys {
+            logs.remove(&(rrid.to_owned(), name));
+        }
+    }
+
+    /// Names of removed hosts with a retained log under `rrid`, in map order
+    /// (already sorted and unique by key).
+    #[must_use]
+    pub(crate) fn detached_hosts(&self, rrid: &str) -> Vec<String> {
+        self.logs_or_recovered()
+            .keys()
+            .filter(|(r, _)| r == rrid)
+            .map(|(_, h)| h.clone())
+            .collect()
+    }
+
+    /// The retained log of removed host `host` under `rrid`, windowed to
+    /// `[start, end)` with the pre-window total — so `--limit 0` clones no
+    /// entries, like the live path. An inverted window reads as empty.
+    /// Only the shared `Arc` crosses the lock; slicing and mapping happen
+    /// outside it.
+    #[must_use]
+    pub(crate) fn detached_window(
+        &self,
+        rrid: &str,
+        host: &str,
+        start: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<LogEntry>)> {
+        let log = self
+            .logs_or_recovered()
+            .get(&(rrid.to_owned(), host.to_owned()))
+            .cloned()?;
+        let total = log.len();
+        let end = end.min(total);
+        let start = start.min(total).min(end);
+        let entries = log[start..end]
+            .iter()
+            .map(|c| {
+                (
+                    c.command.clone(),
+                    c.stdout.clone(),
+                    c.stderr.clone(),
+                    i32::from(c.exitcode),
+                )
+            })
+            .collect();
+        Some((total, entries))
+    }
+
+    /// Drops every retained log under `rrid` (after `unload`, or when the
+    /// same RRID reloads and starts a fresh generation).
+    pub(crate) fn forget_detached_logs(&self, rrid: &str) {
+        self.logs_or_recovered().retain(|(r, _), _| r != rrid);
+    }
+
+    /// The detached-log map, recovering (like the adjacent session caches)
+    /// instead of panicking on a poisoned mutex.
+    fn logs_or_recovered(&self) -> std::sync::MutexGuard<'_, DetachedLogs> {
+        self.detached_logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Loads a template into the registry and, when requested, connects its
     /// reference hosts.
     ///
@@ -1108,6 +1244,9 @@ impl Session {
             tracing::warn!("still disconnecting from {host} while reloading");
         }
         if !rrid.is_empty() {
+            // A reload starts a fresh generation: its retained logs would
+            // resurface as detached for the new live group.
+            self.forget_detached_logs(&rrid);
             self.templates.set_active(&rrid);
         }
         // Restores the guard released above, onto the freshly-loaded template or

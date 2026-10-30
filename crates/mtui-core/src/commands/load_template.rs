@@ -418,6 +418,48 @@ mod tests {
         );
     }
 
+    /// Reloading an RRID starts a fresh generation: the retained removed-host
+    /// logs of the earlier load are dropped with it, not resurfaced as
+    /// detached for the new live group.
+    #[tokio::test]
+    async fn reload_drops_retained_logs() {
+        use crate::commands::removehost::RemoveHost;
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::TargetState;
+        use mtui_types::hostlog::CommandLog;
+
+        let (mut session, _buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:Maintenance:1:1";
+        session.config.template_dir = tmp.path().to_path_buf();
+        let _teregen = serving(&mut session, rrid, "maintenance").await;
+
+        let args = matches(&LoadTemplate, &["-k", rrid]);
+        LoadTemplate.call(&mut session, &args).await.unwrap();
+        session.targets_mut().add(Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1").with_default(CommandLog::new(
+                "",
+                "one-out\n",
+                "",
+                0,
+                0,
+            ))),
+        ));
+        session.targets_mut().run("cmd-one").await;
+        let args = matches(&RemoveHost, &["-t", "h1"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.detached_hosts(rrid), ["h1"]);
+
+        let args = matches(&LoadTemplate, &["-k", rrid]);
+        LoadTemplate.call(&mut session, &args).await.unwrap();
+        assert!(
+            session.detached_hosts(rrid).is_empty(),
+            "a reload must not keep the earlier load's retained logs"
+        );
+    }
+
     #[test]
     fn complete_offers_prefixes_and_flags() {
         let (session, _buf) = empty_session();

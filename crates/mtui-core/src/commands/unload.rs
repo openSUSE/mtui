@@ -91,6 +91,7 @@ impl Command for Unload {
         // closes the hosts (bounded) before the entry drops. As in `quit`,
         // teardown failures are logged and unload still succeeds.
         let removed = session.templates.remove(&rrid).await;
+        session.forget_detached_logs(&rrid);
         for (host, err) in &removed.failed {
             tracing::warn!("failed to disconnect from {host}: {err}");
         }
