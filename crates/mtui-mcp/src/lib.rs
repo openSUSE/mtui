@@ -68,4 +68,4 @@ pub use transfer_tools::{dispatch_transfer_tool, transfer_tool_descriptors};
 #[cfg(feature = "mcp")]
 mod runner;
 #[cfg(feature = "mcp")]
-pub use runner::run;
+pub use runner::{http_app, run};

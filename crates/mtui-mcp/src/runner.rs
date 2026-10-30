@@ -168,8 +168,7 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let otel = init_otel_exporter(&config).await;
     let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
     // Captured before `config` moves into the registry (usize is Copy).
-    let body_limit = resolve_body_limit(config.mcp_max_request_bytes);
-    let rmcp_body_cap = rmcp_body_limit(config.mcp_max_request_bytes);
+    let max_request_bytes = config.mcp_max_request_bytes;
     tracing::info!(
         cap = config.mcp_session_cap,
         idle_timeout_s = config.mcp_session_idle_timeout,
@@ -186,44 +185,7 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let sweeper_cancel = CancellationToken::new();
     let sweeper = sessions.spawn_sweeper(sweeper_cancel.clone());
 
-    // Pin rmcp's session keep-alive (default 300s) to our idle-TTL: its default
-    // is far shorter than the sweeper's horizon and would tear a quiet http
-    // session down mid-conversation. The default 15s SSE ping cadence is kept.
-    let factory_sessions = sessions.clone();
-    // `LocalSessionManager` / `SessionConfig` are `#[non_exhaustive]`, so build
-    // from their defaults and set only the field we override.
-    let mut session_config = SessionConfig::default();
-    session_config.keep_alive = keep_alive;
-    let mut session_manager = LocalSessionManager::default();
-    session_manager.session_config = session_config;
-    // `legacy_session_mode` is already rmcp's default; set explicitly so a future
-    // default flip cannot silently make mtui stateless (per-client http isolation
-    // depends on that session lifecycle, which is why http declines the
-    // 2026-07-28 protocol revision — see `SUPPORTED_PROTOCOL_VERSIONS_HTTP` in
-    // `server.rs`). `max_request_body_bytes` governs rmcp's own pre-session body
-    // buffering, below the `body_layer` below.
-    let service = StreamableHttpService::new(
-        move || factory_sessions.try_make_server(),
-        Arc::new(session_manager),
-        StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(true)
-            .with_max_request_body_bytes(rmcp_body_cap),
-    );
-
-    // Cap the inbound body before rmcp buffers it: an unauthenticated
-    // pre-session request must not be bufferable until memory exhaustion.
-    tracing::info!(
-        request_body_limit =
-            body_limit.map_or_else(|| "disabled".to_owned(), |n| format!("{n} bytes")),
-        "mtui-mcp: http request-body limit"
-    );
-    let body_layer = match body_limit {
-        Some(n) => axum::extract::DefaultBodyLimit::max(n),
-        None => axum::extract::DefaultBodyLimit::disable(),
-    };
-    let app = axum::Router::new()
-        .fallback_service(service)
-        .layer(body_layer);
+    let app = http_app(sessions.clone(), keep_alive, max_request_bytes);
     let addr = format!("{}:{}", args.host, args.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "mtui-mcp: serving on http");
@@ -245,6 +207,61 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
         otel.shutdown().await;
     }
     Ok(())
+}
+
+/// The production streamable-HTTP app: rmcp's [`StreamableHttpService`] mounted
+/// as an `axum` fallback behind the request-body limit layer.
+///
+/// Shared by `serve_http` and the `http_isolation` integration
+/// test, so the posture that test pins cannot drift from what production mounts:
+/// flipping `legacy_session_mode` here stops the legacy handshake minting a
+/// session, and widening `SUPPORTED_PROTOCOL_VERSIONS_HTTP` in `server.rs` turns
+/// the refused stateless call into a dispatched one — either reddens that test.
+#[doc(hidden)]
+pub fn http_app(
+    sessions: SessionRegistry,
+    keep_alive: Option<Duration>,
+    max_request_bytes: usize,
+) -> axum::Router {
+    // Pin rmcp's session keep-alive (default 300s) to our idle-TTL: its default
+    // is far shorter than the sweeper's horizon and would tear a quiet http
+    // session down mid-conversation. The default 15s SSE ping cadence is kept.
+    let factory_sessions = sessions.clone();
+    // `LocalSessionManager` / `SessionConfig` are `#[non_exhaustive]`, so build
+    // from their defaults and set only the field we override.
+    let mut session_config = SessionConfig::default();
+    session_config.keep_alive = keep_alive;
+    let mut session_manager = LocalSessionManager::default();
+    session_manager.session_config = session_config;
+    // `legacy_session_mode` is already rmcp's default; set explicitly so a future
+    // default flip cannot silently make mtui stateless (per-client http isolation
+    // depends on that session lifecycle, which is why http declines the
+    // 2026-07-28 protocol revision — see `SUPPORTED_PROTOCOL_VERSIONS_HTTP` in
+    // `server.rs`). `max_request_body_bytes` governs rmcp's own pre-session body
+    // buffering, below the `body_layer` below.
+    let service = StreamableHttpService::new(
+        move || factory_sessions.try_make_server(),
+        Arc::new(session_manager),
+        StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(true)
+            .with_max_request_body_bytes(rmcp_body_limit(max_request_bytes)),
+    );
+
+    // Cap the inbound body before rmcp buffers it: an unauthenticated
+    // pre-session request must not be bufferable until memory exhaustion.
+    let body_limit = resolve_body_limit(max_request_bytes);
+    tracing::info!(
+        request_body_limit =
+            body_limit.map_or_else(|| "disabled".to_owned(), |n| format!("{n} bytes")),
+        "mtui-mcp: http request-body limit"
+    );
+    let body_layer = match body_limit {
+        Some(n) => axum::extract::DefaultBodyLimit::max(n),
+        None => axum::extract::DefaultBodyLimit::disable(),
+    };
+    axum::Router::new()
+        .fallback_service(service)
+        .layer(body_layer)
 }
 
 /// The rmcp session keep-alive to pin from `idle_timeout_s`.
