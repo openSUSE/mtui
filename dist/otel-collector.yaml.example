@@ -1,0 +1,77 @@
+# Example OpenTelemetry Collector configuration for shipping mtui-mcp's
+# audit log off-host. Tested with otelcol-contrib 0.164.0.
+#
+# The audit sink ([mcp] audit_log) is versioned JSONL, one object per line,
+# mode 0600. This tails it with the contrib filelog receiver, parses each
+# line to attributes (queryable fields, not one opaque message blob), and
+# forwards through batch to either the debug exporter (try it first) or an
+# OTLP/HTTP backend (uncomment the endpoint once the debug output looks
+# right). See docs/src/mcp.md "Shipping the audit log" for rotation,
+# permissions, sensitivity, restart-gap, and trace-correlation notes.
+#
+# Run against a copy of this file with your audit path filled in:
+#
+#   otelcol-contrib --config otel-collector.yaml
+
+receivers:
+  filelog/audit:
+    # The live sink. Add "<path>.1" … "<path>.5" globs here too if the
+    # rotated generations should ship as well.
+    include:
+      - /var/log/mtui/audit.jsonl
+    # A first start tails only new lines instead of re-shipping history;
+    # restarts resume from the file_storage checkpoint below (no re-ship,
+    # no gap). Without storage: the offsets live in memory only, so a
+    # restart would skip every line written while the collector was down.
+    start_at: end
+    storage: file_storage
+    # Rotation-friendly: mtui rotates by rename (<path> -> <path>.1 …),
+    # never by truncate/copytruncate. The receiver tracks each file by
+    # fingerprint across the rename; do not fight it with an operator-side
+    # rotation of your own.
+    fingerprint_size: 1kb
+    # One JSON object per line -> record fields as log attributes.
+    operators:
+      - type: json_parser
+        parse_from: body
+        parse_to: attributes
+
+processors:
+  batch:
+
+exporters:
+  # Try this first: prints one structured event per JSONL line to stdout.
+  debug:
+    verbosity: detailed
+  # Then point at a real backend: uncomment, fill in your endpoint/token,
+  # and switch the pipeline below to [otlphttp/audit]. Left commented so
+  # this file runs as-is: an uncommented stub with unset ${env:…}
+  # placeholders fails collector config validation at startup, even when
+  # the active pipeline only uses debug.
+  # otlphttp/audit:
+  #   endpoint: "${env:OTEL_BACKEND_ENDPOINT}" # e.g. https://logs.example.com:4318
+  #   headers:
+  #     authorization: "${env:OTEL_BACKEND_TOKEN}" # e.g. "Bearer …"
+  #   retry_on_failure:
+  #     enabled: true
+
+extensions:
+  # Checkpoint store for the filelog receiver above. An explicit state
+  # directory: ${env:HOME} is unset for many service units (systemd system
+  # services, some containers), where it would resolve under /. Create this
+  # directory owned by the collector user (systemd: StateDirectory=otelcol)
+  # and run the collector as the serving user, typically a same-user sidecar.
+  # Treat it with the same care as the sink — it records how far the audit
+  # trail has shipped.
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs/audit:
+      receivers: [filelog/audit]
+      processors: [batch]
+      # Start with [debug]; switch to [otlphttp/audit] for a real backend.
+      exporters: [debug]
