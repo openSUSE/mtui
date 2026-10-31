@@ -12,6 +12,10 @@
 !/Cargo.lock
 !/crates/
 !/xtask/
+# Root Containerfile builder stage: the binary sources plus every workspace
+# member manifest (see Containerfile). Everything else stays out — in
+# particular no .git/, no target/, and never local credentials.
+!/src/
 !/fuzz/
 !/fuzz/Cargo.toml
 !/fuzz/fuzz_targets/

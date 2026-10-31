@@ -112,6 +112,98 @@ completions, and man pages into the standard system paths. It builds two package
 - **`mtui-mcp`** — the MCP server, its completions and man page. Installable on
   its own; it reads the same config.
 
+## Container image
+
+Every push to `main` and every release tag also ships a multi-arch
+(`linux/amd64`, `linux/arm64`) image with both binaries, built by
+`.github/workflows/container.yml`:
+
+- `ghcr.io/opensuse/mtui:latest` (GA releases), `:<X.Y.Z>`, `:<X.Y>`,
+  `:edge` (main branch). Pre-release tags (`-rcN`) publish only their exact
+  version, never `latest`.
+- The same tags are mirrored to `registry.opensuse.org/opensuse/mtui` once the
+  mirror credentials are wired up (see the workflow).
+
+The image runs as a non-root user (`mtui`, uid 10001) on the openSUSE base with
+an SSH client for debugging; mtui itself speaks SSH through its own stack, never
+through that binary. Unlike the static musl release binaries, the image binaries
+are dynamically linked against the base image's glibc. No credentials are baked
+in: mount yours read-only from the host. Stage copies owned by the container
+user (uid 10001) — a host-only `~/.ssh` at mode 700 is invisible inside, so copy
+first. Never mount the live `~/.ssh` with `:Z`: the private relabel can lock a
+confined host `sshd` out of `authorized_keys`. The copies below use the shared
+`:z` label instead. `~/.cache/mtui-container` holds secret material (plaintext
+OBS password, private keys): the recipe scopes it to uid 10001, never
+group/other-readable.
+
+```sh
+# Stage copies owned by the container user (once; re-run after rotation).
+mkdir -p ~/.cache/mtui-container
+cp -p ~/.oscrc ~/.cache/mtui-container/oscrc
+cp -rp ~/.ssh ~/.cache/mtui-container/ssh
+podman unshare chown -R 10001:10001 ~/.cache/mtui-container
+podman unshare chmod -R u+rwX,go-rwx ~/.cache/mtui-container
+```
+
+To refresh after rotation, remove the container-owned tree from inside the
+user namespace first, then re-run the recipe: `podman unshare rm -rf
+~/.cache/mtui-container`.
+
+A passphrase-protected key needs the agent — mtui tries `SSH_AUTH_SOCK` first,
+then identity files, and never prompts for a passphrase. Forward yours with two
+extra flags on any example below:
+
+```sh
+-v "$SSH_AUTH_SOCK:/ssh-agent.sock:ro" -e SSH_AUTH_SOCK=/ssh-agent.sock
+```
+
+Note `:ro` does not restrict what the container can do with the agent: anything
+reaching the socket can use every loaded key, so forward an agent holding only
+the keys mtui needs.
+
+`$HOME` is `/home/mtui`, and the default `template_dir` (`.`) and the history
+file resolve under it, so back it with a writable volume — that same volume
+makes the container read-only-rootfs friendly:
+
+```sh
+# REPL (needs a TTY for `shell`/`edit`).
+podman run -it --rm \
+  -v mtui-home:/home/mtui \
+  -v "$HOME/.cache/mtui-container/oscrc:/home/mtui/.oscrc:ro,z" \
+  -v "$HOME/.cache/mtui-container/ssh:/home/mtui/.ssh:ro,z" \
+  -v "$HOME/.config/mtui/mtui.toml:/home/mtui/.config/mtui/mtui.toml:ro,z" \
+  ghcr.io/opensuse/mtui:latest mtui
+```
+
+With `--read-only`, add only the `mtui-home` volume (writable) and keep the
+credential mounts as above:
+
+```sh
+podman run -it --rm --read-only \
+  -v mtui-home:/home/mtui \
+  -v "$HOME/.cache/mtui-container/oscrc:/home/mtui/.oscrc:ro,z" \
+  -v "$HOME/.cache/mtui-container/ssh:/home/mtui/.ssh:ro,z" \
+  ghcr.io/opensuse/mtui:latest mtui
+```
+
+Serve the MCP tools over HTTP (one process, many isolated clients):
+
+```sh
+podman run -d --name mtui-mcp -p 127.0.0.1:8000:8000 \
+  -v mtui-home:/home/mtui \
+  -v "$HOME/.cache/mtui-container/oscrc:/home/mtui/.oscrc:ro,z" \
+  -v "$HOME/.cache/mtui-container/ssh:/home/mtui/.ssh:ro,z" \
+  ghcr.io/opensuse/mtui:latest \
+  mtui-mcp --transport http --host 0.0.0.0 --port 8000
+```
+
+`--host 0.0.0.0` binds all container interfaces so the published port reaches
+the server; `-p 127.0.0.1:` keeps it off the LAN. Reach it through localhost:
+rmcp's DNS-rebinding guard compares the request's `Host` header against its
+allowlist (`localhost`, `127.0.0.1`, `::1` by default), not the client's
+address, so any LAN client sending `Host: localhost` would pass it. Commands on
+the [MCP deny-list](mcp.md#permanent-deny-list) are not MCP tools.
+
 ## Cutting a release (maintainers)
 
 The **supported** openSUSE RPM is built and published from the Build Service, not
