@@ -69,6 +69,7 @@ mod showlog;
 mod export;
 mod list_refhosts;
 mod load_template;
+mod teregen_login;
 
 // REPL-only command-surface additions.
 mod edit;
@@ -131,6 +132,7 @@ pub use sftpget::SftpGet;
 pub use sftpput::SftpPut;
 pub use showdiff::{AnalyzeDiff, ShowDiff};
 pub use showlog::ShowLog;
+pub use teregen_login::TeregenLogin;
 
 /// Shared test scaffolding: a [`Session`](crate::Session) whose active report
 /// carries scripted [`MockConnection`](mtui_hosts::MockConnection) hosts and a

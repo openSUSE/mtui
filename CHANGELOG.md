@@ -10,6 +10,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `whoami` also prints the oscrc principal and signing-key fingerprint that
+  OBS review actions and teregen v2 writes authenticate as (secret-free on
+  both surfaces); at the REPL it adds the key path, oscrc source, teregen
+  base and token-cache age. A new REPL-only `teregen_login` command forces a
+  fresh mint and prints the principal, key, base, verdict and previous-token
+  age, so a broken login is found without writing a report (it writes only
+  the token cache) (#731, #732).
 - `openqa_jobs` filters by `--test <GLOB>`, `--flavor` and `--version`, pages
   with `--offset`/`--limit`, and shows each job's VERSION, FLAVOR and MACHINE.
   Over 100 rows the listing is capped by the shared row budget like `updates`
@@ -319,6 +326,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   writes. The document is fetched fresh on every call; a missing, stale or
   unreadable document refuses and names the cause. `assign` still needs the
   text log to exist.
+- `whoami` and `teregen_login` print the SHA256 fingerprint for a file-backed
+  `sshkey` (from `<path>.pub` or the public half of an unencrypted private
+  key) instead of `file key` (#731).
+- `teregen_login` is REPL-only (MCP deny-list): every call spends one of ~20
+  challenges/60s for the principal, so a looping client would lock the tester
+  out of `commit`/`approve` (#732).
 
 ### Deprecated
 

@@ -101,6 +101,7 @@ pub fn render_cli_reference() -> String {
          shared template flags `-T/--template <RRID>` and `--all-templates` \
          (session-level commands — `load_template`, `unload`, `switch`, \
          `list_templates`, `list_refhosts`, `updates`, `config`, `whoami`, \
+         `teregen_login`, \
          `set_log_level`, `help`, `quit` (`exit`/`EOF`) — take neither, \
          `regenerate` only `-T`); \
          the cross-command behaviour behind them (fan-out, host-pool selection, \

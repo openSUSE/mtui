@@ -270,6 +270,19 @@ impl<A: AgentKeys> TeregenAuth<A> {
         self.signer.key_descriptor()
     }
 
+    /// Challenge + verify + cache a fresh token unconditionally, bypassing
+    /// any cached token. The diagnostic entry point for `teregen_login`;
+    /// prefer [`token`](Self::token) for normal calls. The mint overwrites
+    /// the cache on success, so a failed mint leaves the previous entry
+    /// alone instead of deleting it first.
+    ///
+    /// # Errors
+    ///
+    /// See [`challenge`](Self::challenge) / [`verify`](Self::verify).
+    pub async fn refresh(&self) -> Result<String, TeregenAuthError> {
+        self.mint().await
+    }
+
     /// The fingerprint of the key that last signed a verify request, falling
     /// back to the configured locator when nothing has signed yet. Every
     /// `401` below follows a signature, so the fallback is defense-in-depth.

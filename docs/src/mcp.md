@@ -90,6 +90,9 @@ cannot be re-enabled with `[mcp] tools_allow`:
   the synthesized command forms are permanently gone; the replacement
   hand-written `get`/`put` are ordinary tools — present in `full`, restorable
   under `core` via `tools_allow`, removable via `tools_deny`.)
+- `teregen_login`: every call spends one of ~20 challenges/60s for the
+  principal, so a looping client would lock the tester out of `commit` and
+  `approve`. REPL-only; the REPL operator runs the check deliberately.
 
 Local process execution and terminal launching are not on this list because they
 are not in mtui at all. The former `lrun` (run a command as the local process
@@ -113,6 +116,11 @@ name the attribute(s) explicitly — as are the operator-local values
 path; its `true`/`false` form is shown). Values `config show` never lists
 (the oscrc location, the OBS API URL, lock/history paths) reach neither surface
 through this tool.
+
+`whoami` prints the oscrc principal and signing-key fingerprint on both
+surfaces by design: it is the remote auth identity the server sees (not
+operator-local paths), and a refused `assign` or `commit` is triaged against
+it. Key/oscrc/store file paths stay REPL-only.
 
 ## Session state and isolation
 
