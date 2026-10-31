@@ -50,6 +50,10 @@ tokio.workspace = true
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).
 tempfile = "3"
+# release_plz_config: parses the repo-root release-plz.toml (already in the
+# resolve graph via mtui-config, so no new crates — but Cargo.lock's `xtask`
+# edge still rides in this commit).
+toml.workspace = true
 
 [lints]
 workspace = true

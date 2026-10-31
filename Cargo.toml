@@ -173,16 +173,16 @@ indexmap = "2"
 ini = { package = "rust-ini", version = "0.21" }
 # dev / test
 insta = "1"
-mtui-cli = { path = "crates/mtui-cli" }
-mtui-config = { path = "crates/mtui-config" }
-mtui-core = { path = "crates/mtui-core" }
-mtui-datasources = { path = "crates/mtui-datasources" }
-mtui-hosts = { path = "crates/mtui-hosts" }
-mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
-mtui-testreport = { path = "crates/mtui-testreport" }
-mtui-tui = { path = "crates/mtui-tui" }
+mtui-cli = { version = "=26.4.0", path = "crates/mtui-cli" }
+mtui-config = { version = "=26.4.0", path = "crates/mtui-config" }
+mtui-core = { version = "=26.4.0", path = "crates/mtui-core" }
+mtui-datasources = { version = "=26.4.0", path = "crates/mtui-datasources" }
+mtui-hosts = { version = "=26.4.0", path = "crates/mtui-hosts" }
+mtui-mcp = { version = "=26.4.0", path = "crates/mtui-mcp", default-features = false }
+mtui-testreport = { version = "=26.4.0", path = "crates/mtui-testreport" }
+mtui-tui = { version = "=26.4.0", path = "crates/mtui-tui" }
 # internal crates (path deps)
-mtui-types = { path = "crates/mtui-types" }
+mtui-types = { version = "=26.4.0", path = "crates/mtui-types" }
 # optional desktop notifications (feature `notify`). Pure-Rust
 # freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
 # the single-static-binary / no-Python-runtime contract. Best-effort + headless

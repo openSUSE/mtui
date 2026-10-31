@@ -1,0 +1,91 @@
+# Release automation (#469).
+#
+# release-plz opens a Release PR on `main` carrying the mechanical version
+# bumps plus a draft CHANGELOG entry. The maintainer sets the release by
+# editing that PR (version number and changelog prose); merging it makes
+# release-plz tag the release and publish to crates.io. The tag push then
+# drives `.github/workflows/release.yml`, which stays the only creator of
+# GitHub releases (build matrix and notes-base walk untouched).
+#
+# Per-minor branches (`26.N.x`) get manual cherry-picks only: release-plz
+# assumes a single release branch, so it never runs there. See
+# docs/src/installation.md "Cutting a release".
+[workspace]
+# Publish only on Release-PR merges, never on direct `main` pushes.
+release_always = false
+# One tag per release, unprefixed (`26.4.1`, never `v26.4.1`): `_service`'s
+# `versionrewrite` (`v?([0-9].*)`) and release.yml's `[0-9]+…` tag filter both
+# key on this shape. Tagging is disabled workspace-wide and enabled for the
+# facade crate only, so the lockstep-versioned crates share the one tag
+# instead of each creating the same one.
+git_tag_enable = false
+# GitHub releases stay with release.yml's `gh release create`; release-plz
+# must not take them over.
+git_release_enable = false
+# The hand-written Keep-a-Changelog root file is the only changelog:
+# per-crate changelogs stay off, so the Release PR carries a single draft
+# section for the maintainer to edit instead of scattered per-crate files.
+changelog_update = false
+
+[[package]]
+name = "mtui"
+git_tag_enable = true
+git_tag_name = "{{ version }}"
+changelog_update = true
+changelog_path = "./CHANGELOG.md"
+# Draft the one changelog section from every shippable crate's commits, not
+# just the facade's own directory; the maintainer trims it to the user-visible
+# prose before merging.
+changelog_include = [
+  "mtui-cli",
+  "mtui-config",
+  "mtui-core",
+  "mtui-datasources",
+  "mtui-hosts",
+  "mtui-mcp",
+  "mtui-testreport",
+  "mtui-tui",
+  "mtui-types",
+]
+# Lockstep line: every publishable crate ships the one workspace version.
+# Computed from the shared `version.workspace` field today (release-plz takes
+# the max across inheritors), so this only pins the intent — but if a crate
+# ever drops the inheritance, the group still holds it in lockstep instead of
+# diverging silently. `xtask` (`publish = false`) is intentionally outside it.
+version_group = "mtui"
+
+[[package]]
+name = "mtui-cli"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-config"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-core"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-datasources"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-hosts"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-mcp"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-testreport"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-tui"
+version_group = "mtui"
+
+[[package]]
+name = "mtui-types"
+version_group = "mtui"

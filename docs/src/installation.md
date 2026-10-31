@@ -133,10 +133,88 @@ zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
 osc -A ibs whoami        # confirms the `ibs` alias resolves
 ```
 
+For the release automation itself, the repository needs two secrets (both
+one-time, both in the GitHub web UI):
+
+- **`RELEASE_PLZ_TOKEN`**: a Personal Access Token (classic `repo` scope,
+  or fine-grained with Contents + Pull requests read/write) on an account
+  with write access. Both jobs authenticate as this token: pushes made with
+  the default `GITHUB_TOKEN` trigger no further workflow runs, so with it
+  the tag push would never drive `release.yml` and CI checks would never
+  run on the Release PR. If the Release PR and release commits should not
+  carry a personal account's authorship, create a machine user for it.
+- **`CARGO_REGISTRY_TOKEN` secret**: a crates.io token with the
+  `publish-new`/`publish-update` scopes, otherwise the `release-plz-release`
+  job cannot publish.
+
+### Release flow (main line)
+
+Releases on `main` are driven by release-plz (config: `release-plz.toml`,
+workflow: `.github/workflows/release-plz.yml`):
+
+1. Every push to `main` refreshes the **Release PR**: mechanical version
+   bumps plus a draft CHANGELOG entry.
+2. The maintainer **sets the release by editing that PR** — the version
+   number and the changelog prose. release-plz's inference from commit
+   prefixes is only a proposal; the edited PR is the decision. The draft
+   entry is rewritten into the hand-written Keep-a-Changelog style before
+   merging (the generated text is never merged as-is). Edit, then merge
+   promptly: if another `main` push refreshes the PR first, release-plz
+   **closes a hand-touched PR and opens a fresh one without your edits**
+   (any non-bot commit on its branch counts as a contributor edit, and the
+   fresh PR is recomputed from `main`). Re-apply the edits there — or put a
+   version bump on `main` itself, which the refresh picks up as an
+   already-bumped version instead of clobbering. Never "Update branch" the
+   Release PR: that merge commit reads as an edit and triggers the same
+   close-and-recreate.
+3. Merging the PR makes release-plz **tag the release and publish to
+   crates.io — all 10 workspace crates**: the `mtui` facade plus the 9
+   `mtui-*` libraries, which become public surface on first publish even
+   though only the facade is supported (`xtask` has `publish = false` and
+   is skipped). The tag is the bare version (`26.4.1`); see the tag-shape
+   note in the recipe below.
+4. The tag push drives `.github/workflows/release.yml`, which builds the
+   artifacts and creates the GitHub release. release-plz never creates
+   GitHub releases itself.
+5. The OBS recipe below then ships the openSUSE RPM from the tag.
+
+Direct pushes to `main` never publish (`release_always = false`): only a
+merged Release PR does.
+
+### Maintenance branches (`26.N.x`)
+
+release-plz assumes a single release branch, so it never runs on the
+per-minor branches (`26.0.x`, `26.1.x`, … — one per released line, forked
+from `main` and never merged back). Fixes for a released line are
+cherry-picked by hand:
+
+```sh
+git checkout 26.3.x
+git cherry-pick <fix-commit>…
+# Bump the workspace version, e.g. 26.3.5 → 26.3.6, as its own commit
+# (`chore(release): cut 26.3.6`), so the tag matches the package version.
+git tag 26.3.6
+git push origin 26.3.x 26.3.6
+```
+
+Pushing the tag drives `release.yml` exactly like a main-line release, and
+its notes-base walk picks the predecessor by version order across the
+sibling branches — no ancestry needed. The same unprefixed tag shape
+applies; a `v`-prefixed tag is invalid there too.
+
+Note: tags `26.3.2`–`26.3.5` predate the automation and have no CHANGELOG
+section (#401, not fixed here). A maintenance release cut from them still
+resolves its notes base by version order, not from the CHANGELOG file, so
+the missing sections do not shift the generated notes' start point — but
+expect the hand-written history for that line to stay sparse until it is
+backfilled.
+
 ### Release recipe (build.suse.de / IBS, project `QA:Maintenance:Test`)
 
 1. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
-   `git describe --tags` stamps the version into the binaries. The `_service`
+   `git describe --tags` stamps the version into the binaries. On `main` the
+   tag comes from merging the Release PR (flow above) — reach for `git tag`
+   only for a maintenance-branch cherry-pick. The `_service`
    `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
    require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.
    The format is `XX.Y.Z` — year-based line, major, patch. A `v`-prefixed tag is
