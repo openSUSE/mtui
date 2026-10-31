@@ -50,6 +50,9 @@ tokio.workspace = true
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).
 tempfile = "3"
+# Packaging-metadata guard test (`tests/packaging.rs`) parses every workspace
+# manifest; test-only, never linked into the built xtask.
+toml.workspace = true
 
 [lints]
 workspace = true

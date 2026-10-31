@@ -3,7 +3,13 @@ name = "mtui-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Model Context Protocol server adapter for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its heavy deps (rmcp/axum under `--all-features`) link once, not once
