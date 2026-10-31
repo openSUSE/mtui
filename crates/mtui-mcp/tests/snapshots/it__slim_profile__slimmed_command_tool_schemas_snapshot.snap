@@ -1711,9 +1711,9 @@ expression: pretty
           "type": "string"
         },
         "field": {
-          "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit",
+          "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; Package-Streams/Issues/Comments are read live from OBS per shown row (after --limit/--offset), so narrow large queues with --limit; non-OBS (SLFO) rows render n/a, comments are sanitised and capped per row",
           "items": {
-            "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit",
+            "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; Package-Streams/Issues/Comments are read live from OBS per shown row (after --limit/--offset), so narrow large queues with --limit; non-OBS (SLFO) rows render n/a, comments are sanitised and capped per row",
             "type": "string"
           },
           "type": "array"

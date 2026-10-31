@@ -5,11 +5,19 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
 use futures::stream::{self, StreamExt};
-use mtui_datasources::UpdatesQuery;
+use mtui_config::Config;
+use mtui_datasources::obs::Osc;
+use mtui_datasources::obs::models::ObsComment;
+use mtui_datasources::obs::qam;
+use mtui_datasources::{HttpClient, UpdatesQuery};
+use mtui_types::{RequestKind, RequestReviewID};
 use serde_json::Value;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
+#[cfg(test)]
+use crate::display::TRUNCATION_MARK;
+use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -104,7 +112,11 @@ impl Command for Updates {
                     "select output fields by osc-qam name (e.g. -F Rating \
                      -F 'Assigned Roles'); repeatable, rendered as one block per \
                      update; names match case-insensitively, ignoring \
-                     spaces/hyphens/underscores; narrow large queues with --limit",
+                     spaces/hyphens/underscores; Package-Streams/Issues/Comments \
+                     are read live from OBS per shown row (after \
+                     --limit/--offset), so narrow large queues with --limit; \
+                     non-OBS (SLFO) rows render n/a, comments are sanitised \
+                     and capped per row",
                 ),
         )
         .arg(
@@ -228,6 +240,7 @@ impl Command for Updates {
             .map(|v| v.map(|f| resolve_field(f)).collect::<Result<Vec<_>, _>>())
             .transpose()?
             .unwrap_or_default();
+        let needs_obs = specs.iter().any(|s| s.needs_obs);
         let as_json = args.get_flag("json");
         let status_arg = args
             .get_one::<String>("status")
@@ -378,7 +391,7 @@ impl Command for Updates {
         // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
         // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
         let crushed = crush(windowed, update_key, anomaly_severity);
-        let shown = &crushed.kept;
+        let mut shown = crushed.kept;
         // Over-cap --json stays in-band like the byte-cap convention, but as a
         // structured envelope so stdout stays valid JSON for jq/MCP parsers.
         let notice = (crushed.truncated > 0).then(|| {
@@ -402,9 +415,9 @@ impl Command for Updates {
                 );
                 session
                     .display
-                    .println(&json_envelope(shown.to_vec(), Some(meta), None));
+                    .println(&json_envelope(shown, Some(meta), None));
             } else {
-                let doc = Value::Array(shown.to_vec());
+                let doc = Value::Array(shown);
                 session.display.println(
                     &serde_json::to_string_pretty(&doc)
                         .expect("serialising a serde_json::Value is infallible"),
@@ -425,10 +438,32 @@ impl Command for Updates {
                 .println(&format!("Update queue ({}):", shown.len()));
         }
         if specs.is_empty() {
-            for u in shown {
+            for u in &shown {
                 session.display.println(&render_row(u, want_assignment));
             }
         } else {
+            if needs_obs {
+                // The transport builds only when a shown row can be looked up:
+                // an all-idless (or all-non-OBS) listing answers without
+                // credentials. Non-OBS rows are stamped first so their
+                // fields render n/a rather than dashes.
+                mark_non_obs_rows(&mut shown);
+                let targets = obs_targets(&shown);
+                if targets.is_empty() {
+                    tracing::debug!(
+                        "OBS enrichment skipped: no shown row has a parseable RequestReviewID"
+                    );
+                } else {
+                    // The transport builds only for a lookup that will run;
+                    // `Session` is `!Sync`, so the call below takes owned
+                    // values and borrows nothing across its awaits.
+                    let http = session.http_client().map_err(|e| {
+                        CommandError::Other(format!("could not build OBS client: {e}"))
+                    })?;
+                    let config = session.config.clone();
+                    enrich_shown_with_obs(config, http, &mut shown, targets).await?;
+                }
+            }
             for (i, u) in shown.iter().enumerate() {
                 if i > 0 {
                     session.display.println("");
@@ -454,59 +489,73 @@ struct FieldSpec {
     /// Requesting it in a view that cannot carry assignment is refused rather
     /// than blanked: the omission would render a false "unassigned".
     needs_assignment: bool,
+    /// Whether the value is read live from OBS per shown row instead of the
+    /// TeReGen queue listing. Requesting one fans out over the shown rows
+    /// after `--limit`/`--offset`, building the OBS client only when a shown
+    /// row can be looked up.
+    needs_obs: bool,
     extract: fn(&serde_json::Map<String, Value>) -> String,
 }
 
-/// The fields the TeReGen queue listing can serve. osc-qam names are canonical
+/// The selectable fields. osc-qam names are canonical
 /// so `osc qam list -F` muscle memory transfers; the raw TeReGen key is an
-/// alias where it differs.
+/// alias where it differs. Most extract from the TeReGen queue row;
+/// `Package-Streams`/`Issues`/`Comments` are read live from OBS per shown row.
 static FIELDS: &[FieldSpec] = &[
     FieldSpec {
         canonical: "ReviewRequestID",
         aliases: &["id"],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "id"),
     },
     FieldSpec {
         canonical: "Incident Priority",
         aliases: &["priority", "prio"],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "priority"),
     },
     FieldSpec {
         canonical: "Rating",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "rating"),
     },
     FieldSpec {
         canonical: "Category",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "category"),
     },
     FieldSpec {
         canonical: "Status",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "status"),
     },
     FieldSpec {
         canonical: "Kind",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "kind"),
     },
     FieldSpec {
         canonical: "Deadline",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "deadline"),
     },
     FieldSpec {
         canonical: "Assignee",
         aliases: &[],
         needs_assignment: true,
+        needs_obs: false,
         extract: |o| {
             o.get("assignee")
                 .and_then(Value::as_str)
@@ -519,59 +568,85 @@ static FIELDS: &[FieldSpec] = &[
         canonical: "Assigned Roles",
         aliases: &[],
         needs_assignment: true,
+        needs_obs: false,
         extract: extract_assigned_roles,
     },
     FieldSpec {
         canonical: "Unassigned Roles",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: extract_unassigned_roles,
     },
     FieldSpec {
         canonical: "Title",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "title"),
     },
     FieldSpec {
         canonical: "URL",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "url"),
     },
     FieldSpec {
         canonical: "Products",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| string_list_field(o, "products"),
     },
     FieldSpec {
         canonical: "SRCRPMs",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| string_list_field(o, "srcrpms"),
     },
     FieldSpec {
         canonical: "Bugs",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| string_list_field(o, "bugs"),
     },
     FieldSpec {
         canonical: "Creator",
         aliases: &[],
         needs_assignment: false,
+        needs_obs: false,
         extract: |o| scalar_field(o, "creator"),
     },
+    FieldSpec {
+        // Not TeReGen's `codestreams` under another key: osc-qam derives
+        // Package-Streams from the OBS request's `src_package` set (bare
+        // names like `glibc`), while `codestreams` carries project
+        // identifiers (`SUSE:SLE-15-SP2:Update`, `SUSE:SLFO:1.2`), so the
+        // extractor reads only the OBS-injected `obs_package_streams` key.
+        canonical: "Package-Streams",
+        aliases: &[],
+        needs_assignment: false,
+        needs_obs: true,
+        extract: |o| obs_string_list_field(o, "obs_package_streams"),
+    },
+    FieldSpec {
+        canonical: "Issues",
+        aliases: &[],
+        needs_assignment: false,
+        needs_obs: true,
+        extract: |o| obs_string_list_field(o, "obs_issues"),
+    },
+    FieldSpec {
+        canonical: "Comments",
+        aliases: &[],
+        needs_assignment: false,
+        needs_obs: true,
+        extract: extract_obs_comments,
+    },
 ];
-
-/// osc-qam fields the listing does not carry yet (#415), named so the error can
-/// say "known, but not available here" instead of "unknown".
-/// `Package-Streams` is not TeReGen's `codestreams` under another key:
-/// osc-qam derives it from the OBS request's `src_package` set (bare names
-/// like `glibc`), while `codestreams` carries project identifiers
-/// (`SUSE:SLE-15-SP2:Update`, `SUSE:SLFO:1.2`).
-static UNAVAILABLE_FIELDS: &[&str] = &["Package-Streams", "Issues", "Comments"];
 
 /// Normalizes a field name for matching: lowercase, separators dropped, so
 /// `Incident Priority`, `incident-priority` and `incident_priority` coincide.
@@ -582,8 +657,7 @@ fn normalize_field(name: &str) -> String {
         .collect()
 }
 
-/// Resolves a `-F` name to its spec, or an error naming the #415 gap for a
-/// known-but-unservable osc-qam field and listing what is available otherwise.
+/// Resolves a `-F` name to its spec, or an error listing what is available.
 fn resolve_field(name: &str) -> Result<&'static FieldSpec, CommandError> {
     let norm = normalize_field(name);
     if let Some(spec) = FIELDS
@@ -591,16 +665,6 @@ fn resolve_field(name: &str) -> Result<&'static FieldSpec, CommandError> {
         .find(|s| normalize_field(s.canonical) == norm || s.aliases.iter().any(|a| *a == norm))
     {
         return Ok(spec);
-    }
-    if let Some(known) = UNAVAILABLE_FIELDS
-        .iter()
-        .find(|f| normalize_field(f) == norm)
-    {
-        return Err(CommandError::Other(format!(
-            "field '{known}' is not in TeReGen's queue listing yet \
-             (tracked in #415); available fields: {}",
-            available_field_names()
-        )));
     }
     Err(CommandError::Other(format!(
         "unknown field '{name}'; available fields: {}",
@@ -640,6 +704,29 @@ fn string_list_field(obj: &serde_json::Map<String, Value>, key: &str) -> String 
         "-".to_owned()
     } else {
         parts.join(", ")
+    }
+}
+
+/// `Comments`: the OBS-injected comment lines, newline-joined with indented
+/// continuations (keeping `render_fields`' one-`Name:`-per-block shape);
+/// an explicit null (a deliberately skipped non-OBS row) renders `n/a`;
+/// missing/non-array/empty → `-`. Non-string elements are skipped.
+fn extract_obs_comments(obj: &serde_json::Map<String, Value>) -> String {
+    if obj.get("obs_comments").is_some_and(Value::is_null) {
+        return "n/a".to_owned();
+    }
+    let Some(arr) = obj.get("obs_comments").and_then(Value::as_array) else {
+        return "-".to_owned();
+    };
+    let parts: Vec<&str> = arr
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        "-".to_owned()
+    } else {
+        parts.join("\n  ")
     }
 }
 
@@ -712,6 +799,201 @@ fn render_fields(u: &Value, specs: &[&'static FieldSpec]) -> String {
         .map(|s| format!("  {}: {}", s.canonical, (s.extract)(obj)))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The OBS-backed list extractor: an explicit null (a deliberately skipped
+/// non-OBS row, see [`mark_non_obs_rows`]) renders `n/a`; a missing key (an
+/// id-less row, or one OBS refused) renders `-` like the TeReGen-backed
+/// lists. Every element goes through [`sanitize_external`]: package names and
+/// issue refs are OBS text like comments, and a raw ESC/C1 in either would
+/// reach the REPL as a live terminal sequence. Kept separate from
+/// [`string_list_field`] so TeReGen nulls keep their dash and TeReGen text
+/// keeps its verbatim rendering.
+fn obs_string_list_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
+    if obj.get(key).is_some_and(Value::is_null) {
+        return "n/a".to_owned();
+    }
+    let Some(arr) = obj.get(key).and_then(Value::as_array) else {
+        return "-".to_owned();
+    };
+    let parts: Vec<String> = arr
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|s| sanitize_external(s, Some(OBS_COMMENT_LIMIT)))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        "-".to_owned()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Kept characters of each OBS text part (comment `who`/`when`/body, package
+/// and issue strings): comments are the least-trusted text mtui prints (any
+/// OBS user can write one), so each part goes through [`sanitize_external`]
+/// like a checkers row (`checkers.rs::ROW_LIMIT`), cut to the same width.
+const OBS_COMMENT_LIMIT: usize = 200;
+
+/// Comments kept per row: the row budget counts rows, not bytes, so an
+/// unbounded history would blow past it. The tail is the live discussion;
+/// the omitted count keeps the cut honest.
+const OBS_COMMENTS_PER_ROW: usize = 5;
+
+/// One OBS comment as a single `-F` line: `who (when): body`, naming only the
+/// parts OBS served; the body is flattened (a comment's own newlines would
+/// break the one-line-per-field block). An empty body leaves no dangling
+/// separator. Every part is sanitised: a raw ESC/C1 in the body would reach
+/// the REPL as a live terminal sequence, bidi overrides would reorder the
+/// line, and over MCP the text lands in model context.
+fn format_obs_comment(comment: &ObsComment) -> String {
+    let body = sanitize_external(
+        &comment
+            .body
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        Some(OBS_COMMENT_LIMIT),
+    );
+    let who = sanitize_external(&comment.who, Some(OBS_COMMENT_LIMIT));
+    let when = sanitize_external(&comment.when, Some(OBS_COMMENT_LIMIT));
+    let head = match (who.is_empty(), when.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => who,
+        (true, false) => format!("({when})"),
+        (false, false) => format!("{who} ({when})"),
+    };
+    match (head.is_empty(), body.is_empty()) {
+        (_, true) => head,
+        (true, false) => body,
+        (false, false) => format!("{head}: {body}"),
+    }
+}
+
+/// Merge one row's OBS fallback into its TeReGen row under dedicated `obs_`
+/// keys the OBS-backed extractors read. Namespaced so a TeReGen row carrying
+/// those bare names can neither satisfy the fields nor be overwritten.
+/// Comments keep only the newest [`OBS_COMMENTS_PER_ROW`] by `when`, headed
+/// by a marker counting the omitted ones. The tail is taken in `when` order
+/// (stable, so equal timestamps keep document order) rather than document
+/// order: OBS serves comments oldest-first, but nothing pins that, and `when`
+/// is ISO-8601 so string order is chronological whatever order the document
+/// arrived in.
+fn inject_extras(row: &mut Value, extras: &qam::RequestExtras) {
+    let Some(obj) = row.as_object_mut() else {
+        return;
+    };
+    let strings =
+        |items: &[String]| Value::Array(items.iter().map(|s| Value::String(s.clone())).collect());
+    obj.insert(
+        "obs_package_streams".to_owned(),
+        strings(&extras.src_packages),
+    );
+    obj.insert("obs_issues".to_owned(), strings(&extras.issues));
+    let mut by_when: Vec<&ObsComment> = extras.comments.iter().collect();
+    by_when.sort_by(|a, b| a.when.cmp(&b.when));
+    let total = by_when.len();
+    let tail = if total > OBS_COMMENTS_PER_ROW {
+        &by_when[total - OBS_COMMENTS_PER_ROW..]
+    } else {
+        &by_when[..]
+    };
+    let mut comments = Vec::with_capacity(tail.len() + 1);
+    let omitted = total - tail.len();
+    if omitted > 0 {
+        comments.push(Value::String(if omitted == 1 {
+            "…[1 earlier comment omitted]".to_owned()
+        } else {
+            format!("…[{omitted} earlier comments omitted]")
+        }));
+    }
+    comments.extend(tail.iter().map(|c| Value::String(format_obs_comment(c))));
+    obj.insert("obs_comments".to_owned(), Value::Array(comments));
+}
+
+/// Whether a queue row's RRID names an OBS request: classic Maintenance and
+/// PI review ids are OBS request ids (every backend command reads them as
+/// `request/{review_id}`), while SLFO review ids are Gitea PR numbers — every
+/// SLFO update is a Gitea PR (`docs/src/architecture.md`), and the RRID's
+/// shape cannot tell the two apart. An OBS read of a PR number would serve an
+/// unrelated request, so unknown future kinds fail closed to `false`.
+fn obs_addressable(rrid: &RequestReviewID) -> bool {
+    matches!(rrid.kind, RequestKind::Maintenance | RequestKind::Pi)
+}
+
+/// Stamp the `obs_*` keys null on rows OBS cannot serve, so the OBS-backed
+/// extractors render `n/a` (like `Unassigned Roles`) instead of a dash that
+/// would read as "looked, found nothing".
+fn mark_non_obs_rows(shown: &mut [Value]) {
+    for row in shown {
+        let non_obs = row
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| RequestReviewID::parse(id).ok())
+            .is_some_and(|rrid| !obs_addressable(&rrid));
+        if non_obs && let Some(obj) = row.as_object_mut() {
+            for key in ["obs_package_streams", "obs_issues", "obs_comments"] {
+                obj.insert(key.to_owned(), Value::Null);
+            }
+        }
+    }
+}
+
+/// The shown rows addressable on OBS: `(index, RRID)` for rows with a
+/// parseable, OBS-addressable `id`, in display order. SLFO rows (Gitea PR
+/// numbers, not OBS request ids) never enter, so one row's lookup cannot
+/// serve another request's data.
+fn obs_targets(shown: &[Value]) -> Vec<(usize, RequestReviewID)> {
+    shown
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            row.get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| RequestReviewID::parse(id).ok())
+                .filter(obs_addressable)
+                .map(|rrid| (i, rrid))
+        })
+        .collect()
+}
+
+/// Fill the OBS-backed `-F` keys into each shown row, read live from OBS after
+/// `--limit`/`--offset` (and the row-budget crush) so a large queue costs one
+/// fetch per *shown* row, not per queued row. A row OBS refuses keeps its
+/// TeReGen shape and renders dashes; when *no* shown row is servable the
+/// command errors (a silent all-dash listing would hide a dead OBS base).
+async fn enrich_shown_with_obs(
+    config: Config,
+    http: HttpClient,
+    shown: &mut [Value],
+    targets: Vec<(usize, RequestReviewID)>,
+) -> Result<(), CommandError> {
+    let (indices, rrids): (Vec<usize>, Vec<RequestReviewID>) = targets.into_iter().unzip();
+    let total = rrids.len();
+    let results = Osc::extras_for_many(&config, http, &rrids)
+        .await
+        .map_err(|e| CommandError::Other(format!("could not build OBS client: {e}")))?;
+    let mut failed = 0;
+    let mut first_err = String::new();
+    for ((i, rrid), result) in indices.into_iter().zip(rrids).zip(results) {
+        match result {
+            Ok(extras) => inject_extras(&mut shown[i], &extras),
+            Err(e) => {
+                failed += 1;
+                if first_err.is_empty() {
+                    first_err = e.to_string();
+                }
+                tracing::warn!("OBS details for shown update {rrid} unreadable: {e}");
+            }
+        }
+    }
+    if failed == total {
+        return Err(CommandError::Other(format!(
+            "OBS details unavailable for all {total} shown rows ({first_err}); \
+             check [obs] api_url and the oscrc credentials"
+        )));
+    }
+    Ok(())
 }
 
 /// Renders one queue row in a fixed-width layout.
@@ -834,6 +1116,9 @@ mod tests {
         assert_eq!(names.len(), FIELDS.len(), "{names:?}");
         assert_eq!(names[0], "ReviewRequestID");
         assert!(names.contains(&"Assigned Roles".to_owned()), "{names:?}");
+        for name in ["Package-Streams", "Issues", "Comments"] {
+            assert!(names.contains(&name.to_owned()), "{names:?}");
+        }
         assert_eq!(
             Updates.complete(&session, "Rat", "updates -F Rat"),
             vec!["Rating"]
@@ -1458,25 +1743,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn known_but_unserved_field_names_the_gap() {
-        let server = MockServer::start().await;
-        let (mut session, _buf) = teregen_session(&server);
-        let args = matches(&Updates, &["-F", "comments"]);
-        let err = Updates.call(&mut session, &args).await.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("'Comments' is not in TeReGen's queue listing"),
-            "{msg}"
-        );
-        assert!(msg.contains("#415"), "{msg}");
+    async fn obs_backed_fields_resolve_and_list_as_available() {
+        // Kills keeping Package-Streams/Issues/Comments in the refused set
+        // now that the OBS fallback serves them.
+        for name in [
+            "Package-Streams",
+            "package_streams",
+            "Issues",
+            "ISSUES",
+            "Comments",
+            "comments",
+        ] {
+            resolve_field(name).unwrap();
+        }
+        for name in ["Package-Streams", "Issues", "Comments"] {
+            assert!(available_field_names().contains(name), "{name}");
+        }
     }
 
     #[tokio::test]
-    async fn package_streams_stays_unavailable_despite_codestreams_key() {
+    async fn package_streams_never_aliases_codestreams() {
         // Live rows carry `codestreams` (project identifiers), but osc-qam's
         // `Package-Streams` is the OBS `src_package` set (bare names): the
-        // former must not alias to the latter. Kills serving `codestreams`
-        // as `Package-Streams`.
+        // former must not satisfy the latter, with or without the fallback.
+        // Kills reading `codestreams` as `Package-Streams`, and a
+        // `codestreams` alias resolving at all.
         let row = serde_json::json!({
             "id": "SUSE:Maintenance:1:1",
             "codestreams": ["SUSE:SLE-15-SP2:Update"],
@@ -1486,29 +1777,578 @@ mod tests {
             string_list_field(o, "codestreams"),
             "SUSE:SLE-15-SP2:Update"
         );
-        let msg = resolve_field("Package-Streams").err().unwrap().to_string();
-        assert!(
-            msg.contains("'Package-Streams' is not in TeReGen's queue listing"),
-            "{msg}"
+        let spec = resolve_field("Package-Streams").unwrap();
+        assert_eq!(render_fields(&row, &[spec]), "  Package-Streams: -");
+        let msg = resolve_field("codestreams").err().unwrap().to_string();
+        assert!(msg.contains("unknown field 'codestreams'"), "{msg}");
+    }
+
+    // ------------------------------------------- OBS fallback (PR3, #415)
+
+    const OBS_REQUEST_XML: &str = "<request id='56789'>\
+        <action type='maintenance_incident'>\
+        <source project='SUSE:Maintenance:1' package='glibc'/>\
+        <source project='SUSE:Maintenance:1' package='openssl'/></action>\
+        <issue tracker='bnc' name='1'/>\
+        <state name='review'/></request>";
+    const OBS_COMMENTS_XML: &str = "<comments>\
+        <comment who='carol' when='2024-01-01T00:00:00'>ship it</comment></comments>";
+
+    /// A session whose TeReGen queue and OBS API are two mocks, with oscrc
+    /// resolving against the OBS mock. Only valid inside
+    /// `#[serial(osc_config_env)]`: holds the `$OSC_CONFIG` guard. Both
+    /// servers are returned so the caller keeps them alive past the call.
+    async fn obs_backed_session(
+        queue: serde_json::Value,
+    ) -> (
+        Session,
+        crate::commands::testkit::Buffer,
+        MockServer,
+        MockServer,
+        crate::commands::testkit::NoOscrc,
+        tempfile::TempDir,
+    ) {
+        use crate::commands::testkit::NoOscrc;
+        use crate::commands::testkit::teregen::write_oscrc;
+        let teregen = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(queue))
+            .mount(&teregen)
+            .await;
+        let obs = MockServer::start().await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let oscrc = write_oscrc(dir.path(), &obs);
+        let guard = NoOscrc::set_to(&oscrc);
+        let (mut session, buf) = empty_session();
+        session.config.teregen_api = teregen.uri();
+        session.config.obs_api_url = obs.uri();
+        (session, buf, teregen, obs, guard, dir)
+    }
+
+    async fn mount_obs_row(server: &MockServer, review_id: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/request/{review_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(OBS_REQUEST_XML))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/comments/request/{review_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(OBS_COMMENTS_XML))
+            .mount(server)
+            .await;
+    }
+
+    fn queue_row(review_id: u64) -> serde_json::Value {
+        serde_json::json!({
+            "priority": 1, "status": "testing", "kind": "Maintenance",
+            "id": format!("SUSE:Maintenance:1:{review_id}"),
+        })
+    }
+
+    async fn obs_gets(server: &MockServer, url_path: &str) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == url_path)
+            .count()
+    }
+
+    #[test]
+    fn inject_extras_ignores_non_object_rows() {
+        // Kills an enrichment panic on scalar rows: without an object there
+        // is nothing to inject into, so the row passes through untouched.
+        let mut row = serde_json::json!("stray-string");
+        inject_extras(
+            &mut row,
+            &qam::RequestExtras {
+                src_packages: vec!["glibc".to_owned()],
+                issues: vec![],
+                comments: vec![],
+            },
         );
+        assert_eq!(row, serde_json::json!("stray-string"));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_backed_fields_on_idless_rows_render_dashes_without_fetch() {
+        // Kills fetching (or failing on) rows with no id: there is nothing to
+        // look up, so the OBS mock must see zero calls and the row renders
+        // dashes. The skip is debug-logged so a future id-shape break is
+        // diagnosable rather than silent.
+        use crate::commands::testkit::log_capture;
+        log_capture::start();
+        let (mut session, buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [
+                {"priority": 1, "status": "testing", "kind": "Maintenance"},
+            ]}))
+            .await;
+        let args = matches(&Updates, &["-F", "Package-Streams"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Package-Streams: -"), "{out}");
+        assert!(obs.received_requests().await.unwrap().is_empty());
+        let logged = log_capture::take();
+        assert!(
+            logged.iter().any(|c| c
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("no shown row has a parseable RequestReviewID"))),
+            "expected the enrichment-skip debug log, got {:?}",
+            logged
+                .iter()
+                .filter_map(|c| c.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_backed_fields_served_from_obs_fallback() {
+        // Kills serving TeReGen-shaped placeholders (or dashes) for the OBS
+        // fields: every value below comes from the OBS mocks, not the queue.
+        let (mut session, buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [queue_row(56789)]})).await;
+        mount_obs_row(&obs, "56789").await;
+        let args = matches(
+            &Updates,
+            &["-F", "Package-Streams", "-F", "Issues", "-F", "Comments"],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Package-Streams: glibc, openssl"), "{out}");
+        assert!(out.contains("Issues: bnc#1"), "{out}");
+        assert!(
+            out.contains("Comments: carol (2024-01-01T00:00:00): ship it"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn slfo_rows_render_na_without_obs_read() {
+        // Kills serving another request's data on non-OBS rows: the SLFO
+        // row's review id is a Gitea PR number, so OBS must see no read for
+        // it and the OBS-backed fields render n/a, while the Maintenance
+        // neighbour is still served from OBS.
+        let (mut session, buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [
+                queue_row(56789),
+                {"priority": 9, "status": "testing", "kind": "SLFO",
+                 "id": "SUSE:SLFO:1.2:9"},
+            ]}))
+            .await;
+        mount_obs_row(&obs, "56789").await;
+        let args = matches(
+            &Updates,
+            &["-F", "Package-Streams", "-F", "Issues", "-F", "Comments"],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Package-Streams: glibc, openssl"), "{out}");
+        assert!(out.contains("Package-Streams: n/a"), "{out}");
+        assert!(out.contains("Issues: n/a"), "{out}");
+        assert!(out.contains("Comments: n/a"), "{out}");
+        assert_eq!(obs_gets(&obs, "/request/9").await, 0);
+        assert_eq!(obs_gets(&obs, "/comments/request/9").await, 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_fallback_not_hit_when_unrequested() {
+        // Kills an unconditional OBS fan-out: TeReGen-only fields must not
+        // touch OBS at all (the .expect(0) trips on any GET). Pinned against
+        // a missing oscrc so the kill is deterministic, not ambient-dependent.
+        use crate::commands::testkit::NoOscrc;
+        let _guard = NoOscrc::set();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [row]})),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [queue_row(56789)]})),
             )
-            .expect(0)
             .mount(&server)
             .await;
+        let obs = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+            .expect(0)
+            .mount(&obs)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        session.config.obs_api_url = obs.uri();
+        let args = matches(&Updates, &["-F", "Rating"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("Rating:"), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_fallback_runs_only_for_shown_rows() {
+        // Kills fetching before --limit/--offset: a 3-row queue under
+        // --limit 1 costs exactly one request GET + one comments GET.
+        let (mut session, buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [
+                queue_row(101), queue_row(102), queue_row(103),
+            ]}))
+            .await;
+        mount_obs_row(&obs, "101").await;
+        let args = matches(&Updates, &["-F", "Package-Streams", "--limit", "1"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Update queue (1):"), "{out}");
+        assert!(out.contains("Package-Streams: glibc, openssl"), "{out}");
+        assert_eq!(obs_gets(&obs, "/request/101").await, 1);
+        assert_eq!(obs_gets(&obs, "/comments/request/101").await, 1);
+        assert_eq!(obs_gets(&obs, "/request/102").await, 0);
+        assert_eq!(obs_gets(&obs, "/request/103").await, 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn partial_obs_failure_degrades_only_its_row() {
+        // Kills failing the whole listing over one stale row: the row OBS
+        // 404s renders dashes while its neighbour serves.
+        let (mut session, buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [
+                queue_row(101), queue_row(102),
+            ]}))
+            .await;
+        mount_obs_row(&obs, "101").await;
+        Mock::given(method("GET"))
+            .and(path("/request/102"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&obs)
+            .await;
+        let args = matches(&Updates, &["-F", "Package-Streams"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Package-Streams: glibc, openssl"), "{out}");
+        assert!(out.contains("Package-Streams: -"), "{out}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_outage_for_every_row_is_an_error_not_silent_dashes() {
+        // Kills silent all-dash degradation hiding a dead OBS base (a wrong
+        // [obs] api_url, an unreadable oscrc): with no row servable the
+        // command errors naming OBS instead of printing dashes.
+        let (mut session, _buf, _teregen, obs, _guard, _dir) =
+            obs_backed_session(serde_json::json!({"updates": [queue_row(101)]})).await;
+        Mock::given(method("GET"))
+            .and(path("/request/101"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&obs)
+            .await;
+        let args = matches(&Updates, &["-F", "Issues"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            err.to_string().contains("OBS details unavailable"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_backed_fields_without_oscrc_fail_before_any_obs_read() {
+        // Without credentials the OBS client build refuses once the queue is
+        // known non-empty: the TeReGen query runs (expect(1)), but no OBS
+        // read happens and the error names the credentials.
+        use crate::commands::testkit::NoOscrc;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [queue_row(56789)]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let _guard = NoOscrc::set();
         let (mut session, _buf) = teregen_session(&server);
         let args = matches(&Updates, &["-F", "Package-Streams"]);
         let err = Updates.call(&mut session, &args).await.unwrap_err();
         assert!(
-            err.to_string()
-                .contains("'Package-Streams' is not in TeReGen's queue listing"),
+            err.to_string().contains("could not build OBS client"),
             "{}",
             err.to_string()
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_backed_fields_on_empty_queue_need_no_oscrc() {
+        // Kills requiring oscrc when no OBS read would happen: an empty queue
+        // prints the empty message without touching credentials.
+        use crate::commands::testkit::NoOscrc;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+            )
+            .mount(&server)
+            .await;
+        let _guard = NoOscrc::set();
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-F", "Package-Streams"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("No updates in the queue"));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn obs_backed_fields_past_end_offset_needs_no_oscrc() {
+        // Kills building the OBS client before windowing: an offset past the
+        // last row shows an empty listing without touching credentials.
+        use crate::commands::testkit::NoOscrc;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [queue_row(56789)]})),
+            )
+            .mount(&server)
+            .await;
+        let _guard = NoOscrc::set();
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-F", "Issues", "--offset", "99999"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("Update queue (0):"));
+    }
+
+    #[test]
+    fn obs_comment_format_and_extraction_edges() {
+        // Kills dropping who/when from the line, leaking a comment's own
+        // newlines into the block, joining comments with ", ", rendering a
+        // missing/empty list as anything but "-", emitting an unindented
+        // continuation line, and leaving a dangling separator on an empty
+        // body.
+        let line = |who: &str, when: &str, body: &str| {
+            format_obs_comment(&ObsComment {
+                who: who.to_owned(),
+                when: when.to_owned(),
+                body: body.to_owned(),
+            })
+        };
+        assert_eq!(line("a", "t", "x"), "a (t): x");
+        assert_eq!(line("a", "", "x"), "a: x");
+        assert_eq!(line("", "t", "x"), "(t): x");
+        assert_eq!(line("", "", "  multi\n line "), "multi line");
+        assert_eq!(line("a", "t", ""), "a (t)");
+        assert_eq!(line("a", "", ""), "a");
+        assert_eq!(line("", "", ""), "");
+        let row = serde_json::json!({"obs_comments": ["a (t): x", "b: y"]});
+        assert_eq!(
+            extract_obs_comments(row.as_object().unwrap()),
+            "a (t): x\n  b: y"
+        );
+        for row in [
+            serde_json::json!({"obs_comments": []}),
+            serde_json::json!({"obs_comments": [""]}),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(extract_obs_comments(row.as_object().unwrap()), "-");
+        }
+    }
+
+    #[test]
+    fn obs_comments_drop_terminal_sequences_and_bidi_overrides() {
+        // Kills printing least-trusted text raw: an OBS comment body (or
+        // who/when) carrying CSI/OSC escapes and bidi overrides must not
+        // reach the terminal — or the MCP transcript — verbatim.
+        let line = format_obs_comment(&ObsComment {
+            who: "mallory\x1b]0;pwned\x07".to_owned(),
+            when: "2024-01-01T00:00:00".to_owned(),
+            body: "\x1b[2J\u{202B}rm -rf ~\x1b]52;c;eHlzdGVtCg==\x07".to_owned(),
+        });
+        assert!(!line.contains('\x1b'), "{line:?}");
+        assert!(!line.contains('\u{7}'), "{line:?}");
+        assert!(!line.contains('\u{202B}'), "{line:?}");
+        // The OSC payload goes with its introducer, the way the terminal
+        // itself would consume it — only the surrounding text survives.
+        assert!(line.starts_with("mallory ("), "{line:?}");
+        assert!(line.contains("rm -rf ~"), "{line:?}");
+    }
+
+    #[test]
+    fn obs_comment_parts_cut_at_per_comment_limit() {
+        // Kills an unbounded row in bytes: each comment part is cut to the
+        // per-comment limit with the truncation marked, like checkers rows.
+        let line = format_obs_comment(&ObsComment {
+            who: "a".to_owned(),
+            when: "t".to_owned(),
+            body: "x".repeat(OBS_COMMENT_LIMIT + 50),
+        });
+        assert!(
+            !line.contains(&"x".repeat(OBS_COMMENT_LIMIT + 1)),
+            "{line:?}"
+        );
+        assert!(line.contains(TRUNCATION_MARK), "{line:?}");
+    }
+
+    #[test]
+    fn obs_list_fields_strip_terminal_sequences_and_bidi_overrides() {
+        // Kills printing OBS package/issue text raw: src_package names and
+        // issue refs are OBS text like comments, so a CSI/OSC escape or bidi
+        // override in either must not reach the terminal — or the MCP
+        // transcript — verbatim.
+        let row = serde_json::json!({
+            "obs_package_streams": ["glibc\x1b[2J", "ok\u{202B}pkg"],
+            "obs_issues": ["bnc#1\x1b]0;pwned\x07", "jsc#SLE-9"],
+        });
+        let o = row.as_object().unwrap();
+        let streams = obs_string_list_field(o, "obs_package_streams");
+        let issues = obs_string_list_field(o, "obs_issues");
+        for rendered in [&streams, &issues] {
+            assert!(!rendered.contains('\x1b'), "{rendered:?}");
+            assert!(!rendered.contains('\u{7}'), "{rendered:?}");
+            assert!(!rendered.contains('\u{202B}'), "{rendered:?}");
+        }
+        assert!(streams.contains("glibc"), "{streams:?}");
+        assert!(streams.contains("okpkg"), "{streams:?}");
+        assert!(issues.contains("bnc#1"), "{issues:?}");
+        assert!(issues.contains("jsc#SLE-9"), "{issues:?}");
+        // An element that is only an escape sequence leaves nothing to join.
+        let row = serde_json::json!({"obs_issues": ["\x1b[2J"]});
+        assert_eq!(
+            obs_string_list_field(row.as_object().unwrap(), "obs_issues"),
+            "-"
+        );
+    }
+
+    #[test]
+    fn inject_extras_keeps_newest_comments_by_when_not_document_order() {
+        // Kills trusting OBS document order for "newest five": the kept tail
+        // is the chronologically newest by `when`, so a document arriving
+        // newest-first still renders the live discussion, not the oldest
+        // chatter. `when` is ISO-8601 from OBS, so string order is
+        // chronological; equal timestamps keep document order (stable).
+        let extras = qam::RequestExtras {
+            src_packages: Vec::new(),
+            issues: Vec::new(),
+            comments: (1..=7u32)
+                .rev()
+                .map(|i| ObsComment {
+                    who: "u".to_owned(),
+                    when: format!("2024-01-{i:02}T00:00:00"),
+                    body: format!("c{i}"),
+                })
+                .collect(),
+        };
+        let mut row = serde_json::json!({});
+        inject_extras(&mut row, &extras);
+        let rendered = extract_obs_comments(row.as_object().unwrap());
+        assert!(
+            rendered.contains("2 earlier comments omitted"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains("u (2024-01-07T00:00:00): c7"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains("u (2024-01-06T00:00:00): c6"),
+            "{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("u (2024-01-01T00:00:00): c1"),
+            "{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("u (2024-01-02T00:00:00): c2"),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn obs_targets_skips_non_obs_rows() {
+        // Kills looking a Gitea PR number up as an OBS request: SLFO review
+        // ids are PR numbers (architecture.md), so only Maintenance and PI
+        // rows are OBS-addressable. Unparseable ids stay skipped as before.
+        let row = |id: &str| serde_json::json!({"id": id});
+        let rows = [
+            row("SUSE:SLFO:1.2:9"),
+            row("SUSE:Maintenance:1:56789"),
+            row("SUSE:PI:42:7"),
+            row("not-an-rrid"),
+        ];
+        let ids: Vec<u64> = obs_targets(&rows)
+            .iter()
+            .map(|(_, r)| r.review_id)
+            .collect();
+        assert_eq!(ids, [56789, 7]);
+    }
+
+    #[test]
+    fn inject_extras_keeps_last_comments_with_omitted_marker() {
+        // Kills unbounded comment volume per row: beyond the cap only the
+        // newest comments print, headed by a marker counting the omitted
+        // ones; at exactly the cap there is no marker.
+        let extras_for = |n: u64| qam::RequestExtras {
+            src_packages: Vec::new(),
+            issues: Vec::new(),
+            comments: (1..=n)
+                .map(|i| ObsComment {
+                    who: "u".to_owned(),
+                    when: "t".to_owned(),
+                    body: format!("c{i}"),
+                })
+                .collect(),
+        };
+        let mut row = serde_json::json!({});
+        inject_extras(&mut row, &extras_for(7));
+        let rendered = extract_obs_comments(row.as_object().unwrap());
+        assert!(
+            rendered.contains("2 earlier comments omitted"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains("u (t): c1"), "{rendered:?}");
+        assert!(!rendered.contains("u (t): c2"), "{rendered:?}");
+        assert!(rendered.contains("u (t): c7"), "{rendered:?}");
+        let mut row = serde_json::json!({});
+        inject_extras(&mut row, &extras_for(5));
+        let rendered = extract_obs_comments(row.as_object().unwrap());
+        assert!(!rendered.contains("omitted"), "{rendered:?}");
+        assert!(rendered.contains("u (t): c1"), "{rendered:?}");
+        // The singular marker reads "1 earlier comment omitted".
+        let mut row = serde_json::json!({});
+        inject_extras(&mut row, &extras_for(6));
+        let rendered = extract_obs_comments(row.as_object().unwrap());
+        assert!(
+            rendered.contains("…[1 earlier comment omitted]"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains("u (t): c1"), "{rendered:?}");
+    }
+
+    #[test]
+    fn obs_extractors_ignore_teregen_shaped_keys() {
+        // Kills reading a TeReGen-supplied `package_streams`/`issues`/
+        // `comments` key as OBS data: the OBS extractors read only the
+        // obs_-injected keys, so a future TeReGen row carrying those names
+        // can neither satisfy the fields nor be silently overwritten.
+        let row = serde_json::json!({
+            "id": "SUSE:Maintenance:1:1",
+            "package_streams": ["stray-pkg"],
+            "issues": ["bnc#9"],
+            "comments": ["stray"],
+        });
+        for (name, line) in [
+            ("Package-Streams", "  Package-Streams: -"),
+            ("Issues", "  Issues: -"),
+            ("Comments", "  Comments: -"),
+        ] {
+            let spec = resolve_field(name).unwrap();
+            assert_eq!(render_fields(&row, &[spec]), line);
+        }
     }
 
     #[test]

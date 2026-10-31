@@ -710,7 +710,7 @@ Options:
           filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)
 
   -F, --field <FIELD>
-          select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit
+          select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; Package-Streams/Issues/Comments are read live from OBS per shown row (after --limit/--offset), so narrow large queues with --limit; non-OBS (SLFO) rows render n/a, comments are sanitised and capped per row
 
       --json
           print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON

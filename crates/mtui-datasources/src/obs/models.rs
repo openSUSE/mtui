@@ -14,7 +14,7 @@
 //! distinct events — so a DTD-free body with an entity reference never expands
 //! either. Same guard as `crate::obs::client::error_summary`.
 //!
-//! The four `parse_*` entry points are `pub` (not `pub(crate)`) solely so the
+//! The five `parse_*` entry points are `pub` (not `pub(crate)`) solely so the
 //! detached cargo-fuzz harness in `fuzz/` can drive them with arbitrary bytes;
 //! nothing outside this crate and the harness should call them directly.
 
@@ -67,6 +67,26 @@ pub struct Review {
     pub(crate) history: Vec<HistoryEvent>,
 }
 
+/// One `<issue>` reference of a request (`tracker` + `name` attributes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IssueRef {
+    /// The issue tracker (`tracker` attribute, e.g. `bnc`).
+    pub(crate) tracker: String,
+    /// The issue name (`name` attribute, e.g. `1234567`).
+    pub(crate) name: String,
+}
+
+/// One `<comment>` of a `comments/request/{id}` document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObsComment {
+    /// The comment author (`who` attribute).
+    pub who: String,
+    /// The comment timestamp (`when` attribute).
+    pub when: String,
+    /// The comment body, trimmed.
+    pub body: String,
+}
+
 /// The parts of a request the QAM ops need.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -76,6 +96,11 @@ pub struct Request {
     pub(crate) state: String,
     /// The `action/source/@project`, when present.
     pub(crate) src_project: Option<String>,
+    /// The distinct `action/source/@package` values in document order: the
+    /// `Package-Streams` set `updates -F` serves from OBS.
+    pub(crate) src_packages: Vec<String>,
+    /// The `<issue>` references in document order.
+    pub(crate) issues: Vec<IssueRef>,
     /// The request's reviews.
     pub(crate) reviews: Vec<Review>,
 }
@@ -229,6 +254,8 @@ fn parse_request_element(
         reqid: attr(start, "id").unwrap_or_default(),
         state: String::new(),
         src_project: None,
+        src_packages: Vec::new(),
+        issues: Vec::new(),
         reviews: Vec::new(),
     };
 
@@ -249,6 +276,21 @@ fn parse_request_element(
             {
                 if request.src_project.is_none() {
                     request.src_project = attr(&e, "project");
+                }
+                if let Some(package) = attr(&e, "package")
+                    && !package.is_empty()
+                    && !request.src_packages.contains(&package)
+                {
+                    request.src_packages.push(package);
+                }
+            }
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "issue" => {
+                let issue = IssueRef {
+                    tracker: attr(&e, "tracker").unwrap_or_default(),
+                    name: attr(&e, "name").unwrap_or_default(),
+                };
+                if !issue.name.is_empty() {
+                    request.issues.push(issue);
                 }
             }
             Event::Start(e) if e.local_name().as_ref() == "review" => {
@@ -295,6 +337,8 @@ pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
                     reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
                     src_project: None,
+                    src_packages: Vec::new(),
+                    issues: Vec::new(),
                     reviews: Vec::new(),
                 });
             }
@@ -327,6 +371,8 @@ pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
                     reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
                     src_project: None,
+                    src_packages: Vec::new(),
+                    issues: Vec::new(),
                     reviews: Vec::new(),
                 });
             }
@@ -335,6 +381,92 @@ pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
         }
     }
     Ok(requests)
+}
+
+/// Parse one `<comment …>…</comment>` subtree, starting *after* its start event.
+///
+/// `start` is the comment's start tag (for its attributes); the reader is
+/// positioned just inside the element. Consumes through the matching
+/// `</comment>`.
+fn parse_comment_element(
+    reader: &mut Reader<&[u8]>,
+    buf: &mut Vec<u8>,
+    start: &quick_xml::events::BytesStart<'_>,
+) -> Result<ObsComment, ObsError> {
+    let mut comment = ObsComment {
+        who: attr(start, "who").unwrap_or_default(),
+        when: attr(start, "when").unwrap_or_default(),
+        body: String::new(),
+    };
+    loop {
+        buf.clear();
+        match reader
+            .read_event_into(buf)
+            .map_err(|_| parse_err("request comments"))?
+        {
+            Event::Text(e) => {
+                comment.body.push_str(&e);
+            }
+            Event::CData(e) => {
+                // CDATA is literal per the XML spec: no entity resolution.
+                comment.body.push_str(&e);
+            }
+            Event::GeneralRef(e) => {
+                // The reader surfaces `&name;`/`&#n;` as its own event, so a
+                // Text-only loop drops them (`&amp;` vanishes). Resolve the
+                // way attributes decode; an undecodable reference (e.g. HTML
+                // `&nbsp;` in free text) keeps its raw form rather than
+                // losing the comment.
+                let name: &str = &e;
+                let raw = format!("&{name};");
+                match quick_xml::escape::unescape(&raw) {
+                    Ok(decoded) => comment.body.push_str(&decoded),
+                    Err(_) => comment.body.push_str(&raw),
+                }
+            }
+            Event::End(e) if e.local_name().as_ref() == "comment" => break,
+            Event::Eof => return Err(parse_err("request comments")),
+            _ => {}
+        }
+    }
+    comment.body = comment.body.trim().to_owned();
+    Ok(comment)
+}
+
+/// Parse a `comments/request/{id}` document into its comments.
+///
+/// # Errors
+///
+/// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
+pub fn parse_request_comments(xml: &str) -> Result<Vec<ObsComment>, ObsError> {
+    refuse_dtd(xml)?;
+    // No text trimming: trimming per event would eat significant spaces at
+    // entity/CDATA boundaries (`D ` + `<![CDATA[x]]>` must stay `D x`); the
+    // body is trimmed once, whole, in `parse_comment_element`.
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut comments = Vec::new();
+    loop {
+        buf.clear();
+        match reader
+            .read_event_into(&mut buf)
+            .map_err(|_| parse_err("request comments"))?
+        {
+            Event::Start(e) if e.local_name().as_ref() == "comment" => {
+                comments.push(parse_comment_element(&mut reader, &mut Vec::new(), &e)?);
+            }
+            Event::Empty(e) if e.local_name().as_ref() == "comment" => {
+                comments.push(ObsComment {
+                    who: attr(&e, "who").unwrap_or_default(),
+                    when: attr(&e, "when").unwrap_or_default(),
+                    body: String::new(),
+                });
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(comments)
 }
 
 /// Parse a `group?login=<user>` directory into its group names.
@@ -676,5 +808,127 @@ mod tests {
         assert!(e.to_string().contains("DTD"), "{e}");
         let e = parse_reject_reason_values(billion_laughs).unwrap_err();
         assert!(e.to_string().contains("DTD"), "{e}");
+        let e = parse_request_comments(billion_laughs).unwrap_err();
+        assert!(e.to_string().contains("DTD"), "{e}");
+    }
+
+    #[test]
+    fn parse_request_src_packages_and_issues() {
+        // Kills dropping the per-action `src_package` set or the `<issue>`
+        // refs from the request parser.
+        let xml = concat!(
+            r#"<request id="7">"#,
+            r#"<action type="maintenance_incident">"#,
+            r#"<source project="SUSE:Maintenance:1" package="glibc"/>"#,
+            r#"<source project="SUSE:Maintenance:1" package="glibc-obsolete"/>"#,
+            r#"</action>"#,
+            r#"<action type="maintenance_incident">"#,
+            r#"<source project="SUSE:Maintenance:1" package="glibc"/>"#,
+            r#"</action>"#,
+            r#"<issue tracker="bnc" name="1234567"/>"#,
+            r#"<issue tracker="jsc" name="SLE-1234"/>"#,
+            r#"<state name="review"/>"#,
+            r#"</request>"#,
+        );
+        let req = parse_request(xml).unwrap();
+        assert_eq!(req.src_packages, vec!["glibc", "glibc-obsolete"]);
+        assert_eq!(
+            req.issues,
+            vec![
+                IssueRef {
+                    tracker: "bnc".to_owned(),
+                    name: "1234567".to_owned(),
+                },
+                IssueRef {
+                    tracker: "jsc".to_owned(),
+                    name: "SLE-1234".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_request_without_extras_is_empty_not_missing() {
+        // Kills `Option::None` vs empty-`Vec` confusion: absent extras parse
+        // to empty collections, never an error.
+        let req = parse_request(r#"<request id="9"><state name="review"/></request>"#).unwrap();
+        assert!(req.src_packages.is_empty());
+        assert!(req.issues.is_empty());
+    }
+
+    #[test]
+    fn parse_request_self_closing_request_carries_extras_shape() {
+        // Kills the empty-`<request/>` arms missing the new fields.
+        let req = parse_request(r#"<request id="9"/>"#).unwrap();
+        assert!(req.src_packages.is_empty());
+        assert!(req.issues.is_empty());
+        let all =
+            parse_request_collection(r#"<collection><request id="9"/></collection>"#).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].src_packages.is_empty());
+        assert!(all[0].issues.is_empty());
+    }
+
+    #[test]
+    fn parse_request_comments_bodies() {
+        // Kills a comments parser that drops the body, the actor, or the
+        // timestamp — each is asserted on its own comment.
+        let xml = concat!(
+            r#"<comments>"#,
+            r#"<comment who="alice" when="2024-01-01T00:00:00">first!</comment>"#,
+            r#"<comment who="bob" when="2024-01-02T00:00:00"/>"#,
+            r#"</comments>"#,
+        );
+        let comments = parse_request_comments(xml).unwrap();
+        assert_eq!(
+            comments,
+            vec![
+                ObsComment {
+                    who: "alice".to_owned(),
+                    when: "2024-01-01T00:00:00".to_owned(),
+                    body: "first!".to_owned(),
+                },
+                ObsComment {
+                    who: "bob".to_owned(),
+                    when: "2024-01-02T00:00:00".to_owned(),
+                    body: String::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_request_comments_resolves_entities_and_keeps_cdata() {
+        // Kills raw-entity passthrough and dropped CDATA: text resolves
+        // predefined entities the way attributes decode, CDATA stays literal
+        // per the XML spec, and an undecodable entity (e.g. HTML `&nbsp;` in
+        // free text) keeps its raw form rather than losing the comment.
+        let xml = r#"<comments><comment who="a" when="t">R&amp;D <![CDATA[x]]>&nbsp;</comment></comments>"#;
+        let comments = parse_request_comments(xml).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "R&D x&nbsp;");
+    }
+
+    #[test]
+    fn parse_request_comments_empty_collection() {
+        assert_eq!(parse_request_comments("<comments/>").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn parse_request_comments_truncated_is_error() {
+        // EOF before `</comment>` is rejected, like the request parser's
+        // truncated-history guard — both mid-text and right after the start
+        // tag (the latter reaches the explicit EOF arm, the former quick-xml's
+        // read error; both read as the same typed parse error).
+        for xml in [
+            r#"<comments><comment who="alice" when="2024-01-01T00:00:00">hi"#,
+            r#"<comments><comment who="alice" when="2024-01-01T00:00:00">"#,
+        ] {
+            let err = parse_request_comments(xml).unwrap_err();
+            assert!(
+                err.to_string().contains("malformed OBS request comments"),
+                "{xml}: {err}"
+            );
+        }
     }
 }
