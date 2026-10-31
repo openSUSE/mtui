@@ -53,7 +53,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   outcome after for a tool without `readOnlyHint`, an outcome alone for a
   read-only one — plus a terminal record per background job. An outcome record
   carries the schema version, arrival timestamp, sequence number, session id,
-  transport, tool name, arguments, outcome (`ok`/`error`/`unknown-tool`),
+  transport, reserved `principal: null`, tool name, arguments, outcome
+  (`ok`/`error`/`unknown-tool`),
   duration, and the RRIDs and host names the call resolved to; an `intent`
   record carries the same header and the same arguments; a `terminal` record
   carries no arguments and joins its dispatch by job id. Host names are
@@ -90,7 +91,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   value attached to one (`-pSECRET`, `-U user%pass`), and anything passed by
   environment, stdin or a file. The seam is `mtui-mcp`'s `call_tool` dispatch
   only — `mtui-core` has no session-key/transport notion, so the REPL is not
-  covered (#411).
+  covered. Every record carries `principal: null`, reserved for a future
+  authenticated caller identity: under HTTP every client acts with the
+  server's credentials, so records attribute to a session, never a person,
+  and nothing client-declared may ever populate it (#411, #412).
 
 - New `[mcp] audit_log_max_bytes` key (default `268435456`, 256 MiB): the size
   at which the audit sink rotates to `<path>.1`, keeping five generations and

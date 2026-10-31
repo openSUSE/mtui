@@ -848,6 +848,7 @@ impl McpSession {
             "seq": seq,
             "session": self.id,
             "transport": self.transport,
+            "principal": serde_json::Value::Null,
             "event": crate::audit::AuditEvent::Terminal.as_str(),
             "tool": crate::audit::cap_str(tool),
             "job_id": crate::audit::cap_str(job_id),

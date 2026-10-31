@@ -31,6 +31,12 @@ use rmcp::model::CallToolRequestParams;
 async fn build_server() -> McpServer {
     let mut config = Config::default();
     config.session_user = "testuser".to_owned();
+    build_server_with_config(config).await
+}
+
+/// [`build_server`] with an explicit config, so wire tests can point
+/// `[mcp] audit_log` at a temp file.
+async fn build_server_with_config(config: Config) -> McpServer {
     let registry = Arc::new(register_all());
     let provider = StdioProvider::new(config);
     let session = provider.get_or_create("<default>").await;
@@ -360,9 +366,23 @@ fn spawn_raw_server() -> (
     tokio::io::WriteHalf<tokio::io::DuplexStream>,
     tokio::task::JoinHandle<()>,
 ) {
+    let mut config = Config::default();
+    config.session_user = "testuser".to_owned();
+    spawn_raw_server_with_config(config)
+}
+
+/// [`spawn_raw_server`] with an explicit config, so wire tests can point
+/// `[mcp] audit_log` at a temp file.
+fn spawn_raw_server_with_config(
+    config: Config,
+) -> (
+    tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    tokio::task::JoinHandle<()>,
+) {
     let (server_io, client_io) = tokio::io::duplex(8192);
     let server_task = tokio::spawn(async move {
-        let server = build_server().await;
+        let server = build_server_with_config(config).await;
         let running = server.serve(server_io).await.expect("server serve");
         running.waiting().await.expect("server run");
     });
@@ -520,6 +540,106 @@ async fn server_info_names_mtui_mcp_on_initialize_and_discover() {
         server_info["version"],
         env!("CARGO_PKG_VERSION"),
         "{discover}"
+    );
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}
+
+/// #412: wire-supplied identity never populates the reserved principal.
+///
+/// Sends a raw `tools/call` carrying `_meta.principal` and the SEP-2575
+/// per-request `io.modelcontextprotocol/clientInfo` — the client-controlled
+/// channels that reach `call_tool` — and proves the audit record still carries
+/// `principal: null`. The `initialize` `clientInfo` rides along for the
+/// handshake and is pinned too: rmcp persists it on the peer
+/// (`service/server.rs:690`, `peer.set_peer_info`), so `call_tool` can read it
+/// through `context.peer.peer_info()` — the improvement #412 warns about. This
+/// drives the real `call_tool`, so it pins the source: a later change filling
+/// the field from any of these three channels fails here, the record carrying
+/// `evil-client` (or `root` for `_meta.principal`). Tool *arguments* smuggling
+/// the same
+/// claim are pinned by `audit_principal_ignores_client_supplied_identity`
+/// instead (`call_arguments` returns `arguments` only, so wire `_meta` never
+/// enters kwargs and one test cannot cover both).
+///
+/// A real `RequestContext` is not constructible in tests (`Peer::new` is
+/// rmcp-private and `RequestContext` is `#[non_exhaustive]` — the reason the
+/// unit tests drive the `dispatch_audited` seam directly), so the wire is the
+/// only way to reach `call_tool` with a context.
+#[tokio::test]
+async fn principal_stays_null_for_wire_identity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("audit.jsonl");
+    let mut config = Config::default();
+    config.session_user = "testuser".to_owned();
+    config.mcp_audit_log = Some(path.clone());
+    let (mut reader, mut write_half, server_task) = spawn_raw_server_with_config(config);
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "evil-client", "version": "0" },
+            }
+        }),
+    )
+    .await;
+    let init = recv_line(&mut reader).await;
+    assert_eq!(
+        init["result"]["protocolVersion"], "2025-11-25",
+        "the server must negotiate the requested revision: {init}"
+    );
+    send_line(
+        &mut write_half,
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "whoami",
+                "arguments": {},
+                "_meta": {
+                    "principal": "root",
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "evil-client",
+                        "version": "0",
+                    },
+                },
+            }
+        }),
+    )
+    .await;
+
+    let call = recv_line(&mut reader).await;
+    assert!(call.get("error").is_none(), "the call must succeed: {call}");
+
+    // The outcome record lands before the reply, so it is on disk now.
+    let text = std::fs::read_to_string(&path).expect("sink readable");
+    let mut lines = text.lines();
+    let record: serde_json::Value =
+        serde_json::from_str(lines.next().expect("one record")).expect("one object");
+    assert!(
+        lines.next().is_none(),
+        "whoami is read-only: one record, got: {text}"
+    );
+    assert_eq!(record["event"], "call");
+    assert_eq!(
+        record.get("principal"),
+        Some(&serde_json::Value::Null),
+        "wire identity never populates the reserved field: {record:?}"
     );
 
     drop(reader);
