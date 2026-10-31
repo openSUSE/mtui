@@ -440,6 +440,7 @@ impl McpServer {
                 "seq": seq,
                 "session": self.session.id(),
                 "transport": self.session.transport(),
+                "principal": serde_json::Value::Null,
                 "event": AuditEvent::Intent.as_str(),
                 "tool": crate::audit::cap_str(name),
                 "args": args.clone(),
@@ -608,6 +609,7 @@ impl McpServer {
                 "seq": seq,
                 "session": self.session.id(),
                 "transport": self.session.transport(),
+                "principal": serde_json::Value::Null,
                 "event": event.as_str(),
                 "tool": crate::audit::cap_str(name),
                 "args": args,
@@ -1410,6 +1412,78 @@ mod tests {
         assert_eq!(record["hosts"], json!([AUDIT_HOST]));
         assert!(record["ts"].as_u64().unwrap_or(0) > 0);
         assert!(record["duration_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn audit_principal_is_reserved_null_on_every_record() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts succeeds");
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        // `unload` is mutating (no `readOnlyHint`) and not deny-listed, so it
+        // takes the intent path without depending on `config_set`.
+        audited_call(&server, "unload", json!({"rrid": AUDIT_RRID}))
+            .await
+            .expect("unload succeeds");
+
+        // Read-only call (1) + backgrounded run (intent + dispatch +
+        // terminal) + mutating call (intent + outcome).
+        let records = await_records(&path, 6).await;
+        assert_eq!(records.len(), 6, "all three shapes recorded: {records:?}");
+        for record in &records {
+            assert_eq!(
+                record.get("principal"),
+                Some(&Value::Null),
+                "reserved principal stays null: {record:?}"
+            );
+        }
+        let mut events: Vec<&str> = records.iter().filter_map(|r| r["event"].as_str()).collect();
+        events.sort_unstable();
+        assert_eq!(
+            events,
+            vec!["call", "call", "dispatch", "intent", "intent", "terminal"],
+            "every shape covered, none missing: {records:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_principal_ignores_client_supplied_identity() {
+        let (server, _session, _dir, path) = audited_server();
+        // A caller-typed identity smuggled as tool arguments must never reach
+        // the reserved field. The wire `_meta`/client-name channel is pinned
+        // by the stdio round-trip test instead.
+        audited_call(
+            &server,
+            "run",
+            json!({
+                "command": ["true"],
+                "principal": "root",
+                "_meta": {"principal": "root"},
+            }),
+        )
+        .await
+        .expect("rejected args still answer with a payload, not a protocol error");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "intent + outcome: {records:?}");
+        for record in &records {
+            assert_eq!(
+                record.get("principal"),
+                Some(&Value::Null),
+                "client input never populates principal: {record:?}"
+            );
+        }
+        assert_eq!(records[1]["args"]["principal"], json!("root"));
+        assert_eq!(records[1]["args"]["_meta"]["principal"], json!("root"));
     }
 
     #[tokio::test]

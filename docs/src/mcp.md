@@ -74,7 +74,8 @@ tools_deny = ["updates", "openqa_overview"]
 tool surface; they do not gate callers. HTTP session isolation is likewise not
 caller authentication. Keep the HTTP transport on its default loopback interface,
 or place it behind an authenticated boundary you trust to operate the remaining
-maintenance tools.
+maintenance tools. Audit records attribute to a session, not a person (see
+[Audit log](#audit-log)).
 
 ### Permanent deny-list
 
@@ -548,13 +549,18 @@ alone.** A same-user hardlink is allowed on purpose; it crosses no boundary.
 The record is durable and append-only but **not tamper-evident**: there is no
 hash chain and no HMAC, so anyone writing as the owner can rewrite history
 undetected. Tamper evidence means shipping each record off-host as it lands —
-see [OTLP log export](#otlp-log-export). An **outcome** record carries the schema
-version, the arrival timestamp, the sequence number, the session id, the
-transport, the tool name, the (redacted, see below) arguments, the outcome
-(`ok` / `error` / `unknown-tool`), the duration, and the RRIDs and host names
-the call resolved to. An **`intent`** record carries the same header and the
-same arguments, and nothing that only exists afterwards. A **`terminal`**
-record carries no arguments at all.
+see [OTLP log export](#otlp-log-export). Every record carries `principal:
+null`, reserved for a future authenticated caller identity (#412): under
+HTTP every client acts with the server's credentials, so records attribute
+to a session, never a person, and nothing client-declared (a header, a tool
+argument, an `initialize` client name) may ever populate it. An **outcome**
+record carries the schema version, the arrival timestamp, the sequence
+number, the session id, the transport, the reserved principal, the tool
+name, the (redacted, see below) arguments, the outcome (`ok` / `error` /
+`unknown-tool`), the duration, and the RRIDs and host names the call
+resolved to. An **`intent`** record carries the same header and the same
+arguments, and nothing that only exists afterwards. A **`terminal`** record
+carries no arguments at all.
 
 Host names on a record are **best-effort**: they are empty when the session is
 busy with an exclusive background job (a backgrounded `load_template` or
@@ -584,8 +590,9 @@ shift, never a refused call.
 
 A tool that is **not** advertised `readOnlyHint` writes an `intent` record
 before it runs — schema version, arrival timestamp, sequence number, session,
-transport, `event: "intent"`, tool, (redacted) arguments, and the `trace`
-correlation when the client supplied one. Nothing else, because nothing else
+transport, reserved `principal: null` (see [Audit log](#audit-log)),
+`event: "intent"`, tool, (redacted) arguments, and the `trace` correlation
+when the client supplied one. Nothing else, because nothing else
 exists yet. Its outcome record then carries `intent: <seq>`, and its
 `duration_ms` — measured from arrival, like `ts` — includes the intent record's
 own write. Read-only tools skip the intent and write only the outcome record, so
