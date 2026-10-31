@@ -1,0 +1,85 @@
+---
+name: release-plz
+# yamllint disable-line rule:truthy
+on:
+  # Main only: release-plz assumes a single release branch, and the tag this
+  # workflow pushes drives release.yml. Fixes for a `26.N.x` line are
+  # cherry-picked by hand (docs/src/installation.md "Cutting a release");
+  # this workflow never runs there. Both jobs authenticate with the
+  # RELEASE_PLZ_TOKEN PAT: GITHUB_TOKEN pushes trigger no further workflow
+  # runs, so the tag push would never reach release.yml.
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  # Tag + publish to crates.io once the Release PR lands (`release_always =
+  # false` in release-plz.toml, so direct main pushes are no-ops here). No
+  # GitHub release from this job: the tag push drives release.yml, which
+  # stays the only creator (build matrix + notes-base walk).
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+    # Same group as the PR job: serialize the two so a Release-PR merge never
+    # tags/publishes while the PR job recomputes from the same push, and two
+    # rapid merges never publish concurrently.
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history + tags: version and changelog computation walks back
+          # to the previous release. No credential persists in .git/config;
+          # the action pushes tags over its own authenticated remote.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+      - name: Run release-plz
+        uses: release-plz/action@f36720ba01927d9927fba665fcdf802e12bc264b  # v0.5.147
+        with:
+          command: release
+        env:
+          # PAT, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN trigger no
+          # further workflow runs, so the tag push below would never drive
+          # release.yml. See "One-time maintainer setup" in installation.md.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  # Open/update the Release PR (mechanical version bumps + draft changelog)
+  # for the maintainer to edit; merging it is what sets the release.
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+      - name: Run release-plz
+        uses: release-plz/action@f36720ba01927d9927fba665fcdf802e12bc264b  # v0.5.147
+        with:
+          command: release-pr
+        env:
+          # Same PAT as the release job: CI checks never run on a Release PR
+          # pushed with GITHUB_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
