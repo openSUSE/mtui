@@ -186,14 +186,14 @@ mod tests {
     use mtui_core::{ColorMode, CommandPromptDisplay};
     use mtui_testreport::{ObsReport, TestReport};
     use mtui_types::RequestReviewID;
+    use mtui_types::fixtures::MAINTENANCE_OPENQA_L3;
     use mtui_types::report_document::{ReportDocument, Verdict};
     use ratatui::backend::TestBackend;
 
     use super::*;
 
     const RRID: &str = "SUSE:Maintenance:1:1";
-    const DOCUMENT: &str =
-        include_str!("../../mtui-types/tests/fixtures/document/maintenance_openqa_l3.json");
+    const DOCUMENT: &str = MAINTENANCE_OPENQA_L3;
 
     struct Script(VecDeque<Event>);
 

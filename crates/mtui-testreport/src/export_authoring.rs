@@ -46,6 +46,7 @@ pub fn author_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mtui_types::fixtures::MAINTENANCE_OBS;
 
     #[test]
     fn is_a_no_op_when_no_document_is_loaded() {
@@ -129,11 +130,7 @@ mod tests {
     /// `openqa_overview --export` document path relies on.
     #[test]
     fn parks_overview_rows_under_testing_openqa_extra() {
-        let mut document: Option<ReportDocument> = Some(
-            include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json")
-                .parse()
-                .unwrap(),
-        );
+        let mut document: Option<ReportDocument> = Some(MAINTENANCE_OBS.parse().unwrap());
         let overview = OpenQAOverviewResult {
             single_incidents: vec![mtui_datasources::oqa_search::VersionResult {
                 version: "15-SP6".to_owned(),

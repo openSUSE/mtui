@@ -1,7 +1,7 @@
 //! Golden projection of the document-based ingest path.
 //!
-//! For each pair in `tests/fixtures/pairs/` (see `PROVENANCE.md` alongside
-//! them), builds a [`TestReportBase`] via [`apply_document`] over
+//! For each pair in `tests/fixtures/pairs/` (on-disk directory: the RRID with
+//! `:` as `_`; see `PROVENANCE.md` alongside them), builds a [`TestReportBase`] via [`apply_document`] over
 //! `document.json` and `update_repos_parser`, and pins every field they set as
 //! an `insta` snapshot. The values were agreed against the retired text
 //! template reader before it was removed: reference `hostnames` are empty (the
@@ -41,9 +41,11 @@ const PAIRS: &[Pair] = &[
 ];
 
 fn pair_dir(rrid: &str) -> PathBuf {
+    // `:` is unpackageable (`cargo package` rejects it), so the on-disk
+    // directory replaces it with `_`; the RRID itself is untouched.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/pairs")
-        .join(rrid)
+        .join(rrid.replace(':', "_"))
 }
 
 fn new_report(kind: RequestKind, config: Config) -> Box<dyn TestReport + Send + Sync> {

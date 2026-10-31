@@ -307,11 +307,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    const MAINTENANCE_OBS: &str =
-        include_str!("../../tests/fixtures/document/maintenance_obs.json");
-    const PI: &str = include_str!("../../tests/fixtures/document/pi.json");
-    const MAXIMAL: &str = include_str!("../../tests/fixtures/document/maximal.json");
+    use crate::fixtures::{
+        MAINTENANCE_ADDON, MAINTENANCE_OBS, MAINTENANCE_OPENQA_L3, MAXIMAL, PI, SLFO_GITEA,
+    };
 
     fn doc(raw: &str) -> ReportDocument {
         raw.parse().expect("fixture parses")
@@ -344,18 +342,9 @@ mod tests {
 
     const ALL_FIXTURES: [(&str, &str); 6] = [
         ("maintenance_obs", MAINTENANCE_OBS),
-        (
-            "maintenance_addon",
-            include_str!("../../tests/fixtures/document/maintenance_addon.json"),
-        ),
-        (
-            "maintenance_openqa_l3",
-            include_str!("../../tests/fixtures/document/maintenance_openqa_l3.json"),
-        ),
-        (
-            "slfo_gitea",
-            include_str!("../../tests/fixtures/document/slfo_gitea.json"),
-        ),
+        ("maintenance_addon", MAINTENANCE_ADDON),
+        ("maintenance_openqa_l3", MAINTENANCE_OPENQA_L3),
+        ("slfo_gitea", SLFO_GITEA),
         ("maximal", MAXIMAL),
         ("pi", PI),
     ];

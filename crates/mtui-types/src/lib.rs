@@ -4,6 +4,11 @@
 
 pub mod enums;
 pub mod error;
+// Test data, not API: hidden from the docs rather than feature-gated — every
+// test crate already depends on `mtui-types`, so a feature would gate
+// nothing while complicating every test build.
+#[doc(hidden)]
+pub mod fixtures;
 pub mod hostlog;
 pub mod oqaresults;
 pub mod package;

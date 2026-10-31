@@ -519,11 +519,7 @@ mod tests {
     const FIXTURE_FP: &str = "SHA256:lbmsoA0yIEcEiVDRnMWuzm+nV+3ZEEpVIURqFoeSspg";
 
     fn fixture_pub_text() -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/obs/id_ed25519.pub"),
-        )
-        .unwrap()
+        mtui_types::fixtures::SSH_ID_ED25519_PUB.to_owned()
     }
 
     #[test]
@@ -570,10 +566,8 @@ mod tests {
         // The private file alone (no `.pub` beside it): the public half still
         // yields the same fingerprint, and no secret is read for it.
         let dir = tempfile::tempdir().unwrap();
-        let src =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
         let base = dir.path().join("id_test");
-        std::fs::copy(&src, &base).unwrap();
+        std::fs::write(&base, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         assert_eq!(file_key_fingerprint(&base).as_deref(), Some(FIXTURE_FP));
     }
 
@@ -582,10 +576,8 @@ mod tests {
         // A mismatched `.pub` beside a valid unencrypted key must not
         // misreport: signing uses the private half, so the display does too.
         let dir = tempfile::tempdir().unwrap();
-        let src =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
         let base = dir.path().join("id_test");
-        std::fs::copy(&src, &base).unwrap();
+        std::fs::write(&base, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         std::fs::write(
             dir.path().join("id_test.pub"),
             "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOhp76L4G35dZCjy2rSLa8dOnzQebZz4eiiC4zCWEv3OnX8XoSamKF6l73YZtDt5wo6VYanto8+l0TC/750dsdI= other\n",
@@ -607,10 +599,8 @@ mod tests {
     #[test]
     fn key_display_prefers_configured_then_file_then_fallback() {
         let dir = tempfile::tempdir().unwrap();
-        let src =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
         let base = dir.path().join("id_test");
-        std::fs::copy(&src, &base).unwrap();
+        std::fs::write(&base, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         assert_eq!(key_display(Some(&base), Some("SHA256:abc")), "SHA256:abc");
         assert_eq!(key_display(Some(&base), Some("abc")), "SHA256:abc");
         assert_eq!(key_display(Some(&base), None), FIXTURE_FP);

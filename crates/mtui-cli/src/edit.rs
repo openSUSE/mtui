@@ -150,6 +150,7 @@ mod tests {
     fn session_with_report(document: bool, path: Option<&str>) -> Session {
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
+        use mtui_types::fixtures::MAINTENANCE_OBS;
         use mtui_types::report_document::ReportDocument;
 
         const RRID: &str = "SUSE:Maintenance:1:1";
@@ -158,11 +159,7 @@ mod tests {
         report.base_mut().rrid = Some(RequestReviewID::parse(RRID).unwrap());
         report.base_mut().path = path.map(PathBuf::from);
         if document {
-            report.base_mut().document = Some(
-                include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json")
-                    .parse::<ReportDocument>()
-                    .unwrap(),
-            );
+            report.base_mut().document = Some(MAINTENANCE_OBS.parse::<ReportDocument>().unwrap());
         }
         session.templates.add(Box::new(report));
         session.templates.set_active(RRID);

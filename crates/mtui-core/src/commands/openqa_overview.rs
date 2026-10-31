@@ -758,9 +758,7 @@ mod tests {
     }
 
     fn maintenance_document() -> mtui_types::report_document::ReportDocument {
-        include_str!("../../../mtui-types/tests/fixtures/document/maintenance_obs.json")
-            .parse()
-            .unwrap()
+        mtui_types::fixtures::MAINTENANCE_OBS.parse().unwrap()
     }
 
     #[tokio::test]

@@ -608,8 +608,8 @@ mod tests {
         let server = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         let store_file = dir.path().join("teregen-token.json");
-        let key =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
+        let key = dir.path().join("id_ed25519");
+        std::fs::write(&key, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         Mock::given(method("POST"))
             .and(path("/auth/ssh/challenge"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

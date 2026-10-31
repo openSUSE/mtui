@@ -94,6 +94,7 @@ fn etag_text(etag: Option<&str>) -> &str {
 mod tests {
     use super::*;
     use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
+    use mtui_types::fixtures::PI;
     use mtui_types::report_document::ReportDocument;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -128,10 +129,7 @@ mod tests {
     const NEW_ETAG: &str = "\"etag-new\"";
 
     fn document(comment: Option<&str>) -> ReportDocument {
-        let mut doc: ReportDocument =
-            include_str!("../../../mtui-types/tests/fixtures/document/pi.json")
-                .parse()
-                .expect("fixture parses");
+        let mut doc: ReportDocument = PI.parse().expect("fixture parses");
         doc.comment = mtui_types::report_document::Req(comment.map(str::to_owned));
         doc
     }

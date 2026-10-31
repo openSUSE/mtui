@@ -256,10 +256,8 @@ mod tests {
             .await;
 
         let dir = tempfile::TempDir::new().unwrap();
-        let key_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../mtui-datasources/tests/fixtures/obs/id_ed25519");
         let key = dir.path().join("id_test");
-        std::fs::copy(&key_src, &key).unwrap();
+        std::fs::write(&key, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         let oscrc = dir.path().join("oscrc");
         std::fs::write(
             &oscrc,
@@ -393,10 +391,8 @@ mod tests {
             .await;
 
         let dir = tempfile::TempDir::new().unwrap();
-        let key_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../mtui-datasources/tests/fixtures/obs/id_ed25519");
         let key = dir.path().join("id_test");
-        std::fs::copy(&key_src, &key).unwrap();
+        std::fs::write(&key, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         let oscrc = dir.path().join("oscrc");
         std::fs::write(
             &oscrc,

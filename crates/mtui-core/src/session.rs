@@ -2612,18 +2612,22 @@ mod tests {
     use mtui_types::RequestReviewID;
     use mtui_types::hostlog::CommandLog;
 
-    const REFHOSTS_FIXTURE: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../mtui-datasources/tests/fixtures/refhosts.yml"
-    );
-
     /// A config whose refhosts resolver is the offline file-backed `path`
-    /// resolver pointed at the fixture above (no network).
-    fn config_with_path_refhosts() -> Config {
+    /// resolver pointed at a live copy of the `mtui_types::fixtures` inventory
+    /// (no network). The compiled constant is not a file, so each call
+    /// materializes it into a fresh temp dir; the returned dir must outlive
+    /// the session under test.
+    fn config_with_path_refhosts() -> (tempfile::TempDir, Config) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("refhosts.yml"),
+            mtui_types::fixtures::REFHOSTS_YML,
+        )
+        .unwrap();
         let mut c = Config::default();
         c.refhosts_resolvers = "path".to_owned();
-        c.refhosts_path = REFHOSTS_FIXTURE.into();
-        c
+        c.refhosts_path = dir.path().join("refhosts.yml");
+        (dir, c)
     }
 
     /// A teregen serving `rrid`'s document, and `config` pointed at it.
@@ -2687,7 +2691,8 @@ mod tests {
     /// (offline `path` resolver), sorted and deduplicated.
     #[tokio::test]
     async fn autoconnect_hosts_merges_reference_and_testplatform_hosts() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         // The fixture's minor is the numeric `5`, so the query needs `minor=5`.
         seed_active_report(
             &mut s,
@@ -2712,7 +2717,8 @@ mod tests {
     /// With no testplatforms the result is exactly the reference-host set.
     #[tokio::test]
     async fn autoconnect_hosts_reference_only_when_no_testplatforms() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &["only.example.com"], &[]);
 
         let hosts = autoconnect_hosts_of(&s).await;
@@ -2723,7 +2729,8 @@ mod tests {
     /// the reference hosts still stand.
     #[tokio::test]
     async fn autoconnect_hosts_unmatched_testplatform_yields_reference_only() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(
             &mut s,
             "SUSE:Maintenance:1:1",
@@ -2742,7 +2749,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
 
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
         let _teregen = teregen_serving(&mut config, rrid, "maintenance").await;
         let mut s = Session::new(config, false);
@@ -2766,7 +2773,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:PI:1.2:5";
 
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
         let _teregen = teregen_serving(&mut config, rrid, "pi").await;
         assert!(config.lock_pi_autolock, "default must be enabled");
@@ -2789,7 +2796,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
 
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
         let _teregen = teregen_serving(&mut config, rrid, "maintenance").await;
         assert!(config.lock_pi_autolock, "default must be enabled");
@@ -2808,7 +2815,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:PI:1.2:5";
 
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
         let _teregen = teregen_serving(&mut config, rrid, "pi").await;
         config.lock_pi_autolock = false;
@@ -2826,7 +2833,7 @@ mod tests {
     #[tokio::test]
     async fn load_update_missing_report_returns_empty_and_registers_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.template_dir = tmp.path().to_path_buf();
         let teregen = wiremock::MockServer::start().await;
         config.teregen_api_v2 = teregen.uri();
@@ -2849,7 +2856,8 @@ mod tests {
     /// `set_workflow` mutates the active report's workflow mode.
     #[test]
     fn set_workflow_mutates_active_report() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         assert_eq!(s.metadata().workflow(), Workflow::Manual);
         s.set_workflow(Workflow::Auto);
@@ -2860,7 +2868,8 @@ mod tests {
     /// alone and report `false`; with one it writes through (#484).
     #[test]
     fn set_workflow_with_no_active_report_does_not_mutate_sentinel() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         // No active report => null sentinel, default Manual.
         assert_eq!(s.metadata().workflow(), Workflow::Manual);
         // Attempt to set Auto with no active report must be a no-op.
@@ -2889,7 +2898,8 @@ mod tests {
     /// An unreachable host fails its live connect and is skipped, not added.
     #[tokio::test]
     async fn add_named_hosts_skips_unconnectable() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
@@ -2907,7 +2917,8 @@ mod tests {
     /// connect loop, leaving the group size unchanged.
     #[tokio::test]
     async fn add_named_hosts_skips_already_connected() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         s.targets_mut().add(mock_target("refhost.example"));
         assert_eq!(s.targets().len(), 1);
@@ -2975,7 +2986,8 @@ mod tests {
     /// nothing attaches, nothing is claimed, and the holder is named.
     #[tokio::test]
     async fn add_named_hosts_refuses_foreign_held_host() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
@@ -3005,7 +3017,8 @@ mod tests {
     /// its in-process claim, and its failure comes back with its reason.
     #[tokio::test]
     async fn add_named_hosts_releases_failed_claims() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
@@ -3037,7 +3050,8 @@ mod tests {
     /// with its holder named instead of vanishing into a plain skip.
     #[tokio::test]
     async fn add_named_hosts_names_remote_holder() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
@@ -3083,7 +3097,8 @@ mod tests {
     /// owner held before the call (e.g. from an earlier pool selection) stays.
     #[tokio::test]
     async fn add_named_hosts_keeps_preexisting_claim_on_failure() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
@@ -3114,7 +3129,8 @@ mod tests {
     /// path is exercised.
     #[tokio::test]
     async fn add_testplatform_hosts_resolves_and_connects() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(
             &mut s,
             "SUSE:Maintenance:1:1",
@@ -3128,7 +3144,8 @@ mod tests {
     /// With no testplatforms, `add_testplatform_hosts` is a no-op.
     #[tokio::test]
     async fn add_testplatform_hosts_no_testplatforms_is_noop() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         s.add_testplatform_hosts().await;
         assert!(s.targets().is_empty());
@@ -3140,7 +3157,8 @@ mod tests {
     /// suppressed on the perform_* path.
     #[tokio::test]
     async fn take_and_split_targets_propagate_session_is_repl() {
-        let mut s = Session::new(config_with_path_refhosts(), true);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, true);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         // The load-time reconcile `make_testreport` performs.
         s.targets_mut().set_is_repl(true);
@@ -3378,7 +3396,8 @@ mod tests {
     /// stale entry for a host that now matches.
     #[test]
     fn apply_product_warnings_records_and_clears() {
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         // A stale entry the later match must clear.
         s.metadata_mut()
@@ -3572,7 +3591,7 @@ mod tests {
     /// Production always wires both, so this only exercises the fall-through.
     #[tokio::test]
     async fn resolve_and_record_pool_unwired_resolves_no_testplatform_hosts() {
-        let config = config_with_path_refhosts();
+        let (_refhosts_dir, config) = config_with_path_refhosts();
         let mut s = Session::new(config.clone(), false);
         let ref_hosts = vec!["explicit-host".to_owned()];
         // Matches fixture hosts a wired arbiter/owner would otherwise resolve.
@@ -3668,7 +3687,7 @@ mod tests {
     /// the walk off after about 4.
     #[tokio::test]
     async fn connect_pool_backups_stops_once_budget_is_spent() {
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let mut s = Session::new(config.clone(), false);
         let rrid = "SUSE:Maintenance:1:1";
@@ -3794,7 +3813,7 @@ mod tests {
     /// host keeps its command log.
     #[tokio::test]
     async fn backup_keeps_attached_slot_host() {
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let mut s = Session::new(config, false);
         let rrid = "SUSE:Maintenance:1:1";
@@ -3841,7 +3860,7 @@ mod tests {
     /// up slots nobody asked about.
     #[tokio::test]
     async fn named_add_does_not_back_up_unrelated_slots() {
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let mut s = Session::new(config, false);
         let rrid = "SUSE:Maintenance:1:1";
@@ -3871,7 +3890,7 @@ mod tests {
     /// the sibling fails too.
     #[tokio::test]
     async fn backup_retries_failed_primary() {
-        let mut config = config_with_path_refhosts();
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let mut s = Session::new(config, false);
         let rrid = "SUSE:Maintenance:1:1";
@@ -3916,18 +3935,32 @@ mod tests {
     }
 
     /// A session over the active report with the pool seam wired, for the
-    /// failed-primary tests below.
+    /// failed-primary tests below. Returns the temp dir holding the
+    /// materialized refhosts inventory first: it must outlive the session,
+    /// or the resolver silently degrades to the inventory-unavailable path.
     fn pool_session(
         connect_timeout: u64,
         lock_wait: u64,
-    ) -> (Session, &'static HostArbiter, Owner, &'static str) {
-        let mut config = config_with_path_refhosts();
+    ) -> (
+        tempfile::TempDir,
+        Session,
+        &'static HostArbiter,
+        Owner,
+        &'static str,
+    ) {
+        let (refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = connect_timeout;
         config.lock_wait = lock_wait;
         let mut s = Session::new(config, false);
         let rrid = "SUSE:Maintenance:1:1";
         seed_active_report(&mut s, rrid, &[], &[]);
-        (s, test_arbiter(), ("reg".to_owned(), rrid.to_owned()), rrid)
+        (
+            refhosts_dir,
+            s,
+            test_arbiter(),
+            ("reg".to_owned(), rrid.to_owned()),
+            rrid,
+        )
     }
 
     /// A failed primary's claim is released even when the retry budget is
@@ -3935,7 +3968,14 @@ mod tests {
     /// `add_host` would skip it silently.
     #[tokio::test]
     async fn failed_primary_claim_is_released_when_budget_is_spent_at_slot_start() {
-        let (mut s, arbiter, owner, rrid) = pool_session(0, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(0, 0);
+        // The pool seam resolves testplatforms through the materialized
+        // inventory: a dropped TempDir would silently degrade these tests to
+        // the inventory-unavailable path.
+        assert!(
+            s.config.refhosts_path.is_file(),
+            "pool_session must keep the refhosts fixture alive"
+        );
         let primary = closed_addr();
         let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         wire_pool(
@@ -3971,7 +4011,7 @@ mod tests {
     /// primary must not keep a pool host pinned.
     #[tokio::test]
     async fn failed_primary_claim_is_released_when_slot_is_already_served() {
-        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
         let primary = closed_addr();
         let spare = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         wire_pool(
@@ -4005,7 +4045,7 @@ mod tests {
     /// its failure does not back the slot up.
     #[tokio::test]
     async fn named_slot_candidate_failure_does_not_back_up() {
-        let (mut s, arbiter, owner, _) = pool_session(1, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, _) = pool_session(1, 0);
         let named = closed_addr();
         let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         wire_pool(
@@ -4025,7 +4065,7 @@ mod tests {
     /// every candidate being unconnectable.
     #[tokio::test]
     async fn budget_cut_inside_a_slots_sibling_walk_is_budget_spent() {
-        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
         let primary = closed_addr();
         // Black holes: each sibling costs a full `connect_timeout`, so the
         // fifth cannot start inside the 4s budget.
@@ -4055,7 +4095,7 @@ mod tests {
     /// Siblings the backup walk finds claimed by another RRID are named with it.
     #[tokio::test]
     async fn backup_names_the_claimant_of_a_busy_sibling() {
-        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
         let primary = closed_addr();
         let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
         assert!(arbiter.try_acquire("busy-host", &other));
@@ -4095,7 +4135,7 @@ mod tests {
     /// yields them in.
     #[tokio::test]
     async fn unserved_slots_are_reported_in_sorted_order() {
-        let (mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
         let names: Vec<String> = (0..8).map(|i| format!("slot-{i}")).collect();
         let cands: Vec<[String; 2]> = (0..8).map(|_| [closed_addr(), closed_addr()]).collect();
         let slots: Vec<(&str, &[String])> = names
@@ -4169,7 +4209,8 @@ mod tests {
     fn fork_for_call_shares_reports_with_own_display() {
         use crate::display::{ColorMode, CommandPromptDisplay};
 
-        let mut s = Session::new(config_with_path_refhosts(), false);
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
 
         // The canonical session must not hold a guard on the entry the fork will

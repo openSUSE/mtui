@@ -94,8 +94,8 @@ build-from-source, install, and packaging details.
 
 ```sh
 cargo build --workspace              # build all crates (produces mtui + mtui-mcp)
-cargo run -p mtui -- --help                    # run the REPL binary (mtui)
-cargo run -p mtui --bin mtui-mcp -- --help     # run the MCP server (mtui-mcp)
+cargo run -p suse-mtui -- --help                    # run the REPL binary (mtui)
+cargo run -p suse-mtui --bin mtui-mcp -- --help     # run the MCP server (mtui-mcp)
 cargo test --workspace               # run tests
 cargo fmt --all --check              # formatting gate
 cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint gate

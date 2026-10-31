@@ -399,7 +399,9 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        let key = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/obs/id_ed25519");
+        let key_dir = tempfile::tempdir().unwrap();
+        let key = key_dir.path().join("id_ed25519");
+        std::fs::write(&key, mtui_types::fixtures::SSH_ID_ED25519).unwrap();
         Mock::given(method("POST"))
             .and(path("/auth/ssh/challenge"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
