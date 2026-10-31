@@ -139,8 +139,10 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
    `git describe --tags` stamps the version into the binaries. The `_service`
    `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
    require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.
-   The format is `XX.Y.Z` — year-based line, major, patch. A `v`-prefixed tag is
-   invalid and does not trigger the release workflow.
+   The format is `XX.Y.Z` — year-based line, major, patch. The unprefixed
+   numeric tag is the single valid shape: it is what the `release.yml` push
+   filter matches (`[0-9]+.[0-9]+.[0-9]+`, with an optional suffix), so a
+   `v`-prefixed tag is invalid and does not trigger the release workflow.
 
    ```sh
    git tag 26.4.1
