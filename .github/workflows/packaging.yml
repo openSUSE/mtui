@@ -1,0 +1,153 @@
+---
+name: packaging
+on:
+  push:
+    branches: [main]
+    tags: ['**']
+  # Path filters apply only to pull_request: tag pushes behave surprisingly
+  # under path filtering, and `main` should keep running everything.
+  # No `**/*.md`: the root README.md is packaging metadata
+  # (`readme.workspace = true`), so README-only changes must still run.
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'plans/**'
+      - '.opencode/**'
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    name: MTUI cargo package (publishable, publishes nothing)
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Metadata-rot guard: fails on missing description/license/readme,
+      # unpackageable filenames, or path deps without an exact version.
+      # `--no-verify`: the verify build compiles each packaged crate in
+      # isolation against the crates.io index, where the sibling `mtui-*`
+      # crates do not exist until they are actually published in dependency
+      # order — so a verifying run cannot pass on an unpublished workspace.
+      # Build correctness is already covered by the ci.yml jobs; the scope
+      # here (and in xtask/tests/packaging.rs, its fast local counterpart)
+      # is the metadata the publish itself requires. Uploads nothing —
+      # publishing stays an explicit manual act. No Rust target cache either:
+      # without a verify build cargo does no compilation, only manifest
+      # validation plus tarball assembly, so a cache restore would cost more
+      # than it saves.
+      - name: Package the workspace without publishing
+        run: cargo package --workspace --exclude xtask --locked --no-verify
+  distro-packages:
+    runs-on: ubuntu-latest
+    name: MTUI distro packages (names only, no release)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `rpm` is for the check step; the runner image has no rpm tooling.
+      - name: Install rpm tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y rpm
+          command -v rpm > /dev/null || {
+            echo "::error::rpm not on PATH after apt-get install"; exit 1; }
+      # Same provenance path as the release job (see release.yml): a prebuilt
+      # binary whose SHA256 install-action verifies.
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
+        with:
+          tool: cargo-deb@3.7.0
+      # Same hash-pinned crate install as the release job (see release.yml):
+      # cargo-generate-rpm is not in install-action's manifest, so the
+      # expected hash is recorded here and the install fails closed.
+      - name: Install cargo-generate-rpm
+        working-directory: ${{ runner.temp }}
+        env:
+          CGR_VERSION: '0.21.0'
+          CGR_SHA256: 3187e19f0e00274b3b24f017559038722388889bd1a2ecd2281cd748e7d52ec6
+        run: |
+          set -euo pipefail
+          crate="cargo-generate-rpm-${CGR_VERSION}.crate"
+          curl -sSLf --proto '=https' --tlsv1.2 \
+            -o "$crate" \
+            "https://static.crates.io/crates/cargo-generate-rpm/${crate}"
+          echo "${CGR_SHA256}  ${crate}" | sha256sum -c -
+          tar -xf "$crate"
+          cargo install --locked --path "cargo-generate-rpm-${CGR_VERSION}"
+      - name: Assert the packaging-tool pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$(cargo-deb --version)" = "cargo-deb 3.7.0" ] || {
+            echo "::error::$(cargo-deb --version) != 3.7.0"; exit 1; }
+          [ "$(cargo-generate-rpm --version)" = "cargo-generate-rpm 0.21.0" ] || {
+            echo "::error::$(cargo-generate-rpm --version) != 0.21.0"; exit 1; }
+      # Debug, not release: only the `Name:` fields are asserted below, and
+      # those come from the manifests, not the binaries — so the shipped bytes
+      # stay release.yml's business while this job stays PR-fast. `--locked`
+      # so the checked names are the committed dependency set's.
+      - name: Build binaries
+        run: cargo build --locked
+      - name: Build packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/packages
+          # --no-build reuses the binaries above; --profile dev because that
+          # is what was built (cargo-deb defaults to release). Pinned to
+          # cargo-deb 3.7.0, where dev only warns.
+          cargo-deb --no-build --no-strip --profile dev --output dist/packages/
+          cargo-deb --no-build --no-strip --profile dev --variant mcp \
+            --output dist/packages/
+          # --profile dev for the same reason; --auto-req builtin so the scan
+          # does not depend on the runner having rpm-build's find-requires.
+          cargo-generate-rpm --auto-req builtin --profile dev \
+            --output dist/packages/
+          cargo-generate-rpm --auto-req builtin --profile dev --variant mcp \
+            --output dist/packages/
+      - name: Check the distro package names
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Without this a zero-package glob would reach the case below as the
+          # literal pattern and report "unexpected name" instead of "none built".
+          shopt -s nullglob
+          d=dist/packages
+          ls -l "$d"
+          # Resolve by declared package name, not by filename: the split is the
+          # point of this job and a naming slip must fail here, not at release.
+          for f in "$d"/*.deb; do
+            case "$(dpkg-deb -f "$f" Package)" in
+              mtui) deb_main="$f" ;;
+              mtui-mcp) deb_mcp="$f" ;;
+              *) echo "::error::unexpected deb package name in $f"; exit 1 ;;
+            esac
+          done
+          for f in "$d"/*.rpm; do
+            case "$(rpm -qp --qf '%{NAME}' "$f")" in
+              mtui) rpm_main="$f" ;;
+              mtui-mcp) rpm_mcp="$f" ;;
+              *) echo "::error::unexpected rpm package name in $f"; exit 1 ;;
+            esac
+          done
+          : "${deb_main:?no mtui .deb}" "${deb_mcp:?no mtui-mcp .deb}"
+          : "${rpm_main:?no mtui .rpm}" "${rpm_mcp:?no mtui-mcp .rpm}"
+          echo "distro package names ok: $deb_main $deb_mcp $rpm_main $rpm_mcp"

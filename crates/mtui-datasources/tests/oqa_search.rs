@@ -999,7 +999,7 @@ fn extract_test_results_real_logs() {
 
 #[test]
 fn extract_test_results_rust_folds_via_summarize() {
-    let log_path = fixtures_dir().join("rust/rust1.95.SUSE_SLE-15-SP3_Update:test.aarch64.log");
+    let log_path = fixtures_dir().join("rust/rust1.95.SUSE_SLE-15-SP3_Update_test.aarch64.log");
     let log_text = std::fs::read_to_string(&log_path).expect("read log");
     let matches = extract_test_results(&log_text, None);
     assert!(

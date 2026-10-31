@@ -458,6 +458,9 @@ pub fn parse_and_warn_on_dropped_keys(raw: &str) -> Result<ReportDocument, Docum
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{
+        MAINTENANCE_ADDON, MAINTENANCE_OBS, MAINTENANCE_OPENQA_L3, PI, SLFO_GITEA,
+    };
 
     #[test]
     fn schema_version_rejects_unsupported_value() {
@@ -631,15 +634,6 @@ mod tests {
     }
 
     // --- has_tester_content ---
-
-    const MAINTENANCE_OBS: &str =
-        include_str!("../../tests/fixtures/document/maintenance_obs.json");
-    const MAINTENANCE_ADDON: &str =
-        include_str!("../../tests/fixtures/document/maintenance_addon.json");
-    const SLFO_GITEA: &str = include_str!("../../tests/fixtures/document/slfo_gitea.json");
-    const MAINTENANCE_OPENQA_L3: &str =
-        include_str!("../../tests/fixtures/document/maintenance_openqa_l3.json");
-    const PI: &str = include_str!("../../tests/fixtures/document/pi.json");
 
     /// Every freshly generated (server-produced) fixture: none of them carry
     /// tester content yet. `maximal.json` is deliberately excluded — it *is*

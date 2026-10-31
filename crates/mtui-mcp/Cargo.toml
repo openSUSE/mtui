@@ -3,8 +3,19 @@ name = "mtui-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Model Context Protocol server adapter for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+# Integration tests `include_str!` document fixtures from `mtui-types`' tree,
+# outside this package: they compile in the workspace but not from a crates.io
+# tarball, so they don't ship. (The lib's own unit tests stay runnable from
+# the tarball; pinned by `xtask/tests/packaging.rs`.)
+exclude = ["tests/**"]
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its heavy deps (rmcp/axum under `--all-features`) link once, not once
 # per file.
@@ -98,7 +109,7 @@ nix = { version = "0.31", features = ["fs", "user"] }
 default = ["mcp"]
 # Gates the rmcp server so the root facade's `cli`-only build and the `mtui`
 # REPL never drag in the MCP SDK. The stdio runner + tool synthesiser live
-# behind this; the facade names it explicitly, so `-p mtui
+# behind this; the facade names it explicitly, so `-p suse-mtui
 # --no-default-features` genuinely drops it.
 mcp = [
   "dep:axum",

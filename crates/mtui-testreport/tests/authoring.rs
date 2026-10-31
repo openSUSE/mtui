@@ -26,9 +26,11 @@ const PAIRS: &[&str] = &[
 ];
 
 fn pair_dir(rrid: &str) -> std::path::PathBuf {
+    // `:` is unpackageable (`cargo package` rejects it), so the on-disk
+    // directory replaces it with `_`; the RRID itself is untouched.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/pairs")
-        .join(rrid)
+        .join(rrid.replace(':', "_"))
 }
 
 /// A synthetic connected host matching the fixture's first `install.targets[]`

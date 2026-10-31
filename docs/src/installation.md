@@ -19,9 +19,11 @@ page, or build from source.
 cargo build --release
 ```
 
-The root `mtui` facade package exposes a `cli` and an `mcp` feature, both
+The root `suse-mtui` facade package exposes a `cli` and an `mcp` feature, both
 **enabled by default**, so a plain `cargo build --release` produces both
-binaries. `--no-default-features --features cli` (or `mcp`) builds only the
+binaries. (`cargo install suse-mtui` still installs the `mtui` binary: the
+crates.io name differs because `mtui` belongs to an unrelated project.)
+`--no-default-features --features cli` (or `mcp`) builds only the
 REPL (or only the MCP server), if you want to skip pulling in the MCP SDK
 (`rmcp`/`axum`) or the REPL's dependencies.
 
@@ -135,7 +137,15 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
 
 ### Release recipe (build.suse.de / IBS, project `QA:Maintenance:Test`)
 
-1. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
+1. **Bump the lockstep version** in the root `Cargo.toml`: `[workspace.package]
+   version` plus the nine `=…` pins in `[workspace.dependencies]` (`mtui-cli`,
+   `mtui-config`, `mtui-core`, `mtui-datasources`, `mtui-hosts`, `mtui-mcp`,
+   `mtui-testreport`, `mtui-tui`, `mtui-types`). The pins cannot derive the
+   workspace version with plain cargo — a path dep's `version` needs an
+   explicit exact pin so a future publish resolves — so the bump stays manual
+   and `cargo test -p xtask --test packaging` fails until all nine match.
+
+2. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
    `git describe --tags` stamps the version into the binaries. The `_service`
    `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
    require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.
@@ -149,7 +159,7 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
    git push origin 26.4.1
    ```
 
-2. **Check out the IBS package and drop in the sources:**
+3. **Check out the IBS package and drop in the sources:**
 
    ```sh
    osc -A ibs checkout QA:Maintenance:Test mtui
@@ -157,7 +167,7 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
    cp /path/to/mtui/_service /path/to/mtui/mtui.spec .
    ```
 
-3. **Run all source services.** This fetches the tagged source, compresses it,
+4. **Run all source services.** This fetches the tagged source, compresses it,
    fills the spec `Version:`, and vendors + audits every crate dependency:
 
    ```sh
@@ -166,7 +176,7 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
    #        Cargo.lock + vendor/), cargo_config, _servicedata
    ```
 
-4. **Commit and build:**
+5. **Commit and build:**
 
    ```sh
    osc add _service _servicedata cargo_config \

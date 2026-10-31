@@ -3,8 +3,19 @@ name = "mtui-tui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Full-screen report-document editor for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+# Integration tests `include_str!` document fixtures from `mtui-types`' tree,
+# outside this package: they compile in the workspace but not from a crates.io
+# tarball, so they don't ship. (The lib's own unit tests stay runnable from
+# the tarball; pinned by `xtask/tests/packaging.rs`.)
+exclude = ["tests/**"]
 autotests = false
 
 [[test]]

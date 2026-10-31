@@ -335,14 +335,11 @@ mod tests {
         TestReportBase::new(Config::default())
     }
 
-    const MAINTENANCE_OBS: &str =
-        include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json");
-    const MAINTENANCE_ADDON: &str =
-        include_str!("../../mtui-types/tests/fixtures/document/maintenance_addon.json");
-    const SLFO_GITEA: &str =
-        include_str!("../../mtui-types/tests/fixtures/document/slfo_gitea.json");
-    const MAXIMAL: &str = include_str!("../../mtui-types/tests/fixtures/document/maximal.json");
-    const PI: &str = include_str!("../../mtui-types/tests/fixtures/document/pi.json");
+    const MAINTENANCE_OBS: &str = mtui_types::fixtures::MAINTENANCE_OBS;
+    const MAINTENANCE_ADDON: &str = mtui_types::fixtures::MAINTENANCE_ADDON;
+    const SLFO_GITEA: &str = mtui_types::fixtures::SLFO_GITEA;
+    const MAXIMAL: &str = mtui_types::fixtures::MAXIMAL;
+    const PI: &str = mtui_types::fixtures::PI;
 
     // --- product_lines ---
 

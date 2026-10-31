@@ -435,6 +435,7 @@ impl AnalyzeDiff {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use mtui_types::fixtures::PI;
 
     #[test]
     fn names_and_scopes() {
@@ -772,11 +773,7 @@ spec files:
             let dir = tempfile::tempdir().unwrap();
             let base = session.metadata_mut().base_mut();
             base.path = Some(dir.path().join("log"));
-            base.document = Some(
-                include_str!("../../../mtui-types/tests/fixtures/document/pi.json")
-                    .parse()
-                    .unwrap(),
-            );
+            base.document = Some(PI.parse().unwrap());
             (session, dir)
         }
 

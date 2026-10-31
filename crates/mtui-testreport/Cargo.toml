@@ -3,8 +3,19 @@ name = "mtui-testreport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "TestReport lifecycle and update workflow for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+# Integration tests `include_str!` document fixtures from `mtui-types`' tree,
+# outside this package: they compile in the workspace but not from a crates.io
+# tarball, so they don't ship. (The lib's own unit tests stay runnable from
+# the tarball via `mtui_types::fixtures`; pinned by `xtask/tests/packaging.rs`.)
+exclude = ["tests/**"]
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its deps link once, not once per file.
 autotests = false

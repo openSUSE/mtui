@@ -2599,17 +2599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mtui"
-version = "26.4.0"
-dependencies = [
- "anyhow",
- "mtui-cli",
- "mtui-mcp",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "mtui-cli"
 version = "26.4.0"
 dependencies = [
@@ -4812,6 +4801,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "suse-mtui"
+version = "26.4.0"
+dependencies = [
+ "anyhow",
+ "mtui-cli",
+ "mtui-mcp",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5824,6 +5824,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
 ]
 
 [[package]]

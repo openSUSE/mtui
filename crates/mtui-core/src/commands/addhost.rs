@@ -173,16 +173,20 @@ mod tests {
 
     use crate::commands::testkit::{matches, session_with_hosts};
 
-    /// Path to the offline refhosts fixture (no network).
-    const REFHOSTS_FIXTURE: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../mtui-datasources/tests/fixtures/refhosts.yml"
-    );
-
-    /// Points the session's config at the offline `path` refhosts resolver.
-    fn use_path_refhosts(session: &mut Session) {
+    /// Points the session's config at a live copy of the
+    /// `mtui_types::fixtures` inventory through the offline `path` refhosts
+    /// resolver (no network). Returns the temp dir holding that copy, which
+    /// must outlive the session under test.
+    fn use_path_refhosts(session: &mut Session) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("refhosts.yml"),
+            mtui_types::fixtures::REFHOSTS_YML,
+        )
+        .unwrap();
         session.config.refhosts_resolvers = "path".to_owned();
-        session.config.refhosts_path = REFHOSTS_FIXTURE.into();
+        session.config.refhosts_path = dir.path().join("refhosts.yml");
+        dir
     }
 
     /// Sets the active report's testplatforms (via the public template registry).
@@ -223,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn named_hosts_that_cannot_connect_are_error() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
         let err = AddHost.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("unreachable.invalid")));
@@ -245,7 +249,7 @@ mod tests {
     #[tokio::test]
     async fn existing_mock_host_survives_a_failed_add() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         add_mock_host(&mut session, "h2");
         let before = session.targets().len();
         let args = matches(&AddHost, &["-t", "unreachable-survivor.invalid"]);
@@ -260,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn switches_auto_workflow_to_manual() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable-switch.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
@@ -271,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn keep_mode_preserves_auto_workflow() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable-keep.invalid", "-k"]);
         let _ = AddHost.call(&mut session, &args).await;
@@ -282,7 +286,7 @@ mod tests {
     #[tokio::test]
     async fn manual_workflow_is_left_untouched() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         session.set_workflow(Workflow::Manual);
         let args = matches(&AddHost, &["-t", "unreachable-manual.invalid"]);
         let _ = AddHost.call(&mut session, &args).await;
@@ -295,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn no_target_resolves_testplatforms() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         set_testplatforms(&mut session, &["base=sles(major=15,minor=5);arch=[x86_64]"]);
         let args = matches(&AddHost, &[]);
         AddHost.call(&mut session, &args).await.unwrap();
@@ -328,7 +332,7 @@ mod tests {
         use mtui_hosts::{HostArbiter, Owner};
 
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
@@ -373,7 +377,7 @@ mod tests {
         use crate::commands::testkit::session_with_targets;
 
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        use_path_refhosts(&mut session);
+        let _refhosts_dir = use_path_refhosts(&mut session);
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         {
