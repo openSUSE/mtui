@@ -1,5 +1,5 @@
 //! Smoke test for the committed paired fixtures
-//! (`tests/fixtures/pairs/<RRID>/document.json`): every `document.json` must parse into a [`ReportDocument`] and validate against
+//! (`tests/fixtures/pairs/` holds the RRID with `:` as `_`): every `document.json` must parse into a [`ReportDocument`] and validate against
 //! the committed schema copy.
 //!
 //! The schema-conformance check is a local copy of
@@ -24,9 +24,11 @@ const PAIRS: &[&str] = &[
 ];
 
 fn pair_dir(rrid: &str) -> std::path::PathBuf {
+    // `:` is unpackageable (`cargo package` rejects it), so the on-disk
+    // directory replaces it with `_`; the RRID itself is untouched.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/pairs")
-        .join(rrid)
+        .join(rrid.replace(':', "_"))
 }
 
 use mtui_types::report_document::SCHEMA_JSON;

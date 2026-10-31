@@ -8,7 +8,19 @@ rust-version.workspace = true
 # word-wraps it and the overflow becomes the first line of the long description.
 description = "Maintenance Test Update Installer for SUSE QE update validation"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+# The facade lives at the repo root, so without this `cargo package` sweeps
+# `.github/`, `.clusterfuzzlite/`, `.cargo/`, `dist/`, `docs/` and friends
+# into its tarball alongside the bins. Every entry below is a file the repo
+# actually ships (`cargo package --list` plus the
+# `root_package_ships_only_allowlisted_files` guard prove it); `Cargo.toml`
+# needs no entry, cargo always includes the manifest itself.
+include = ["src/**", "tests/**", "LICENSE", "README.md", "CHANGELOG.md"]
 default-run = "mtui"
 autobins = false
 # Both smoke tests are consolidated into one `tests/it.rs` binary (see
@@ -119,6 +131,15 @@ version = "26.4.0"
 edition = "2024"
 rust-version = "1.96"
 repository = "https://github.com/openSUSE/mtui"
+homepage = "https://opensuse.github.io/mtui/"
+# Every crate — including the `mtui-*` libraries — points at the user mdBook.
+# Intentional override of the docs.rs default: the libs are internal
+# implementation details published only so the facade can publish, not
+# standalone APIs, so the book stays the single supported entry point.
+documentation = "https://opensuse.github.io/mtui/"
+readme = "README.md"
+keywords = ["suse", "maintenance", "testing", "ssh", "qa"]
+categories = ["command-line-utilities"]
 license = "GPL-3.0-or-later"  # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
 
 [workspace.dependencies]
@@ -173,16 +194,16 @@ indexmap = "2"
 ini = { package = "rust-ini", version = "0.21" }
 # dev / test
 insta = "1"
-mtui-cli = { path = "crates/mtui-cli" }
-mtui-config = { path = "crates/mtui-config" }
-mtui-core = { path = "crates/mtui-core" }
-mtui-datasources = { path = "crates/mtui-datasources" }
-mtui-hosts = { path = "crates/mtui-hosts" }
-mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
-mtui-testreport = { path = "crates/mtui-testreport" }
-mtui-tui = { path = "crates/mtui-tui" }
+mtui-cli = { version = "=26.4.0", path = "crates/mtui-cli" }
+mtui-config = { version = "=26.4.0", path = "crates/mtui-config" }
+mtui-core = { version = "=26.4.0", path = "crates/mtui-core" }
+mtui-datasources = { version = "=26.4.0", path = "crates/mtui-datasources" }
+mtui-hosts = { version = "=26.4.0", path = "crates/mtui-hosts" }
+mtui-mcp = { version = "=26.4.0", path = "crates/mtui-mcp", default-features = false }
+mtui-testreport = { version = "=26.4.0", path = "crates/mtui-testreport" }
+mtui-tui = { version = "=26.4.0", path = "crates/mtui-tui" }
 # internal crates (path deps)
-mtui-types = { path = "crates/mtui-types" }
+mtui-types = { version = "=26.4.0", path = "crates/mtui-types" }
 # optional desktop notifications (feature `notify`). Pure-Rust
 # freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
 # the single-static-binary / no-Python-runtime contract. Best-effort + headless

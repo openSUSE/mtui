@@ -3,7 +3,8 @@
 Captured 2026-09-15 from production (`https://qam.suse.de/api/v2/reports/<RRID>`),
 for the ingest golden snapshots in `crates/mtui-testreport/tests/ingest.rs`.
 
-Each `<RRID>/` directory holds `document.json`: the live
+Each `<RRID>/` directory (on disk with `:` replaced by `_`, which `cargo
+package` rejects) holds `document.json`: the live
 `GET /api/v2/reports/<RRID>` body, pretty printed and key-sorted. The goldens
 pin what `apply_document` and `update_repos_parser` derive from it; the values
 were agreed against the matching text-template checkout (`metadata.json`, `log`

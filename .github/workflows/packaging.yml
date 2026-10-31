@@ -1,0 +1,46 @@
+---
+name: packaging
+on:
+  push:
+    branches: [main]
+    tags: ['**']
+  # Path filters apply only to pull_request: tag pushes behave surprisingly
+  # under path filtering, and `main` should keep running everything.
+  # No `**/*.md`: the root README.md is packaging metadata
+  # (`readme.workspace = true`), so README-only changes must still run.
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'plans/**'
+      - '.opencode/**'
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    name: MTUI cargo package (publishable, publishes nothing)
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Metadata-rot guard: fails on missing description/license/readme,
+      # unpackageable filenames, or path deps without an exact version.
+      # `--no-verify`: the verify build compiles each packaged crate in
+      # isolation against the crates.io index, where the sibling `mtui-*`
+      # crates do not exist until they are actually published in dependency
+      # order — so a verifying run cannot pass on an unpublished workspace.
+      # Build correctness is already covered by the ci.yml jobs; the scope
+      # here (and in xtask/tests/packaging.rs, its fast local counterpart)
+      # is the metadata the publish itself requires. Uploads nothing —
+      # publishing stays an explicit manual act. No Rust target cache either:
+      # without a verify build cargo does no compilation, only manifest
+      # validation plus tarball assembly, so a cache restore would cost more
+      # than it saves.
+      - name: Package the workspace without publishing
+        run: cargo package --workspace --exclude xtask --locked --no-verify

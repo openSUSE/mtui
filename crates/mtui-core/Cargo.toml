@@ -3,7 +3,13 @@ name = "mtui-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Command registry, session, and dispatch engine for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
 
 [dependencies]

@@ -3,7 +3,13 @@ name = "mtui-config"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "TOML configuration file handling for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 license.workspace = true
 
 [dependencies]
