@@ -42,6 +42,7 @@ axum = { workspace = true, optional = true }
 base64ct = { version = "1", features = ["alloc"], optional = true }
 clap.workspace = true
 futures = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 mtui-config.workspace = true
 mtui-core.workspace = true
 # `sanitize_url` for the audit record's argument masking, so a credential in a
@@ -104,6 +105,7 @@ mcp = [
   "dep:axum",
   "dep:base64ct",
   "dep:futures",
+  "dep:getrandom",
   "dep:mtui-datasources",
   "dep:mtui-hosts",
   "dep:mtui-testreport",

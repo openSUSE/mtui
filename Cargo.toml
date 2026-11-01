@@ -159,6 +159,9 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6"
 futures = "0.3"
+# OS entropy for the MCP session-handle mint (`getrandom::fill`, already in
+# the normal graph at 0.4 via `rand`/`russh`).
+getrandom = { version = "0.4", features = ["std"] }
 # HMAC-SHA1, for the OpenSSH hashed known_hosts test helper (mtui-hosts dev-dep);
 # not used for openQA auth any more (ruoqa owns that).
 hmac = "0.13"
