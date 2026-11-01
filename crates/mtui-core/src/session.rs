@@ -16,8 +16,11 @@ use mtui_config::Config;
 use mtui_datasources::HttpError;
 use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
+#[cfg(test)]
+use mtui_hosts::MockConnection;
 use mtui_hosts::{
-    HostArbiter, HostError, HostsGroup, LockOutcome, OpLockHolders, Owner, Prompter, Target,
+    Connection, HostArbiter, HostError, HostsGroup, LockOutcome, OpLockHolders, Owner, Prompter,
+    Target,
 };
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
@@ -118,6 +121,10 @@ pub struct Session {
     /// transport, mirroring [`http_builds`](Self::http_builds).
     #[cfg(test)]
     openqa_builds: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only dial replacement: a hostname mapped here is connected through
+    /// its mock instead of SSH (see [`inject_mock_connection`](Self::inject_mock_connection)).
+    #[cfg(test)]
+    mock_conns: std::collections::HashMap<String, MockConnection>,
     /// Per-slot candidate shuffle, so pool selection spreads load across
     /// interchangeable refhosts instead of always taking the first in
     /// `refhosts.yml` order. Tests override it with the identity.
@@ -211,7 +218,7 @@ pub(crate) enum HostFailure {
 }
 
 impl HostFailure {
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         match self {
             Self::Unreachable => "unreachable".to_owned(),
             Self::ClaimedBy(Some(rrid)) => format!("claimed by {rrid}"),
@@ -410,6 +417,8 @@ impl Session {
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            mock_conns: std::collections::HashMap::new(),
         }
     }
 
@@ -439,6 +448,8 @@ impl Session {
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            mock_conns: std::collections::HashMap::new(),
         }
     }
 
@@ -503,6 +514,8 @@ impl Session {
             http_builds: Arc::clone(&self.http_builds),
             #[cfg(test)]
             openqa_builds: Arc::clone(&self.openqa_builds),
+            #[cfg(test)]
+            mock_conns: self.mock_conns.clone(),
         }
     }
 
@@ -624,6 +637,13 @@ impl Session {
     #[cfg(test)]
     fn openqa_builds(&self) -> usize {
         self.openqa_builds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Registers a mock connection `host` dials instead of SSH (test seam for
+    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts)).
+    #[cfg(test)]
+    pub(crate) fn inject_mock_connection(&mut self, host: &str, conn: MockConnection) {
+        self.mock_conns.insert(host.to_owned(), conn);
     }
 
     /// The session-scoped openQA transport, built lazily and reused.
@@ -1304,12 +1324,14 @@ impl Session {
         let (wanted, _unserved) = self
             .resolve_and_record_pool(&config, ref_hosts, testplatforms, arbiter, owner, shuffle)
             .await;
-        let wanted = wanted
+        let wanted: Vec<String> = wanted
             .into_iter()
             .filter(|h| !already.contains(h))
             .collect();
+        let pool_primaries: std::collections::HashSet<String> = wanted.iter().cloned().collect();
 
-        self.connect_and_add_hosts(wanted, rrid).await;
+        self.connect_and_add_hosts(wanted, rrid, &pool_primaries)
+            .await;
     }
 
     /// Builds a live [`Target`] for each host in `hosts`, connects it, and adds
@@ -1331,8 +1353,14 @@ impl Session {
     /// recorded in `product_warnings` and WARN-logged, but never dropping the
     /// host, and skipped entirely if the inventory is unavailable.
     ///
-    /// Returns the slots the backup step tried and could not serve.
-    async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) -> Vec<Unserved> {
+    /// Returns the slots the backup step tried and could not serve, plus one
+    /// `(host, reason)` per attempted host that never attached.
+    async fn connect_and_add_hosts(
+        &mut self,
+        hosts: Vec<String>,
+        rrid: &str,
+        pool_primaries: &std::collections::HashSet<String>,
+    ) -> (Vec<Unserved>, Vec<(String, HostFailure)>) {
         let config = self.config.clone();
         // Everything below is snapshotted before the connect loop: a `base()` or
         // `&Prompter` borrow held across the connect `.await` would make this
@@ -1346,6 +1374,10 @@ impl Session {
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
         let holders = self.op_lock_holders.clone();
+        // Test-only dial replacements, snapshotted like the rest (see
+        // `inject_mock_connection`); always empty in production.
+        #[cfg(test)]
+        let mocks = self.mock_conns.clone();
         // One inventory for the whole batch, built before the `targets_mut()`
         // borrow so this await does not straddle it. `None` disables the drift
         // check for every host — best-effort, never fatal.
@@ -1364,6 +1396,13 @@ impl Session {
         let pool_claims_ref = &pool_claims;
         let holders_ref = &holders;
         let connect_futs = hosts.iter().map(|host| {
+            #[cfg(test)]
+            let injected: Option<Box<dyn Connection>> = mocks
+                .get(host)
+                .cloned()
+                .map(|c| Box::new(c) as Box<dyn Connection>);
+            #[cfg(not(test))]
+            let injected: Option<Box<dyn Connection>> = None;
             Self::connect_one(
                 config_ref,
                 host.clone(),
@@ -1374,6 +1413,7 @@ impl Session {
                 store_ref,
                 pool_claims_ref.contains(host),
                 holders_ref,
+                injected,
             )
         });
         let bound = (config.max_parallel as usize).max(1);
@@ -1403,13 +1443,30 @@ impl Session {
         }
 
         let (backup_drift, unserved) = self
-            .connect_pool_backups(&config, rrid, &hosts, failures, timeout_prompt.clone())
+            .connect_pool_backups(
+                &config,
+                rrid,
+                &hosts,
+                failures.clone(),
+                timeout_prompt.clone(),
+                pool_primaries,
+            )
             .await;
         drift.extend(backup_drift);
 
         // Only now is the `targets_mut()` borrow released.
         self.apply_product_warnings(drift);
-        unserved
+        // Failures for hosts that never attached (a backup sibling may have
+        // served the slot instead); named hosts have no backup, so all of
+        // theirs come back.
+        let attached: std::collections::HashSet<String> =
+            self.targets().names().into_iter().collect();
+        let mut connect_failures: Vec<(String, HostFailure)> = failures
+            .into_iter()
+            .filter(|(host, _)| !attached.contains(host))
+            .collect();
+        connect_failures.sort_by(|a, b| a.0.cmp(&b.0));
+        (unserved, connect_failures)
     }
 
     /// Drives `futs` with at most `bound` in flight (a `[connection]
@@ -1441,7 +1498,7 @@ impl Session {
     /// regardless of `is_pool_claim`, so a pool-selected host is PI-locked too.
     /// Split out of [`connect_one`](Self::connect_one) — where it was an
     /// `if/else` that left a pool host never PI-locked — so it is exercisable
-    /// against a [`MockConnection`](mtui_hosts::MockConnection) without a live
+    /// against a mock connection without a live
     /// SSH connect.
     async fn lock_connected_target(
         target: &mut Target,
@@ -1460,7 +1517,12 @@ impl Session {
                 Ok(false) => {
                     warn!(host = %host, "claimed in-process but busy remotely; skipping");
                     return Err(HostFailure::ClaimedBy(
-                        target.pool_claim_rrid().await.ok().flatten(),
+                        target
+                            .pool_claim_rrid()
+                            .await
+                            .ok()
+                            .flatten()
+                            .filter(|s| !s.is_empty()),
                     ));
                 }
                 Err(e) => {
@@ -1492,8 +1554,15 @@ impl Session {
         store: Option<&Refhosts>,
         is_pool_claim: bool,
         holders: &OpLockHolders,
+        injected: Option<Box<dyn Connection>>,
     ) -> Result<(Target, (String, Option<Vec<String>>)), (String, HostFailure)> {
-        let mut target = Target::new(config, host.clone(), TargetState::Enabled);
+        // Test seam: a registered mock skips the SSH dial (see
+        // `inject_mock_connection`); the claim/seed/drift steps below still run.
+        let mut target = if let Some(conn) = injected {
+            Target::with_connection_and_config(config, host.clone(), TargetState::Enabled, conn)
+        } else {
+            Target::new(config, host.clone(), TargetState::Enabled)
+        };
         target.set_rrid(rrid.to_owned());
         // Before connecting, so the load-time autolock is registered too.
         target.set_op_lock_holders(holders.clone());
@@ -1574,6 +1643,7 @@ impl Session {
         attempted_initial: &[String],
         primary_failures: std::collections::HashMap<String, HostFailure>,
         timeout_prompt: Option<mtui_hosts::TimeoutPrompt>,
+        pool_primaries: &std::collections::HashSet<String>,
     ) -> (Vec<(String, Option<Vec<String>>)>, Vec<Unserved>) {
         // Snapshot pool state + selection identity before any await.
         let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
@@ -1600,13 +1670,19 @@ impl Session {
 
         let mut attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
-        // Pool-claimed hosts this call tried and lost. Must never include a
-        // claim taken outside this call's pool selection.
+        // Pool-claimed primaries this call tried and lost. Explicitly the
+        // pool selection's primaries — never a claim taken outside it (an
+        // explicitly-named host claims too, but a slot nobody asked about
+        // must not be backed up). Set membership cannot tell them apart:
+        // `slot_candidates` is cumulative history, so the caller threads the
+        // set through.
         let failed: std::collections::HashSet<String> = {
             let claims = &self.metadata().base().pool_claims;
             attempted_initial
                 .iter()
-                .filter(|h| claims.contains(*h) && !attached.contains(*h))
+                .filter(|h| {
+                    claims.contains(*h) && !attached.contains(*h) && pool_primaries.contains(*h)
+                })
                 .cloned()
                 .collect()
         };
@@ -1693,6 +1769,7 @@ impl Session {
                     store.as_ref(),
                     true, // backup hosts are always pool claims
                     &holders,
+                    None,
                 )
                 .await
                 {
@@ -1848,8 +1925,42 @@ impl Session {
         wanted.dedup();
 
         let rrid = self.metadata().id();
-        unserved.extend(self.connect_and_add_hosts(wanted, &rrid).await);
+        let pool_primaries: std::collections::HashSet<String> = wanted.iter().cloned().collect();
+        let (more_unserved, _) = self
+            .connect_and_add_hosts(wanted, &rrid, &pool_primaries)
+            .await;
+        unserved.extend(more_unserved);
         unserved
+    }
+
+    /// Claim explicitly-named `hosts` in-process and record them as pool
+    /// claims, refusing hosts another template holds with their holder
+    /// named. Returns `(claiming, refused)`.
+    ///
+    /// Pure sync seam around [`HostArbiter::try_acquire`], so the refusal and
+    /// recording rules are unit-testable without a connect.
+    fn claim_named(
+        arbiter: &HostArbiter,
+        owner: &Owner,
+        pool_claims: &mut std::collections::HashSet<String>,
+        wanted: Vec<String>,
+    ) -> (Vec<String>, Vec<(String, HostFailure)>) {
+        let mut claiming = Vec::with_capacity(wanted.len());
+        let mut refused = Vec::new();
+        for host in wanted {
+            if arbiter.try_acquire(&host, owner) {
+                pool_claims.insert(host.clone());
+                claiming.push(host);
+            } else {
+                // Separate lock from the refusal above: the holder may have
+                // changed in between, degrading to `None` ("claimed
+                // remotely") rather than a wrong RRID.
+                let holder = arbiter.owner_of(&host).map(|(_, rrid)| rrid);
+                warn!(host = %host, "held by another template, skipping");
+                refused.push((host, HostFailure::ClaimedBy(holder)));
+            }
+        }
+        (claiming, refused)
     }
 
     /// Connects+adds the explicitly-named `hosts` to the active report's group.
@@ -1859,18 +1970,77 @@ impl Session {
     /// skipped, matching the silent dedup
     /// [`add_testplatform_hosts`](Self::add_testplatform_hosts) does. The
     /// membership snapshot precedes any `.await`, keeping the future `Send`.
-    pub(crate) async fn add_named_hosts(&mut self, hosts: Vec<String>) {
-        let already = self.metadata().base().targets.names();
+    ///
+    /// Named hosts take the in-process pool claim like pool-selected ones, so
+    /// a later pool selection cannot hand them out again — and a host claimed
+    /// by another template is refused with its holder named instead of being
+    /// attached silently. Returns one `(host, reason)` per named host that
+    /// never attached, whether refused in-process or failed to connect
+    /// (a fresh remote claim names its holder the same way).
+    pub(crate) async fn add_named_hosts(
+        &mut self,
+        hosts: Vec<String>,
+    ) -> Vec<(String, HostFailure)> {
         let mut wanted = Vec::with_capacity(hosts.len());
         for host in hosts {
-            if already.contains(&host) {
+            if self.metadata().base().targets.contains(&host) {
                 warn!(host = %host, "already connected to {host}, skipping");
             } else {
                 wanted.push(host);
             }
         }
+        // Snapshot the arbitration state before any `.await` (see
+        // `connect_and_add_hosts`): without an arbiter/owner pair there is no
+        // pool selection to coordinate with, and named hosts attach as before.
+        let arbitration = self
+            .metadata()
+            .base()
+            .arbiter
+            .zip(self.metadata().base().owner.clone());
+        // Claims this owner held before the call: a failed connect drops only
+        // what `claim_named` took below, never an earlier pool selection's.
+        let mut pre_claims = std::collections::HashSet::new();
+        let mut pre_owned = std::collections::HashSet::new();
+        let mut refused = Vec::new();
+        if let Some((arbiter, owner)) = &arbitration {
+            let base = self.metadata().base();
+            pre_claims = base.pool_claims.clone();
+            for host in &wanted {
+                if arbiter.owner_of(host).as_ref() == Some(owner) {
+                    pre_owned.insert(host.clone());
+                }
+            }
+            let base = self.metadata_mut().base_mut();
+            (wanted, refused) = Self::claim_named(arbiter, owner, &mut base.pool_claims, wanted);
+        }
         let rrid = self.metadata().id();
-        self.connect_and_add_hosts(wanted, &rrid).await;
+        // Named hosts are not pool primaries: their failures must not back
+        // up slots nobody asked about (their claims are released below).
+        let no_primaries = std::collections::HashSet::new();
+        let (_, connect_failures) = self
+            .connect_and_add_hosts(wanted.clone(), &rrid, &no_primaries)
+            .await;
+        refused.extend(connect_failures);
+        // Hosts that never attached hold no remote claim (claiming happens
+        // after connect) and must not keep the in-process one either: the
+        // backup phase only releases claims for recorded slots, which named
+        // hosts have none of.
+        if let Some((arbiter, owner)) = arbitration {
+            let attached: std::collections::HashSet<String> =
+                self.targets().names().into_iter().collect();
+            let base = self.metadata_mut().base_mut();
+            for host in wanted {
+                if !attached.contains(&host) {
+                    if !pre_claims.contains(&host) {
+                        base.pool_claims.remove(&host);
+                    }
+                    if !pre_owned.contains(&host) {
+                        arbiter.release(&host, &owner);
+                    }
+                }
+            }
+        }
+        refused
     }
 
     /// Builds the refhosts inventory on demand from `config`, or `None` on any
@@ -2721,6 +2891,13 @@ mod tests {
     async fn add_named_hosts_skips_unconnectable() {
         let mut s = Session::new(config_with_path_refhosts(), false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner.clone());
+        }
         s.add_named_hosts(vec!["unreachable.invalid".to_owned()])
             .await;
         assert!(s.targets().is_empty());
@@ -2743,6 +2920,193 @@ mod tests {
             1,
             "already-connected host must not be re-added"
         );
+    }
+
+    /// `claim_named` records free hosts as pool claims and refuses foreign-held
+    /// ones with their holder named.
+    #[test]
+    fn claim_named_claims_free_and_refuses_held() {
+        use mtui_hosts::HostArbiter;
+
+        let arbiter = HostArbiter::new();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("held", &other));
+        let mut claims = std::collections::HashSet::new();
+
+        let (claiming, refused) = Session::claim_named(
+            &arbiter,
+            &owner,
+            &mut claims,
+            vec!["free".to_owned(), "held".to_owned()],
+        );
+
+        assert_eq!(claiming, ["free"]);
+        assert!(claims.contains("free"));
+        assert!(!claims.contains("held"));
+        assert_eq!(arbiter.owner_of("free"), Some(owner));
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].0, "held");
+        assert!(
+            matches!(&refused[0].1, HostFailure::ClaimedBy(Some(rrid)) if rrid == "SUSE:Maintenance:2:2"),
+            "{:?}",
+            refused[0].1
+        );
+    }
+
+    /// Claiming is idempotent for hosts this owner already holds.
+    #[test]
+    fn claim_named_keeps_own_holds() {
+        use mtui_hosts::HostArbiter;
+
+        let arbiter = HostArbiter::new();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        assert!(arbiter.try_acquire("mine", &owner));
+        let mut claims = std::collections::HashSet::from(["mine".to_owned()]);
+
+        let (claiming, refused) =
+            Session::claim_named(&arbiter, &owner, &mut claims, vec!["mine".to_owned()]);
+
+        assert_eq!(claiming, ["mine"]);
+        assert!(refused.is_empty());
+    }
+
+    /// A named host held by another template is refused before any connect:
+    /// nothing attaches, nothing is claimed, and the holder is named.
+    #[tokio::test]
+    async fn add_named_hosts_refuses_foreign_held_host() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner);
+        }
+        assert!(arbiter.try_acquire("h1", &other));
+
+        let refused = s.add_named_hosts(vec!["h1".to_owned()]).await;
+
+        assert!(s.targets().is_empty());
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].0, "h1");
+        assert!(
+            matches!(&refused[0].1, HostFailure::ClaimedBy(Some(rrid)) if rrid == "SUSE:Maintenance:2:2"),
+            "{:?}",
+            refused[0].1
+        );
+        assert!(!s.metadata().base().pool_claims.contains("h1"));
+        assert_eq!(arbiter.owner_of("h1"), Some(other));
+    }
+
+    /// A named host that fails to connect keeps neither its pool claim nor
+    /// its in-process claim, and its failure comes back with its reason.
+    #[tokio::test]
+    async fn add_named_hosts_releases_failed_claims() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner.clone());
+        }
+
+        let refused = s
+            .add_named_hosts(vec!["unreachable.invalid".to_owned()])
+            .await;
+
+        assert_eq!(
+            refused,
+            vec![("unreachable.invalid".to_owned(), HostFailure::Unreachable)]
+        );
+        assert!(s.targets().is_empty());
+        assert!(
+            !s.metadata()
+                .base()
+                .pool_claims
+                .contains("unreachable.invalid")
+        );
+        assert_eq!(arbiter.owner_of("unreachable.invalid"), None);
+    }
+
+    /// A named host whose remote pool claim another RRID holds is refused
+    /// with its holder named instead of vanishing into a plain skip.
+    #[tokio::test]
+    async fn add_named_hosts_names_remote_holder() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner.clone());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let foreign =
+            format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:2:2 [bob]").into_bytes();
+        s.inject_mock_connection(
+            "remote-held.invalid",
+            MockConnection::new("remote-held.invalid")
+                .with_file(mtui_hosts::POOL_LOCK_PATH, foreign),
+        );
+
+        let refused = s
+            .add_named_hosts(vec!["remote-held.invalid".to_owned()])
+            .await;
+
+        assert!(s.targets().is_empty());
+        assert_eq!(
+            refused,
+            vec![(
+                "remote-held.invalid".to_owned(),
+                HostFailure::ClaimedBy(Some("SUSE:Maintenance:2:2".to_owned())),
+            )]
+        );
+        assert!(
+            !s.metadata()
+                .base()
+                .pool_claims
+                .contains("remote-held.invalid")
+        );
+        assert_eq!(arbiter.owner_of("remote-held.invalid"), None);
+    }
+
+    /// A failed connect drops only the claims this call took: a claim the
+    /// owner held before the call (e.g. from an earlier pool selection) stays.
+    #[tokio::test]
+    async fn add_named_hosts_keeps_preexisting_claim_on_failure() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        assert!(arbiter.try_acquire("preheld.invalid", &owner));
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner.clone());
+            base.pool_claims.insert("preheld.invalid".to_owned());
+        }
+
+        let refused = s.add_named_hosts(vec!["preheld.invalid".to_owned()]).await;
+
+        assert!(s.targets().is_empty());
+        assert_eq!(
+            refused,
+            vec![("preheld.invalid".to_owned(), HostFailure::Unreachable)]
+        );
+        assert!(
+            s.metadata().base().pool_claims.contains("preheld.invalid"),
+            "a claim held before the call must survive its failed connect"
+        );
+        assert_eq!(arbiter.owner_of("preheld.invalid"), Some(owner));
     }
 
     /// Testplatforms resolve via the offline `path` resolver and are then
@@ -2888,6 +3252,25 @@ mod tests {
                 "SUSE:Maintenance:9:9".to_owned()
             )))
         );
+    }
+
+    /// A remote claim whose comment is not a pool stamp names no RRID, so the
+    /// refusal degrades to "claimed remotely" rather than "claimed by ".
+    #[tokio::test]
+    async fn lock_connected_target_empty_holder_degrades_to_claimed_remotely() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let foreign = format!("{now}:otheruser:99:manual reservation").into_bytes();
+        let conn = MockConnection::new("h1").with_file(mtui_hosts::POOL_LOCK_PATH, foreign);
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_rrid("SUSE:Maintenance:1:1");
+
+        let res =
+            Session::lock_connected_target(&mut t, "h1", "SUSE:Maintenance:1:1", "", true).await;
+
+        assert_eq!(res, Err(HostFailure::ClaimedBy(None)));
     }
 
     // --- product-drift verification -----
@@ -3314,7 +3697,14 @@ mod tests {
             .collect();
         let (drift, unserved) = tokio::time::timeout(
             Duration::from_secs(30),
-            s.connect_pool_backups(&config, rrid, &primaries, failures, None),
+            s.connect_pool_backups(
+                &config,
+                rrid,
+                &primaries,
+                failures,
+                None,
+                &primaries.iter().cloned().collect(),
+            ),
         )
         .await
         .expect("must not hang past the outer test wrapper");
@@ -3428,7 +3818,8 @@ mod tests {
         s.targets_mut().run("echo marker").await;
         assert_eq!(s.targets().get("mock-a").unwrap().out().len(), 1);
 
-        s.connect_and_add_hosts(vec![], rrid).await;
+        s.connect_and_add_hosts(vec![], rrid, &std::collections::HashSet::new())
+            .await;
 
         assert!(
             s.metadata().base().pool_claims.contains("mock-a"),
@@ -3498,7 +3889,14 @@ mod tests {
             &[&primary],
         );
 
-        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![primary.clone()],
+                rrid,
+                &std::collections::HashSet::from([primary.clone()]),
+            )
+            .await
+            .0;
 
         assert!(was_dialled(&sibling), "the sibling was never tried");
         assert_eq!(
@@ -3548,7 +3946,14 @@ mod tests {
             &[&primary],
         );
 
-        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![primary.clone()],
+                rrid,
+                &std::collections::HashSet::from([primary.clone()]),
+            )
+            .await
+            .0;
 
         assert_eq!(
             unserved,
@@ -3581,7 +3986,14 @@ mod tests {
         );
         s.targets_mut().add(mock_target("mock-b"));
 
-        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![primary.clone()],
+                rrid,
+                &std::collections::HashSet::from([primary.clone()]),
+            )
+            .await
+            .0;
 
         assert!(unserved.is_empty(), "a served slot reports nothing");
         assert_eq!(arbiter.owner_of(&primary), None);
@@ -3624,7 +4036,14 @@ mod tests {
         cands.extend(holes.iter().map(listener_addr));
         wire_pool(&mut s, arbiter, &owner, &[("slot", &cands)], &[&primary]);
 
-        let unserved = s.connect_and_add_hosts(vec![primary], rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![primary.clone()],
+                rrid,
+                &std::collections::HashSet::from([primary.clone()]),
+            )
+            .await
+            .0;
 
         assert!(
             matches!(unserved.as_slice(), [Unserved::BudgetSpent { slot, .. }] if slot == "slot"),
@@ -3648,7 +4067,14 @@ mod tests {
             &[&primary],
         );
 
-        let unserved = s.connect_and_add_hosts(vec![primary.clone()], rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![primary.clone()],
+                rrid,
+                &std::collections::HashSet::from([primary.clone()]),
+            )
+            .await
+            .0;
 
         assert_eq!(
             unserved,
@@ -3681,7 +4107,10 @@ mod tests {
         let claims: Vec<&str> = primaries.iter().map(String::as_str).collect();
         wire_pool(&mut s, arbiter, &owner, &slots, &claims);
 
-        let unserved = s.connect_and_add_hosts(primaries, rrid).await;
+        let unserved = s
+            .connect_and_add_hosts(primaries.clone(), rrid, &primaries.into_iter().collect())
+            .await
+            .0;
 
         let got: Vec<&str> = unserved
             .iter()
