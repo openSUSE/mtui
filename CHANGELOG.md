@@ -414,6 +414,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   line, is reported the same way, keeping its record: the hold may still be
   ours, and dropping a corrupt line would strand it under a later plain
   `unlock`'s skip while the kept record surfaces it on release (#677).
+- `add_host -t` takes the pool claim for the hosts it names and refuses a
+  host claimed by another template, naming the holder, instead of attaching
+  it silently; pool selection no longer hands out hosts attached by name
+  (#679).
 - `prepare` and `downgrade` abort before locking with the names of every
   transactional host they cannot resolve a command for — `host (Product
   version, transactional|non-transactional)` — instead of refusing the whole

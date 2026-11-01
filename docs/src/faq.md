@@ -44,6 +44,10 @@ fleet writes the same `timestamp:user:pid[:comment]` layout, so sessions see one
 another's claims — a host held by someone else is *skipped*, and an
 install/update aborts with "Hosts locked" rather than waiting. Raise
 `[lock] wait` (default `0`) to poll for a busy host during pool arbitration.
+Naming a held host explicitly (`add_host -t`) is refused with the holder's
+RRID instead of attaching it, and a fresh remote claim blocks `-t` with no
+override on that template: have the holding template run
+`unlock --pool --force [host]`, or wait for the stale reap.
 There are two locks with that layout: the operation lock
 (`/var/lock/mtui.lock`, PID-based, guards serialized zypper transactions) and the
 pool-claim lock (`/var/lock/mtui-pool.lock`, RRID-based). Stale-lock reaping is

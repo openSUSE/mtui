@@ -92,6 +92,13 @@ command out across all of them.
   host. When every candidate for a slot is busy, the claim **queues** on the
   exhausted pool according to `[lock] wait` / `[lock] wait_poll` (see
   [Configuration](configuration.md)).
+- Hosts named explicitly (`add_host -t`) take the same in-process claim and,
+  once connected, the remote pool claim, so a later pool selection treats
+  them as taken. A named host claimed by another template is refused with
+  the holder's RRID instead of being attached silently. A fresh remote claim
+  blocks `-t` with no override on that template: have the holding template
+  run `unlock --pool --force [host]`, or wait for the stale reap
+  (`[lock] pool_stale_age`); a force flag for `-t` itself does not exist yet.
 
 To search the inventory *without* connecting, use
 [`list_refhosts`](cli.md#list_refhosts) — it reads the same source offline (no
