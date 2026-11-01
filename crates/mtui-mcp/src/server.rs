@@ -18,8 +18,10 @@
 //! Scope: this handler serves **one** [`McpSession`]. Under stdio one server
 //! instance serves the process's one client; under http the
 //! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server —
-//! hence a fresh isolated session — per MCP session. The report-document and
-//! transfer tools are hand-written; the job tools drive the session's background-job table.
+//! hence a fresh isolated session — per MCP session, each carrying the explicit
+//! `SessionHandle` identifying its session. The report-document
+//! and transfer tools are hand-written; the job tools drive the session's
+//! background-job table.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
@@ -41,6 +43,7 @@ use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
+use crate::SessionHandle;
 use crate::provider::SessionGuard;
 use crate::session::{AbortUnlock, McpSession, ProgressSink, ToolOutcome, forced_abort_note};
 use crate::tools::{
@@ -87,6 +90,12 @@ pub struct McpServer {
     /// Which transport this server was built for, deciding
     /// [`supported_protocol_versions`](ServerHandler::supported_protocol_versions).
     transport: Transport,
+    /// The explicit state key for this server's session, minted by the http
+    /// registry. `None` under stdio / tests: one client per process needs no
+    /// handle.
+    // #416: no non-test reader until the consuming PR; narrowed meanwhile.
+    #[allow(dead_code)]
+    session_handle: Option<SessionHandle>,
 }
 
 /// The transport an [`McpServer`] was built for.
@@ -114,6 +123,7 @@ impl McpServer {
             None,
             Arc::new(AtomicU64::new(0)),
             Transport::Stdio,
+            None,
         )
     }
 
@@ -129,6 +139,7 @@ impl McpServer {
         session: Arc<McpSession>,
         guard: SessionGuard,
         last_touch: Arc<AtomicU64>,
+        handle: SessionHandle,
     ) -> Self {
         Self::build(
             registry,
@@ -136,6 +147,7 @@ impl McpServer {
             Some(Arc::new(guard)),
             last_touch,
             Transport::Http,
+            Some(handle),
         )
     }
 
@@ -146,6 +158,7 @@ impl McpServer {
         guard: Option<Arc<SessionGuard>>,
         last_touch: Arc<AtomicU64>,
         transport: Transport,
+        session_handle: Option<SessionHandle>,
     ) -> Self {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
@@ -219,7 +232,21 @@ impl McpServer {
             last_touch,
             _guard: guard,
             transport,
+            session_handle,
         }
+    }
+
+    /// This server's explicit session handle, if the http registry minted one.
+    ///
+    /// Carried on the server and indexed handle → session in the registry
+    /// while the session lives, released with the slot. `None` under stdio /
+    /// tests: one client per process needs no handle. Read back through the
+    /// registry lookup; no tool takes or returns it.
+    // #416: no non-test caller until the consuming PR; narrowed meanwhile.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn session_handle(&self) -> Option<&SessionHandle> {
+        self.session_handle.as_ref()
     }
 
     /// Record activity on this session (monotonic millis), for the idle sweeper.
@@ -996,6 +1023,21 @@ mod tests {
 
         assert!(!tool_names(&server).iter().any(|n| n == "shell"));
         assert!(!server.routes.contains_key("shell"));
+    }
+
+    #[test]
+    fn http_factory_server_carries_a_handle_stdio_server_has_none() {
+        let registry = SessionRegistry::new(Arc::new(register_all()), Config::default());
+        let http = registry.try_make_server().expect("http server");
+        assert!(
+            http.session_handle().is_some(),
+            "an http-registry server must carry its explicit handle"
+        );
+        let stdio = server_with(Config::default());
+        assert!(
+            stdio.session_handle().is_none(),
+            "a stdio server has one client per process and mints no handle"
+        );
     }
 
     #[test]

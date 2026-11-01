@@ -48,6 +48,7 @@ use mtui_hosts::OpLockHolders;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::SessionHandle;
 use crate::server::McpServer;
 use crate::session::McpSession;
 
@@ -109,13 +110,98 @@ impl SessionProvider for StdioProvider {
 /// Only a [`Weak`] is held (rmcp owns the strong [`McpServer`], and the
 /// `Arc<McpSession>` inside it), so a session rmcp already dropped upgrades to
 /// `None` and is pruned. `last_touch` is shared with that [`McpServer`].
+/// `handle` is the explicit handle minted and indexed for this session.
 struct TrackedSession {
     session: Weak<McpSession>,
     last_touch: Arc<AtomicU64>,
+    handle: SessionHandle,
 }
 
-/// The registry's shared live-session table, keyed by a monotonic session id.
-type LiveSet = Arc<StdMutex<HashMap<u64, TrackedSession>>>;
+/// The registry's shared live-session table: sessions keyed by a monotonic id,
+/// plus the server-minted [`SessionHandle`] → id index the registry lookup
+/// reads. One mutex, so the two maps cannot drift.
+#[derive(Default)]
+struct LiveState {
+    sessions: HashMap<u64, TrackedSession>,
+    handles: HashMap<SessionHandle, u64>,
+}
+
+impl LiveState {
+    fn insert(
+        &mut self,
+        id: u64,
+        session: Weak<McpSession>,
+        last_touch: Arc<AtomicU64>,
+        handle: SessionHandle,
+    ) {
+        debug_assert!(
+            !self.handles.contains_key(&handle),
+            "the caller mints outside the lock and retries on collision"
+        );
+        self.handles.insert(handle.clone(), id);
+        self.sessions.insert(
+            id,
+            TrackedSession {
+                session,
+                last_touch,
+                handle,
+            },
+        );
+    }
+
+    /// Drop the session and its handle index entry together; a released handle
+    /// never resolves again.
+    fn remove(&mut self, id: u64) {
+        if let Some(tracked) = self.sessions.remove(&id) {
+            self.handles.remove(&tracked.handle);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.sessions.clear();
+        self.handles.clear();
+    }
+
+    /// Sessions whose server is already gone, pruned with their handles.
+    fn prune_dead(&mut self) {
+        let dead: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|(_, t)| t.session.strong_count() == 0)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in dead {
+            self.remove(id);
+        }
+    }
+
+    /// Strong handles to every live session, skipping the dead.
+    fn upgrades(&self) -> Vec<Arc<McpSession>> {
+        self.sessions
+            .values()
+            .filter_map(|t| t.session.upgrade())
+            .collect()
+    }
+
+    /// Live sessions only; a server rmcp already dropped is pruned lazily and
+    /// is not counted here in the meantime.
+    fn live_len(&self) -> usize {
+        self.sessions
+            .values()
+            .filter(|t| t.session.strong_count() > 0)
+            .count()
+    }
+
+    /// Resolve an explicit handle to its live session, if any.
+    fn resolve(&self, handle: &SessionHandle) -> Option<Arc<McpSession>> {
+        let id = self.handles.get(handle)?;
+        self.sessions.get(id)?.session.upgrade()
+    }
+}
+
+/// The registry's shared live-session table: [`LiveState`] (sessions plus the
+/// handle → session index) under one mutex, so the two maps cannot drift.
+type LiveSet = Arc<StdMutex<LiveState>>;
 
 /// RAII handle owned by each minted [`McpServer`]: unregisters its session on
 /// `Drop`.
@@ -123,6 +209,8 @@ type LiveSet = Arc<StdMutex<HashMap<u64, TrackedSession>>>;
 /// When rmcp drops the `McpServer` at session close (or the idle sweeper evicts
 /// it), this frees a `session_cap` slot automatically, with no rmcp teardown
 /// hook required. Idempotent by construction (a removed key is a no-op remove).
+/// Removal cascades to the session's explicit `SessionHandle`, so a dropped
+/// session's handle never resolves again.
 pub struct SessionGuard {
     live: LiveSet,
     id: u64,
@@ -130,8 +218,8 @@ pub struct SessionGuard {
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        if let Ok(mut set) = self.live.lock() {
-            set.remove(&self.id);
+        if let Ok(mut state) = self.live.lock() {
+            state.remove(self.id);
         }
     }
 }
@@ -186,7 +274,7 @@ impl SessionRegistry {
             cap,
             idle_timeout,
             sweep_parallel,
-            live: Arc::new(StdMutex::new(HashMap::new())),
+            live: Arc::new(StdMutex::new(LiveState::default())),
             next_id: Arc::new(AtomicU64::new(0)),
             op_lock_holders: OpLockHolders::default(),
         }
@@ -209,10 +297,7 @@ impl SessionRegistry {
     /// the sweeper) and is not counted here in the meantime.
     #[must_use]
     pub fn live_count(&self) -> usize {
-        self.live
-            .lock()
-            .map(|s| s.values().filter(|t| t.session.strong_count() > 0).count())
-            .unwrap_or(0)
+        self.live.lock().map(|s| s.live_len()).unwrap_or(0)
     }
 
     /// Strong handles to every live session, for inspection: upgrades each
@@ -220,10 +305,24 @@ impl SessionRegistry {
     /// observe a session's teardown after an eviction.
     #[must_use]
     pub fn live_sessions(&self) -> Vec<Arc<McpSession>> {
-        self.live
-            .lock()
-            .map(|s| s.values().filter_map(|t| t.session.upgrade()).collect())
-            .unwrap_or_default()
+        self.live.lock().map(|s| s.upgrades()).unwrap_or_default()
+    }
+
+    /// Resolve an explicit [`SessionHandle`] to its live session, if any.
+    ///
+    /// A handle whose session was dropped, swept or shut down resolves to
+    /// nothing. Read-only — resolving never refreshes the idle last-touch.
+    ///
+    /// Bearer semantics, with two limits that hold today: the handle is bound
+    /// to no principal or transport, so whoever presents a live handle
+    /// resolves to its session from any connection; and the `HashMap` + `==`
+    /// lookup is not constant-time (SipHash's per-process random keys make
+    /// timing attacks impractical).
+    // #416: no non-test caller until the consuming PR; narrowed meanwhile.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn resolve(&self, handle: &SessionHandle) -> Option<Arc<McpSession>> {
+        self.live.lock().ok()?.resolve(handle)
     }
 
     /// Mint a fresh [`McpSession`], cloning the base [`Config`] so its mutable
@@ -248,54 +347,76 @@ impl SessionRegistry {
     /// `service_factory`. Refuses to mint past [`cap`](Self::cap) with an
     /// [`io::Error`] rmcp surfaces as an internal-error response (a bounded DoS
     /// refusal). On success it registers the session's [`Weak`] handle + a
-    /// shared last-touch timestamp, and hands the [`McpServer`] a
-    /// [`SessionGuard`] (frees the slot on `Drop`) plus that last-touch handle.
+    /// shared last-touch timestamp, mints the session's explicit
+    /// `SessionHandle`, and hands the [`McpServer`] a [`SessionGuard`] (frees
+    /// the slot and releases the handle on `Drop`) plus that last-touch handle.
     ///
     /// # Errors
     ///
     /// Returns an [`io::Error`] of kind [`io::ErrorKind::Other`] when the live
-    /// set already holds [`cap`](Self::cap) sessions.
+    /// set already holds [`cap`](Self::cap) sessions, or when the OS entropy
+    /// source fails to mint a handle (the session is refused, never handle-less).
     pub fn try_make_server(&self) -> io::Result<McpServer> {
-        let mut set = self
-            .live
-            .lock()
-            .map_err(|_| io::Error::other("session registry lock poisoned"))?;
+        self.try_make_server_with_mint(|| SessionHandle::mint().map_err(io::Error::other))
+    }
 
-        // Drop dead entries so a burst of disconnects+reconnects cannot
-        // spuriously trip the cap.
-        set.retain(|_, t| t.session.strong_count() > 0);
+    /// Mint loop with an injectable entropy source: [`try_make_server`](Self::try_make_server)
+    /// passes the OS mint, tests pass a stub replaying a registered handle to
+    /// pin the collision re-mint.
+    fn try_make_server_with_mint(
+        &self,
+        mut mint: impl FnMut() -> io::Result<SessionHandle>,
+    ) -> io::Result<McpServer> {
+        // Mint outside the lock: the entropy syscall must not extend the
+        // registry's critical section.
+        loop {
+            let handle = mint()?;
+            let mut state = self
+                .live
+                .lock()
+                .map_err(|_| io::Error::other("session registry lock poisoned"))?;
 
-        if set.len() >= self.cap {
-            return Err(io::Error::other(format!(
-                "session registry full: {} concurrent client sessions already \
-                 active; retry once a session is released or raise \
-                 [mcp] session_cap",
-                self.cap
-            )));
+            // Drop dead entries so a burst of disconnects+reconnects cannot
+            // spuriously trip the cap.
+            state.prune_dead();
+
+            // Pruned above, so every tracked session is live: count directly
+            // instead of re-filtering.
+            if state.sessions.len() >= self.cap {
+                return Err(io::Error::other(format!(
+                    "session registry full: {} concurrent client sessions already \
+                     active; retry once a session is released or raise \
+                     [mcp] session_cap",
+                    self.cap
+                )));
+            }
+            if state.handles.contains_key(&handle) {
+                continue; // ~2^-128 collision: re-mint outside the lock.
+            }
+
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let session = self.make_session();
+            let last_touch = Arc::new(AtomicU64::new(now_millis()));
+            state.insert(
+                id,
+                Arc::downgrade(&session),
+                Arc::clone(&last_touch),
+                handle.clone(),
+            );
+            drop(state);
+
+            let guard = SessionGuard {
+                live: Arc::clone(&self.live),
+                id,
+            };
+            return Ok(McpServer::new_tracked(
+                Arc::clone(&self.registry),
+                session,
+                guard,
+                last_touch,
+                handle,
+            ));
         }
-
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let session = self.make_session();
-        let last_touch = Arc::new(AtomicU64::new(now_millis()));
-        set.insert(
-            id,
-            TrackedSession {
-                session: Arc::downgrade(&session),
-                last_touch: Arc::clone(&last_touch),
-            },
-        );
-        drop(set);
-
-        let guard = SessionGuard {
-            live: Arc::clone(&self.live),
-            id,
-        };
-        Ok(McpServer::new_tracked(
-            Arc::clone(&self.registry),
-            session,
-            guard,
-            last_touch,
-        ))
     }
 
     /// Start the background idle-TTL sweeper.
@@ -336,12 +457,12 @@ impl SessionRegistry {
     /// Best-effort and idempotent: a second call finds an empty set.
     pub(crate) async fn close_all(&self) {
         let sessions: Vec<Arc<McpSession>> = {
-            let mut set = match self.live.lock() {
+            let mut state = match self.live.lock() {
                 Ok(s) => s,
                 Err(_) => return,
             };
-            let sessions = set.values().filter_map(|t| t.session.upgrade()).collect();
-            set.clear();
+            let sessions = state.upgrades();
+            state.clear();
             sessions
         };
         close_sessions(sessions, self.sweep_parallel).await;
@@ -380,13 +501,15 @@ async fn close_sessions(sessions: Vec<Arc<McpSession>>, parallel: usize) {
 /// a side effect. Returns `(id, session)` tuples so the caller can re-validate +
 /// close without re-locking per entry.
 fn collect_stale(live: &LiveSet, timeout: Duration, now: u64) -> Vec<(u64, Arc<McpSession>)> {
-    let mut set = match live.lock() {
+    let mut state = match live.lock() {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    set.retain(|_, t| t.session.strong_count() > 0);
+    state.prune_dead();
     let timeout_ms = timeout.as_millis() as u64;
-    set.iter()
+    state
+        .sessions
+        .iter()
         .filter(|(_, t)| now.saturating_sub(t.last_touch.load(Ordering::Relaxed)) >= timeout_ms)
         .filter_map(|(id, t)| t.session.upgrade().map(|s| (*id, s)))
         .collect()
@@ -420,11 +543,11 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
     // removed here are closed, so a spared session is never torn down.
     let mut to_close: Vec<Arc<McpSession>> = Vec::new();
     for (id, session) in collect_stale(live, timeout, now) {
-        let mut set = match live.lock() {
+        let mut state = match live.lock() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let Some(tracked) = set.get(&id) else {
+        let Some(tracked) = state.sessions.get(&id) else {
             continue; // already evicted elsewhere
         };
         let touched = tracked.last_touch.load(Ordering::Relaxed);
@@ -432,8 +555,8 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
             tracing::info!(id, "skipping sweep: session re-activated");
             continue;
         }
-        set.remove(&id);
-        drop(set);
+        state.remove(id);
+        drop(state);
         tracing::info!(id, "sweeping idle MCP session");
         to_close.push(session);
     }
@@ -510,12 +633,12 @@ mod tests {
     ) -> (u64, Arc<AtomicU64>) {
         let id = reg.next_id.fetch_add(1, Ordering::Relaxed);
         let last_touch = Arc::new(AtomicU64::new(touch));
+        let handle = SessionHandle::mint().expect("OS entropy mints the test handle");
         reg.live.lock().unwrap().insert(
             id,
-            TrackedSession {
-                session: Arc::downgrade(session),
-                last_touch: Arc::clone(&last_touch),
-            },
+            Arc::downgrade(session),
+            Arc::clone(&last_touch),
+            handle,
         );
         (id, last_touch)
     }
@@ -631,8 +754,8 @@ mod tests {
         // Drive the loop's per-entry re-check manually.
         let timeout_ms = reg.idle_timeout.as_millis() as u64;
         {
-            let set = reg.live.lock().unwrap();
-            let tracked = set.get(&id).unwrap();
+            let state = reg.live.lock().unwrap();
+            let tracked = state.sessions.get(&id).unwrap();
             let touched = tracked.last_touch.load(Ordering::Relaxed);
             assert!(
                 now_millis().saturating_sub(touched) < timeout_ms,
@@ -783,6 +906,27 @@ mod tests {
         assert_eq!(reg.live_count(), 0);
     }
 
+    /// `close_all` releases the handle index with the sessions: a shut-down
+    /// handle never resolves again and no index entry leaks.
+    #[tokio::test]
+    async fn close_all_releases_handle_index() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let server = reg.try_make_server().expect("http server");
+        let handle = server.session_handle().expect("handle").clone();
+        assert!(reg.resolve(&handle).is_some(), "handle resolves while live");
+
+        reg.close_all().await;
+
+        assert!(
+            reg.resolve(&handle).is_none(),
+            "a shut-down session's handle must stop resolving"
+        );
+        assert!(
+            reg.live.lock().unwrap().handles.is_empty(),
+            "close_all must release the handle index, not just the sessions"
+        );
+    }
+
     #[tokio::test]
     async fn sessions_of_one_registry_share_the_op_lock_holders() {
         let reg = reg_with_idle(Duration::from_secs(3600));
@@ -820,5 +964,170 @@ mod tests {
             "cancellation must preempt the wedged teardown"
         );
         gate.notify_waiters(); // release the abandoned close task
+    }
+
+    /// Each http-minted server carries a distinct explicit handle resolving to
+    /// its own session.
+    #[tokio::test]
+    async fn minted_servers_carry_distinct_resolvable_handles() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let a = reg.try_make_server().expect("first http server");
+        let b = reg.try_make_server().expect("second http server");
+        let (Some(ha), Some(hb)) = (a.session_handle(), b.session_handle()) else {
+            panic!("http-minted servers must carry handles");
+        };
+        assert_ne!(ha, hb, "handles must not collide across sessions");
+
+        let sessions = reg.live_sessions();
+        assert_eq!(sessions.len(), 2);
+        let ra = reg.resolve(ha).expect("a's handle resolves");
+        let rb = reg.resolve(hb).expect("b's handle resolves");
+        assert!(
+            !Arc::ptr_eq(&ra, &rb),
+            "distinct handles must resolve to distinct sessions"
+        );
+    }
+
+    /// A stub mint replaying a registered handle must collide exactly once and
+    /// the retry still mints a distinct second session. The call count pins the
+    /// re-mint: without it the stub runs once and the second server reuses the
+    /// taken handle.
+    #[test]
+    fn handle_collision_re_mints_fresh_handle() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let first = reg.try_make_server().expect("first http server");
+        let taken = first.session_handle().expect("handle").clone();
+        let mut calls = 0;
+        let second = reg
+            .try_make_server_with_mint(|| {
+                calls += 1;
+                Ok(if calls == 1 {
+                    taken.clone()
+                } else {
+                    SessionHandle::mint().expect("OS entropy mints the retry")
+                })
+            })
+            .expect("retry mints after the collision");
+        assert_eq!(calls, 2, "the taken handle must collide exactly once");
+        let minted = second.session_handle().expect("handle").clone();
+        assert_ne!(minted, taken, "the retry must mint a fresh handle");
+        assert_eq!(reg.live_count(), 2);
+        assert!(
+            reg.resolve(&taken).is_some(),
+            "the first session keeps its handle"
+        );
+        assert!(
+            reg.resolve(&minted).is_some(),
+            "the retried session resolves"
+        );
+    }
+
+    /// A handle minted outside the registry resolves to nothing.
+    #[test]
+    fn resolve_rejects_unregistered_handles() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let foreign = SessionHandle::mint().expect("OS entropy");
+        assert!(
+            reg.resolve(&foreign).is_none(),
+            "an unregistered handle must not resolve"
+        );
+    }
+
+    /// Dropping the server releases the handle with the cap slot: the
+    /// same handle never resolves again.
+    #[tokio::test]
+    async fn dropped_server_releases_its_handle() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let server = reg.try_make_server().expect("http server");
+        let handle = server.session_handle().expect("handle").clone();
+        assert!(reg.resolve(&handle).is_some(), "handle resolves while live");
+        drop(server);
+        assert_eq!(reg.live_count(), 0, "dropped server frees its slot");
+        assert!(
+            reg.resolve(&handle).is_none(),
+            "a dropped session's handle must stop resolving"
+        );
+        assert!(
+            reg.live.lock().unwrap().handles.is_empty(),
+            "a dropped session's handle index entry must be released, not leaked"
+        );
+    }
+
+    /// Handles are registry-scoped: one registry's handle means nothing to
+    /// another.
+    #[tokio::test]
+    async fn handles_do_not_cross_registries() {
+        let a = reg_with_idle(Duration::from_secs(3600));
+        let b = reg_with_idle(Duration::from_secs(3600));
+        let server = a.try_make_server().expect("http server");
+        let handle = server.session_handle().expect("handle").clone();
+        assert!(a.resolve(&handle).is_some(), "owning registry resolves");
+        assert!(
+            b.resolve(&handle).is_none(),
+            "a sibling registry must not resolve it"
+        );
+    }
+
+    /// Resolving is read-only: it never refreshes the idle last-touch, so a
+    /// handle probe cannot keep a quiet session alive.
+    #[tokio::test]
+    async fn resolve_does_not_refresh_idle_touch() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let session = reg.make_session();
+        let (id, touch) = track(&reg, &session, 1000);
+        let handle = reg
+            .live
+            .lock()
+            .unwrap()
+            .sessions
+            .get(&id)
+            .unwrap()
+            .handle
+            .clone();
+
+        let before = touch.load(Ordering::Relaxed);
+        assert!(
+            reg.resolve(&handle).is_some(),
+            "a live session's handle resolves"
+        );
+        assert_eq!(
+            touch.load(Ordering::Relaxed),
+            before,
+            "resolve must not bump last-touch"
+        );
+    }
+
+    /// A swept session's handle stops resolving with the session.
+    ///
+    /// A zero idle-TTL forces the sweep path with no wall-clock sleep: under
+    /// the process-epoch clock a seeded absolute touch is stale only once the
+    /// test binary outlives it, so a nonzero TTL + fixed touch flakes when
+    /// this test runs early.
+    #[tokio::test]
+    async fn swept_session_handle_stops_resolving() {
+        let reg = reg_with_idle(Duration::ZERO);
+        let session = reg.make_session();
+        let (id, _touch) = track(&reg, &session, now_millis());
+        let handle = reg
+            .live
+            .lock()
+            .unwrap()
+            .sessions
+            .get(&id)
+            .unwrap()
+            .handle
+            .clone();
+
+        sweep_once(&reg.live, reg.idle_timeout, 4).await;
+
+        assert_eq!(reg.live_count(), 0, "stale session must be swept");
+        assert!(
+            reg.resolve(&handle).is_none(),
+            "a swept session's handle must stop resolving"
+        );
+        assert!(
+            reg.live.lock().unwrap().handles.is_empty(),
+            "a swept session's handle index entry must be released, not leaked"
+        );
     }
 }

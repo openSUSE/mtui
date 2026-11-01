@@ -2738,6 +2738,7 @@ dependencies = [
  "clap",
  "criterion",
  "futures",
+ "getrandom 0.4.3",
  "insta",
  "libc",
  "mtui-config",
