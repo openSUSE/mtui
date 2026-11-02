@@ -139,6 +139,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The openQA overview no longer reports a build whose package name contains
   `+` (e.g. `libsigc++2`) as passed: the build was sent unencoded, so openQA
   matched no jobs.
+- `regenerate` no longer waits for, and may report success on, a regeneration
+  TeReGen refused with a JSON error body lacking an `error` key.
 
 ## [26.3.5] - 2026-10-27
 
