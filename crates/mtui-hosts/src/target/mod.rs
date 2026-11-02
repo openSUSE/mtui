@@ -867,21 +867,23 @@ impl Target {
     ///
     /// Driven by the `reload_products`
     /// command: re-runs [`parse_system`] and stores the
-    /// `(System, transactional)` pair via [`set_system`](Self::set_system). A
-    /// no-op (logged) when the target is not connected; a parse failure is
-    /// logged and the previously recorded system is left untouched, matching the
-    /// crate's best-effort degradation elsewhere.
-    pub async fn reload_system(&mut self) {
+    /// `(System, transactional)` pair via [`set_system`](Self::set_system). On
+    /// failure the previously recorded system is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::Connect`] when the target is not connected, or the
+    /// [`parse_system`] error.
+    pub async fn reload_system(&mut self) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
-            tracing::debug!(host = %self.hostname, "reload_system: not connected");
-            return;
+            return Err(HostError::Connect {
+                host: self.hostname.clone(),
+                reason: "not connected".to_owned(),
+            });
         };
-        match parsers::parse_system(conn.as_mut()).await {
-            Ok((system, transactional)) => self.set_system(system, transactional),
-            Err(e) => {
-                tracing::warn!(host = %self.hostname, error = %e, "reload_system: parse failed");
-            }
-        }
+        let (system, transactional) = parsers::parse_system(conn.as_mut()).await?;
+        self.set_system(system, transactional);
+        Ok(())
     }
 
     /// The per-host tracked packages.
@@ -1603,17 +1605,17 @@ mod tests {
         // Starts with the `unknown` placeholder before any parse.
         assert_eq!(t.system().get_base().name, "unknown");
 
-        t.reload_system().await;
+        t.reload_system().await.unwrap();
 
         assert_eq!(t.system().get_base().name, "SLES");
         assert_eq!(t.system().get_base().version, "15-SP5");
     }
 
     #[tokio::test]
-    async fn reload_system_on_unconnected_is_noop() {
+    async fn reload_system_on_unconnected_errors_and_keeps_the_system() {
         let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
-        t.reload_system().await;
-        // No connection -> system untouched (still the unknown placeholder).
+        let err = t.reload_system().await.unwrap_err();
+        assert!(matches!(err, HostError::Connect { .. }), "{err:?}");
         assert_eq!(t.system().get_base().name, "unknown");
     }
 
