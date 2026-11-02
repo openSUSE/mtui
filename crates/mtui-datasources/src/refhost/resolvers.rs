@@ -29,7 +29,7 @@ use tracing::warn;
 
 use super::store::Refhosts;
 use crate::error::RefhostError;
-use crate::http::{HttpClient, VerifyPolicy, resolve_verify};
+use crate::http::{HttpClient, VerifyPolicy, resolve_verify, sanitize_url};
 
 /// The subset of configuration a [`Resolver`] needs.
 ///
@@ -192,7 +192,7 @@ impl Fetcher for HttpFetcher {
             .get_bytes(uri)
             .await
             .map_err(|e| RefhostError::Io {
-                path: uri.to_string(),
+                path: sanitize_url(uri),
                 source: std::io::Error::other(e.to_string()),
             })
     }
@@ -556,6 +556,21 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_failed_download_does_not_echo_the_uri_userinfo() {
+        let fetcher = HttpFetcher::new(VerifyPolicy::Default(true)).unwrap();
+        let err = fetcher
+            .fetch(
+                "http://bot:s3cret@127.0.0.1:1/refhosts.yml",
+                VerifyPolicy::Default(true),
+            )
+            .await
+            .expect_err("nothing listens on port 1");
+        let rendered = err.to_string();
+        assert!(rendered.contains("127.0.0.1:1"), "{rendered}");
+        assert!(!rendered.contains("s3cret"), "{rendered}");
+    }
 
     /// Recorded `(uri, verifying)` fetch calls, where `verifying` is `false`
     /// only for the `Default(false)` skip-verification posture.
