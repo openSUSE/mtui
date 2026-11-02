@@ -131,6 +131,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host disabled since then.
 - `put` of an unreadable local file fails on every host instead of printing
   nothing and succeeding.
+- `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
+  download no longer fails on every host; the result line names
+  `downloads/<dir>/*.<host>`.
 
 ## [26.3.5] - 2026-10-27
 
