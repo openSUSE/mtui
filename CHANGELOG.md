@@ -127,6 +127,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   openQA base URL ends in `/`.
 - Unlocking a lock that someone else removed in the meantime reports it
   released instead of failing with an SFTP "No such file" error.
+- `get`/`put` no longer report the previous transfer's `ok` or `FAILED` for a
+  host disabled since then.
 
 ## [26.3.5] - 2026-10-27
 
