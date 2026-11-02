@@ -143,6 +143,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   TeReGen refused with a JSON error body lacking an `error` key.
 - Gitea review comments reach the PR when the owner or repository name
   contains `pulls`.
+- An update whose rpm output lacks its end marker can no longer crash mtui on a
+  multi-byte character.
 
 ## [26.3.5] - 2026-10-27
 
