@@ -787,7 +787,7 @@ fn error_detail(bytes: &[u8]) -> String {
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
     if detail.len() > MAX_DETAIL_LEN {
-        detail[..MAX_DETAIL_LEN].to_owned()
+        detail[..detail.floor_char_boundary(MAX_DETAIL_LEN)].to_owned()
     } else {
         detail
     }
@@ -811,5 +811,15 @@ mod tests {
             rendered.contains("qam.example.invalid"),
             "debug: {rendered}"
         );
+    }
+
+    #[test]
+    fn error_detail_truncates_on_a_char_boundary() {
+        // One ASCII byte shifts every 3-byte `€` so the cap lands mid-char.
+        let body = format!("x{}", "€".repeat(MAX_DETAIL_LEN));
+        let detail = error_detail(body.as_bytes());
+        assert!(detail.len() <= MAX_DETAIL_LEN);
+        assert!(body.starts_with(&detail));
+        assert_eq!(detail.len(), MAX_DETAIL_LEN - 1);
     }
 }
