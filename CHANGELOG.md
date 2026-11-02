@@ -421,6 +421,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host disabled since then.
 - `put` of an unreadable local file fails on every host instead of printing
   nothing and succeeding.
+- `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
+  download no longer fails on every host; the result line names
+  `downloads/<dir>/*.<host>`.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.
