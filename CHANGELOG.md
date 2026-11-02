@@ -122,6 +122,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Session-level `list_refhosts`/`updates` (and the other template-free
   commands) no longer hold the active template's entry for the call, so a
   concurrent call on that template no longer fails `template busy` (#666).
+- `export` on a kernel update downloads the openQA install and LTP logs again:
+  every one was refused as an "unsafe export path component" because the
+  openQA base URL ends in `/`.
 
 ## [26.3.5] - 2026-10-27
 
