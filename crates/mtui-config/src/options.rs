@@ -750,8 +750,8 @@ pub struct Config {
     /// guard), enforced by
     /// `mtui_mcp::provider::SessionRegistry::try_make_server`. Default 32.
     pub mcp_session_cap: usize,
-    /// Seconds of inactivity after which an idle http session is swept; `0`
-    /// disables the sweeper. Also pins the rmcp streamable-HTTP session
+    /// Seconds of inactivity after which an idle http session is swept; a `0`
+    /// in the file is rejected for the default. Also pins the rmcp streamable-HTTP session
     /// keep-alive (`serve_http`), whose own 300s default would otherwise drop
     /// idle sessions mid-conversation. Default 14400 (4h).
     pub mcp_session_idle_timeout: u64,
