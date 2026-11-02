@@ -424,6 +424,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
   download no longer fails on every host; the result line names
   `downloads/<dir>/*.<host>`.
+- `reload_products` fails, naming the host, when the products cannot be
+  re-read, instead of printing the previously recorded product as reloaded.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.

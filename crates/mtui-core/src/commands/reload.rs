@@ -15,7 +15,7 @@ use crate::session::Session;
 /// host whose parse fails, or which exhausts its own
 /// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget, keeps its
 /// previous system and the pass continues — but the command then fails naming
-/// the hosts it could not reach. `-t/--target`-only, hence [`Scope::Active`]:
+/// those hosts. `-t/--target`-only, hence [`Scope::Active`]:
 /// the active template's host set, not once per loaded template.
 pub struct ReloadProducts;
 
@@ -50,24 +50,26 @@ impl Command for ReloadProducts {
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
-        // `reload_system` returns no outcome (a parse failure only logs and keeps
-        // the previous system), so the base product is read back per host to
-        // confirm — never silent for an MCP caller.
         let mut lines: Vec<String> = Vec::new();
-        let mut unreached: Vec<&str> = Vec::new();
+        let mut failed: Vec<&str> = Vec::new();
         let budget = host_op_budget();
         let secs = budget.as_secs();
         // Per host, not one budget for the whole serial pass: a host that
         // exhausts its own is abandoned and the pass moves on.
         for name in &hosts {
             if let Some(t) = targets.get_mut(name) {
-                if tokio::time::timeout(budget, t.reload_system())
-                    .await
-                    .is_err()
-                {
-                    unreached.push(name);
-                    lines.push(format!("{name}: reload not completed within {secs}s"));
-                    continue;
+                match tokio::time::timeout(budget, t.reload_system()).await {
+                    Err(_) => {
+                        failed.push(name);
+                        lines.push(format!("{name}: reload not completed within {secs}s"));
+                        continue;
+                    }
+                    Ok(Err(e)) => {
+                        failed.push(name);
+                        lines.push(format!("{name}: reload failed ({e})"));
+                        continue;
+                    }
+                    Ok(Ok(())) => {}
                 }
                 tracing::info!(host = %name, "reloaded products");
                 let product = t.system().get_base().name.clone();
@@ -78,12 +80,12 @@ impl Command for ReloadProducts {
         for line in &lines {
             session.display.println(line);
         }
-        if unreached.is_empty() {
+        if failed.is_empty() {
             return Ok(());
         }
         Err(CommandError::Other(format!(
-            "reload_products timed out on: {}",
-            unreached.join(", ")
+            "reload_products failed on: {}",
+            failed.join(", ")
         )))
     }
 }
@@ -141,6 +143,28 @@ mod tests {
             "{}",
             buf.contents()
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_parse_fails_the_command_instead_of_echoing_the_old_product() {
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod", "sle-ha.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_open_error("/etc/products.d/sle-ha.prod");
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        session.targets_mut().add(target);
+
+        let args = matches(&ReloadProducts, &["-t", "h1"]);
+        let err = ReloadProducts.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("h1")),
+            "{err}"
+        );
+        let out = buf.contents();
+        assert!(!out.contains("h1: reloaded products"), "{out}");
+        assert!(out.contains("h1: reload failed"), "{out}");
     }
 
     #[tokio::test]
