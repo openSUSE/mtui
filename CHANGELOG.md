@@ -415,6 +415,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   openQA base URL ends in `/`.
 - Unlocking a lock that someone else removed in the meantime reports it
   released instead of failing with an SFTP "No such file" error.
+- A released pool claim (`unlock --pool`) is no longer written back by a
+  later `reboot`.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.
