@@ -55,22 +55,33 @@ impl Command for SftpGet {
             .and_then(|n| n.to_str())
             .ok_or_else(|| CommandError::Other("invalid remote file name".to_owned()))?;
         let local = wd.join("downloads").join(name);
-        if let Some(parent) = local.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| CommandError::Other(format!("{}: {e}", parent.display())))?;
-        }
-
         let remote_str = remote
             .to_str()
             .ok_or_else(|| CommandError::Other("invalid remote path".to_owned()))?;
+        // A folder fetch (trailing `/`) writes `<local>/<entry>.<host>`.
+        let is_folder = remote_str.ends_with('/');
+        let dir = if is_folder {
+            Some(local.as_path())
+        } else {
+            local.parent()
+        };
+        if let Some(dir) = dir {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| CommandError::Other(format!("{}: {e}", dir.display())))?;
+        }
         let targets = session.targets_mut();
         targets.sftp_get(remote_str, &local).await;
 
         // `sftp_get` suffixes the local path with the hostname
-        // (`{local}.{host}`), so report that concrete path. Any errored transfer
-        // must fail the command, so an MCP call never silently succeeds on a
-        // download that never happened; `None` hosts are skipped.
-        let local_label = local.display().to_string();
+        // (`{local}.{host}`, or `{local}/*.{host}` for a folder), so report that
+        // concrete path. Any errored transfer must fail the command, so an MCP
+        // call never silently succeeds on a download that never happened;
+        // `None` hosts are skipped.
+        let local_label = if is_folder {
+            format!("{}/*", local.display())
+        } else {
+            local.display().to_string()
+        };
         let mut outcomes: Vec<(String, Result<(), String>)> = Vec::new();
         for host in targets.names() {
             let Some(outcome) = targets
@@ -155,6 +166,26 @@ mod tests {
         assert!(out.contains("<- h2: ok"), "{out}");
         assert!(out.contains("file.log.h1"), "suffixed path: {out}");
         assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn folder_get_creates_its_local_directory() {
+        // A folder fetch writes `<local>/<entry>.<host>`, so `<local>` itself
+        // must exist and the label must name it as a directory.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut session, buf) =
+            session_with_download_outcomes("SUSE:Maintenance:1:1", &[("h1", true)], dir.path());
+        let args = matches(&SftpGet, &["/var/log/"]);
+        SftpGet.call(&mut session, &args).await.unwrap();
+        let local = session
+            .metadata()
+            .base()
+            .report_wd()
+            .unwrap()
+            .join("downloads/log");
+        assert!(local.is_dir(), "{} missing", local.display());
+        let out = buf.contents();
+        assert!(out.contains("log/*.h1 <- h1: ok"), "{out}");
     }
 
     #[tokio::test]
