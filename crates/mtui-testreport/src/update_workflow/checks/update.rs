@@ -351,16 +351,19 @@ pub(super) fn markers(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateErro
 /// occurrence of `end` (searched from the marker); `None` when `marker` is
 /// absent.
 ///
-/// If `end` is not found this falls back to `len - 1`, matching a slice indexed
-/// by a `-1` "not found" sentinel.
+/// If `end` is not found this stops before the last character, matching a
+/// slice indexed by a `-1` "not found" sentinel.
 fn extract_between<'a>(s: &'a str, marker: &str, end: &str) -> Option<&'a str> {
     let m = s.find(marker)?;
     let start = m + marker.len();
     let rest = &s[start..];
     let stop = match rest.find(end) {
         Some(rel) => start + rel,
-        // `end` not found: fall back to slice `[start:-1]`.
-        None => s.len().saturating_sub(1).max(start),
+        None => s
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i)
+            .max(start),
     };
     Some(&s[start..stop])
 }
@@ -509,6 +512,13 @@ mod tests {
             extract_between("nothing here", "Additional rpm output:", "Retrieving"),
             None
         );
+    }
+
+    #[test]
+    fn extract_between_without_end_drops_the_last_char_not_byte() {
+        let s = "Additional rpm output:\nwarning: ünïcödé ✔";
+        let got = extract_between(s, "Additional rpm output:", "Retrieving");
+        assert_eq!(got, Some("\nwarning: ünïcödé "));
     }
 
     #[test]
