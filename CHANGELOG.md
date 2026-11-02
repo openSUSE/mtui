@@ -134,6 +134,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
   download no longer fails on every host; the result line names
   `downloads/<dir>/*.<host>`.
+- `reload_products` fails, naming the host, when the products cannot be
+  re-read, instead of printing the previously recorded product as reloaded.
 
 ## [26.3.5] - 2026-10-27
 
