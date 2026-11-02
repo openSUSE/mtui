@@ -129,6 +129,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   released instead of failing with an SFTP "No such file" error.
 - `get`/`put` no longer report the previous transfer's `ok` or `FAILED` for a
   host disabled since then.
+- `put` of an unreadable local file fails on every host instead of printing
+  nothing and succeeding.
 
 ## [26.3.5] - 2026-10-27
 
