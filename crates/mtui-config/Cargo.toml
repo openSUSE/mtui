@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 directories.workspace = true
+mtui-types.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
@@ -16,6 +17,7 @@ tracing.workspace = true
 [dev-dependencies]
 directories.workspace = true
 tempfile = "3"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
