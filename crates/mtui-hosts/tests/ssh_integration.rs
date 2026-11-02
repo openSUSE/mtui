@@ -737,8 +737,10 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
-        self.fs.lock().await.files.remove(&filename);
-        Ok(Self::ok(id))
+        match self.fs.lock().await.files.remove(&filename) {
+            Some(_) => Ok(Self::ok(id)),
+            None => Err(StatusCode::NoSuchFile),
+        }
     }
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
@@ -1761,6 +1763,23 @@ async fn sftp_remove_and_readlink() {
         .await
         .expect("readlink");
     assert_eq!(target, "/tmp/target");
+}
+
+/// The lock release paths read `SftpNotFound` as "already released".
+#[tokio::test]
+async fn sftp_remove_of_a_missing_file_is_not_found() {
+    let fs = SharedFs::default();
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_remove(std::path::Path::new("/tmp/gone"))
+        .await
+        .expect_err("nothing to remove");
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "{err:?}"
+    );
 }
 
 #[cfg(feature = "shell")]

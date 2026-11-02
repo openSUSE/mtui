@@ -413,6 +413,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `export` on a kernel update downloads the openQA install and LTP logs again:
   every one was refused as an "unsafe export path component" because the
   openQA base URL ends in `/`.
+- Unlocking a lock that someone else removed in the meantime reports it
+  released instead of failing with an SFTP "No such file" error.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.
