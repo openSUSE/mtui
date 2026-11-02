@@ -1531,6 +1531,7 @@ impl<C: Clock> PoolLock<C> {
     /// forced, or an SFTP error from the remove path.
     pub(crate) async fn unlock(&mut self, force: bool) -> Result<()> {
         if !self.is_locked().await? {
+            self.mark_released();
             return Ok(());
         }
         if !self.is_mine()? && !force {
@@ -1549,6 +1550,7 @@ impl<C: Clock> PoolLock<C> {
         }
         self.inner.lock = RemoteLock::default();
         self.inner.invalid = false;
+        self.mark_released();
         Ok(())
     }
 }
@@ -2766,6 +2768,28 @@ mod tests {
         let mut p = pool(conn, "SUSE:Maintenance:1:2");
         p.unlock(false).await.unwrap();
         assert!(handle.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
+    /// A released claim must leave no hold behind, or a later reboot's
+    /// re-apply writes the claim back.
+    #[tokio::test]
+    async fn pool_unlock_drops_the_in_memory_hold() {
+        let comment = "mtui pool SUSE:Maintenance:1:2 [alice]";
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(p.try_claim(comment).await.unwrap());
+        assert_eq!(p.held_comment().as_deref(), Some(comment));
+        p.unlock(false).await.unwrap();
+        assert_eq!(p.held_comment(), None);
+
+        assert!(p.try_claim(comment).await.unwrap());
+        let mut other = handle.clone();
+        Connection::sftp_remove(&mut other, Path::new(POOL_LOCK_PATH))
+            .await
+            .unwrap();
+        p.unlock(false).await.unwrap();
+        assert_eq!(p.held_comment(), None);
     }
 
     #[tokio::test]
