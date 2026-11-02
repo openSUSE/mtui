@@ -1809,7 +1809,7 @@ impl Connection for SshConnection {
         let sftp = self.sftp().await?;
         sftp.remove_file(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_verb_err(e))?;
+            .map_err(|e| self.sftp_verb_err_at(e, path))?;
         Ok(())
     }
 
