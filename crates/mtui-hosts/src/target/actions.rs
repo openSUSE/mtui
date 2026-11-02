@@ -310,16 +310,14 @@ pub(crate) async fn sftp_put_all(
 
     // Read the immutable payload once when it is size-bounded, and dispatch the
     // shared bytes to every host — a fan-out of N hosts then performs one disk
-    // read, not N. A file larger than the cap (or one whose size can't be
-    // stat'd) falls back to per-host streaming from disk.
+    // read, not N. A file larger than the cap (or one that can't be stat'd or
+    // read) falls back to per-host streaming from disk, which records each
+    // host's own failure for the `put` aggregation.
     let shared: Option<Arc<[u8]>> = match tokio::fs::metadata(local).await {
-        Ok(meta) if meta.len() <= SHARED_UPLOAD_CAP => match tokio::fs::read(local).await {
-            Ok(bytes) => Some(Arc::from(bytes.into_boxed_slice())),
-            Err(e) => {
-                tracing::error!(local = %local.display(), error = %e, "failed to read upload payload");
-                return;
-            }
-        },
+        Ok(meta) if meta.len() <= SHARED_UPLOAD_CAP => tokio::fs::read(local)
+            .await
+            .ok()
+            .map(|bytes| Arc::from(bytes.into_boxed_slice())),
         _ => None,
     };
 
@@ -656,6 +654,27 @@ mod tests {
                 h.sftp_ops()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn sftp_put_all_unreadable_payload_still_records_every_host() {
+        // A directory stats fine but fails to read: every host must still be
+        // attempted, so `put` sees a per-host outcome instead of nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let (m1, m2) = (echo("h1", ""), echo("h2", ""));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
+
+        sftp_put_all(&mut g, dir.path(), Path::new("/r"), false, 0).await;
+
+        for h in [&h1, &h2] {
+            assert!(
+                matches!(h.sftp_ops().as_slice(), [MockSftpOp::Put { .. }]),
+                "got {:?}",
+                h.sftp_ops()
+            );
+        }
+        assert!(g.values().all(|t| t.last_upload().is_some()));
     }
 
     #[tokio::test]
