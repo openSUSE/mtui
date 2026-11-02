@@ -1382,9 +1382,9 @@ impl Target {
                     }
                 };
             }
-            // Left as `None` (not attempted) so the `put` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
+            // `None` (not attempted) so the `put` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => self.last_upload = None,
         }
     }
 
@@ -1425,9 +1425,12 @@ impl Target {
                 };
                 self.last_upload.clone()
             }
-            // Left as `None` (not attempted) so the `put` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => None,
+            // `None` (not attempted) so the `put` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => {
+                self.last_upload = None;
+                None
+            }
         }
     }
 
@@ -1472,9 +1475,9 @@ impl Target {
                     }
                 };
             }
-            // Left as `None` (not attempted) so the `get` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
+            // `None` (not attempted) so the `get` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => self.last_download = None,
         }
     }
 
@@ -2230,6 +2233,29 @@ mod tests {
         t.sftp_get("/remote/file", Path::new("/local")).await;
 
         assert_eq!(t.last_download(), None);
+    }
+
+    /// A host disabled since its last transfer must read as skipped, not
+    /// replay that transfer's outcome into the next `put`/`get` aggregation.
+    #[tokio::test]
+    async fn disabling_a_host_clears_its_earlier_transfer_outcomes() {
+        let mut t = enabled_with(MockConnection::new("h1"));
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        t.sftp_get("/remote/file", Path::new("/local/file")).await;
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+        assert_eq!(t.last_download(), Some(&Ok(())));
+
+        t.set_state(TargetState::Disabled);
+        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
+        assert_eq!(t.last_upload(), None);
+        t.sftp_get("/remote/file", Path::new("/local")).await;
+        assert_eq!(t.last_download(), None);
+
+        t.set_state(TargetState::Enabled);
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        t.set_state(TargetState::Disabled);
+        assert_eq!(t.sftp_put_bytes(b"x", Path::new("/remote")).await, None);
+        assert_eq!(t.last_upload(), None);
     }
 
     // --- connect() ----------------------------------------------------------
