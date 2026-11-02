@@ -145,6 +145,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   contains `pulls`.
 - An update whose rpm output lacks its end marker can no longer crash mtui on a
   multi-byte character.
+- An invalid endpoint URL in the config file, and a failed `refhosts.yml`
+  download, no longer write the URL's `user:password@` to the log.
 
 ## [26.3.5] - 2026-10-27
 

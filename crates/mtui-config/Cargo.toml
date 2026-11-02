@@ -20,3 +20,4 @@ thiserror.workspace = true
 [dev-dependencies]
 directories.workspace = true
 tempfile = "3"
+tracing-subscriber.workspace = true
