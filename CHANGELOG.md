@@ -431,6 +431,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   matched no jobs.
 - `regenerate` no longer waits for, and may report success on, a regeneration
   TeReGen refused with a JSON error body lacking an `error` key.
+- Gitea review comments reach the PR when the owner or repository name
+  contains `pulls`.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.

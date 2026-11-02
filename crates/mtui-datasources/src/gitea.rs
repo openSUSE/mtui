@@ -322,7 +322,10 @@ impl Gitea {
     ) -> Result<Self, GiteaError> {
         let trusted_origin = parse_trusted_origin(trusted_gitea_url)?;
         // `.../pulls/<n>` -> `.../issues/<n>/comments`.
-        let prissues = format!("{}/comments", giteaprapi.replace("pulls", "issues"));
+        let prissues = match giteaprapi.rsplit_once("/pulls/") {
+            Some((repo, number)) => format!("{repo}/issues/{number}/comments"),
+            None => format!("{giteaprapi}/comments"),
+        };
         let api_root = giteaprapi
             .split_once("/api/v1/")
             .map_or(giteaprapi, |(root, _)| root);
@@ -960,6 +963,24 @@ mod tests {
             "https://gitea.example.com/api/v1/repos/owner/repo/issues/1/comments"
         );
         assert_eq!(g.api_base, "https://gitea.example.com/api/v1");
+    }
+
+    #[test]
+    fn issues_url_rewrites_only_the_pulls_segment() {
+        let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+        let g = Gitea::with_client(
+            http,
+            "tok".to_string(),
+            "testuser".to_string(),
+            "https://gitea.example.com/api/v1/repos/pulls-org/pullsync/pulls/12",
+            "https://gitea.example.com",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            g.prissues,
+            "https://gitea.example.com/api/v1/repos/pulls-org/pullsync/issues/12/comments"
+        );
     }
 
     #[test]
