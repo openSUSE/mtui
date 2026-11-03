@@ -105,3 +105,17 @@ fn prerelease_identifiers_follow_semver_precedence() {
     );
     assert_eq!(base(tags, "1.0.0"), (true, "1.0.0-alpha.1".to_owned()));
 }
+
+/// Releases are cut on per-minor branches forked from main and never merged
+/// back, so consecutive release tags are siblings, not ancestors. The base
+/// comes from version order alone — `git tag --list`, never ancestry — so a
+/// `26.4.0` cut from main takes the `26.3.x` line's `26.3.5` even though
+/// neither contains the other.
+#[test]
+fn sibling_branch_tags_resolve_by_version_not_ancestry() {
+    // Shuffled: ascending input would pass even if the script took the
+    // previous line without sorting.
+    let tags = &["26.4.0", "26.3.4", "26.3.5"];
+    assert_eq!(base(tags, "26.4.0"), (true, "26.3.5".to_owned()));
+    assert_eq!(base(tags, "26.3.5"), (true, "26.3.4".to_owned()));
+}
