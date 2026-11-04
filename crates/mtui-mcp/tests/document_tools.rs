@@ -20,6 +20,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const RRID: &str = "SUSE:Maintenance:1:1";
 const OTHER: &str = "SUSE:Maintenance:2:2";
 const MAINTENANCE_OBS: &str = mtui_types::fixtures::MAINTENANCE_OBS;
+const MAINTENANCE_NEW_ISSUES: &str = mtui_types::fixtures::MAINTENANCE_NEW_ISSUES;
 const PI: &str = mtui_types::fixtures::PI;
 
 fn report(session: &mtui_core::Session, rrid: &str, document: Option<&str>) -> ObsReport {
@@ -222,6 +223,11 @@ async fn a_report_without_a_document_refuses_every_tool() {
             "report_issue_write",
             json!({"issue_id": "bsc#1", "value": {}}),
         ),
+        (
+            "report_new_issue_write",
+            json!({"issue_id": "bsc#1", "title": "t"}),
+        ),
+        ("report_new_issue_delete", json!({"issue_id": "bsc#1"})),
         ("report_files", json!({})),
         ("report_file_read", json!({"path": "checkers.log"})),
     ] {
@@ -434,6 +440,193 @@ async fn an_over_budget_result_is_flagged_not_clipped_into_invalid_json() {
     assert_eq!(out["truncated"], true);
     assert!(out["size"].as_u64().unwrap() > 200);
     assert!(out["content"].as_str().unwrap().contains("truncated"));
+}
+
+#[tokio::test]
+async fn a_new_issue_is_filed_listed_and_marks_dirty() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+
+    let written = call(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "bsc#999", "title": "regression", "comment": "on s390x"}),
+    )
+    .await;
+    assert_eq!(written["dirty"], true);
+    assert!(state(&session, RRID).await.1);
+
+    let index = call(&session, "report_issue_read", json!({})).await;
+    let rows = index["issues"].as_array().unwrap();
+    let row = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap();
+    assert_eq!(row("bsc#999")["new"], true);
+    assert_eq!(row("bnc#1276308")["new"], Value::Null);
+
+    let one = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert_eq!(one["issue"]["title"], "regression");
+    assert_eq!(one["issue"]["comment"], "on s390x");
+}
+
+#[tokio::test]
+async fn updating_a_new_issue_keeps_its_answers() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let filed = json!({"issue_id": "bsc#999", "title": "first"});
+    call(&session, "report_new_issue_write", filed).await;
+    let mut issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await["issue"]
+        .clone();
+    issue["status"] = json!("FIXED");
+    call(
+        &session,
+        "report_issue_write",
+        json!({"issue_id": "bsc#999", "value": issue}),
+    )
+    .await;
+
+    call(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "bsc#999", "title": "second"}),
+    )
+    .await;
+
+    let one = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert_eq!(one["issue"]["title"], "second");
+    assert_eq!(one["issue"]["status"], "FIXED");
+}
+
+/// The server folds a `new_issues` that differs from its stored view, so the
+/// view has to follow an edit made through `issues`.
+#[tokio::test]
+async fn an_issue_write_on_a_new_issue_shows_in_the_new_issues_section() {
+    let session = loaded(Some(MAINTENANCE_NEW_ISSUES)).await;
+    let mut issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await["issue"]
+        .clone();
+    issue["comment"] = json!("edited");
+    call(
+        &session,
+        "report_issue_write",
+        json!({"issue_id": "bsc#999", "value": issue}),
+    )
+    .await;
+
+    let view = call(
+        &session,
+        "report_section_read",
+        json!({"section": "new_issues"}),
+    )
+    .await;
+    assert_eq!(view["data"][0]["comment"], "edited");
+}
+
+#[tokio::test]
+async fn a_new_issues_section_write_files_a_bug() {
+    let session = loaded(Some(MAINTENANCE_NEW_ISSUES)).await;
+    let value = json!([{"id": "bsc#1000", "title": "another"}]);
+    call(
+        &session,
+        "report_section_write",
+        json!({"section": "new_issues", "value": value}),
+    )
+    .await;
+
+    let index = call(&session, "report_issue_read", json!({})).await;
+    let ids: Vec<&str> = index["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["bnc#1276308", "bsc#1000"]);
+}
+
+#[tokio::test]
+async fn a_new_issue_write_refuses_a_pipeline_issue_a_bad_id_and_a_missing_title() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let before = state(&session, RRID).await;
+
+    let msg = refusal(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "bnc#1276308", "title": "t"}),
+    )
+    .await;
+    assert!(msg.contains("not tester-filed"), "{msg}");
+    let msg = refusal(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "cve#1", "title": "t"}),
+    )
+    .await;
+    assert!(msg.contains("invalid issue key"), "{msg}");
+    let msg = refusal(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "bsc#1"}),
+    )
+    .await;
+    assert!(msg.contains("`title` is required"), "{msg}");
+    let msg = refusal(
+        &session,
+        "report_new_issue_write",
+        json!({"issue_id": "bsc#1", "title": "t", "bogus": 1}),
+    )
+    .await;
+    assert!(msg.contains("bogus"), "{msg}");
+
+    assert_eq!(state(&session, RRID).await, before);
+}
+
+#[tokio::test]
+async fn a_new_issue_is_deleted_but_a_pipeline_or_unknown_issue_is_refused() {
+    let session = loaded(Some(MAINTENANCE_NEW_ISSUES)).await;
+
+    for (id, needle) in [("bnc#1276308", "not tester-filed"), ("bsc#1", "no issue")] {
+        let msg = refusal(&session, "report_new_issue_delete", json!({"issue_id": id})).await;
+        assert!(msg.contains(needle), "{msg}");
+    }
+    assert!(!state(&session, RRID).await.1, "refusals leave it clean");
+
+    let out = call(
+        &session,
+        "report_new_issue_delete",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert_eq!(out["dirty"], true);
+    assert!(state(&session, RRID).await.1, "the base flag is set");
+    let msg = refusal(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert!(msg.contains("no issue"), "{msg}");
+    let view = call(
+        &session,
+        "report_section_read",
+        json!({"section": "new_issues"}),
+    )
+    .await;
+    assert_eq!(view["data"], json!([]));
 }
 
 /// Full-schema golden: pins the tool names, descriptions, input schemas
