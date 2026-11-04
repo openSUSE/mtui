@@ -35,9 +35,7 @@ fn id_empty_when_no_rrid() {
 fn update_repos_parser_reads_the_document() {
     let dir = tempfile::tempdir().unwrap();
     let doc: mtui_types::report_document::ReportDocument =
-        include_str!("../../mtui-types/tests/fixtures/document/maintenance_addon.json")
-            .parse()
-            .unwrap();
+        mtui_types::fixtures::MAINTENANCE_ADDON.parse().unwrap();
     let mut r = ObsReport::new(config());
     r.base_mut().path = Some(dir.path().join("log"));
     r.base_mut().document = Some(doc);

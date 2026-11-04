@@ -305,10 +305,8 @@ async fn reject_happy_path_declines_via_injected_client() {
 #[tokio::test]
 async fn maintenance_approve_and_reject_read_the_verdict_from_the_configured_teregen() {
     let doc = |verdict: Option<&str>, comment: Option<&str>| {
-        let mut doc: serde_json::Value = serde_json::from_str(include_str!(
-            "../../mtui-types/tests/fixtures/document/maintenance_obs.json"
-        ))
-        .unwrap();
+        let mut doc: serde_json::Value =
+            serde_json::from_str(mtui_types::fixtures::MAINTENANCE_OBS).unwrap();
         doc["verdict"] = verdict.into();
         doc["comment"] = comment.into();
         doc.to_string()
