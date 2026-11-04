@@ -10,6 +10,8 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Tabs,
 use ratatui_textarea::{CursorMove, TextArea};
 use serde_json::Value;
 
+use mtui_types::report_document::Section;
+
 use crate::form::{Field, FieldError, Form, Saved, Widget};
 
 /// How the editor ended.
@@ -31,8 +33,32 @@ enum Mode {
         choices: Vec<Value>,
         index: usize,
     },
+    /// Filing a bug: id, then title, then an optional comment.
+    Add {
+        step: AddStep,
+        id: String,
+        title: String,
+        area: Box<TextArea<'static>>,
+    },
     ConfirmQuit,
     Help,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AddStep {
+    Id,
+    Title,
+    Comment,
+}
+
+impl AddStep {
+    fn prompt(self) -> &'static str {
+        match self {
+            Self::Id => " new issue: id (e.g. bsc#1234567) ",
+            Self::Title => " new issue: title ",
+            Self::Comment => " new issue: comment (optional) ",
+        }
+    }
 }
 
 const PAGE: usize = 10;
@@ -77,6 +103,10 @@ impl App {
             }
             Mode::Picker { .. } => {
                 self.pick(key, ctrl);
+                None
+            }
+            Mode::Add { .. } => {
+                self.add(key, ctrl);
                 None
             }
             Mode::ConfirmQuit => match key.code {
@@ -125,6 +155,13 @@ impl App {
             KeyCode::Char('n') => {
                 if let Some(field) = fields.get(at) {
                     let result = self.form.set_null(&field.pointer);
+                    self.settle(result);
+                }
+            }
+            KeyCode::Char('a') if !ctrl => self.start_add(),
+            KeyCode::Char('d') if !ctrl => {
+                if let Some(field) = fields.get(at) {
+                    let result = self.form.remove_new_issue(&field.pointer);
                     self.settle(result);
                 }
             }
@@ -252,6 +289,80 @@ impl App {
             self.status = None;
         } else {
             area.input(key);
+        }
+    }
+
+    fn files_bugs(&self) -> bool {
+        self.form.tabs()[self.tab]
+            .sections
+            .contains(&Section::NewIssues)
+    }
+
+    fn start_add(&mut self) {
+        if !self.files_bugs() {
+            self.status = Some("bugs are filed from the issues tab".to_owned());
+            return;
+        }
+        self.mode = Mode::Add {
+            step: AddStep::Id,
+            id: String::new(),
+            title: String::new(),
+            area: Box::new(single_line("")),
+        };
+    }
+
+    fn add(&mut self, key: KeyEvent, ctrl: bool) {
+        let Mode::Add {
+            step,
+            id,
+            title,
+            area,
+        } = &mut self.mode
+        else {
+            return;
+        };
+        if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+            self.mode = Mode::Browse;
+            self.status = None;
+            return;
+        }
+        if key.code != KeyCode::Enter {
+            area.input(key);
+            return;
+        }
+        let text = area.lines().join("");
+        match *step {
+            AddStep::Id => match self.form.check_new_issue_id(&text) {
+                Ok(()) => {
+                    *id = text;
+                    *step = AddStep::Title;
+                    **area = single_line("");
+                    self.status = None;
+                }
+                Err(err) => self.status = Some(err.message),
+            },
+            AddStep::Title if text.trim().is_empty() => {
+                self.status = Some("the title must not be empty".to_owned());
+            }
+            AddStep::Title => {
+                *title = text;
+                *step = AddStep::Comment;
+                **area = single_line("");
+            }
+            AddStep::Comment => {
+                let (id, title) = (id.clone(), title.clone());
+                match self.form.add_new_issue(&id, &title, Some(&text)) {
+                    Ok(pointer) => {
+                        self.mode = Mode::Browse;
+                        self.settle(Ok(()));
+                        if let Some((tab, row)) = self.form.locate(&pointer) {
+                            self.tab = tab;
+                            self.cursors[tab] = row;
+                        }
+                    }
+                    Err(err) => self.status = Some(err.message),
+                }
+            }
         }
     }
 
@@ -412,10 +523,14 @@ impl App {
 
     fn hints(&self) -> &'static str {
         match self.mode {
+            Mode::Browse if self.files_bugs() => {
+                " Tab section  Up/Down move  Enter edit  </> cycle  n null  a add  d del  Ctrl-S save  q quit  ? help"
+            }
             Mode::Browse => {
                 " Tab section  Up/Down move  Enter edit  Left/Right cycle  n null  Ctrl-S save  q quit  ? help"
             }
             Mode::Edit { .. } => " Ctrl-S accept  Esc cancel",
+            Mode::Add { .. } => " Enter next  Esc cancel",
             Mode::Picker { .. } => " Up/Down choose  Enter accept  Esc cancel",
             Mode::ConfirmQuit => " y discard changes  n keep editing",
             Mode::Help => " any key closes help",
@@ -456,6 +571,13 @@ impl App {
                     &mut state,
                 );
             }
+            Mode::Add { step, area, .. } => {
+                let rect = centered(frame.area(), 70, 3);
+                frame.render_widget(Clear, rect);
+                let mut area = area.clone();
+                area.set_block(Block::bordered().title(step.prompt()));
+                frame.render_widget(&*area, rect);
+            }
             Mode::ConfirmQuit => {
                 let rect = centered(frame.area(), 44, 3);
                 frame.render_widget(Clear, rect);
@@ -465,7 +587,7 @@ impl App {
                 );
             }
             Mode::Help => {
-                let rect = centered(frame.area(), 72, 14);
+                let rect = centered(frame.area(), 72, 16);
                 frame.render_widget(Clear, rect);
                 frame.render_widget(
                     Paragraph::new(HELP)
@@ -484,12 +606,20 @@ Up / Down         move between fields
 Enter             edit the field, open a group, create an absent block
 Left / Right      step an enum or yes/no field
 n                 set the field to null
+a                 file a new bug (issues section)
+d                 delete a bug you filed
 Ctrl-S            check every change and save
 q / Ctrl-C        quit (asks first when there are unsaved changes)
 
 Greyed fields belong to the pipeline or to export and cannot be edited.
 Run export before editing: export rewrites the install and regression
 blocks and would replace what is entered here.";
+
+fn single_line(text: &str) -> TextArea<'static> {
+    let mut area = TextArea::new(vec![text.to_owned()]);
+    area.set_cursor_line_style(Style::default());
+    area
+}
 
 fn show(value: &Value) -> String {
     match value {

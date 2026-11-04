@@ -1,6 +1,6 @@
 use mtui_tui::form::Widget;
 use mtui_tui::{Form, Schema};
-use mtui_types::report_document::{ReportDocument, SCHEMA_JSON, Verdict};
+use mtui_types::report_document::{ReportDocument, SCHEMA_JSON, Verdict, project_new_issues};
 use serde_json::{Value, json};
 
 const MAXIMAL: &str = mtui_types::fixtures::MAXIMAL;
@@ -39,7 +39,12 @@ fn a_verdict_edit_saves_as_a_document_with_one_touched_section() {
 
 #[test]
 fn an_untouched_form_saves_a_byte_equal_document() {
-    for raw in [MAXIMAL, PI, OPENQA_L3] {
+    for raw in [
+        MAXIMAL,
+        PI,
+        OPENQA_L3,
+        mtui_types::fixtures::MAINTENANCE_NEW_ISSUES,
+    ] {
         let original = doc(raw);
         let form = Form::new(&Schema::load().unwrap(), &original);
 
@@ -359,4 +364,168 @@ fn locate_falls_back_to_the_nearest_enclosing_field() {
     let (tab, row) = form.locate("/people/reviewer/nothing/here").unwrap();
 
     assert_eq!(form.fields(tab)[row].pointer, "/people/reviewer");
+}
+
+// ---- tester-filed issues ---------------------------------------------- //
+
+const NEW_ISSUES: &str = mtui_types::fixtures::MAINTENANCE_NEW_ISSUES;
+
+fn pointers(form: &Form, tab: &str) -> Vec<String> {
+    let tab = form.tabs().iter().position(|t| t.name == tab).unwrap();
+    form.fields(tab).into_iter().map(|f| f.pointer).collect()
+}
+
+fn assert_view_in_sync(doc: &ReportDocument) {
+    assert_eq!(
+        doc.new_issues.as_deref(),
+        Some(project_new_issues(&doc.issues).as_slice())
+    );
+}
+
+#[test]
+fn a_filed_bug_is_listed_once_under_new_issues_not_among_the_issues() {
+    let form = form(NEW_ISSUES);
+    let rows = pointers(&form, "issues");
+
+    assert!(rows.contains(&"/issues/bnc#1276308".to_owned()), "{rows:?}");
+    assert!(
+        !rows.iter().any(|p| p.starts_with("/issues/bsc#999")),
+        "{rows:?}"
+    );
+    assert!(rows.contains(&"/new_issues/0".to_owned()), "{rows:?}");
+}
+
+#[test]
+fn a_filed_bugs_title_and_comment_are_editable_but_not_its_id() {
+    let form = form(NEW_ISSUES);
+
+    assert!(field(&form, "/new_issues/0/title").editable);
+    assert!(field(&form, "/new_issues/0/comment").editable);
+    assert!(!field(&form, "/new_issues/0/id").editable);
+}
+
+#[test]
+fn an_empty_comment_is_listed_so_it_can_be_filled_in() {
+    let mut form = form(NEW_ISSUES);
+    form.set_null("/new_issues/0/comment").unwrap();
+    let saved = form.save().unwrap();
+    assert_view_in_sync(&saved.document);
+
+    let mut form = Form::new(&Schema::load().unwrap(), &saved.document);
+    assert_eq!(field(&form, "/new_issues/0/comment").value, Value::Null);
+    assert!(!form.is_dirty());
+    form.set_text("/new_issues/0/comment", "now filled")
+        .unwrap();
+    let saved = form.save().unwrap();
+    let issue = &saved.document.issues[&"bsc#999".parse().unwrap()];
+    assert_eq!(issue.comment.as_deref(), Some("now filled"));
+}
+
+#[test]
+fn a_filed_bug_is_never_counted_as_unfilled() {
+    let mut form = form(NEW_ISSUES);
+    let before = form.unfilled();
+    form.set_null("/new_issues/0/comment").unwrap();
+    assert_eq!(form.unfilled(), before);
+}
+
+#[test]
+fn retitling_a_filed_bug_saves_through_new_issues() {
+    let mut form = form(NEW_ISSUES);
+
+    form.set_text("/new_issues/0/title", "retitled").unwrap();
+    let saved = form.save().unwrap();
+
+    assert_eq!(saved.touched, ["/new_issues"]);
+    let issue = &saved.document.issues[&"bsc#999".parse().unwrap()];
+    assert_eq!(issue.title, "retitled");
+    assert_eq!(issue.new, Some(true));
+    assert_view_in_sync(&saved.document);
+}
+
+#[test]
+fn filing_a_bug_adds_it_in_key_order_and_saves_as_a_new_issue() {
+    let mut form = form(NEW_ISSUES);
+
+    let pointer = form.add_new_issue("bsc#100", "first", Some("c")).unwrap();
+    assert_eq!(pointer, "/new_issues/0", "bsc#100 sorts before bsc#999");
+    assert!(form.is_dirty());
+    assert_eq!(field(&form, "/new_issues/0/title").value, json!("first"));
+    let saved = form.save().unwrap();
+
+    assert_eq!(saved.touched, ["/new_issues"]);
+    let issue = &saved.document.issues[&"bsc#100".parse().unwrap()];
+    assert_eq!((issue.new, issue.title.as_str()), (Some(true), "first"));
+    assert_eq!(issue.comment.as_deref(), Some("c"));
+    assert_eq!(saved.document.issues.len(), 3);
+    assert_view_in_sync(&saved.document);
+}
+
+#[test]
+fn an_issue_edit_and_a_filed_bug_save_together() {
+    let mut form = form(NEW_ISSUES);
+    form.set("/issues/bnc#1276308/status", json!("FIXED"))
+        .unwrap();
+    form.add_new_issue("bsc#5", "t", None).unwrap();
+
+    let saved = form.save().unwrap();
+
+    assert_eq!(saved.touched, ["/issues", "/new_issues"]);
+    assert_eq!(saved.document.issues.len(), 3);
+    assert_view_in_sync(&saved.document);
+}
+
+#[test]
+fn filing_a_bug_refuses_a_bad_id_a_taken_id_an_empty_title_and_a_report_without_the_list() {
+    let mut form = form(NEW_ISSUES);
+    for (id, title) in [
+        ("cve#1", "t"),
+        ("bsc#999", "t"),
+        ("bnc#1276308", "t"),
+        ("bsc#1", "  "),
+    ] {
+        form.add_new_issue(id, title, None).unwrap_err();
+    }
+    assert!(!form.is_dirty());
+
+    let mut bare = self::form(MAXIMAL);
+    let err = bare.add_new_issue("bsc#1", "t", None).unwrap_err();
+    assert!(err.message.contains("cannot carry"), "{err}");
+}
+
+#[test]
+fn only_a_filed_bug_can_be_deleted() {
+    let mut form = form(NEW_ISSUES);
+
+    for pointer in [
+        "/issues/bnc#1276308",
+        "/issues/bnc#1276308/title",
+        "/verdict",
+    ] {
+        let err = form.remove_new_issue(pointer).unwrap_err();
+        assert_eq!(
+            err.message, "only tester-filed issues can be deleted",
+            "{pointer}"
+        );
+    }
+    assert!(form.remove_new_issue("/new_issues/7").is_err());
+    assert!(!form.is_dirty());
+
+    form.remove_new_issue("/new_issues/0/title").unwrap();
+    let saved = form.save().unwrap();
+    assert!(
+        !saved
+            .document
+            .issues
+            .contains_key(&"bsc#999".parse().unwrap())
+    );
+    assert_view_in_sync(&saved.document);
+}
+
+#[test]
+fn a_bug_filed_on_a_report_without_new_issues_still_shows_among_the_issues() {
+    let form = form(MAXIMAL);
+
+    let rows = pointers(&form, "issues");
+    assert!(rows.contains(&"/issues/bsc#1234567".to_owned()), "{rows:?}");
 }

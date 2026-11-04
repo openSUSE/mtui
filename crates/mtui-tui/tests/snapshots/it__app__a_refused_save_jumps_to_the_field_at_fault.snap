@@ -31,4 +31,4 @@ expression: screen(&mut app)
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
 " [modified]  0 unfilled  | save refused: /issues/bsc#1234567/status: unknown variant `BOGUS`, expect"
-" Tab section  Up/Down move  Enter edit  Left/Right cycle  n null  Ctrl-S save  q quit  ? help       "
+" Tab section  Up/Down move  Enter edit  </> cycle  n null  a add  d del  Ctrl-S save  q quit  ? help"
