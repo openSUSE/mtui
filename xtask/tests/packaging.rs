@@ -19,11 +19,12 @@
 //! SHA into `--version`.
 //! `crates_with_foreign_test_fixtures_exclude_tests` plus
 //! `shipped_sources_reference_only_shipped_files` pin the tarball
-//! self-containment P3.2 settled: integration tests that `include_str!`
-//! fixtures from outside their package do not ship, and every other shipped
-//! source only references files that ship with it — whether read at compile
-//! time (`include_str!`) or at run time (`CARGO_MANIFEST_DIR` joins) — so
-//! `cargo test` from a crates.io tarball compiles. (`cargo publish`
+//! self-containment P3.2 settled: no shipped source references a file
+//! outside its package — whether read at compile time (`include_str!`) or
+//! at run time (`CARGO_MANIFEST_DIR` joins) — so `cargo test` from a
+//! crates.io tarball compiles. Formerly foreign-referencing integration
+//! tests used `mtui_types::fixtures` instead (as the `src/` unit tests do),
+//! so no member carries an `exclude` anymore. (`cargo publish`
 //! verification only builds lib and bins, so this never blocked publishing.)
 
 use std::path::{Component, Path, PathBuf};
@@ -722,19 +723,14 @@ fn root_package_ships_only_allowlisted_files() {
     }
 }
 
-/// Crates whose integration tests `include_str!` fixtures from outside the
-/// package (`../../mtui-types/tests/...`): those tests compile in the
-/// workspace but not from a crates.io tarball, so they carry
-/// `exclude = ["tests/**"]` and don't ship. These are the only members with
-/// foreign test refs (`src/` unit tests cannot be excluded and use
-/// `mtui_types::fixtures` instead — see below). The root facade's `tests/`
-/// only reference files inside the root package, so it ships.
-const TESTS_EXCLUDED: &[&str] = &[
-    "crates/mtui-datasources/Cargo.toml",
-    "crates/mtui-mcp/Cargo.toml",
-    "crates/mtui-testreport/Cargo.toml",
-    "crates/mtui-tui/Cargo.toml",
-];
+/// No member's tests reference fixtures from outside its package: cross-crate
+/// document fixtures come through `mtui_types::fixtures` (as the `src/` unit
+/// tests do), so every `tests/` tree ships and no member carries an `exclude`.
+/// `TESTS_EXCLUDED` stays as the exhaustive-both-ways pin: a crate gaining a
+/// foreign test ref must either route it through `mtui_types::fixtures` or
+/// be listed here with `exclude = ["tests/**"]`, and a listing-less `exclude`
+/// on any other member fails below.
+const TESTS_EXCLUDED: &[&str] = &[];
 
 /// The `cargo package --list` output for one shippable crate: the exact file
 /// set its tarball would carry.
@@ -758,13 +754,14 @@ fn package_list(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every `TESTS_EXCLUDED` manifest excludes exactly `tests/**` (nothing more
-/// must go missing silently), its tarball lists no `tests/` entry, and the
-/// set is exhaustive both ways: a crate with foreign refs in `tests/` that
-/// is not listed here breaks tarball `cargo test`, a listed crate whose
-/// refs are gone carries a stale exclusion, and a crate carrying an `exclude`
+/// A listed manifest excludes exactly `tests/**` (nothing more must go
+/// missing silently) and its tarball lists no `tests/` entry; the set is
+/// exhaustive both ways: a crate with foreign refs in `tests/` that is not
+/// listed here breaks tarball `cargo test`, a listed crate whose refs are
+/// gone carries a stale exclusion, and a crate carrying an `exclude`
 /// without being listed here silently drops shipped files from its tarball —
 /// so every shippable member is checked for a listing-less `exclude` too.
+/// The list is currently empty: every `tests/` tree ships.
 #[test]
 fn crates_with_foreign_test_fixtures_exclude_tests() {
     let mut found: Vec<&str> = Vec::new();
@@ -829,8 +826,8 @@ fn crates_with_foreign_test_fixtures_exclude_tests() {
 /// with the same tarball — whether read at compile time (`include_str!` /
 /// `include_bytes!`) or at run time (`CARGO_MANIFEST_DIR` joins, `concat!`):
 /// the `src/` unit tests that used to reach outside their package now use
-/// `mtui_types::fixtures`, and the excluded `tests/` trees are not scanned
-/// (they don't ship — see above). Each `tests/fixtures` literal is resolved
+/// `mtui_types::fixtures`, and so do the integration tests (no member
+/// excludes `tests/**` anymore — see above). Each `tests/fixtures` literal is resolved
 /// both against its file's directory (the compile-time read base) and
 /// against the crate root (the run-time `CARGO_MANIFEST_DIR` base); either
 /// may hit, and a literal resolving to a shipped directory (a prefix of

@@ -3,10 +3,9 @@ use mtui_tui::{Form, Schema};
 use mtui_types::report_document::{ReportDocument, SCHEMA_JSON, Verdict};
 use serde_json::{Value, json};
 
-const MAXIMAL: &str = include_str!("../../mtui-types/tests/fixtures/document/maximal.json");
-const PI: &str = include_str!("../../mtui-types/tests/fixtures/document/pi.json");
-const OPENQA_L3: &str =
-    include_str!("../../mtui-types/tests/fixtures/document/maintenance_openqa_l3.json");
+const MAXIMAL: &str = mtui_types::fixtures::MAXIMAL;
+const PI: &str = mtui_types::fixtures::PI;
+const OPENQA_L3: &str = mtui_types::fixtures::MAINTENANCE_OPENQA_L3;
 
 fn doc(raw: &str) -> ReportDocument {
     raw.parse().expect("fixture parses")

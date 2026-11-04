@@ -1082,8 +1082,7 @@ async fn unassign_refused_without_assignment() {
 // approve / reject read the verdict from the report document                  //
 // --------------------------------------------------------------------------- //
 
-const DOCUMENT: &str =
-    include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json");
+const DOCUMENT: &str = mtui_types::fixtures::MAINTENANCE_OBS;
 const DOCUMENT_PATH: &str = "/reports/SUSE:Maintenance:1:56789";
 
 /// The maintenance fixture with `verdict` and the top-level `comment` set.

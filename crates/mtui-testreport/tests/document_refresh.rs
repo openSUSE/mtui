@@ -14,7 +14,7 @@ use mtui_types::report_document::ReportDocument;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const PI: &str = include_str!("../../mtui-types/tests/fixtures/document/pi.json");
+const PI: &str = mtui_types::fixtures::PI;
 const ID: &str = "SUSE:PI:16.0:1";
 const OLD_ETAG: &str = "\"etag-old\"";
 const NEW_ETAG: &str = "\"etag-new\"";

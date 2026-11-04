@@ -19,9 +19,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:1:1";
 const OTHER: &str = "SUSE:Maintenance:2:2";
-const MAINTENANCE_OBS: &str =
-    include_str!("../../mtui-types/tests/fixtures/document/maintenance_obs.json");
-const PI: &str = include_str!("../../mtui-types/tests/fixtures/document/pi.json");
+const MAINTENANCE_OBS: &str = mtui_types::fixtures::MAINTENANCE_OBS;
+const PI: &str = mtui_types::fixtures::PI;
 
 fn report(session: &mtui_core::Session, rrid: &str, document: Option<&str>) -> ObsReport {
     let mut report = ObsReport::new(session.config.clone());
