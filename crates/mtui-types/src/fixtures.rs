@@ -22,6 +22,10 @@ pub const SLFO_GITEA: &str = include_str!("../tests/fixtures/document/slfo_gitea
 /// Maintenance-request document with an openQA L3 `testing` block.
 pub const MAINTENANCE_OPENQA_L3: &str =
     include_str!("../tests/fixtures/document/maintenance_openqa_l3.json");
+/// Maintenance document with a pipeline issue, a tester-filed (`new`) issue
+/// and the matching `new_issues` view, captured from a teregen container.
+pub const MAINTENANCE_NEW_ISSUES: &str =
+    include_str!("../tests/fixtures/document/maintenance_new_issues.json");
 /// Maximal document exercising every optional section.
 pub const MAXIMAL: &str = include_str!("../tests/fixtures/document/maximal.json");
 /// Product-increment document.

@@ -58,7 +58,10 @@ use serde_path_to_error::{Path, Segment};
 use thiserror::Error;
 
 pub use install::{Install, PlatformRef, Target, TestPlatform};
-pub use issues::{Issue, IssueKey, IssueKeyParseError, IssueStatus, Issues, L3, Severity};
+pub use issues::{
+    Issue, IssueKey, IssueKeyParseError, IssueStatus, Issues, L3, NewIssue, Severity,
+    project_new_issues,
+};
 pub use review::{
     BuildLog, BuildLogResult, BuildResult, People, Review, ReviewSource, Reviewer, SlackRef,
     TesterEntry, Tristate,
@@ -167,6 +170,13 @@ pub struct ReportDocument {
     pub update: Update,
     pub install: Install,
     pub issues: Issues,
+    /// The server's view of the `new: true` entries of `issues`. `None` only
+    /// for a server that does not send it; while present it always equals
+    /// [`project_new_issues`] of `issues`, because the server compares it with
+    /// its stored view and silently reverts any edit a stale copy disagrees
+    /// with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_issues: Option<Vec<NewIssue>>,
     pub testing: Testing,
     /// Absent for `kind: pi` (the schema's first `allOf` conditional requires
     /// it for `maintenance`/`slfo`).
@@ -175,10 +185,18 @@ pub struct ReportDocument {
 }
 
 impl ReportDocument {
+    /// Re-derives `new_issues` from `issues` when the document carries it.
+    pub(crate) fn sync_new_issues(&mut self) {
+        if self.new_issues.is_some() {
+            self.new_issues = Some(project_new_issues(&self.issues));
+        }
+    }
+
     /// `true` when this document already carries tester-authored content:
     /// a non-null `verdict`/`comment`, any entry in `people.testers`, a
     /// non-null `people.reviewer.name`, an `issues.*` entry with a
-    /// non-null `reproducer`/`status`/`comment`, a `testing.install` block, a
+    /// non-null `reproducer`/`status`/`comment` or any tester-filed (`new`) issue, a
+    /// `testing.install` block, a
     /// `testing.regression` with a non-null `verdict`/`comment`, or a
     /// non-null `review.source.comment`/`review.build_log.comment`.
     ///
@@ -197,10 +215,12 @@ impl ReportDocument {
             || self.comment.is_some()
             || !self.people.testers.is_empty()
             || self.people.reviewer.name.is_some()
-            || self
-                .issues
-                .values()
-                .any(|i| i.reproducer.is_some() || i.status.is_some() || i.comment.is_some())
+            || self.issues.values().any(|i| {
+                i.new == Some(true)
+                    || i.reproducer.is_some()
+                    || i.status.is_some()
+                    || i.comment.is_some()
+            })
             || self.testing.install.is_some()
             || self
                 .testing
@@ -219,11 +239,13 @@ impl FromStr for ReportDocument {
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let mut de = serde_json::Deserializer::from_str(raw);
-        let doc = serde_path_to_error::deserialize(&mut de).map_err(DocumentError::from)?;
+        let mut doc: ReportDocument =
+            serde_path_to_error::deserialize(&mut de).map_err(DocumentError::from)?;
         de.end().map_err(|source| DocumentError {
             pointer: "/".to_owned(),
             source,
         })?;
+        doc.sync_new_issues();
         Ok(doc)
     }
 }
@@ -426,12 +448,6 @@ fn collect_dropped(
     }
 }
 
-/// `new_issues` is the server's derived view of the `new: true` entries in
-/// `issues`, which the model already carries, so dropping it loses nothing.
-fn is_server_view(pointer: &str) -> bool {
-    pointer == "/new_issues" || pointer.starts_with("/new_issues/")
-}
-
 /// Parses `raw` into a [`ReportDocument`], then logs (`tracing::warn!`, once
 /// per pointer) every key [`dropped_pointers`] finds between the raw document
 /// and the model's re-serialised form (P1-D2). The two schema-open objects
@@ -456,9 +472,6 @@ pub fn parse_and_warn_on_dropped_keys(raw: &str) -> Result<ReportDocument, Docum
     };
     let round_tripped = serde_json::to_value(&doc).expect("ReportDocument always serializes");
     for pointer in dropped_pointers(&original, &round_tripped) {
-        if is_server_view(&pointer) {
-            continue;
-        }
         tracing::warn!(pointer, "report document: unknown key dropped during parse");
     }
     Ok(doc)

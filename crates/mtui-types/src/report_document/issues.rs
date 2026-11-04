@@ -119,6 +119,33 @@ fn deserialize_new_flag<'de, D: Deserializer<'de>>(
     }
 }
 
+/// One `new_issues` item (`$defs/new_issues`): the server's view of a
+/// `new: true` entry in `issues`, which is the only place the entry is stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewIssue {
+    pub id: IssueKey,
+    pub title: String,
+    /// Omitted when empty, as the server omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// The `new: true` entries of `issues` in key order, as the server serves them
+/// in `new_issues`.
+#[must_use]
+pub fn project_new_issues(issues: &Issues) -> Vec<NewIssue> {
+    issues
+        .iter()
+        .filter(|(_, issue)| issue.new == Some(true))
+        .map(|(id, issue)| NewIssue {
+            id: id.clone(),
+            title: issue.title.clone(),
+            comment: issue.comment.0.clone().filter(|c| !c.is_empty()),
+        })
+        .collect()
+}
+
 /// Bug severity (`$defs/issue.severity`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -193,6 +220,51 @@ pub struct L3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issue(new: bool, comment: Option<&str>) -> Issue {
+        Issue {
+            title: "t".to_owned(),
+            severity: None,
+            new: new.then_some(true),
+            reproducer: Req(None),
+            status: Req(None),
+            comment: Req(comment.map(str::to_owned)),
+            l3: None,
+        }
+    }
+
+    #[test]
+    fn projection_keeps_new_entries_in_key_order_and_omits_an_empty_comment() {
+        let issues: Issues = [
+            ("bsc#2", issue(true, Some("note"))),
+            ("bsc#1", issue(true, Some(""))),
+            ("bsc#3", issue(false, Some("pipeline"))),
+            ("bsc#4", issue(true, None)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.parse().unwrap(), v))
+        .collect();
+        let view = project_new_issues(&issues);
+        let rows: Vec<_> = view
+            .iter()
+            .map(|n| (n.id.as_str(), n.comment.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [("bsc#1", None), ("bsc#2", Some("note")), ("bsc#4", None)]
+        );
+    }
+
+    #[test]
+    fn a_new_issue_rejects_unknown_keys_and_bad_ids() {
+        let unknown = serde_json::from_str::<NewIssue>(r#"{"id":"bsc#1","title":"t","x":1}"#);
+        assert!(unknown.is_err());
+        let bad = serde_json::from_str::<NewIssue>(r#"{"id":"cve#1","title":"t"}"#);
+        assert!(bad.is_err());
+        let null_comment: NewIssue =
+            serde_json::from_str(r#"{"id":"bsc#1","title":"t","comment":null}"#).unwrap();
+        assert_eq!(null_comment.comment, None);
+    }
 
     #[test]
     fn issue_key_rejects_unknown_tracker_prefix() {
