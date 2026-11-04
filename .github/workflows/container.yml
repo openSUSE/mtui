@@ -155,6 +155,7 @@ jobs:
         run: |
           mkdir -p /tmp/digests
           digest="$DIGEST"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "::error::invalid digest '${digest:-<empty>}'" >&2; exit 1; fi
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
@@ -230,10 +231,13 @@ jobs:
         run: |
           set -euo pipefail
           cd /tmp/digests
+          shopt -s nullglob
+          files=( [0-9a-f]* )
+          if [ "${#files[@]}" -eq 0 ]; then echo "::error::no digest files in /tmp/digests" >&2; exit 1; fi
           first_tag="$(jq -r '.tags[0]' <<< "$TAGS_JSON")"
           if [ -z "$first_tag" ] || [ "$first_tag" = "null" ]; then echo "::error::no tags from metadata" >&2; exit 1; fi
           # shellcheck disable=SC2046
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$TAGS_JSON") $(printf 'ghcr.io/opensuse/mtui@sha256:%s ' *)
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$TAGS_JSON") $(printf 'ghcr.io/opensuse/mtui@sha256:%s ' "${files[@]}")
           # The new list may need a moment to propagate; retry the read.
           merged=""
           for _ in 1 2 3 4 5; do
