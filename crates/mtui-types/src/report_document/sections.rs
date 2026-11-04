@@ -13,7 +13,10 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::{DocumentError, IssueKey, IssueKeyParseError, ReportDocument, dropped_pointers};
+use super::{
+    DocumentError, Issue, IssueKey, IssueKeyParseError, NewIssue, ReportDocument, Req,
+    dropped_pointers, project_new_issues,
+};
 
 /// A top-level section of the report document.
 ///
@@ -27,19 +30,21 @@ pub enum Section {
     Update,
     Install,
     Issues,
+    NewIssues,
     Testing,
     Review,
 }
 
 impl Section {
     /// Every section, in the server's listing order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Verdict,
         Self::Comment,
         Self::People,
         Self::Update,
         Self::Install,
         Self::Issues,
+        Self::NewIssues,
         Self::Testing,
         Self::Review,
     ];
@@ -54,6 +59,7 @@ impl Section {
             Self::Update => "update",
             Self::Install => "install",
             Self::Issues => "issues",
+            Self::NewIssues => "new_issues",
             Self::Testing => "testing",
             Self::Review => "review",
         }
@@ -135,6 +141,13 @@ pub enum SectionWriteError {
     },
     #[error("no issue {0:?} in this report")]
     UnknownIssue(String),
+    #[error("issue {0:?} is not tester-filed (`new: true`); use report_issue_write to edit it")]
+    NotNewIssue(String),
+    #[error(
+        "new_issues entries clash with a pipeline issue or repeat an id at: {}",
+        .pointers.join(", ")
+    )]
+    NewIssueConflict { pointers: Vec<String> },
     #[error(transparent)]
     BadIssueKey(#[from] IssueKeyParseError),
 }
@@ -181,6 +194,16 @@ impl ReportDocument {
         serde_json::to_value(self).expect("ReportDocument always serializes")
     }
 
+    /// The document as JSON without the tester-filed issues, which start out
+    /// unanswered by design and so never count as unfilled.
+    fn answerable(&self) -> Value {
+        let mut value = self.to_value();
+        if let Some(issues) = value.get_mut("issues").and_then(Value::as_object_mut) {
+            issues.retain(|_, issue| issue.get("new") != Some(&Value::Bool(true)));
+        }
+        value
+    }
+
     /// The JSON of one section, or `None` when this document lacks it
     /// (`review` on a `pi` report).
     #[must_use]
@@ -192,6 +215,7 @@ impl ReportDocument {
             Section::Update => Some(serialize_section(&self.update)),
             Section::Install => Some(serialize_section(&self.install)),
             Section::Issues => Some(serialize_section(&self.issues)),
+            Section::NewIssues => self.new_issues.as_ref().map(serialize_section),
             Section::Testing => Some(serialize_section(&self.testing)),
             Section::Review => self.review.as_ref().map(serialize_section),
         }
@@ -203,14 +227,18 @@ impl ReportDocument {
         let Value::Object(map) = self.to_value() else {
             return Vec::new();
         };
+        let answerable = self.answerable();
         Section::ALL
             .into_iter()
             .filter_map(|section| {
                 let value = map.get(section.as_str())?;
+                let unanswered = answerable
+                    .get(section.as_str())
+                    .is_some_and(|v| !null_pointers(v, "").is_empty());
                 Some(SectionSummary {
                     name: section.as_str(),
                     size: serde_json::to_vec(value).map_or(0, |bytes| bytes.len()),
-                    has_unanswered: !null_pointers(value, "").is_empty(),
+                    has_unanswered: unanswered,
                 })
             })
             .collect()
@@ -219,7 +247,7 @@ impl ReportDocument {
     /// Every `null` leaf across the whole document.
     #[must_use]
     pub fn completeness(&self) -> Completeness {
-        let unfilled = null_pointers(&self.to_value(), "");
+        let unfilled = null_pointers(&self.answerable(), "");
         Completeness {
             complete: unfilled.is_empty(),
             unfilled,
@@ -248,7 +276,13 @@ impl ReportDocument {
             check_issue_keys(current, &value)?;
         }
         map.insert(section.as_str().to_owned(), value);
-        validated(candidate)
+        let mut document = validated(candidate)?;
+        if section == Section::NewIssues {
+            let items = document.new_issues.clone().unwrap_or_default();
+            document.fold_new_issues(&items)?;
+        }
+        document.sync_new_issues();
+        Ok(document)
     }
 
     /// A copy of this document with the existing issue `issue_id` replaced by
@@ -268,7 +302,119 @@ impl ReportDocument {
         if let Some(issues) = candidate.get_mut("issues").and_then(Value::as_object_mut) {
             issues.insert(key.as_str().to_owned(), value);
         }
-        validated(candidate)
+        let mut document = validated(candidate)?;
+        document.sync_new_issues();
+        Ok(document)
+    }
+
+    /// A copy of this document with the tester-filed issue `issue_id` created
+    /// or, when it already is one, given `title` and `comment`. The entry's
+    /// reproducer, status, severity and L3 record are kept; an empty comment
+    /// is stored as none.
+    ///
+    /// # Errors
+    ///
+    /// Refused when `issue_id` is malformed or names a pipeline issue.
+    pub fn with_new_issue(
+        &self,
+        issue_id: &str,
+        title: &str,
+        comment: Option<&str>,
+    ) -> Result<Self, SectionWriteError> {
+        let key: IssueKey = issue_id.parse()?;
+        let comment = Req(comment.filter(|c| !c.is_empty()).map(str::to_owned));
+        let mut document = self.clone();
+        match document.issues.get_mut(&key) {
+            Some(issue) if issue.new != Some(true) => {
+                return Err(SectionWriteError::NotNewIssue(issue_id.to_owned()));
+            }
+            Some(issue) => {
+                title.clone_into(&mut issue.title);
+                issue.comment = comment;
+            }
+            None => {
+                document.issues.insert(
+                    key,
+                    Issue {
+                        title: title.to_owned(),
+                        severity: None,
+                        new: Some(true),
+                        reproducer: Req(None),
+                        status: Req(None),
+                        comment,
+                        l3: None,
+                    },
+                );
+            }
+        }
+        document.sync_new_issues();
+        Ok(document)
+    }
+
+    /// A copy of this document without the tester-filed issue `issue_id`.
+    ///
+    /// # Errors
+    ///
+    /// Refused when `issue_id` is malformed, names no issue, or names a
+    /// pipeline issue.
+    pub fn without_new_issue(&self, issue_id: &str) -> Result<Self, SectionWriteError> {
+        let key: IssueKey = issue_id.parse()?;
+        match self.issues.get(&key) {
+            None => return Err(SectionWriteError::UnknownIssue(issue_id.to_owned())),
+            Some(issue) if issue.new != Some(true) => {
+                return Err(SectionWriteError::NotNewIssue(issue_id.to_owned()));
+            }
+            Some(_) => {}
+        }
+        let mut document = self.clone();
+        document.issues.remove(&key);
+        document.sync_new_issues();
+        Ok(document)
+    }
+
+    /// Replaces the `new: true` issues with `items`, as the server does when
+    /// `items` differs from its stored view: an entry already there keeps its
+    /// reproducer, status, severity and L3 record, and only title and comment
+    /// come from the item.
+    fn fold_new_issues(&mut self, items: &[NewIssue]) -> Result<(), SectionWriteError> {
+        if items == project_new_issues(&self.issues) {
+            return Ok(());
+        }
+        let mut old = Vec::new();
+        self.issues.retain(|key, issue| {
+            let new = issue.new == Some(true);
+            if new {
+                old.push((key.clone(), issue.clone()));
+            }
+            !new
+        });
+        let mut pointers = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            if self.issues.contains_key(&item.id) {
+                pointers.push(format!("/new_issues/{i}/id"));
+                continue;
+            }
+            let mut issue = old.iter().find(|(key, _)| *key == item.id).map_or_else(
+                || Issue {
+                    title: String::new(),
+                    severity: None,
+                    new: Some(true),
+                    reproducer: Req(None),
+                    status: Req(None),
+                    comment: Req(None),
+                    l3: None,
+                },
+                |(_, issue)| issue.clone(),
+            );
+            item.title.clone_into(&mut issue.title);
+            issue.comment = Req(item.comment.clone().filter(|c| !c.is_empty()));
+            self.issues.insert(item.id.clone(), issue);
+        }
+        if pointers.is_empty() {
+            Ok(())
+        } else {
+            Err(SectionWriteError::NewIssueConflict { pointers })
+        }
     }
 }
 
@@ -291,10 +437,22 @@ fn check_issue_keys(current: &Value, proposed: &Value) -> Result<(), SectionWrit
     }
 }
 
+fn is_new_issue_comment(pointer: &str) -> bool {
+    pointer
+        .strip_prefix("/new_issues/")
+        .and_then(|rest| rest.strip_suffix("/comment"))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn validated(candidate: Value) -> Result<ReportDocument, SectionWriteError> {
     let document: ReportDocument = serde_path_to_error::deserialize(&candidate)
         .map_err(|e| SectionWriteError::Invalid(DocumentError::from(e)))?;
-    let dropped = dropped_pointers(&candidate, &document.to_value());
+    // The schema allows `comment: null` on a new issue and the server stores
+    // it as no comment, so the model dropping it is not a lost key.
+    let dropped: Vec<String> = dropped_pointers(&candidate, &document.to_value())
+        .into_iter()
+        .filter(|pointer| !is_new_issue_comment(pointer))
+        .collect();
     if dropped.is_empty() {
         Ok(document)
     } else {
@@ -308,7 +466,8 @@ mod tests {
 
     use super::*;
     use crate::fixtures::{
-        MAINTENANCE_ADDON, MAINTENANCE_OBS, MAINTENANCE_OPENQA_L3, MAXIMAL, PI, SLFO_GITEA,
+        MAINTENANCE_ADDON, MAINTENANCE_NEW_ISSUES, MAINTENANCE_OBS, MAINTENANCE_OPENQA_L3, MAXIMAL,
+        PI, SLFO_GITEA,
     };
 
     fn doc(raw: &str) -> ReportDocument {
@@ -340,7 +499,8 @@ mod tests {
         assert_eq!(read_only, [Section::Update, Section::Install]);
     }
 
-    const ALL_FIXTURES: [(&str, &str); 6] = [
+    const ALL_FIXTURES: [(&str, &str); 7] = [
+        ("maintenance_new_issues", MAINTENANCE_NEW_ISSUES),
         ("maintenance_obs", MAINTENANCE_OBS),
         ("maintenance_addon", MAINTENANCE_ADDON),
         ("maintenance_openqa_l3", MAINTENANCE_OPENQA_L3),
@@ -402,7 +562,7 @@ mod tests {
         let doc = doc(MAXIMAL);
         let values: Vec<(Section, Value)> = Section::ALL
             .into_iter()
-            .map(|s| (s, section_of(&doc, s)))
+            .filter_map(|s| Some((s, doc.section(s)?)))
             .collect();
         for (i, (a, va)) in values.iter().enumerate() {
             for (b, vb) in &values[i + 1..] {
@@ -524,8 +684,8 @@ mod tests {
         assert_eq!(section_of(&after, Section::Testing), value);
         for section in Section::ALL.into_iter().filter(|s| *s != Section::Testing) {
             assert_eq!(
-                serde_json::to_vec(&section_of(&after, section)).unwrap(),
-                serde_json::to_vec(&section_of(&before, section)).unwrap(),
+                serde_json::to_vec(&after.section(section)).unwrap(),
+                serde_json::to_vec(&before.section(section)).unwrap(),
                 "{section} changed"
             );
         }
@@ -701,5 +861,244 @@ mod tests {
             SectionWriteError::Invalid(e) => assert_eq!(e.pointer, format!("/issues/{key}/status")),
             other => panic!("expected Invalid, got {other}"),
         }
+    }
+
+    // --- new_issues ---
+
+    fn with_new() -> ReportDocument {
+        doc(MAINTENANCE_NEW_ISSUES)
+    }
+
+    /// Whatever write produced `doc`, a document carrying `new_issues` keeps
+    /// it equal to the projection of `issues`.
+    fn assert_view_in_sync(doc: &ReportDocument) {
+        assert_eq!(
+            doc.new_issues.as_deref(),
+            Some(project_new_issues(&doc.issues).as_slice())
+        );
+    }
+
+    #[test]
+    fn a_new_issues_write_adds_the_entry_to_issues() {
+        let after = with_new()
+            .with_section(
+                Section::NewIssues,
+                json!([
+                    {"id": "bsc#1000", "title": "second", "comment": "c"},
+                    {"id": "bsc#999", "title": "regression in foo", "comment": "seen on s390x"},
+                ]),
+            )
+            .unwrap();
+
+        let added = &after.issues[&"bsc#1000".parse::<IssueKey>().unwrap()];
+        assert_eq!(added.new, Some(true));
+        assert_eq!(added.title, "second");
+        assert_eq!(added.comment.0.as_deref(), Some("c"));
+        assert_view_in_sync(&after);
+        assert_eq!(after.new_issues.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_new_issues_write_keeps_the_answers_of_an_entry_it_retitles() {
+        let key: IssueKey = "bsc#999".parse().unwrap();
+        let mut issue = section_of(&with_new(), Section::Issues)["bsc#999"].clone();
+        issue["status"] = json!("FIXED");
+        issue["reproducer"] = json!(true);
+        let answered = with_new().with_issue("bsc#999", issue).unwrap();
+
+        let after = answered
+            .with_section(
+                Section::NewIssues,
+                json!([{"id": "bsc#999", "title": "retitled"}]),
+            )
+            .unwrap();
+
+        let kept = &after.issues[&key];
+        assert_eq!(kept.title, "retitled");
+        assert_eq!(kept.comment.0, None);
+        assert_eq!(
+            *kept.status,
+            Some(crate::report_document::IssueStatus::Fixed)
+        );
+        assert_eq!(*kept.reproducer, Some(true));
+        assert_view_in_sync(&after);
+    }
+
+    #[test]
+    fn a_new_issues_write_without_an_entry_deletes_it() {
+        let after = with_new()
+            .with_section(Section::NewIssues, json!([]))
+            .unwrap();
+        assert!(!after.issues.contains_key(&"bsc#999".parse().unwrap()));
+        assert_eq!(after.new_issues, Some(Vec::new()));
+        assert_eq!(after.issues.len(), 1);
+    }
+
+    #[test]
+    fn a_new_issues_write_clashing_with_a_pipeline_issue_or_repeating_an_id_is_refused() {
+        let clash = with_new()
+            .with_section(
+                Section::NewIssues,
+                json!([{"id": "bnc#1276308", "title": "x"}]),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&clash, SectionWriteError::NewIssueConflict { pointers } if pointers == &["/new_issues/0/id"]),
+            "{clash}"
+        );
+
+        let repeat = with_new()
+            .with_section(
+                Section::NewIssues,
+                json!([{"id": "bsc#5", "title": "a"}, {"id": "bsc#5", "title": "b"}]),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&repeat, SectionWriteError::NewIssueConflict { pointers } if pointers == &["/new_issues/1/id"]),
+            "{repeat}"
+        );
+    }
+
+    #[test]
+    fn a_new_issues_item_with_a_null_comment_is_accepted_but_an_unknown_key_is_not() {
+        let after = with_new()
+            .with_section(
+                Section::NewIssues,
+                json!([{"id": "bsc#999", "title": "t", "comment": null}]),
+            )
+            .unwrap();
+        assert_view_in_sync(&after);
+
+        let err = with_new()
+            .with_section(
+                Section::NewIssues,
+                json!([{"id": "bsc#999", "title": "t", "extra": 1}]),
+            )
+            .unwrap_err();
+        assert!(matches!(err, SectionWriteError::Invalid(_)), "{err}");
+    }
+
+    #[test]
+    fn new_issues_cannot_be_written_to_a_document_that_never_carried_it() {
+        let err = doc(MAINTENANCE_OBS)
+            .with_section(Section::NewIssues, json!([]))
+            .unwrap_err();
+        assert!(
+            matches!(err, SectionWriteError::Absent(Section::NewIssues)),
+            "{err}"
+        );
+    }
+
+    /// The server folds a `new_issues` that differs from its stored view, so a
+    /// stale copy would silently revert this edit.
+    #[test]
+    fn editing_a_new_issue_through_issues_re_projects_the_view() {
+        let before = with_new();
+        let mut issue = section_of(&before, Section::Issues)["bsc#999"].clone();
+        issue["comment"] = json!("edited");
+
+        let after = before.with_issue("bsc#999", issue).unwrap();
+        assert_view_in_sync(&after);
+        assert_eq!(
+            after.new_issues.as_ref().unwrap()[0].comment.as_deref(),
+            Some("edited")
+        );
+
+        let mut issues = section_of(&before, Section::Issues);
+        issues["bsc#999"]["title"] = json!("renamed");
+        let after = before.with_section(Section::Issues, issues).unwrap();
+        assert_view_in_sync(&after);
+        assert_eq!(after.new_issues.as_ref().unwrap()[0].title, "renamed");
+    }
+
+    #[test]
+    fn with_new_issue_creates_updates_and_keeps_the_answers() {
+        let created = doc(MAINTENANCE_OBS)
+            .with_new_issue("bsc#7", "found it", Some("details"))
+            .unwrap();
+        let key: IssueKey = "bsc#7".parse().unwrap();
+        assert_eq!(created.issues[&key].new, Some(true));
+        assert_eq!(created.new_issues, None, "the key stays absent");
+
+        let answered = {
+            let mut issue = section_of(&created, Section::Issues)["bsc#7"].clone();
+            issue["reproducer"] = json!(false);
+            created.with_issue("bsc#7", issue).unwrap()
+        };
+        let updated = answered.with_new_issue("bsc#7", "again", Some("")).unwrap();
+        assert_eq!(updated.issues[&key].title, "again");
+        assert_eq!(updated.issues[&key].comment.0, None);
+        assert_eq!(*updated.issues[&key].reproducer, Some(false));
+
+        let synced = with_new().with_new_issue("bsc#8", "t", None).unwrap();
+        assert_view_in_sync(&synced);
+        assert_eq!(synced.new_issues.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn with_new_issue_refuses_a_pipeline_issue_and_a_bad_id() {
+        let err = with_new()
+            .with_new_issue("bnc#1276308", "t", None)
+            .unwrap_err();
+        assert!(matches!(err, SectionWriteError::NotNewIssue(_)), "{err}");
+        let err = with_new().with_new_issue("cve#1", "t", None).unwrap_err();
+        assert!(matches!(err, SectionWriteError::BadIssueKey(_)), "{err}");
+    }
+
+    #[test]
+    fn without_new_issue_deletes_only_a_tester_filed_issue() {
+        let after = with_new().without_new_issue("bsc#999").unwrap();
+        assert!(!after.issues.contains_key(&"bsc#999".parse().unwrap()));
+        assert_eq!(after.new_issues, Some(Vec::new()));
+
+        let err = with_new().without_new_issue("bnc#1276308").unwrap_err();
+        assert!(matches!(err, SectionWriteError::NotNewIssue(_)), "{err}");
+        let err = with_new().without_new_issue("bsc#1").unwrap_err();
+        assert!(matches!(err, SectionWriteError::UnknownIssue(_)), "{err}");
+        let err = with_new().without_new_issue("cve#1").unwrap_err();
+        assert!(matches!(err, SectionWriteError::BadIssueKey(_)), "{err}");
+    }
+
+    #[test]
+    fn a_tester_filed_issue_is_never_unfilled_or_unanswered() {
+        let bare = with_new().without_new_issue("bsc#999").unwrap();
+        let with = with_new();
+        assert_eq!(with.completeness(), bare.completeness());
+        assert!(
+            !with
+                .completeness()
+                .unfilled
+                .iter()
+                .any(|p| p.contains("bsc#999"))
+        );
+
+        let mut value = serde_json::to_value(&with).unwrap();
+        value["issues"] = json!({"bsc#999": value["issues"]["bsc#999"].clone()});
+        value["new_issues"] = json!([{"id": "bsc#999", "title": "regression in foo"}]);
+        let only: ReportDocument = serde_json::from_value(value).unwrap();
+        let row = |d: &ReportDocument, name: &str| {
+            d.section_summaries()
+                .into_iter()
+                .find(|r| r.name == name)
+                .unwrap()
+        };
+        assert!(!row(&only, "issues").has_unanswered);
+        assert!(row(&with, "issues").has_unanswered, "the pipeline issue is");
+        assert!(!row(&with, "new_issues").has_unanswered);
+    }
+
+    #[test]
+    fn a_tester_filed_issue_counts_as_tester_content() {
+        let mut value = serde_json::to_value(doc(MAINTENANCE_OBS)).unwrap();
+        assert!(
+            !serde_json::from_value::<ReportDocument>(value.clone())
+                .unwrap()
+                .has_tester_content()
+        );
+        value["issues"]["bsc#1"] = json!({
+            "title": "t", "new": true, "reproducer": null, "status": null, "comment": null
+        });
+        let doc: ReportDocument = serde_json::from_value(value).unwrap();
+        assert!(doc.has_tester_content());
     }
 }
