@@ -10,6 +10,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Tester-filed bugs (`new_issues`): the report document models the list teregen
+  derives from `new: true` issues and keeps it in step with `issues` on every
+  write, so an edit made through `issues` is not reverted by the upload. New
+  MCP tools `report_new_issue_write` (file or update a bug) and
+  `report_new_issue_delete` (remove one) join the core profile;
+  `report_section_read`/`report_section_write` take a `new_issues` section,
+  and `report_issue_read` rows carry `new`. In the `edit` editor `a` files a bug
+  on the issues tab and `d` deletes one you filed.
 - `show_log` still answers for removed hosts: `remove_host` keeps their
   verbatim command protocol in the session (marked `detached`) until
   `unload` — or a reload of the same template — drops it with the template
