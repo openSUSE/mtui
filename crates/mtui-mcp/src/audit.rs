@@ -721,7 +721,8 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 ///   `config_set` on the MCP surface: no current tool routes here, but any
 ///   future credential-carrying tool must redact the same way.
 /// * File-body payloads — `put` `content`/`content_b64`,
-///   `report_section_write`/`report_issue_write` `value`. Each records
+///   `report_section_write`/`report_issue_write` `value`,
+///   `report_new_issue_write` `title`/`comment`. Each records
 ///   `{bytes, sha256}` over the original string: correlatable across the file
 ///   and OTLP bodies without persisting a credentials file or SSH key.
 ///   Always fingerprinted, never verbatim regardless of size, so small secrets
@@ -760,6 +761,7 @@ fn payload_keys_for(tool: &str) -> Option<&'static [&'static str]> {
     match tool {
         "put" => Some(&["content", "content_b64"]),
         "report_section_write" | "report_issue_write" => Some(&["value"]),
+        "report_new_issue_write" => Some(&["title", "comment"]),
         _ => None,
     }
 }
@@ -1539,6 +1541,22 @@ mod tests {
             );
             assert_eq!(args["template"], json!("SUSE:Maintenance:1:1"));
         }
+    }
+
+    #[test]
+    fn sanitize_new_issue_title_and_comment_are_fingerprinted_not_stored() {
+        let kwargs: Map<String, Value> = serde_json::from_value(json!({
+            "issue_id": "bsc#1", "title": "SECRET-TITLE", "comment": "SECRET-NOTE",
+            "template": "SUSE:Maintenance:1:1",
+        }))
+        .expect("object");
+        let args = sanitize_args("report_new_issue_write", &kwargs);
+        let raw = serde_json::to_string(&args).expect("serialisable");
+        assert!(!raw.contains("SECRET"), "payload fingerprinted: {raw}");
+        for key in ["title", "comment"] {
+            assert_eq!(args[key]["sha256"].as_str().expect("hex").len(), 64);
+        }
+        assert_eq!(args["issue_id"], json!("bsc#1"));
     }
 
     #[test]

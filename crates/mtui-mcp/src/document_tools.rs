@@ -131,7 +131,8 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
             "Replace one tester section of the report document with `value`. `update` and \
              `install` are pipeline-owned and refused; a section the report lacks (`review` \
              on a PI report) is refused; an `issues` write must keep exactly the same issue \
-             keys (use report_issue_write for one entry). {WRITE_NOTE} A later `export` \
+             keys (use report_issue_write for one entry); `new_issues` is the list of tester-filed \
+             bugs and a write replaces it (report_new_issue_write changes one). {WRITE_NOTE} A later `export` \
              overwrites testing.install, testing.openqa and people.testers. \
              {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
@@ -158,7 +159,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "report_issue_read".to_owned(),
         description: format!(
             "Without `issue_id`, list the report's issues (`id`, `title`, `status`, \
-             `severity`); with it, read that issue in full. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+             `severity`, `new` — true for a tester-filed bug); with it, read that issue in full. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -177,7 +178,8 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "report_issue_write".to_owned(),
         description: format!(
             "Replace one existing issue of the report document with `value`; the issue set \
-             cannot grow or shrink. {WRITE_NOTE} {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+             cannot grow or shrink (use report_new_issue_write / report_new_issue_delete for \
+             tester-filed bugs). {WRITE_NOTE} {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -194,6 +196,55 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
                 ("template", template_prop()),
             ],
             &["issue_id", "value"],
+        ),
+        read_only: false,
+    };
+
+    let new_issue_write = ToolDescriptor {
+        name: "report_new_issue_write".to_owned(),
+        description: format!(
+            "File a bug the tester found during validation, or update the `title`/`comment` \
+             of one already filed (`new: true` in report_issue_read). An existing entry keeps \
+             its reproducer, status and severity; an empty `comment` clears it. A pipeline \
+             issue is refused: use report_issue_write for those. {WRITE_NOTE} {DOCUMENT_NOTE} \
+             {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "issue_id",
+                    issue_id_prop("Bug key such as `bsc#1234567` (bsc, bnc, boo, jsc or ijsc)."),
+                ),
+                (
+                    "title",
+                    json!({ "type": "string", "description": "Bug summary." }),
+                ),
+                (
+                    "comment",
+                    json!({ "type": "string", "description": "Optional free text about the bug." }),
+                ),
+                ("template", template_prop()),
+            ],
+            &["issue_id", "title"],
+        ),
+        read_only: false,
+    };
+
+    let new_issue_delete = ToolDescriptor {
+        name: "report_new_issue_delete".to_owned(),
+        description: format!(
+            "Remove a bug the tester filed with report_new_issue_write. Pipeline issues cannot \
+             be removed and are refused. {WRITE_NOTE} {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "issue_id",
+                    issue_id_prop("Key of a tester-filed bug, such as `bsc#1234567`."),
+                ),
+                ("template", template_prop()),
+            ],
+            &["issue_id"],
         ),
         read_only: false,
     };
@@ -248,6 +299,8 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         section_write,
         issue_read,
         issue_write,
+        new_issue_write,
+        new_issue_delete,
         files,
         file_read,
     ]
@@ -309,6 +362,18 @@ async fn dispatch_document_tool_inner(
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
             let value = value_arg(kwargs)?;
             report_issue_write(session, issue_id, value, template).await?
+        }
+        "report_new_issue_write" => {
+            let issue_id =
+                opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
+            let title = opt_str(kwargs, "title")?.ok_or_else(|| refuse("`title` is required"))?;
+            let comment = opt_str(kwargs, "comment")?;
+            report_new_issue_write(session, issue_id, title, comment, template).await?
+        }
+        "report_new_issue_delete" => {
+            let issue_id =
+                opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
+            report_new_issue_delete(session, issue_id, template).await?
         }
         "report_files" => report_files(session, template).await?,
         "report_file_read" => {
@@ -602,6 +667,7 @@ async fn report_issue_read(
                         "title": issue.get("title").unwrap_or(&Value::Null),
                         "status": issue.get("status").unwrap_or(&Value::Null),
                         "severity": issue.get("severity").unwrap_or(&Value::Null),
+                        "new": issue.get("new").unwrap_or(&Value::Null),
                     })
                 })
                 .collect();
@@ -647,6 +713,42 @@ async fn report_issue_write(
         let id = updated.id.clone();
         base.document = Some(updated);
         base.mark_document_authored(&[&format!("/issues/{issue_id}")]);
+        Ok(json!({ "id": id, "issue_id": issue_id, "dirty": true }))
+    })
+    .await
+}
+
+async fn report_new_issue_write(
+    session: &McpSession,
+    issue_id: &str,
+    title: &str,
+    comment: Option<&str>,
+    template: Option<&str>,
+) -> Result<Value, McpCommandError> {
+    write_base(session, template, |base| {
+        let doc = base.document.as_ref().ok_or_else(no_document)?;
+        let updated = doc
+            .with_new_issue(issue_id, title, comment)
+            .map_err(write_refusal)?;
+        let id = updated.id.clone();
+        base.document = Some(updated);
+        base.mark_document_authored(&["/new_issues", &format!("/issues/{issue_id}")]);
+        Ok(json!({ "id": id, "issue_id": issue_id, "dirty": true }))
+    })
+    .await
+}
+
+async fn report_new_issue_delete(
+    session: &McpSession,
+    issue_id: &str,
+    template: Option<&str>,
+) -> Result<Value, McpCommandError> {
+    write_base(session, template, |base| {
+        let doc = base.document.as_ref().ok_or_else(no_document)?;
+        let updated = doc.without_new_issue(issue_id).map_err(write_refusal)?;
+        let id = updated.id.clone();
+        base.document = Some(updated);
+        base.mark_document_authored(&["/new_issues", &format!("/issues/{issue_id}")]);
         Ok(json!({ "id": id, "issue_id": issue_id, "dirty": true }))
     })
     .await

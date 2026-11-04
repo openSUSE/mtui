@@ -1931,6 +1931,10 @@ mod tests {
                 "report_issue_write",
                 json!({"value": "SECRET", "issue": "bsc#1"}),
             ),
+            (
+                "report_new_issue_write",
+                json!({"title": "SECRET", "comment": "SECRET", "issue_id": "bsc#1"}),
+            ),
         ] {
             let kwargs: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_value(kwargs).expect("object");

@@ -52,7 +52,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Replace one tester section of the report document with `value`. `update` and `install` are pipeline-owned and refused; a section the report lacks (`review` on a PI report) is refused; an `issues` write must keep exactly the same issue keys (use report_issue_write for one entry). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. A later `export` overwrites testing.install, testing.openqa and people.testers. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Replace one tester section of the report document with `value`. `update` and `install` are pipeline-owned and refused; a section the report lacks (`review` on a PI report) is refused; an `issues` write must keep exactly the same issue keys (use report_issue_write for one entry); `new_issues` is the list of tester-filed bugs and a write replaces it (report_new_issue_write changes one). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. A later `export` overwrites testing.install, testing.openqa and people.testers. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -87,7 +87,7 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`); with it, read that issue in full. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`, `new` — true for a tester-filed bug); with it, read that issue in full. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -106,7 +106,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Replace one existing issue of the report document with `value`; the issue set cannot grow or shrink. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Replace one existing issue of the report document with `value`; the issue set cannot grow or shrink (use report_new_issue_write / report_new_issue_delete for tester-filed bugs). Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -129,6 +129,59 @@ expression: pretty
       "type": "object"
     },
     "name": "report_issue_write",
+    "read_only": false
+  },
+  {
+    "description": "File a bug the tester found during validation, or update the `title`/`comment` of one already filed (`new: true` in report_issue_read). An existing entry keeps its reproducer, status and severity; an empty `comment` clears it. A pipeline issue is refused: use report_issue_write for those. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "comment": {
+          "description": "Optional free text about the bug.",
+          "type": "string"
+        },
+        "issue_id": {
+          "description": "Bug key such as `bsc#1234567` (bsc, bnc, boo, jsc or ijsc).",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        },
+        "title": {
+          "description": "Bug summary.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "name": "report_new_issue_write",
+    "read_only": false
+  },
+  {
+    "description": "Remove a bug the tester filed with report_new_issue_write. Pipeline issues cannot be removed and are refused. Validated against the report schema locally, refused with the offending pointers, and applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {
+          "description": "Key of a tester-filed bug, such as `bsc#1234567`.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_id"
+      ],
+      "type": "object"
+    },
+    "name": "report_new_issue_delete",
     "read_only": false
   },
   {

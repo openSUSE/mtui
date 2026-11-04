@@ -1078,7 +1078,15 @@ mod tests {
                     "get",
                     "report_issue_read",
                 ],
-                ["run", "job_cancel", "put", "unload", "report_issue_write"],
+                [
+                    "run",
+                    "job_cancel",
+                    "put",
+                    "unload",
+                    "report_issue_write",
+                    "report_new_issue_write",
+                    "report_new_issue_delete",
+                ],
             ),
             (
                 "core",
@@ -1095,6 +1103,8 @@ mod tests {
                     "update",
                     "report_issue_write",
                     "report_section_write",
+                    "report_new_issue_write",
+                    "report_new_issue_delete",
                 ],
             ),
         ] {
@@ -1152,8 +1162,9 @@ mod tests {
         let server = server_with(Config::default());
         for tool in server.tools.iter() {
             let blob = serde_json::to_string(&*tool.input_schema).unwrap();
+            // A title keyword has a string value; a property named `title` an object.
             assert!(
-                !blob.contains("\"title\""),
+                !blob.contains("\"title\":\""),
                 "{} kept a title keyword",
                 tool.name
             );
