@@ -426,6 +426,12 @@ fn collect_dropped(
     }
 }
 
+/// `new_issues` is the server's derived view of the `new: true` entries in
+/// `issues`, which the model already carries, so dropping it loses nothing.
+fn is_server_view(pointer: &str) -> bool {
+    pointer == "/new_issues" || pointer.starts_with("/new_issues/")
+}
+
 /// Parses `raw` into a [`ReportDocument`], then logs (`tracing::warn!`, once
 /// per pointer) every key [`dropped_pointers`] finds between the raw document
 /// and the model's re-serialised form (P1-D2). The two schema-open objects
@@ -450,6 +456,9 @@ pub fn parse_and_warn_on_dropped_keys(raw: &str) -> Result<ReportDocument, Docum
     };
     let round_tripped = serde_json::to_value(&doc).expect("ReportDocument always serializes");
     for pointer in dropped_pointers(&original, &round_tripped) {
+        if is_server_view(&pointer) {
+            continue;
+        }
         tracing::warn!(pointer, "report document: unknown key dropped during parse");
     }
     Ok(doc)

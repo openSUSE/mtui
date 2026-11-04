@@ -64,6 +64,7 @@
     "update": { "$ref": "#/$defs/update" },
     "install": { "$ref": "#/$defs/install" },
     "issues": { "$ref": "#/$defs/issues" },
+    "new_issues": { "$ref": "#/$defs/new_issues" },
     "testing": { "$ref": "#/$defs/testing" },
     "review": { "$ref": "#/$defs/review" }
   },
@@ -268,6 +269,21 @@
       "type": "object",
       "propertyNames": { "pattern": "^(bsc|bnc|boo|jsc|ijsc)#[A-Za-z0-9-]+$" },
       "additionalProperties": { "$ref": "#/$defs/issue" }
+    },
+
+    "new_issues": {
+      "description": "Bugs a tester filed during validation; folded into `issues` as `new: true` on upload.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^(bsc|bnc|boo|jsc|ijsc)#[A-Za-z0-9-]+$" },
+          "title": { "type": "string" },
+          "comment": { "type": ["string", "null"] }
+        }
+      }
     },
 
     "issue": {

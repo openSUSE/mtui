@@ -415,6 +415,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Report document writes (`commit`, `approve`, `report_section_write`, ...) are no
+  longer refused against a TeReGen that serves `new_issues`: the vendored
+  report schema now includes it, so loading no longer flags schema drift.
 - `export` on a kernel update downloads the openQA install and LTP logs again:
   every one was refused as an "unsafe export path component" because the
   openQA base URL ends in `/`.

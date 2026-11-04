@@ -6,9 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use mtui_types::report_document::{
     BuildLog, DocWorkflow, DocumentKind, Install, Origin, People, Product, ReportDocument, Review,
     ReviewSource, Reviewer, SchemaVersion, Target, Testing, Update, dropped_pointers,
+    parse_and_warn_on_dropped_keys,
 };
 use serde_json::{Value, json};
 
+use crate::log_capture::capture_logs;
 use crate::schema_conformance::validate_against_schema;
 
 const MAINTENANCE_OBS: &str = include_str!("fixtures/document/maintenance_obs.json");
@@ -216,6 +218,34 @@ fn unknown_key_on_a_closed_object_is_dropped_and_reported() {
     assert_eq!(dropped, vec!["/update/bogus_key".to_owned()]);
     // And it never reappears in the serialised form.
     assert!(round_tripped["update"].get("bogus_key").is_none());
+}
+
+#[test]
+fn the_new_issues_server_view_is_not_reported_as_dropped() {
+    let mut value = serde_json::to_value(minimal_document()).unwrap();
+    value["new_issues"] = json!([{"id": "bsc#1", "title": "t"}]);
+    let raw = serde_json::to_string(&value).unwrap();
+
+    let logs = capture_logs(|| {
+        parse_and_warn_on_dropped_keys(&raw).unwrap();
+    });
+
+    assert!(!logs.contains("new_issues"), "{logs}");
+}
+
+#[test]
+fn a_stray_key_is_still_reported_as_dropped() {
+    let mut value = serde_json::to_value(minimal_document()).unwrap();
+    value["new_issues"] = json!([]);
+    value["stray_key"] = json!(true);
+    let raw = serde_json::to_string(&value).unwrap();
+
+    let logs = capture_logs(|| {
+        parse_and_warn_on_dropped_keys(&raw).unwrap();
+    });
+
+    assert!(logs.contains("/stray_key"), "{logs}");
+    assert!(!logs.contains("new_issues"), "{logs}");
 }
 
 #[test]
