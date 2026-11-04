@@ -358,7 +358,7 @@ and nothing is written there.
 
 ## Report document tools
 
-Seven hand-written tools work on the loaded report as a **document**: five read
+Nine hand-written tools work on the loaded report as a **document**: seven read
 and edit it as named sections and issues rather than lines of text, and two list
 and read its files. Each accepts an optional
 **`template="<RRID>"`** selecting which loaded template to act on; with more than
@@ -368,7 +368,8 @@ fan-out](#multiple-templates-scoping-and-fan-out) — and with zero or one loade
 it may be omitted. All refuse cleanly when no report is loaded.
 
 The sections are `verdict`, `comment`, `people`, `update`, `install`, `issues`,
-`testing` and `review`; `review` is absent from a PI report. Reads never change
+`new_issues`, `testing` and `review`; `review` is absent from a PI report, and
+`new_issues` from a report whose teregen predates it. Reads never change
 the report.
 
 ### `report_sections` (read-only)
@@ -390,11 +391,13 @@ the report.
 Replaces one tester section with `value`.
 
 - Parameters (required): `section` (`verdict`, `comment`, `people`, `issues`,
-  `testing` or `review`), `value` (any JSON — `null` is a legitimate value
+  `new_issues`, `testing` or `review`), `value` (any JSON — `null` is a legitimate value
   for an unanswered `verdict` or `comment`). Plus optional `template`.
 - `update` and `install` are pipeline-owned and refused. A section the report
   lacks refuses. An `issues` write must keep exactly the same issue keys; use
-  `report_issue_write` for one entry.
+  `report_issue_write` for one entry. A `new_issues` write replaces the whole
+  list of tester-filed bugs (`[{"id","title","comment"?}]`); an id that
+  clashes with a pipeline issue or repeats is refused.
 - The whole candidate document is re-parsed against the typed schema, and a
   value carrying a key the schema would drop (an unknown key in a closed
   object, or `null` on an optional field) is refused. A refusal lists the
@@ -410,7 +413,8 @@ Replaces one tester section with `value`.
 
 - Parameters (all optional): `issue_id` (such as `bsc#1234567`), `template`.
 - Without `issue_id`, returns `{ "id", "issues": [{"id","title","status",
-  "severity"}] }`; with it, `{ "id", "issue_id", "issue" }`.
+  "severity","new"}] }`, where `new` is `true` for a bug a tester filed and
+  `null` otherwise; with it, `{ "id", "issue_id", "issue" }`.
 
 ### `report_issue_write`
 
@@ -418,6 +422,27 @@ Replaces one **existing** issue with `value`; the set of issues cannot grow or
 shrink. Validated and applied exactly like `report_section_write`.
 
 - Parameters (required): `issue_id`, `value`. Plus optional `template`.
+- Returns `{ "id", "issue_id", "dirty": true }`.
+
+### `report_new_issue_write`
+
+Files a bug found while testing, or updates one already filed. teregen keeps
+such a bug as an issue with `new: true`, so it also shows in `report_issue_read`.
+
+- Parameters (required): `issue_id` (`bsc#…`, `bnc#…`, `boo#…`, `jsc#…` or
+  `ijsc#…`), `title`. Optional: `comment`, `template`.
+- An existing tester-filed bug gets the new `title`/`comment` and keeps its
+  reproducer and status (answer those with `report_issue_write`); an empty
+  `comment` clears it. A pipeline issue is refused.
+- Applied to local state like `report_issue_write`; `commit` uploads it.
+- Returns `{ "id", "issue_id", "dirty": true }`.
+
+### `report_new_issue_delete`
+
+Removes a bug filed with `report_new_issue_write`.
+
+- Parameters (required): `issue_id`. Plus optional `template`.
+- A pipeline issue, or an id the report does not have, is refused.
 - Returns `{ "id", "issue_id", "dirty": true }`.
 
 ### `report_files` (read-only)
@@ -649,7 +674,8 @@ was told in band (and which the OTLP stream may still hold).
 
 No tool argument carrying a credential in bulk lands verbatim. File-body
 payloads (`put` `content`/`content_b64`,
-`report_section_write`/`report_issue_write` `value`) each record
+`report_section_write`/`report_issue_write` `value`,
+`report_new_issue_write` `title`/`comment`) each record
 `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
 persisted. Always fingerprinted, never inline, regardless of size — the same

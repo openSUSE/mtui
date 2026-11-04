@@ -76,10 +76,12 @@ section: `summary` (verdict and comment), `people`, `issues`, `testing` and
 switch sections, `Up`/`Down` move, `Enter` edits a field or opens a group,
 `Left`/`Right` step an enum or yes/no field, `n` sets a field to null, `Ctrl-S`
 saves and `q`/`Ctrl-C` quits (asking first when there are unsaved changes); `?`
-lists the keys.
+lists the keys. On the `issues` tab, `a` files a bug you found (it asks for the id,
+the title and an optional comment) and `d` deletes a bug you filed; pipeline issues
+cannot be deleted.
 
 Only the tester's answers are editable: verdicts, comments, issue
-reproducer/status/comment, the reviewer name and the review questions. Fields the
+reproducer/status/comment, the title and comment of a bug you filed, the reviewer name and the review questions. Fields the
 pipeline or `export` fills in are shown greyed. Every field is checked against the
 report schema as you edit it, and `Ctrl-S` re-checks the whole document; a refusal
 leaves the editor open on the offending field.
