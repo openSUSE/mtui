@@ -5,6 +5,9 @@
 //! crate + its dev-deps are linked once, not once per file. Add new
 //! integration tests as a module here, not as a new top-level `tests/*.rs`.
 
+// Shared test support, like `schema_conformance`: not a test module itself.
+#[path = "log_capture.rs"]
+mod log_capture;
 #[path = "refhost.rs"]
 mod refhost;
 #[path = "report_document.rs"]

@@ -2811,6 +2811,7 @@ dependencies = [
  "shlex",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
