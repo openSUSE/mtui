@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mtui_types::report_document::{
     BuildLog, DocWorkflow, DocumentKind, Install, Origin, People, Product, ReportDocument, Review,
     ReviewSource, Reviewer, SchemaVersion, Target, Testing, Update, dropped_pointers,
-    parse_and_warn_on_dropped_keys,
+    parse_and_warn_on_dropped_keys, project_new_issues,
 };
 use serde_json::{Value, json};
 
@@ -17,15 +17,17 @@ const MAINTENANCE_OBS: &str = include_str!("fixtures/document/maintenance_obs.js
 const MAINTENANCE_ADDON: &str = include_str!("fixtures/document/maintenance_addon.json");
 const SLFO_GITEA: &str = include_str!("fixtures/document/slfo_gitea.json");
 const MAINTENANCE_OPENQA_L3: &str = include_str!("fixtures/document/maintenance_openqa_l3.json");
+const MAINTENANCE_NEW_ISSUES: &str = include_str!("fixtures/document/maintenance_new_issues.json");
 const MAXIMAL: &str = include_str!("fixtures/document/maximal.json");
 const PI: &str = include_str!("fixtures/document/pi.json");
 
 /// Every fixture this phase's four properties are checked against.
-const FIXTURES: [(&str, &str); 6] = [
+const FIXTURES: [(&str, &str); 7] = [
     ("maintenance_obs", MAINTENANCE_OBS),
     ("maintenance_addon", MAINTENANCE_ADDON),
     ("slfo_gitea", SLFO_GITEA),
     ("maintenance_openqa_l3", MAINTENANCE_OPENQA_L3),
+    ("maintenance_new_issues", MAINTENANCE_NEW_ISSUES),
     ("maximal", MAXIMAL),
     ("pi", PI),
 ];
@@ -107,6 +109,7 @@ fn minimal_document() -> ReportDocument {
             test_platforms: vec![],
         },
         issues: BTreeMap::new(),
+        new_issues: None,
         testing: Testing::default(),
         review: Some(Review {
             source: ReviewSource {
@@ -221,22 +224,17 @@ fn unknown_key_on_a_closed_object_is_dropped_and_reported() {
 }
 
 #[test]
-fn the_new_issues_server_view_is_not_reported_as_dropped() {
-    let mut value = serde_json::to_value(minimal_document()).unwrap();
-    value["new_issues"] = json!([{"id": "bsc#1", "title": "t"}]);
-    let raw = serde_json::to_string(&value).unwrap();
-
+fn a_consistent_new_issues_view_is_not_reported_as_dropped() {
     let logs = capture_logs(|| {
-        parse_and_warn_on_dropped_keys(&raw).unwrap();
+        parse_and_warn_on_dropped_keys(MAINTENANCE_NEW_ISSUES).unwrap();
     });
 
-    assert!(!logs.contains("new_issues"), "{logs}");
+    assert!(logs.is_empty(), "{logs}");
 }
 
 #[test]
 fn a_stray_key_is_still_reported_as_dropped() {
-    let mut value = serde_json::to_value(minimal_document()).unwrap();
-    value["new_issues"] = json!([]);
+    let mut value: Value = serde_json::from_str(MAINTENANCE_NEW_ISSUES).unwrap();
     value["stray_key"] = json!(true);
     let raw = serde_json::to_string(&value).unwrap();
 
@@ -246,6 +244,47 @@ fn a_stray_key_is_still_reported_as_dropped() {
 
     assert!(logs.contains("/stray_key"), "{logs}");
     assert!(!logs.contains("new_issues"), "{logs}");
+}
+
+#[test]
+fn new_issues_with_an_unknown_key_or_bad_id_is_a_parse_error() {
+    for bad in [
+        json!({"id": "bsc#999", "title": "t", "extra": 1}),
+        json!({"id": "cve#999", "title": "t"}),
+    ] {
+        let mut value: Value = serde_json::from_str(MAINTENANCE_NEW_ISSUES).unwrap();
+        value["new_issues"] = json!([bad]);
+        let err = serde_json::to_string(&value)
+            .unwrap()
+            .parse::<ReportDocument>()
+            .unwrap_err();
+        assert!(err.pointer.starts_with("/new_issues/0"), "{}", err.pointer);
+    }
+}
+
+#[test]
+fn a_stale_new_issues_view_is_reprojected_on_load() {
+    let mut value: Value = serde_json::from_str(MAINTENANCE_NEW_ISSUES).unwrap();
+    value["new_issues"][0]["title"] = json!("stale");
+    let doc: ReportDocument = serde_json::to_string(&value).unwrap().parse().unwrap();
+
+    assert_eq!(doc.new_issues, Some(project_new_issues(&doc.issues)));
+    assert_eq!(doc.new_issues.unwrap()[0].title, "regression in foo");
+}
+
+#[test]
+fn an_absent_new_issues_key_stays_absent_even_with_a_new_issue() {
+    let mut value: Value = serde_json::from_str(MAINTENANCE_NEW_ISSUES).unwrap();
+    value.as_object_mut().unwrap().remove("new_issues");
+    let doc: ReportDocument = serde_json::to_string(&value).unwrap().parse().unwrap();
+
+    assert_eq!(doc.new_issues, None);
+    assert!(
+        serde_json::to_value(&doc)
+            .unwrap()
+            .get("new_issues")
+            .is_none()
+    );
 }
 
 #[test]

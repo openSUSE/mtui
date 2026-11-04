@@ -99,6 +99,7 @@ mod tests {
                 test_platforms: Vec::new(),
             },
             issues: Issues::default(),
+            new_issues: None,
             testing: Testing::default(),
             review: None,
         });
