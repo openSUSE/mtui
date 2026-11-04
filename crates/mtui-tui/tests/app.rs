@@ -330,3 +330,128 @@ fn the_help_overlay_names_the_export_caveat_and_any_key_closes_it() {
 
     assert!(!screen(&mut app).contains("Run export before editing"));
 }
+
+// ---- tester-filed issues ---------------------------------------------- //
+
+const NEW_ISSUES: &str = mtui_types::fixtures::MAINTENANCE_NEW_ISSUES;
+
+fn on_issues_tab(raw: &str) -> App {
+    let mut app = app(raw);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    app
+}
+
+fn file_bug(app: &mut App, id: &str, title: &str, comment: &str) {
+    press(app, KeyCode::Char('a'));
+    for line in [id, title, comment] {
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+}
+
+#[test]
+fn a_bug_filed_with_a_ends_in_a_saved_new_issue() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+
+    file_bug(&mut app, "bsc#100", "found a crash", "on s390x");
+
+    let screen = screen(&mut app);
+    assert!(screen.contains("found a crash"), "{screen}");
+    assert!(screen.contains("[modified]"), "{screen}");
+    let Some(Exit::Saved(saved)) = ctrl(&mut app, 's') else {
+        panic!("not saved");
+    };
+    let issue = &saved.document.issues[&"bsc#100".parse().unwrap()];
+    assert_eq!(
+        (issue.new, issue.title.as_str()),
+        (Some(true), "found a crash")
+    );
+    assert_eq!(issue.comment.as_deref(), Some("on s390x"));
+    assert_eq!(saved.touched, ["/new_issues"]);
+}
+
+#[test]
+fn the_add_prompt_refuses_a_bad_id_and_an_empty_title_and_escape_cancels() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+
+    press(&mut app, KeyCode::Char('a'));
+    type_text(&mut app, "cve#1");
+    press(&mut app, KeyCode::Enter);
+    let asking = screen(&mut app);
+    assert!(asking.contains("new issue: id"), "{asking}");
+    assert!(asking.contains("must match"), "{asking}");
+
+    press(&mut app, KeyCode::Esc);
+    assert!(!screen(&mut app).contains("new issue:"));
+    let Some(Exit::Saved(saved)) = ctrl(&mut app, 's') else {
+        panic!("not saved");
+    };
+    assert!(saved.touched.is_empty(), "{:?}", saved.touched);
+}
+
+#[test]
+fn an_empty_title_keeps_the_prompt_open() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+    press(&mut app, KeyCode::Char('a'));
+    type_text(&mut app, "bsc#7");
+    press(&mut app, KeyCode::Enter);
+
+    press(&mut app, KeyCode::Enter);
+
+    let screen = screen(&mut app);
+    assert!(screen.contains("new issue: title"), "{screen}");
+    assert!(screen.contains("title must not be empty"), "{screen}");
+}
+
+#[test]
+fn a_is_refused_outside_the_issues_tab() {
+    let mut app = app(NEW_ISSUES);
+
+    press(&mut app, KeyCode::Char('a'));
+
+    let screen = screen(&mut app);
+    assert!(!screen.contains("new issue:"), "{screen}");
+    assert!(
+        screen.contains("bugs are filed from the issues tab"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn d_deletes_a_filed_bug_and_refuses_a_pipeline_issue() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+
+    press(&mut app, KeyCode::Char('d'));
+    let refused = screen(&mut app);
+    assert!(
+        refused.contains("only tester-filed issues can be deleted"),
+        "{refused}"
+    );
+    assert!(refused.contains("[unchanged]"), "{refused}");
+
+    press(&mut app, KeyCode::End);
+    press(&mut app, KeyCode::Char('d'));
+    assert!(screen(&mut app).contains("[modified]"));
+    let Some(Exit::Saved(saved)) = ctrl(&mut app, 's') else {
+        panic!("not saved");
+    };
+    assert!(
+        !saved
+            .document
+            .issues
+            .contains_key(&"bsc#999".parse().unwrap())
+    );
+}
+
+#[test]
+fn the_issues_tab_hints_the_bug_keys_and_help_names_them() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+    let screen_ = screen(&mut app);
+    assert!(screen_.contains("a add  d del"), "{screen_}");
+
+    press(&mut app, KeyCode::Char('?'));
+    let help = screen(&mut app);
+    assert!(help.contains("file a new bug"), "{help}");
+    assert!(help.contains("delete a bug you filed"), "{help}");
+}

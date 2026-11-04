@@ -91,7 +91,7 @@ pub struct Field {
 const TABS: [(&str, &[Section], bool); 7] = [
     ("summary", &[Section::Verdict, Section::Comment], true),
     ("people", &[Section::People], true),
-    ("issues", &[Section::Issues], true),
+    ("issues", &[Section::Issues, Section::NewIssues], true),
     ("testing", &[Section::Testing], true),
     ("review", &[Section::Review], true),
     ("update", &[Section::Update], false),
@@ -142,7 +142,9 @@ impl Form {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
-        let original = serde_json::to_value(document).expect("ReportDocument always serializes");
+        let mut original =
+            serde_json::to_value(document).expect("ReportDocument always serializes");
+        show_empty_comments(&mut original);
         let tabs = TABS
             .iter()
             .filter(|(_, sections, _)| sections.iter().any(|s| original.get(s.as_str()).is_some()))
@@ -181,7 +183,14 @@ impl Form {
     /// How many `null` leaves the document still has, edits included.
     #[must_use]
     pub fn unfilled(&self) -> usize {
-        null_pointers(&self.work, "").len()
+        let mut answerable = self.work.clone();
+        if let Some(issues) = answerable.get_mut("issues").and_then(Value::as_object_mut) {
+            issues.retain(|_, issue| !policy::is_hidden_entry("/issues", issue));
+        }
+        if let Some(root) = answerable.as_object_mut() {
+            root.remove("new_issues");
+        }
+        null_pointers(&answerable, "").len()
     }
 
     /// The fields of `tab`, flattened in display order.
@@ -287,10 +296,16 @@ impl Form {
                 let Some(map) = value.as_object() else {
                     return out.push(leaf(Widget::Fixed));
                 };
-                let Some(below) = self.open_group(out, at, true, map.len(), &help, value) else {
+                // Without a `new_issues` list there is nowhere else to show them.
+                let listed_apart = self.work.get("new_issues").is_some();
+                let shown: Vec<_> = map
+                    .iter()
+                    .filter(|(_, v)| !(listed_apart && policy::is_hidden_entry(at.pointer, v)))
+                    .collect();
+                let Some(below) = self.open_group(out, at, true, shown.len(), &help, value) else {
                     return;
                 };
-                for (key, v) in map {
+                for (key, v) in shown {
                     let pointer = format!("{}/{}", at.pointer, escape(key));
                     self.emit(item, v, below.at(&pointer, key), out);
                 }
@@ -502,6 +517,86 @@ impl Form {
         Ok(())
     }
 
+    /// Check `id` as the key of a bug to file: the schema's pattern, and not
+    /// already in the report.
+    ///
+    /// # Errors
+    ///
+    /// Refused when the report has no `new_issues` list, `id` breaks the
+    /// pattern, or the report already has an issue with that key.
+    pub fn check_new_issue_id(&self, id: &str) -> Result<(), FieldError> {
+        const POINTER: &str = "/new_issues";
+        if self.work.get("new_issues").is_none() {
+            return Err(refuse(POINTER, "this report cannot carry filed bugs"));
+        }
+        if let Some(node) = self.root.lookup("/new_issues/0/id") {
+            check(node, &Value::String(id.to_owned())).map_err(|m| refuse(POINTER, m))?;
+        }
+        if self
+            .work
+            .pointer("/issues")
+            .and_then(|i| i.get(id))
+            .is_some()
+        {
+            return Err(refuse(POINTER, format!("{id} is already in this report")));
+        }
+        Ok(())
+    }
+
+    /// File a bug: append it to `new_issues` (kept in key order, as the server
+    /// serves it) and return its pointer.
+    ///
+    /// # Errors
+    ///
+    /// As [`check_new_issue_id`](Self::check_new_issue_id), plus a refusal for
+    /// an empty `title`.
+    pub fn add_new_issue(
+        &mut self,
+        id: &str,
+        title: &str,
+        comment: Option<&str>,
+    ) -> Result<String, FieldError> {
+        self.check_new_issue_id(id)?;
+        if title.trim().is_empty() {
+            return Err(refuse("/new_issues", "the title must not be empty"));
+        }
+        let comment = comment
+            .filter(|c| !c.is_empty())
+            .map_or(Value::Null, |c| Value::String(c.to_owned()));
+        let item = serde_json::json!({ "id": id, "title": title, "comment": comment });
+        let list = self
+            .work
+            .get_mut("new_issues")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| refuse("/new_issues", "this report cannot carry filed bugs"))?;
+        list.push(item);
+        list.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        let at = list.iter().position(|i| i["id"] == id).unwrap_or_default();
+        Ok(format!("/new_issues/{at}"))
+    }
+
+    /// Delete the bug the row at `pointer` belongs to: `/new_issues/<n>` or
+    /// anything beneath it.
+    ///
+    /// # Errors
+    ///
+    /// Refused when `pointer` is not part of a filed bug.
+    pub fn remove_new_issue(&mut self, pointer: &str) -> Result<(), FieldError> {
+        let index = pointer
+            .strip_prefix("/new_issues/")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|token| token.parse::<usize>().ok())
+            .ok_or_else(|| refuse(pointer, "only tester-filed issues can be deleted"))?;
+        let list = self
+            .work
+            .get_mut("new_issues")
+            .and_then(Value::as_array_mut)
+            .filter(|list| index < list.len())
+            .ok_or_else(|| refuse(pointer, "no such field"))?;
+        list.remove(index);
+        Ok(())
+    }
+
     /// Replay every changed section onto the document through
     /// [`ReportDocument::with_section`].
     ///
@@ -530,6 +625,15 @@ impl Form {
 
 const MAX_NESTING: usize = 32;
 
+/// The server leaves an empty comment out of a filed bug; the form lists it as
+/// `null` so it can be filled in.
+fn show_empty_comments(document: &mut Value) {
+    let items = document.get_mut("new_issues").and_then(Value::as_array_mut);
+    for item in items.into_iter().flatten().filter_map(Value::as_object_mut) {
+        item.entry("comment").or_insert(Value::Null);
+    }
+}
+
 fn escape(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
@@ -539,6 +643,9 @@ fn section_error(section: Section, err: &SectionWriteError) -> FieldError {
     let pointer = match err {
         SectionWriteError::Invalid(e) if e.pointer != "/" => e.pointer.clone(),
         SectionWriteError::Dropped(pointers) => pointers.first().cloned().unwrap_or(whole),
+        SectionWriteError::NewIssueConflict { pointers } => {
+            pointers.first().cloned().unwrap_or(whole)
+        }
         _ => whole,
     };
     let message = match err {

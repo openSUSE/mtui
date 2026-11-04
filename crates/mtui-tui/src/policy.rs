@@ -4,6 +4,8 @@
 //! exactly one token. Everything not listed is shown read-only: the pipeline
 //! owns it, or `export` rewrites it.
 
+use serde_json::Value;
+
 const EDITABLE: &[&str] = &[
     "/verdict",
     "/comment",
@@ -11,6 +13,8 @@ const EDITABLE: &[&str] = &[
     "/issues/*/reproducer",
     "/issues/*/status",
     "/issues/*/comment",
+    "/new_issues/*/title",
+    "/new_issues/*/comment",
     "/testing/install/verdict",
     "/testing/install/comment",
     "/testing/install/checks/*/verdict",
@@ -44,6 +48,13 @@ pub fn is_editable(pointer: &str) -> bool {
     EDITABLE.iter().any(|pattern| matches(pattern, pointer))
 }
 
+/// Whether the entry `value` of the map at `parent` is listed elsewhere: a
+/// tester-filed issue shows once, in `new_issues`, not again among `issues`.
+#[must_use]
+pub fn is_hidden_entry(parent: &str, value: &Value) -> bool {
+    parent == "/issues" && value.get("new") == Some(&Value::Bool(true))
+}
+
 /// Whether an absent subtree at `pointer` is worth listing (and, when a
 /// minimal value can be built, creating).
 #[must_use]
@@ -61,6 +72,24 @@ mod tests {
         assert!(!is_editable("/issues/status"));
         assert!(!is_editable("/issues/bsc#1/extra/status"));
         assert!(is_editable("/review/source/comment"));
+    }
+
+    #[test]
+    fn a_tester_filed_issue_is_hidden_only_among_the_issues() {
+        let new = serde_json::json!({"new": true});
+        assert!(is_hidden_entry("/issues", &new));
+        assert!(!is_hidden_entry(
+            "/issues",
+            &serde_json::json!({"title": "t"})
+        ));
+        assert!(!is_hidden_entry("/new_issues", &new));
+    }
+
+    #[test]
+    fn a_filed_bugs_title_and_comment_are_editable_but_not_its_id() {
+        assert!(is_editable("/new_issues/0/title"));
+        assert!(is_editable("/new_issues/0/comment"));
+        assert!(!is_editable("/new_issues/0/id"));
     }
 
     #[test]
