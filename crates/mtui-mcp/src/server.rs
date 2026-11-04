@@ -93,8 +93,7 @@ pub struct McpServer {
     /// The explicit state key for this server's session, minted by the http
     /// registry. `None` under stdio / tests: one client per process needs no
     /// handle.
-    // #416: no non-test reader until the consuming PR; narrowed meanwhile.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no non-test reader yet"))]
     session_handle: Option<SessionHandle>,
 }
 
@@ -242,8 +241,7 @@ impl McpServer {
     /// while the session lives, released with the slot. `None` under stdio /
     /// tests: one client per process needs no handle. Read back through the
     /// registry lookup; no tool takes or returns it.
-    // #416: no non-test caller until the consuming PR; narrowed meanwhile.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no non-test caller yet"))]
     #[must_use]
     pub(crate) fn session_handle(&self) -> Option<&SessionHandle> {
         self.session_handle.as_ref()

@@ -318,8 +318,7 @@ impl SessionRegistry {
     /// resolves to its session from any connection; and the `HashMap` + `==`
     /// lookup is not constant-time (SipHash's per-process random keys make
     /// timing attacks impractical).
-    // #416: no non-test caller until the consuming PR; narrowed meanwhile.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no non-test caller yet"))]
     #[must_use]
     pub(crate) fn resolve(&self, handle: &SessionHandle) -> Option<Arc<McpSession>> {
         self.live.lock().ok()?.resolve(handle)

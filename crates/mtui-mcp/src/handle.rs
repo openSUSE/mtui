@@ -52,8 +52,7 @@ impl SessionHandle {
 
     /// The canonical 32-character lowercase-hex rendering: the textual form
     /// [`FromStr`] parses back.
-    // #416: no non-test caller until the consuming PR; narrowed meanwhile.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no non-test caller yet"))]
     #[must_use]
     pub fn to_hex(&self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
