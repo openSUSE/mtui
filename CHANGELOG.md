@@ -16,8 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   MCP tools `report_new_issue_write` (file or update a bug) and
   `report_new_issue_delete` (remove one) join the core profile;
   `report_section_read`/`report_section_write` take a `new_issues` section,
-  and `report_issue_read` rows carry `new`. In the `edit` editor `a` files a bug
-  on the issues tab and `d` deletes one you filed.
+  and `report_issue_read` rows carry `new`. In the `edit` editor `a`, or Enter on
+  the `new_issues` row, files a bug on the issues tab and `d` deletes one you
+  filed.
 - `show_log` still answers for removed hosts: `remove_host` keeps their
   verbatim command protocol in the session (marked `detached`) until
   `unload` — or a reload of the same template — drops it with the template

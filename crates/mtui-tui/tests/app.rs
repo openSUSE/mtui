@@ -455,3 +455,31 @@ fn the_issues_tab_hints_the_bug_keys_and_help_names_them() {
     assert!(help.contains("file a new bug"), "{help}");
     assert!(help.contains("delete a bug you filed"), "{help}");
 }
+
+#[test]
+fn enter_on_the_new_issues_row_opens_the_add_prompt() {
+    let mut app = on_issues_tab(NEW_ISSUES);
+    let (_, row) = Form::new(&Schema::load().unwrap(), &doc(NEW_ISSUES))
+        .locate("/new_issues")
+        .unwrap();
+    for _ in 0..row {
+        press(&mut app, KeyCode::Down);
+    }
+
+    press(&mut app, KeyCode::Enter);
+    for line in ["bsc#100", "found a crash", "on s390x"] {
+        type_text(&mut app, line);
+        press(&mut app, KeyCode::Enter);
+    }
+
+    let Some(Exit::Saved(saved)) = ctrl(&mut app, 's') else {
+        panic!("not saved");
+    };
+    assert_eq!(saved.touched, ["/new_issues"]);
+    assert!(
+        saved
+            .document
+            .issues
+            .contains_key(&"bsc#100".parse().unwrap())
+    );
+}

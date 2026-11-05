@@ -221,6 +221,7 @@ impl App {
 
     fn activate(&mut self, field: &Field) {
         match &field.widget {
+            Widget::Group { .. } if field.pointer == "/new_issues" => self.start_add(),
             Widget::Group { .. } => self.form.toggle_group(&field.pointer),
             Widget::Absent { .. } => {
                 let result = self.form.create(&field.pointer);
@@ -607,6 +608,7 @@ Enter             edit the field, open a group, create an absent block
 Left / Right      step an enum or yes/no field
 n                 set the field to null
 a                 file a new bug (issues section)
+Enter on new_issues  file a new bug
 d                 delete a bug you filed
 Ctrl-S            check every change and save
 q / Ctrl-C        quit (asks first when there are unsaved changes)

@@ -76,7 +76,8 @@ section: `summary` (verdict and comment), `people`, `issues`, `testing` and
 switch sections, `Up`/`Down` move, `Enter` edits a field or opens a group,
 `Left`/`Right` step an enum or yes/no field, `n` sets a field to null, `Ctrl-S`
 saves and `q`/`Ctrl-C` quits (asking first when there are unsaved changes); `?`
-lists the keys. On the `issues` tab, `a` files a bug you found (it asks for the id,
+lists the keys. On the `issues` tab, `a` (or Enter on the `new_issues`
+row) files a bug you found (it asks for the id,
 the title and an optional comment) and `d` deletes a bug you filed; pipeline issues
 cannot be deleted.
 
