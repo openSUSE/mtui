@@ -16,6 +16,7 @@ use mtui_config::Config;
 use mtui_datasources::HttpError;
 use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
+use mtui_datasources::teregen::TokenStore;
 #[cfg(test)]
 use mtui_hosts::MockConnection;
 use mtui_hosts::{
@@ -121,6 +122,10 @@ pub struct Session {
     /// transport, mirroring [`http_builds`](Self::http_builds).
     #[cfg(test)]
     openqa_builds: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only home of the teregen token cache, so a test run never touches
+    /// the operator's real one. Shared (`Arc`) with every fork.
+    #[cfg(test)]
+    teregen_token_dir: Arc<tempfile::TempDir>,
     /// Test-only dial replacement: a hostname mapped here is connected through
     /// its mock instead of SSH (see [`inject_mock_connection`](Self::inject_mock_connection)).
     #[cfg(test)]
@@ -418,6 +423,8 @@ impl Session {
             #[cfg(test)]
             openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
+            teregen_token_dir: Arc::new(tempfile::tempdir().expect("temp token dir")),
+            #[cfg(test)]
             mock_conns: std::collections::HashMap::new(),
         }
     }
@@ -448,6 +455,8 @@ impl Session {
             http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            teregen_token_dir: Arc::new(tempfile::tempdir().expect("temp token dir")),
             #[cfg(test)]
             mock_conns: std::collections::HashMap::new(),
         }
@@ -514,6 +523,8 @@ impl Session {
             http_builds: Arc::clone(&self.http_builds),
             #[cfg(test)]
             openqa_builds: Arc::clone(&self.openqa_builds),
+            #[cfg(test)]
+            teregen_token_dir: Arc::clone(&self.teregen_token_dir),
             #[cfg(test)]
             mock_conns: self.mock_conns.clone(),
         }
@@ -623,6 +634,22 @@ impl Session {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *cache = Some((policy, client.clone()));
         Ok(client)
+    }
+
+    /// The teregen token cache: the operator's data dir in production, a
+    /// per-session temp dir under test.
+    #[cfg(not(test))]
+    pub(crate) fn teregen_token_store(&self) -> Option<TokenStore> {
+        TokenStore::new()
+    }
+
+    /// The teregen token cache: the operator's data dir in production, a
+    /// per-session temp dir under test.
+    #[cfg(test)]
+    pub(crate) fn teregen_token_store(&self) -> Option<TokenStore> {
+        Some(TokenStore::at(
+            self.teregen_token_dir.path().join("teregen-token.json"),
+        ))
     }
 
     /// Test-only count of clients actually built by
@@ -2355,6 +2382,35 @@ mod tests {
         assert!(!s.metadata().is_loaded());
         assert!(s.templates.is_empty());
         assert_eq!(s.metadata().id(), "");
+    }
+
+    #[test]
+    fn teregen_token_store_stays_out_of_the_real_data_dir() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let s = Session::new(config(), false);
+        let path = s
+            .teregen_token_store()
+            .expect("test store")
+            .path()
+            .to_owned();
+        if let Some(data) = mtui_config::data_dir() {
+            assert!(!path.starts_with(&data), "{path:?} is under {data:?}");
+        }
+
+        let fork = s.fork_for_call(CommandPromptDisplay::with_sink(
+            Box::new(Vec::new()),
+            ColorMode::Never,
+        ));
+        assert_eq!(fork.teregen_token_store().unwrap().path(), path);
+        assert_ne!(
+            Session::new(config(), false)
+                .teregen_token_store()
+                .unwrap()
+                .path(),
+            path,
+            "each session gets its own store"
+        );
     }
 
     /// Guards against a regression to per-command client construction: a stable
