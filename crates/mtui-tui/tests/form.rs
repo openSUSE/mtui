@@ -529,3 +529,17 @@ fn a_bug_filed_on_a_report_without_new_issues_still_shows_among_the_issues() {
     let rows = pointers(&form, "issues");
     assert!(rows.contains(&"/issues/bsc#1234567".to_owned()), "{rows:?}");
 }
+
+#[test]
+fn an_empty_new_issues_list_still_shows_its_header_row() {
+    let mut form = form(NEW_ISSUES);
+    form.remove_new_issue("/new_issues/0").unwrap();
+
+    assert_eq!(
+        field(&form, "/new_issues").widget,
+        Widget::Group {
+            expanded: true,
+            len: 0
+        }
+    );
+}

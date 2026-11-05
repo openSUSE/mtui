@@ -211,7 +211,7 @@ impl Form {
                 pointer: &format!("/{key}"),
                 label: key,
                 depth: 0,
-                top: true,
+                top: *section != Section::NewIssues,
             };
             self.emit(node, value, at, &mut out);
         }
