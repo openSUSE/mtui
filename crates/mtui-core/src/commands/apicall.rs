@@ -131,7 +131,8 @@ pub(crate) fn teregen_v2_writer(session: &Session) -> Result<TeregenV2, CommandE
         creds.sshkey_path,
         creds.sshkey_fingerprint,
         http.clone(),
-    );
+    )
+    .with_store(session.teregen_token_store());
     Ok(TeregenV2::with_client(http, &session.config.teregen_api_v2).with_auth(auth))
 }
 
@@ -1395,6 +1396,27 @@ mod tests {
             assert_eq!(session.metadata().base().reviewer, "alice");
             teregen.verify().await;
             assert_eq!(posts(&gitea.received_requests().await.unwrap()), 1);
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn minted_token_is_cached_in_the_session_store_not_the_real_one() {
+            let (gitea, teregen) = (MockServer::start().await, teregen_expecting(1).await);
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+            let args = matches(
+                &Reject,
+                &["-r", "regression", "--reviewer", "alice", "--allow-stale"],
+            );
+
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            Reject.call(&mut session, &args).await.unwrap();
+
+            let store = session.teregen_token_store().unwrap();
+            assert!(store.path().is_file(), "token cached at {:?}", store.path());
+            if let Some(data) = mtui_config::data_dir() {
+                assert!(!store.path().starts_with(data));
+            }
         }
 
         /// The Gitea client and the assignment check come before the upload.
