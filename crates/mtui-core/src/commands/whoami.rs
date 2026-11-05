@@ -43,7 +43,8 @@ impl Command for Whoami {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        self.call_with_store(session, TokenStore::new()).await
+        let store = session.teregen_token_store();
+        self.call_with_store(session, store).await
     }
 }
 
