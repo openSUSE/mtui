@@ -12,6 +12,20 @@ all-features = true
 [advisories]
 ignore = [
   { id = "RUSTSEC-2023-0071", reason = "timing side-channel in rsa, pulled in transitively via russh's SSH key handling; no fix is available upstream, and the attack requires network-observable RSA signing timing, which does not apply to mtui's outbound-only SSH client role" },
+  # Unmaintained D-Bus plumbing under notify-rust 4.18.2's zbus 5 tree:
+  # notify-rust is at its latest release and no release adopts zbus 6 (which
+  # restructured away from these crates), so a fix needs a future notify-rust
+  # major, not a `cargo update -p`. These advisories flag lack of maintenance,
+  # not a known exploit; the residual risk (a hostile local session bus
+  # disrupting toast delivery) is accepted — notifications are best-effort UI
+  # behind the opt-in, non-default `notify` feature whose backend already
+  # swallows every failure, and toast payloads are status strings
+  # (`updating <rrid> finished|failed`), never secrets. These IDs are
+  # unconditional: re-scope this block if a default dependency ever pulls the
+  # same crates. Revisit when notify-rust ships zbus-6 support.
+  { id = "RUSTSEC-2026-0370", reason = "unmaintained zvariant 5 under zbus 5; no known vuln, opt-in non-default feature, secret-free toast payloads (see block comment)" },
+  { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus-names 4 under zbus 5 (see block comment)" },
+  { id = "RUSTSEC-2026-0372", reason = "unmaintained zvariant-derive 5 under zbus 5 (see block comment)" },
 ]
 
 # This section is considered when running `cargo deny check licenses`.
