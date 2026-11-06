@@ -5,10 +5,10 @@
 //! [`aggregated_updates`], and [`build_checks`]. Each returns a list of typed
 //! result rows (defined in [`super::results`]) that the command layer renders.
 //!
-//! The openQA job-group list is fetched per call rather than memoised: that is
-//! a per-process performance detail, not a behavioural contract. The build-check
-//! directory-index scan uses the `scraper` HTML parser, with a golden test
-//! pinning the extracted `.log` set so parser drift is caught.
+//! The openQA job-group list is large, so the caller fetches it once with
+//! [`fetch_job_groups`] and hands it to both openQA entry points. The
+//! build-check directory-index scan uses the `scraper` HTML parser, with a
+//! golden test pinning the extracted `.log` set so parser drift is caught.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -145,7 +145,7 @@ async fn fallback_build(
 
 /// Jobs fetched per `/api/v1/jobs` request by [`incident_jobs`]. Small enough
 /// that a page of large jobs (kernel builds carry ~23 KB of settings and
-/// modules per job) stays far below [`MAX_API_BODY`].
+/// modules per job) stays far below the openQA client's body cap.
 pub const JOBS_PAGE_SIZE: usize = 200;
 
 /// Upper bound on the jobs [`incident_jobs`] reads for one build, so a huge
@@ -362,12 +362,25 @@ async fn fetch_all_jobs(
 
 // --- openQA job-group enumeration ---
 
+/// The openQA job-group list, as fetched by [`fetch_job_groups`].
+///
+/// Opaque on purpose: it is fetched once and handed to [`single_incidents`] and
+/// [`aggregated_updates`], which resolve group ids from it.
+#[derive(Debug, Clone)]
+pub struct JobGroups(Vec<serde_json::Value>);
+
 /// Fetch the full openQA job-group list for a host.
-async fn fetch_openqa_groups(
-    oqa: &ruoqa::Client,
-) -> Result<Vec<serde_json::Value>, OqaSearchError> {
+///
+/// openQA has no field filter for this endpoint, and every group's YAML
+/// template is in the response, so it is large (about 19 MB on openqa.suse.de).
+///
+/// # Errors
+///
+/// Returns [`OqaSearchError::Http`] if openQA cannot be reached, answers with
+/// an error status, or its response exceeds the client's size cap.
+pub async fn fetch_job_groups(oqa: &ruoqa::Client) -> Result<JobGroups, OqaSearchError> {
     let data = oqa_request(oqa, "/api/v1/job_groups").await?;
-    Ok(data.as_array().cloned().unwrap_or_default())
+    Ok(JobGroups(data.as_array().cloned().unwrap_or_default()))
 }
 
 /// A job-group has a usable template that is not a SLE-Micro one.
@@ -744,20 +757,25 @@ fn log_matches_package(log: &str, packages: &[String]) -> bool {
 
 /// Resolve openQA status for each SLE version of a single incident.
 ///
-/// Never fails as a whole: an unknown version or an openQA query failure is
-/// recorded as a `failed` row with a note, so a flaky openQA cannot abort the
-/// command.
+/// Never fails as a whole, so a flaky openQA cannot abort the command. `groups`
+/// is the outcome of [`fetch_job_groups`]; when it failed, every version is an
+/// `error` row carrying the cause, with no per-version query. Otherwise a
+/// version without a job group is a `missing` row, and an openQA query failure
+/// is an `error` row.
 pub async fn single_incidents(
     oqa: &ruoqa::Client,
+    groups: Result<&JobGroups, &OqaSearchError>,
     build: &str,
     versions: &[String],
     max_parallel: usize,
 ) -> Vec<VersionResult> {
-    let groups = match fetch_openqa_groups(oqa).await {
-        Ok(g) => g,
+    let groups = match groups {
+        Ok(groups) => groups,
         Err(e) => {
-            tracing::error!("openQA job-group fetch failed: {e}");
-            Vec::new()
+            return versions
+                .iter()
+                .map(|version| lookup_failed_row(version, e))
+                .collect();
         }
     };
 
@@ -768,7 +786,7 @@ pub async fn single_incidents(
     let jobs: Vec<(usize, String, Option<i64>)> = versions
         .iter()
         .enumerate()
-        .map(|(idx, version)| (idx, version.clone(), get_group_id(&groups, version)))
+        .map(|(idx, version)| (idx, version.clone(), get_group_id(&groups.0, version)))
         .collect();
     let build = build.to_owned();
     let mut indexed: Vec<(usize, VersionResult)> = stream::iter(jobs)
@@ -778,15 +796,13 @@ pub async fn single_incidents(
             let oqa = oqa.clone();
             async move {
                 let Some(group_id) = group_id else {
-                    let note = format!(
-                        "Not a valid version (single incident) or group (aggregated updates): {version}"
-                    );
+                    let note = format!("no openQA job group found for version {version}");
                     tracing::warn!("{note}");
                     return (
                         idx,
                         VersionResult {
                             version,
-                            status: "failed".to_string(),
+                            status: "missing".to_string(),
                             note,
                             ..Default::default()
                         },
@@ -796,7 +812,7 @@ pub async fn single_incidents(
                     Ok(row) => row,
                     Err(e) => VersionResult {
                         version,
-                        status: "failed".to_string(),
+                        status: "error".to_string(),
                         note: format!("openQA query failed: {e}"),
                         ..Default::default()
                     },
@@ -812,9 +828,23 @@ pub async fn single_incidents(
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
+/// An `error` row for a version whose job-group list could not be fetched.
+fn lookup_failed_row(version: &str, e: &OqaSearchError) -> VersionResult {
+    VersionResult {
+        version: version.to_string(),
+        status: "error".to_string(),
+        note: format!("openQA job-group lookup failed: {e}"),
+        ..Default::default()
+    }
+}
+
 /// Walk the last `days` days of aggregated builds for each group.
+///
+/// `groups` is the outcome of [`fetch_job_groups`]. When it failed, every wanted
+/// group gets one `error` row per version, carrying the cause.
 pub async fn aggregated_updates(
     oqa: &ruoqa::Client,
+    groups: Result<&JobGroups, &OqaSearchError>,
     incident_id: &str,
     versions: &[String],
     days: u32,
@@ -833,11 +863,19 @@ pub async fn aggregated_updates(
 
     let incident_id_int: Option<i64> = incident_id.parse().ok();
 
-    let groups = match fetch_openqa_groups(oqa).await {
-        Ok(g) => g,
+    let groups = match groups {
+        Ok(groups) => groups,
         Err(e) => {
-            tracing::error!("openQA job-group fetch failed: {e}");
-            Vec::new()
+            return groups_wanted
+                .iter()
+                .map(|group| GroupResult {
+                    group: group.clone(),
+                    versions: filtered_versions
+                        .iter()
+                        .map(|version| lookup_failed_row(version, e))
+                        .collect(),
+                })
+                .collect();
         }
     };
 
@@ -845,7 +883,7 @@ pub async fn aggregated_updates(
     // skipped), so each survivor has a stable output position.
     let mut valid_groups: Vec<(String, i64)> = Vec::new();
     for group in groups_wanted {
-        let Some(group_id) = get_group_id(&groups, group) else {
+        let Some(group_id) = get_group_id(&groups.0, group) else {
             tracing::warn!(
                 "Not a valid version (single incident) or group (aggregated updates): {group}"
             );
@@ -936,7 +974,7 @@ async fn scan_aggregated_for_version(
                 Ok(row) => row,
                 Err(e) => VersionResult {
                     version: version.to_string(),
-                    status: "failed".to_string(),
+                    status: "error".to_string(),
                     note: format!("openQA query failed: {e}"),
                     ..Default::default()
                 },

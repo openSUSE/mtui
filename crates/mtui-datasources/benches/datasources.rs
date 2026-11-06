@@ -22,7 +22,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mtui_datasources::gitea::{Gitea, assign_marker};
-use mtui_datasources::oqa_search::search::single_incidents;
+use mtui_datasources::oqa_search::search::{fetch_job_groups, single_incidents};
 use mtui_datasources::{Attributes, HttpClient, Refhosts, VerifyPolicy};
 use mtui_types::load_refhosts;
 use serde_json::json;
@@ -257,7 +257,8 @@ fn bench_oqa_single_incidents(c: &mut Criterion) {
     for bound in [1usize, OQA_VERSIONS] {
         g.bench_with_input(BenchmarkId::from_parameter(bound), &bound, |b, &bound| {
             b.to_async(&rt).iter(|| async {
-                black_box(single_incidents(&oqa, ":1:pkg", &versions, bound).await)
+                let groups = fetch_job_groups(&oqa).await;
+                black_box(single_incidents(&oqa, groups.as_ref(), ":1:pkg", &versions, bound).await)
             });
         });
     }

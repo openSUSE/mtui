@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 
 use super::log_capture::capture_logs;
 use mtui_datasources::oqa_search::search::{
-    aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
-    single_incidents, summarize_test_results,
+    aggregated_updates, build_checks, extract_test_results, fetch_job_groups, get_incident_info,
+    incident_jobs, single_incidents, summarize_test_results,
 };
-use mtui_datasources::{HttpClient, IncidentKey, VerifyPolicy};
+use mtui_datasources::{GroupResult, HttpClient, IncidentKey, VerifyPolicy, VersionResult};
 use mtui_types::UpdateSource;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -36,6 +36,41 @@ fn oqa_client(server_uri: &str) -> ruoqa::Client {
         .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
         .build()
         .expect("ruoqa client builds")
+}
+
+/// Fetch the job groups once, then run [`single_incidents`] on them.
+async fn single_incidents_of(
+    server_uri: &str,
+    build: &str,
+    versions: &[String],
+    max_parallel: usize,
+) -> Vec<VersionResult> {
+    let oqa = oqa_client(server_uri);
+    let groups = fetch_job_groups(&oqa).await;
+    single_incidents(&oqa, groups.as_ref(), build, versions, max_parallel).await
+}
+
+/// Fetch the job groups once, then run [`aggregated_updates`] on them.
+async fn aggregated_updates_of(
+    server_uri: &str,
+    incident_id: &str,
+    versions: &[String],
+    days: u32,
+    groups_wanted: &[String],
+    max_parallel: usize,
+) -> Vec<GroupResult> {
+    let oqa = oqa_client(server_uri);
+    let groups = fetch_job_groups(&oqa).await;
+    aggregated_updates(
+        &oqa,
+        groups.as_ref(),
+        incident_id,
+        versions,
+        days,
+        groups_wanted,
+        max_parallel,
+    )
+    .await
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -76,13 +111,7 @@ async fn single_incidents_passed() {
         .mount(&server)
         .await;
 
-    let rows = single_incidents(
-        &oqa_client(&server.uri()),
-        ":12358:bash",
-        &["15-SP5".to_string()],
-        4,
-    )
-    .await;
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &["15-SP5".to_string()], 4).await;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].version, "15-SP5");
@@ -118,13 +147,7 @@ async fn single_incidents_failed_counts_jobs() {
         .mount(&server)
         .await;
 
-    let rows = single_incidents(
-        &oqa_client(&server.uri()),
-        ":12358:bash",
-        &["15-SP5".to_string()],
-        4,
-    )
-    .await;
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &["15-SP5".to_string()], 4).await;
     assert_eq!(rows[0].status, "failed");
     assert_eq!(rows[0].failed_count, 3);
 }
@@ -134,15 +157,58 @@ async fn single_incidents_unknown_version_records_note() {
     let server = MockServer::start().await;
     mount_job_groups(&server, vec![job_group(490, "SLE 15 SP5 Core Incidents")]).await;
 
-    let rows = single_incidents(
-        &oqa_client(&server.uri()),
-        ":12358:bash",
-        &["99-SP99".to_string()],
-        4,
-    )
-    .await;
-    assert_eq!(rows[0].status, "failed");
-    assert!(rows[0].note.contains("99-SP99"));
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &["99-SP99".to_string()], 4).await;
+    assert_eq!(rows[0].status, "missing");
+    assert_eq!(
+        rows[0].note,
+        "no openQA job group found for version 99-SP99"
+    );
+}
+
+#[tokio::test]
+async fn single_incidents_lookup_failure_is_an_error_row_per_version() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/job_groups"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let versions = ["15-SP5".to_string(), "12-SP5".to_string()];
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &versions, 4).await;
+
+    assert_eq!(rows.len(), 2);
+    for (row, version) in rows.iter().zip(&versions) {
+        assert_eq!(&row.version, version);
+        assert_eq!(row.status, "error");
+        assert!(row.note.contains("job-group lookup failed"), "{}", row.note);
+        assert!(!row.note.contains("Not a valid version"), "{}", row.note);
+    }
+    let reqs = server.received_requests().await.unwrap();
+    assert!(
+        reqs.iter().all(|r| r.url.path() == "/api/v1/job_groups"),
+        "no per-version query after a failed lookup"
+    );
+}
+
+#[tokio::test]
+async fn single_incidents_query_failure_is_an_error_row() {
+    let server = MockServer::start().await;
+    mount_job_groups(&server, vec![job_group(490, "SLE 15 SP5 Core Incidents")]).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &["15-SP5".to_string()], 4).await;
+
+    assert_eq!(rows[0].status, "error");
+    assert!(
+        rows[0].note.contains("openQA query failed"),
+        "{}",
+        rows[0].note
+    );
 }
 
 #[tokio::test]
@@ -159,8 +225,8 @@ async fn single_incidents_teradata_uses_base_version_in_url() {
         .mount(&server)
         .await;
 
-    let rows = single_incidents(
-        &oqa_client(&server.uri()),
+    let rows = single_incidents_of(
+        &server.uri(),
         ":12358:bash",
         &["12-SP3-TERADATA".to_string()],
         4,
@@ -184,8 +250,8 @@ async fn aggregated_updates_skips_excluded_versions() {
     )
     .await;
 
-    let out = aggregated_updates(
-        &oqa_client(&server.uri()),
+    let out = aggregated_updates_of(
+        &server.uri(),
         "12358",
         &["15-SP4-TERADATA".to_string(), "16.0".to_string()],
         5,
@@ -237,8 +303,8 @@ async fn aggregated_updates_finds_matching_build() {
         .mount(&server)
         .await;
 
-    let out = aggregated_updates(
-        &oqa_client(&server.uri()),
+    let out = aggregated_updates_of(
+        &server.uri(),
         "12358",
         &["15-SP5".to_string()],
         5,
@@ -270,8 +336,8 @@ async fn aggregated_updates_missing_after_window() {
         .mount(&server)
         .await;
 
-    let out = aggregated_updates(
-        &oqa_client(&server.uri()),
+    let out = aggregated_updates_of(
+        &server.uri(),
         "12358",
         &["15-SP5".to_string()],
         3,
@@ -307,8 +373,8 @@ async fn aggregated_updates_preserves_group_and_version_order() {
         .mount(&server)
         .await;
 
-    let out = aggregated_updates(
-        &oqa_client(&server.uri()),
+    let out = aggregated_updates_of(
+        &server.uri(),
         "12358",
         &["15-SP5".to_string(), "15-SP4".to_string()],
         2,
@@ -326,6 +392,102 @@ async fn aggregated_updates_preserves_group_and_version_order() {
         assert_eq!(group.versions[0].version, "15-SP5");
         assert_eq!(group.versions[1].version, "15-SP4");
     }
+}
+
+#[tokio::test]
+async fn aggregated_updates_lookup_failure_is_an_error_row_per_group_and_version() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/job_groups"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let out = aggregated_updates_of(
+        &server.uri(),
+        "12358",
+        &["15-SP5".to_string(), "15-SP4".to_string()],
+        5,
+        &["core".to_string(), "cloud".to_string()],
+        4,
+    )
+    .await;
+
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].group, "core");
+    assert_eq!(out[1].group, "cloud");
+    for group in &out {
+        assert_eq!(group.versions.len(), 2);
+        for row in &group.versions {
+            assert_eq!(row.status, "error");
+            assert!(row.note.contains("job-group lookup failed"), "{}", row.note);
+        }
+    }
+}
+
+#[tokio::test]
+async fn aggregated_updates_query_failure_is_an_error_row() {
+    let server = MockServer::start().await;
+    mount_job_groups(
+        &server,
+        vec![job_group(367, "Core Maintenance Updates 15-SP5")],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id": 999}])))
+        .with_priority(10)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/999"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "job": {"settings": {"INCIDENT_TEST_ISSUES": "12358"}}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .and(query_param("state", "running"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let out = aggregated_updates_of(
+        &server.uri(),
+        "12358",
+        &["15-SP5".to_string()],
+        5,
+        &["core".to_string()],
+        4,
+    )
+    .await;
+
+    let row = &out[0].versions[0];
+    assert_eq!(row.status, "error");
+    assert!(row.note.contains("openQA query failed"), "{}", row.note);
+}
+
+#[tokio::test]
+async fn aggregated_updates_lookup_failure_still_skips_excluded_versions() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/job_groups"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let out = aggregated_updates_of(
+        &server.uri(),
+        "12358",
+        &["16.0".to_string()],
+        5,
+        &["core".to_string()],
+        4,
+    )
+    .await;
+
+    assert!(out.is_empty());
 }
 
 // --- build_checks ---
@@ -1064,7 +1226,7 @@ async fn single_incidents_request_count_is_exact() {
         "15-SP4".to_string(),
         "12-SP5".to_string(),
     ];
-    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 4).await;
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &versions, 4).await;
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| r.status == "passed"));
     // Output order matches the input order regardless of completion order.
@@ -1114,7 +1276,7 @@ async fn single_incidents_runs_versions_concurrently() {
     // bound. Sequential lower bound would be 8×delay = 800ms; bounded-parallel
     // (bound ≥ 4) is closer to ~2×delay. Assert well under the sequential bound.
     let start = std::time::Instant::now();
-    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 8).await;
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &versions, 8).await;
     let elapsed = start.elapsed();
 
     assert_eq!(rows.len(), 4);
@@ -1145,7 +1307,7 @@ async fn single_incidents_respects_bound_of_one() {
     // delay), so serialised ≈ 2×delay while bound≥2 would be ≈ 1×delay. Assert
     // it takes at least the serialised lower bound.
     let start = std::time::Instant::now();
-    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 1).await;
+    let rows = single_incidents_of(&server.uri(), ":12358:bash", &versions, 1).await;
     let elapsed = start.elapsed();
 
     assert_eq!(rows.len(), 2);

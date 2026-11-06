@@ -26,9 +26,9 @@ pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, resolve_verify, sanitize_
 pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc};
 pub use openqa::{IncidentName, Job, KernelOpenQA, OpenQABase, build_openqa_client_with_transport};
 pub use oqa_search::{
-    BuildCheckResult, GroupResult, JobResult, OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER,
-    OpenQAOverviewResult, VersionResult, aggregated_updates, build_checks, get_incident_info,
-    incident_jobs, render_overview, single_incidents,
+    BuildCheckResult, GroupResult, JobGroups, JobResult, OVERVIEW_BEGIN_MARKER,
+    OVERVIEW_END_MARKER, OpenQAOverviewResult, VersionResult, aggregated_updates, build_checks,
+    fetch_job_groups, get_incident_info, incident_jobs, render_overview, single_incidents,
 };
 pub use qem_dashboard::{DashboardAutoOpenQA, IncidentKey, QemDashboardClient, QemIncident};
 pub use refhost::{Attributes, ProductDiff, Refhosts};

@@ -20,11 +20,11 @@ use super::row_budget::{crush_slice, row_notice};
 const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pattern";
 
 /// Non-`passed` rows survive the crush: the actionable openQA signal.
-/// Severity: `failed` (2) outranks other non-`passed` (1).
+/// Severity: `failed` and `error` (2) outrank other non-`passed` (1).
 fn anomaly_severity_version(row: &oqa::VersionResult) -> u8 {
     match row.status.as_str() {
         "passed" => 0,
-        "failed" => 2,
+        "failed" | "error" => 2,
         _ => 1,
     }
 }
@@ -450,29 +450,38 @@ pub(crate) async fn fetch_overview(
     // Independent fetches, so concurrent — but rendered in a fixed order by
     // the caller, keeping the output byte-identical to a sequential flow.
     let openqa_versions = versions.as_ref().filter(|v| !v.is_empty());
-    let single_fut = async {
-        match openqa_versions {
-            Some(versions) => {
-                oqa::single_incidents(&oqa_client, &build, versions, max_oqa_parallel).await
-            }
-            None => Vec::new(),
+    let openqa_fut = async {
+        let Some(versions) = openqa_versions else {
+            return (Vec::new(), Vec::new());
+        };
+        // The group list is large, so it is fetched once for both sections.
+        let job_groups = oqa::fetch_job_groups(&oqa_client).await;
+        if let Err(e) = &job_groups {
+            tracing::warn!("openQA job-group fetch failed: {e}");
         }
-    };
-    let aggregated_fut = async {
-        match openqa_versions {
-            Some(versions) if !no_aggregated => {
-                oqa::aggregated_updates(
-                    &oqa_client,
-                    &effective_incident_id,
-                    versions,
-                    days,
-                    &groups,
-                    max_oqa_parallel,
-                )
-                .await
+        let single_fut = oqa::single_incidents(
+            &oqa_client,
+            job_groups.as_ref(),
+            &build,
+            versions,
+            max_oqa_parallel,
+        );
+        let aggregated_fut = async {
+            if no_aggregated {
+                return Vec::new();
             }
-            _ => Vec::new(),
-        }
+            oqa::aggregated_updates(
+                &oqa_client,
+                job_groups.as_ref(),
+                &effective_incident_id,
+                versions,
+                days,
+                &groups,
+                max_oqa_parallel,
+            )
+            .await
+        };
+        tokio::join!(single_fut, aggregated_fut)
     };
     let build_checks_fut = oqa::build_checks(
         &http,
@@ -484,8 +493,8 @@ pub(crate) async fn fetch_overview(
         test_pattern.as_deref(),
         max_oqa_parallel,
     );
-    let (single_incidents, aggregated_updates, build_checks) =
-        tokio::join!(single_fut, aggregated_fut, build_checks_fut);
+    let ((single_incidents, aggregated_updates), build_checks) =
+        tokio::join!(openqa_fut, build_checks_fut);
 
     Ok(oqa::OpenQAOverviewResult {
         single_incidents,
@@ -546,7 +555,7 @@ fn title_case(s: &str) -> String {
         .join(" ")
 }
 
-/// Prints one PASSED/FAILED/RUNNING/MISSING row: `version -> url` (or a bare
+/// Prints one PASSED/FAILED/RUNNING/MISSING/ERROR row: `version -> url` (or a bare
 /// `version`), the status label colored by state, then any note in yellow.
 fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
     if row.status == "missing" {
@@ -581,7 +590,9 @@ fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
             };
             session.display.yellow(&text)
         }
-        _ => session.display.green("PASSED"),
+        "error" => session.display.red("ERROR"),
+        "passed" => session.display.green("PASSED"),
+        other => session.display.yellow(&other.to_uppercase()),
     };
     session.display.println(&label);
 
@@ -689,6 +700,41 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("PASSED"));
         assert!(!out.contains("FAILED"));
+    }
+
+    #[test]
+    fn version_row_error_prints_error_and_note_never_failed_or_passed() {
+        let (mut session, buf) = empty_session();
+        print_version_row(
+            &mut session,
+            &version_row("error", "", 0, 0, "openQA job-group lookup failed: boom"),
+        );
+        let out = buf.contents();
+        assert!(out.contains("ERROR\n"), "{out}");
+        assert!(out.contains("job-group lookup failed: boom"), "{out}");
+        assert!(!out.contains("FAILED"), "{out}");
+        assert!(!out.contains("PASSED"), "{out}");
+    }
+
+    #[test]
+    fn version_row_unknown_status_is_never_passed() {
+        let (mut session, buf) = empty_session();
+        print_version_row(&mut session, &version_row("bogus", "", 0, 0, ""));
+        let out = buf.contents();
+        assert!(out.contains("BOGUS"), "{out}");
+        assert!(!out.contains("PASSED"), "{out}");
+    }
+
+    #[test]
+    fn error_row_has_the_severity_of_a_failed_one() {
+        assert_eq!(
+            anomaly_severity_version(&version_row("error", "", 0, 0, "")),
+            2
+        );
+        assert_eq!(
+            anomaly_severity_version(&version_row("failed", "", 0, 0, "")),
+            2
+        );
     }
 
     #[test]
@@ -806,6 +852,107 @@ mod tests {
         assert!(out.contains("Build checks:"), "{out}");
         assert!(out.contains("document: testing.openqa updated"), "{out}");
         assert!(session.metadata().base().document_dirty);
+    }
+
+    /// The job-group list is large, so both openQA sections share one fetch.
+    #[tokio::test]
+    async fn job_groups_are_fetched_once_for_both_sections() {
+        use wiremock::matchers::{method, path, path_regex, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"version": "15-SP5", "settings": {"BUILD": "20260101-1", "DISTRI": "sle"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/job_groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": 490, "name": "SLE 15 SP5 Core Incidents", "template": "tpl"},
+                {"id": 367, "name": "Core Maintenance Updates 15-SP5", "template": "tpl"}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let uri = server.uri();
+        let args = matches(
+            &OpenQAOverview,
+            &[
+                "--days",
+                "1",
+                "--url-dashboard-qam",
+                &uri,
+                "--url-openqa",
+                &uri,
+                "--url-qam",
+                &uri,
+            ],
+        );
+        OpenQAOverview.call(&mut session, &args).await.unwrap();
+
+        let saved = session.metadata().openqa().overview.clone().unwrap();
+        assert_eq!(saved.single_incidents[0].status, "passed", "{saved:?}");
+        assert_eq!(saved.aggregated_updates.len(), 1, "both sections ran");
+    }
+
+    /// A failed group-list fetch shows as `error` rows with the cause, not as
+    /// `failed` rows saying the version is invalid.
+    #[tokio::test]
+    async fn failed_job_group_fetch_shows_error_rows() {
+        use wiremock::matchers::{method, path, path_regex, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/incident_settings/.*$"))
+            .and(query_param("project", "SUSE:Maintenance:1"))
+            .and(query_param("type", "smelt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"version": "15-SP5", "settings": {"BUILD": "20260101-1", "DISTRI": "sle"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/job_groups"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let uri = server.uri();
+        let args = matches(
+            &OpenQAOverview,
+            &[
+                "--url-dashboard-qam",
+                &uri,
+                "--url-openqa",
+                &uri,
+                "--url-qam",
+                &uri,
+            ],
+        );
+        OpenQAOverview.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("ERROR"), "{out}");
+        assert!(out.contains("job-group lookup failed"), "{out}");
+        assert!(!out.contains("Not a valid version"), "{out}");
+        assert!(!out.contains("FAILED"), "{out}");
     }
 
     /// The full result stays on the report for `export`, with or without `--export`.

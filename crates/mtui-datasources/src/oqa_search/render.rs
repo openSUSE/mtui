@@ -104,7 +104,7 @@ pub fn render_overview(
     lines
 }
 
-/// Renders one PASSED/FAILED/RUNNING/MISSING line as 1-2 plain lines.
+/// Renders one PASSED/FAILED/RUNNING/MISSING/ERROR line as 1-2 plain lines.
 fn render_version_row(row: &VersionResult) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if row.status == "missing" {
@@ -135,7 +135,9 @@ fn render_version_row(row: &VersionResult) -> Vec<String> {
             };
             out.push(label);
         }
-        _ => out.push("  - PASSED".to_string()),
+        "error" => out.push("  - ERROR".to_string()),
+        "passed" => out.push("  - PASSED".to_string()),
+        other => out.push(format!("  - {}", other.to_uppercase())),
     }
 
     if !row.note.is_empty() {
@@ -245,6 +247,32 @@ mod tests {
             render_version_row(&row),
             vec!["- 15-SP6: no build".to_string()]
         );
+    }
+
+    #[test]
+    fn version_row_error_renders_error_and_note() {
+        let row = VersionResult {
+            version: "15-SP6".into(),
+            status: "error".into(),
+            note: "openQA job-group lookup failed: boom".into(),
+            ..Default::default()
+        };
+        let out = render_version_row(&row);
+        assert_eq!(out[0], "- 15-SP6");
+        assert_eq!(out[1], "  - ERROR");
+        assert_eq!(out[2], "  - note: openQA job-group lookup failed: boom");
+    }
+
+    #[test]
+    fn version_row_unknown_status_is_never_passed() {
+        let row = VersionResult {
+            version: "15-SP6".into(),
+            status: "bogus".into(),
+            ..Default::default()
+        };
+        let out = render_version_row(&row);
+        assert_eq!(out[1], "  - BOGUS");
+        assert!(!out.iter().any(|l| l.contains("PASSED")), "{out:?}");
     }
 
     #[test]
