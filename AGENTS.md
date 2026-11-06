@@ -103,8 +103,8 @@ next actionable task before working on a subsystem.
 
 ## Setup & commands
 - Build everything: `cargo build --workspace` (produces both `mtui` and `mtui-mcp`)
-- Run the REPL: `cargo run -p mtui -- --help`
-- Run the MCP server: `cargo run -p mtui --bin mtui-mcp -- --help`
+- Run the REPL: `cargo run -p suse-mtui -- --help`
+- Run the MCP server: `cargo run -p suse-mtui --bin mtui-mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Docs (broken/private links are errors): `RUSTDOCFLAGS="-D warnings" cargo doc
