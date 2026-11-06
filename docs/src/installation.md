@@ -235,113 +235,88 @@ zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
 osc -A ibs whoami        # confirms the `ibs` alias resolves
 ```
 
-For the release automation itself, the repository needs two secrets (both
-one-time, both in the GitHub web UI):
+For the crates.io publish, the repository needs one environment and one secret
+(both one-time, in the GitHub web UI, needs repo admin):
 
-- **`RELEASE_PLZ_TOKEN`**: a Personal Access Token (classic `repo` scope,
-  or fine-grained with Contents + Pull requests read/write) on an account
-  with write access. Both jobs authenticate as this token: pushes made with
-  the default `GITHUB_TOKEN` trigger no further workflow runs, so with it
-  the tag push would never drive `release.yml` and CI checks would never
-  run on the Release PR. If the Release PR and release commits should not
-  carry a personal account's authorship, create a machine user for it.
-- **`CARGO_REGISTRY_TOKEN`**: a crates.io token scoped to the ten
-  publishable crates with the `publish-new`/`publish-update` scopes,
-  otherwise the `release-plz-release` job cannot publish. Give the token an
-  expiry and rotate it by generating a replacement and updating the
-  repository secret (the old token keeps working until revoked, so overlap
-  the two).
+- the **`crates-io`** environment on `openSUSE/mtui` (optionally with required
+  reviewers, so a publish waits for a human click);
+- the **`CARGO_REGISTRY_TOKEN`** secret in that environment: a crates.io token
+  of the account that owns the crates, scoped to `suse-mtui` and the nine
+  `mtui-*` crates with the `publish-new` and `publish-update` scopes. Give it
+  an expiry. Once every crate has a published version, switch to crates.io
+  Trusted Publishing (repository `openSUSE/mtui`, workflow `release.yml`,
+  environment `crates-io`, configured per crate on crates.io), move the job to
+  `id-token: write` with `rust-lang/crates-io-auth-action`, then delete the
+  secret and revoke the token.
 
-### Release flow (main line)
+### Release model
 
-Releases on `main` are driven by release-plz (config: `release-plz.toml`,
-workflow: `.github/workflows/release-plz.yml`):
+`main` is development. Its version is `X.Y.0` and it never tags or publishes a
+release. A release is always cut on a per-minor branch (`26.3.x`, `26.4.x`, …,
+forked from `main` and never merged back):
 
-1. Every push to `main` refreshes the **Release PR**: mechanical version
-   bumps. The CHANGELOG is hand-written: the PR never inserts a generated
-   section.
-2. The maintainer **sets the release by editing that PR** — the version
-   number, plus renaming its `## [Unreleased]` section to `## [X.Y.Z] -
-   <date>` with the curated entries. release-plz's inference from commit
-   prefixes is only a proposal; the edited PR is the decision. Edit, then
-   merge promptly: if another `main` push refreshes the PR first, release-plz
-   **closes a hand-touched PR and opens a fresh one without your edits**
-   (any non-bot commit on its branch counts as a contributor edit, and the
-   fresh PR is recomputed from `main`). Re-apply the edits there — or put a
-   version bump on `main` itself, which the refresh picks up as an
-   already-bumped version instead of clobbering. Never "Update branch" the
-   Release PR: that merge commit reads as an edit and triggers the same
-   close-and-recreate.
-3. Merging the PR makes release-plz **tag the release and publish to
-   crates.io — all 10 workspace crates**: the `suse-mtui` facade (binaries
-   stay `mtui`/`mtui-mcp`) plus the 9 `mtui-*` libraries, which become
-   public surface on first publish even though only the facade is supported
-   (`xtask` has `publish = false` and is skipped). The tag is the bare
-   version (`26.4.1`); see the tag-shape note in the recipe below.
-4. The tag push drives `.github/workflows/release.yml`, which builds the
-   artifacts and creates the GitHub release. release-plz never creates
-   GitHub releases itself.
-5. The OBS recipe below then ships the openSUSE RPM from the tag.
+- The **stable branch** is the highest-numbered `X.Y.x` branch (compared as
+  numbers, so `26.10.x` is higher than `26.9.x`). Its versions are `X.Y.Z` with
+  `Z >= 1`.
+- Only a plain `X.Y.Z` tag (`Z >= 1`, no pre-release suffix) whose commit is on
+  the stable branch **publishes to crates.io**. The `gate` job in
+  `release.yml` decides this with `.github/scripts/crates-io-gate.sh` (tested
+  by `xtask/tests/crates_io_gate.rs`) plus a `git merge-base --is-ancestor`
+  check of the tagged commit.
+- Every tag still gets a GitHub release. A tag on an older branch, an `X.Y.0`
+  tag or a pre-release tag is not published to crates.io.
+- After `26.5.x` is forked and before `26.5.1` is tagged, a `26.4.z` tag does
+  not publish. That is by design.
 
-Direct pushes to `main` never publish (`release_always = false`): only a
-merged Release PR does. The release job deliberately has no `concurrency`
-gate: `release` publishes only versions missing from the registry, so
-overlapping runs cannot double-publish — while a shared group lets GitHub
-drop a pending release run, which `release_always = false` would then
-silently skip. If a publish is ever skipped that way, re-run the release
-job on the Release-PR merge commit.
+All ten publishable crates move together: the `suse-mtui` facade (binaries
+stay `mtui`/`mtui-mcp`) and the nine `mtui-*` libraries (`xtask` has
+`publish = false` and is skipped). Cargo publishes them in dependency order.
 
-### First publish (one time)
+### Release flow
 
-The registry starts empty: `release-plz update` against it reports all ten
-crates `not found` yet `already up-to-date` at the current version, so the
-first Release PR may carry no changes at all. If no Release PR opens after
-the automation merges, the maintainer bootstrap-publishes once, with no
-local tokens:
+1. Cherry-pick the fixes onto the stable branch (for a new line, fork
+   `X.Y.x` from `main` and set the first patch version `X.Y.1`).
+2. Bump the version, as its own commit (`chore(release): bump version to
+   X.Y.Z`): `[workspace.package] version` plus the `=…` pins in
+   `[workspace.dependencies]`, then refresh `Cargo.lock` and run `cargo xtask
+   gen`. The pins cannot derive the workspace version with plain cargo, so the
+   bump is manual, and `cargo test -p xtask --test packaging` fails until all
+   match.
+3. Cut the changelog (`chore(release): cut X.Y.Z`): rename `## [Unreleased]`
+   to `## [X.Y.Z] - <date>`.
+4. Check the publish locally: `cargo publish --workspace --locked --dry-run`.
+5. Tag the commit (`git tag X.Y.Z`) and push the branch and the tag
+   (`git push origin X.Y.x X.Y.Z`). The tag is the bare version; a
+   `v`-prefixed tag is invalid.
+6. The tag push drives `.github/workflows/release.yml`: build and package, the
+   GitHub release, then, when the gate says so, `cargo publish --workspace
+   --locked` in the `crates-io` job.
+7. The OBS recipe below then ships the openSUSE RPM from the tag.
 
-1. Confirm the version to claim in the root `Cargo.toml`
-   (`[workspace.package] version`, today `26.4.0`), then push a branch
-   named `release-plz-first-publish` carrying one commit: rename the
-   `## [Unreleased]` section in `CHANGELOG.md` to `## [26.4.0] - <date>`
-   with the curated entries. An empty commit is not enough: without the
-   rename the publish tags a version the changelog never names, and step
-   2 of the Release flow above has nothing to rename. Open a PR and merge
-   it promptly: `release` recognises a merged PR by its `release-plz-`
-   branch prefix, so the merge commit counts as a release commit even
-   though no Release PR proposed it — but the same prefix is the
-   `release-plz-pr` job's own namespace, so if `main` moves first the
-   hand-made commit counts as an edit and the PR is closed and recreated
-   without it.
-2. The `release-plz-release` run on that merge publishes all 10 crates to
-   crates.io and pushes the bare-version tag, which drives `release.yml`
-   as usual.
-3. From then on the registry baseline exists and the normal Release-PR
-   flow above takes over.
+`main` takes no release commit. Do not tag on `main`: an `X.Y.0` tag would get
+a GitHub release but never publishes.
 
-Fallback: at the same merge commit, run `release-plz release --token
-"$CARGO_REGISTRY_TOKEN" --git-token "$RELEASE_PLZ_TOKEN"` locally (both
-flags per `release --help`); the same prefix gate applies.
+### Recovering from a partial publish
 
-### Maintenance branches (`26.N.x`)
-
-release-plz assumes a single release branch, so it never runs on the
-per-minor branches (`26.0.x`, `26.1.x`, … — one per released line, forked
-from `main` and never merged back). Fixes for a released line are
-cherry-picked by hand:
+`cargo publish --workspace` is not atomic, and a new crate name is rate limited
+(a burst of about five), so a run can stop with HTTP 429 after some crates are
+already published. A published version cannot be re-published. Wait out the
+limit, then re-run the failed job's command locally or in a re-run with the
+published crates excluded:
 
 ```sh
-git checkout 26.3.x
-git cherry-pick <fix-commit>…
-# Bump the workspace version, e.g. 26.3.5 → 26.3.6, as its own commit
-# (`chore(release): cut 26.3.6`), so the tag matches the package version.
-git tag 26.3.6
-git push origin 26.3.x 26.3.6
+cargo publish --workspace --locked --exclude mtui-types --exclude mtui-config
 ```
 
-Pushing the tag drives `release.yml` exactly like a main-line release, and
-its notes-base walk picks the predecessor by version order across the
-sibling branches — no ancestry needed. The same unprefixed tag shape
-applies; a `v`-prefixed tag is invalid there too.
+If a published crate has a defect, `cargo yank` hides it, but the fix is a new
+patch release.
+
+### Maintenance branches (`X.Y.x`)
+
+The release flow above applies to every branch. Pushing the tag drives
+`release.yml` exactly like a stable-branch release, and its notes-base walk
+picks the predecessor by version order across the sibling branches — no
+ancestry needed.
 
 Note: tags `26.3.2`–`26.3.5` predate the automation and have no CHANGELOG
 section. A maintenance release cut from them still resolves its notes base
@@ -357,24 +332,18 @@ not shift the generated notes' start point.
    workspace version with plain cargo — a path dep's `version` needs an
    explicit exact pin so a future publish resolves — so the bump stays manual
    and `cargo test -p xtask --test packaging` fails until all nine match.
-   Only the first Release PR cannot do this step: with nothing published
-   yet, `release-plz update` reports all ten crates `not found` yet
-   `already up-to-date` (see "First publish" above). From the second
-   release on the Release PR rewrites `version.workspace` and the nine
-   pins together, so review them in the PR instead of bumping them by hand.
-   Maintenance branches never see release-plz, so the manual bump stays
-   the rule there.
+   This is step 2 of the [release flow](#release-flow).
 
 2. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
-   `git describe --tags` stamps the version into the binaries. On `main` the
-   tag comes from merging the Release PR (flow above) — reach for `git tag`
-   only for a maintenance-branch cherry-pick. The `_service`
-   `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
-   require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.
-   The format is `XX.Y.Z` — year-based line, major, patch. The unprefixed
-   numeric tag is the single valid shape: it is what the `release.yml` push
-   filter matches (`[0-9]+.[0-9]+.[0-9]+`, with an optional suffix), so a
-   `v`-prefixed tag is invalid and does not trigger the release workflow.
+   `git describe --tags` stamps the version into the binaries. The tag goes on
+   the release branch, never on `main` (step 5 of the release flow). The
+   `_service` `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v`
+   but does not require one, and mtui's tags carry none: `26.4.1` becomes
+   `Version: 26.4.1`. The format is `XX.Y.Z` — year-based line, major, patch.
+   The unprefixed numeric tag is the single valid shape: it is what the
+   `release.yml` push filter matches (`[0-9]+.[0-9]+.[0-9]+`, with an optional
+   suffix), so a `v`-prefixed tag is invalid and does not trigger the release
+   workflow.
 
    ```sh
    git tag 26.4.1

@@ -52,8 +52,6 @@ tokio.workspace = true
 tempfile = "3"
 # Packaging-metadata guard test (`tests/packaging.rs`) parses every workspace
 # manifest; test-only, never linked into the built xtask.
-# release_plz_config: parses the repo-root release-plz.toml (already in the
-# resolve graph via mtui-config, so no new crates).
 toml.workspace = true
 
 [lints]
