@@ -1,14 +1,26 @@
 [package]
-name = "mtui"
+# crates.io name; the `mtui` name belongs to an unrelated project, so the
+# facade publishes as `suse-mtui` while the binaries stay `mtui`/`mtui-mcp`.
+name = "suse-mtui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 # Doubles as the .deb synopsis for BOTH packages (cargo-deb has no per-variant
 # override), so keep it binary-neutral and under 79 *bytes* — past that cargo-deb
 # word-wraps it and the overflow becomes the first line of the long description.
 description = "Maintenance Test Update Installer for SUSE QE update validation"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+# The facade lives at the repo root, so without this `cargo package` sweeps
+# `.github/`, `.clusterfuzzlite/`, `.cargo/`, `dist/`, `docs/` and friends
+# into its tarball alongside the bins. `Cargo.toml` needs no entry, cargo
+# always includes the manifest itself.
+include = ["src/**", "tests/**", "LICENSE", "README.md", "CHANGELOG.md"]
 default-run = "mtui"
 autobins = false
 # Both smoke tests are consolidated into one `tests/it.rs` binary (see
@@ -102,6 +114,9 @@ assets = [
 ]
 
 [package.metadata.generate-rpm]
+# Distro name stays `mtui` (not the crates.io `suse-mtui`); without this the
+# rpm would take the cargo package name and break the release-job `Name:` check.
+name = "mtui"
 # cargo-generate-rpm adds `Requires: /bin/sh` unconditionally unless told not
 # to; nothing these rpms ship is a script, and a static binary needs no shell.
 require-sh = false
@@ -171,6 +186,13 @@ edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-or-later"   # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
 repository = "https://github.com/openSUSE/mtui"
+homepage = "https://opensuse.github.io/mtui/"
+# Every crate points at the user mdBook: the `mtui-*` libraries are internal
+# implementation details published only so the facade can publish.
+documentation = "https://opensuse.github.io/mtui/"
+readme = "README.md"
+keywords = ["suse", "maintenance", "testing", "ssh", "qa"]
+categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 # runtime
@@ -305,14 +327,14 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 dhat = "0.3"
 tempfile = "3"
 # internal crates (path deps)
-mtui-types = { path = "crates/mtui-types" }
-mtui-config = { path = "crates/mtui-config" }
-mtui-hosts = { path = "crates/mtui-hosts" }
-mtui-datasources = { path = "crates/mtui-datasources" }
-mtui-testreport = { path = "crates/mtui-testreport" }
-mtui-core = { path = "crates/mtui-core" }
-mtui-cli = { path = "crates/mtui-cli" }
-mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
+mtui-types = { version = "=26.3.5", path = "crates/mtui-types" }
+mtui-config = { version = "=26.3.5", path = "crates/mtui-config" }
+mtui-hosts = { version = "=26.3.5", path = "crates/mtui-hosts" }
+mtui-datasources = { version = "=26.3.5", path = "crates/mtui-datasources" }
+mtui-testreport = { version = "=26.3.5", path = "crates/mtui-testreport" }
+mtui-core = { version = "=26.3.5", path = "crates/mtui-core" }
+mtui-cli = { version = "=26.3.5", path = "crates/mtui-cli" }
+mtui-mcp = { version = "=26.3.5", path = "crates/mtui-mcp", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
