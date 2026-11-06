@@ -424,6 +424,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_overview` no longer reports every version as FAILED "Not a valid
+  version" when the openQA job-group list is large (#762). The openQA response
+  cap is now 64 MiB (openqa.suse.de answers about 19 MB), a job-group lookup or
+  openQA query failure shows as `ERROR` with its cause, a version without a job
+  group shows as missing, and the list is fetched once for both sections.
 - Report document writes (`commit`, `approve`, `report_section_write`, ...) are no
   longer refused against a TeReGen that serves `new_issues`: the vendored
   report schema now includes it, so loading no longer flags schema drift.

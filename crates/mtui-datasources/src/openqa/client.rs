@@ -12,7 +12,7 @@
 use crate::error::OpenQAError;
 #[cfg(test)]
 use crate::http::{HttpClient, VerifyPolicy};
-use crate::http::{MAX_API_BODY, root_cause};
+use crate::http::{MAX_OPENQA_BODY, root_cause};
 
 /// Builds a [`ruoqa::Client`] for `base_url` with a fresh, single-use
 /// transport.
@@ -57,7 +57,7 @@ pub fn build_openqa_client_with_transport(
         .server(base_url)
         .http_client(transport)
         .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
-        .max_response_bytes(MAX_API_BODY)
+        .max_response_bytes(MAX_OPENQA_BODY)
         .build()
         .map_err(|e| OpenQAError::ClientBuild(describe(&e)))
 }
