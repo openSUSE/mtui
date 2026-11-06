@@ -147,6 +147,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   multi-byte character.
 - An invalid endpoint URL in the config file, and a failed `refhosts.yml`
   download, no longer write the URL's `user:password@` to the log.
+- `openqa_overview` no longer reports every version as FAILED "Not a valid
+  version" when the openQA job-group list is large (#762): the openQA response
+  cap is now 64 MiB (openqa.suse.de answers about 19 MB).
 
 ## [26.3.5] - 2026-10-27
 

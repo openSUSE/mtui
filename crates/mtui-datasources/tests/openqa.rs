@@ -410,3 +410,31 @@ fn injected_transport_rejects_timeouts_override() {
 fn strip_scheme(uri: &str) -> &str {
     uri.split_once("://").map_or(uri, |(_, rest)| rest)
 }
+
+/// The `job_groups` list carries every group's YAML template (about 19 MB on
+/// openqa.suse.de), so the shared openQA client must accept a body past 16 MiB.
+#[tokio::test]
+#[serial_test::serial(openqa_config_env)]
+async fn job_groups_over_sixteen_mib_is_fetched() {
+    let _env = ApiEnvGuard::new();
+    let server = MockServer::start().await;
+    let big_template = "x".repeat(17 * 1024 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/job_groups"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": 1, "name": "SLE 15 SP5 Core Incidents", "template": big_template}
+        ])))
+        .mount(&server)
+        .await;
+
+    let transport =
+        mtui_datasources::HttpClient::openqa_transport(VerifyPolicy::Default(true)).unwrap();
+    let client =
+        mtui_datasources::build_openqa_client_with_transport(transport, &server.uri()).unwrap();
+
+    let groups = client
+        .request(reqwest::Method::GET, "/api/v1/job_groups", None)
+        .await;
+
+    assert!(groups.is_ok(), "{groups:?}");
+}

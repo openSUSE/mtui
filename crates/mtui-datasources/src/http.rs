@@ -47,10 +47,14 @@ const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
 /// The read-phase component of [`HTTP_TIMEOUT`].
 const READ_TIMEOUT: Duration = HTTP_TIMEOUT.1;
 
-/// Maximum body size for a JSON/text API response (Gitea, openQA, QEM
-/// dashboard, OBS/IBS, teregen, oqa-search): 16 MiB is orders of magnitude
+/// Maximum body size for a JSON/text API response (Gitea, QEM dashboard,
+/// OBS/IBS, teregen, oqa-search): 16 MiB is orders of magnitude
 /// above any legitimate payload while still bounding a hostile server.
 pub const MAX_API_BODY: usize = 16 * 1024 * 1024;
+
+/// Maximum body size for an openQA API response: the `job_groups` list carries
+/// every group's YAML template and is about 19 MB on openqa.suse.de.
+pub(crate) const MAX_OPENQA_BODY: usize = 64 * 1024 * 1024;
 
 /// Maximum body size for a bulk *download* — a `refhosts.yml` database or an
 /// openQA install/result log fetched via [`HttpClient::get_bytes`]. Generous
