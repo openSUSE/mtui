@@ -33,6 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use mtui_config::SslVerify;
+pub use mtui_types::url_redaction::sanitize_url;
 
 use crate::error::{HttpError, Result};
 
@@ -46,10 +47,14 @@ const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
 /// The read-phase component of [`HTTP_TIMEOUT`].
 const READ_TIMEOUT: Duration = HTTP_TIMEOUT.1;
 
-/// Maximum body size for a JSON/text API response (Gitea, openQA, QEM
-/// dashboard, OBS/IBS, teregen, oqa-search): 16 MiB is orders of magnitude
+/// Maximum body size for a JSON/text API response (Gitea, QEM dashboard,
+/// OBS/IBS, teregen, oqa-search): 16 MiB is orders of magnitude
 /// above any legitimate payload while still bounding a hostile server.
 pub const MAX_API_BODY: usize = 16 * 1024 * 1024;
+
+/// Maximum body size for an openQA API response: the `job_groups` list carries
+/// every group's YAML template and is about 19 MB on openqa.suse.de.
+pub(crate) const MAX_OPENQA_BODY: usize = 64 * 1024 * 1024;
 
 /// Maximum body size for a bulk *download* — a `refhosts.yml` database or an
 /// openQA install/result log fetched via [`HttpClient::get_bytes`]. Generous
@@ -332,37 +337,6 @@ pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
     )
 }
 
-/// Return `url` with any userinfo (`user[:password]@`) replaced by `***`, for
-/// safe logging/diagnostics.
-///
-/// Configured datasource URLs may legitimately embed credentials
-/// (`scheme://user:pass@host/…`); those must never reach the log stream. Only
-/// the authority's userinfo is touched, so scheme, host, port, path and query
-/// keep a log line useful. On any unexpected shape it fails closed, stripping an
-/// entire `…@` authority prefix rather than risk echoing a credential.
-#[must_use]
-pub fn sanitize_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        // No scheme separator: fail closed on any `@`.
-        return match rest_after_at(url) {
-            Some(after) => format!("***@{after}"),
-            None => url.to_owned(),
-        };
-    };
-    // The authority ends at the first path/query/fragment delimiter.
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, tail) = rest.split_at(end);
-    match authority.rsplit_once('@') {
-        Some((_userinfo, hostport)) => format!("{scheme}://***@{hostport}{tail}"),
-        None => url.to_owned(),
-    }
-}
-
-/// If `s` contains an `@`, return the slice after the last one; else `None`.
-fn rest_after_at(s: &str) -> Option<&str> {
-    s.rsplit_once('@').map(|(_, after)| after)
-}
-
 /// The DEBUG-level detail line accompanying [`ssl_verification_hint`]: the
 /// deepest cause of `e`, or `e`'s own `Display` when it has no source.
 ///
@@ -623,37 +597,11 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_url_redacts_password() {
-        let out = sanitize_url("https://alice:s3cret@host.example/api/v1?q=1");
-        assert_eq!(out, "https://***@host.example/api/v1?q=1");
-        assert!(!out.contains("s3cret"));
-        assert!(!out.contains("alice"));
-    }
-
-    #[test]
-    fn sanitize_url_redacts_username_only() {
-        let out = sanitize_url("https://token@host.example:443/path");
-        assert_eq!(out, "https://***@host.example:443/path");
-        assert!(!out.contains("token"));
-    }
-
-    #[test]
-    fn sanitize_url_without_userinfo_is_unchanged() {
-        let url = "https://host.example:8080/a/b?c=d#e";
-        assert_eq!(sanitize_url(url), url);
-    }
-
-    #[test]
-    fn sanitize_url_at_in_path_is_not_userinfo() {
-        let url = "https://host.example/users/me@example.com";
-        assert_eq!(sanitize_url(url), url);
-    }
-
-    #[test]
-    fn sanitize_url_unparseable_with_at_fails_closed() {
-        let out = sanitize_url("alice:s3cret@host.example/x");
-        assert_eq!(out, "***@host.example/x");
-        assert!(!out.contains("s3cret"));
+    fn sanitize_url_reexport_redacts_userinfo() {
+        assert_eq!(
+            sanitize_url("https://alice:s3cret@host.example/api/v1?q=1"),
+            "https://***@host.example/api/v1?q=1"
+        );
     }
 
     #[derive(Debug)]

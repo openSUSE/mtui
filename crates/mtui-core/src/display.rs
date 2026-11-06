@@ -47,6 +47,9 @@ pub struct LockStatus {
     pub(crate) time: String,
     /// Optional lock comment.
     pub(crate) comment: String,
+    /// The lock file exists but is empty or unparseable; renders instead of an
+    /// owner.
+    pub(crate) invalid: bool,
 }
 
 /// Whether ANSI color escapes are emitted (`auto`/`always`/`never`); the active
@@ -322,7 +325,10 @@ impl CommandPromptDisplay {
     /// [`LockStatus::is_mine`] is set.
     pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
         let sys = system.to_string();
-        if lock.is_locked {
+        if lock.invalid {
+            let invalid = Self::yellow(self, "invalid lock file (empty or unparseable)");
+            self.println(&format!("{hostname:20} {sys:20}: {invalid}"));
+        } else if lock.is_locked {
             let by = if lock.is_mine { "me" } else { &lock.locked_by };
             let since = Self::yellow(self, &format!("since {} by {by}", lock.time));
             self.print_eol(&format!("{hostname:20} {sys:20}: {since}"), "");
@@ -941,6 +947,7 @@ mod tests {
             locked_by: "someone".to_owned(),
             time: "now".to_owned(),
             comment: "test comment".to_owned(),
+            ..Default::default()
         };
         d.list_locks("test_host", &system("SLES"), &lock);
         let out = rendered(&buf);
@@ -957,9 +964,30 @@ mod tests {
             locked_by: "alice".to_owned(),
             time: "then".to_owned(),
             comment: String::new(),
+            ..Default::default()
         };
         d.list_locks("h", &system("SLES"), &lock);
         assert!(rendered(&buf).contains("since then by alice"));
+    }
+
+    #[test]
+    fn list_locks_reports_an_invalid_lock_file_instead_of_an_owner() {
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let lock = LockStatus {
+            is_locked: true,
+            invalid: true,
+            ..Default::default()
+        };
+        d.list_locks("h", &system("SLES"), &lock);
+        let out = rendered(&buf);
+        assert!(
+            out.contains("invalid lock file (empty or unparseable)"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("since") && !out.contains("not locked"),
+            "{out}"
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@ The server lives behind the `mcp` feature, enabled by default alongside the
 `mtui` REPL's `cli` feature (see [Installation](installation.md)):
 
 ```sh
-cargo run -p mtui --bin mtui-mcp -- --help
+cargo run -p suse-mtui --bin mtui-mcp -- --help
 ```
 
 Two transports are served:
@@ -213,15 +213,19 @@ same names (#434), carrying content in-band in both directions. The REPL
 ### `get` (read-only)
 
 Downloads `remote` (an absolute file path; folders are not supported in-band)
-from every enabled host and returns, per host, the full remote `size`, a
+from every enabled host and returns, per host, the remote `size`, a
 `truncated` flag, and the content: UTF-8 as `content`, binary as `content_b64`
-(standard base64). Reads are capped per host at `[mcp] max_input_bytes`
-(applied after the transfer — the whole remote file is buffered per host), and
-each host gets an equal share of the `[mcp] max_output_bytes` wire budget.
-Truncation never splices a notice into the content: the `truncated` flag and
-the full remote `size` are the signal. Pass `hosts` (a list of connected
-hostnames) to retry or page a subset when one host's file was truncated;
-unknown or disabled names refuse the call. Any host failure fails the whole
+(standard base64). Reads are capped per host at `[mcp] max_input_bytes`,
+enforced while reading — a host never buffers more than the cap (`0` disables
+it and reads the whole file) — and each host gets an equal share of the
+`[mcp] max_output_bytes` wire budget. With a cap set, `size` is the file size
+the server reports when the file is opened, so it can differ from the returned
+bytes if the file changes during the read; a server that reports no size fails
+the call, naming the host, rather than being read without a bound. Without a
+cap, `size` is the number of bytes read. Truncation never splices a notice into
+the content: the `truncated` flag and `size` are the signal. Pass `hosts` (a
+list of connected hostnames) to retry or page a subset when one host's file was
+truncated; unknown or disabled names refuse the call. Any host failure fails the whole
 call with the host named — partial content is never returned as success.
 
 ### `put`
@@ -308,6 +312,10 @@ Reads a file from the checkout as UTF-8 (lossy).
   `install_logs/<host>.log`, `source.diff`, `patchinfo.xml`, etc.
 - Returns `{ "path", "line_count", "content" }`; when a window is requested
   (`offset`/`limit`) it additionally returns `offset` and `returned_lines`.
+- The read stops at `[mcp] max_input_bytes` (`0` disables the cap), cutting a
+  line that crosses it. A capped read ends with a notice, and `line_count` then
+  counts only the lines read up to the cap; the size of the unread rest is
+  unknown.
 
 ### `testreport_logs` (read-only)
 

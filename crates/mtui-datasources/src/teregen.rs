@@ -398,8 +398,15 @@ impl TeReGen {
             .await
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        if let Some(Value::Object(_)) = &body {
-            return body;
+        if let Some(Value::Object(mut map)) = body {
+            // Callers detect a refusal by its `error` key alone.
+            if !status.is_success() && !map.contains_key("error") {
+                map.insert(
+                    "error".to_owned(),
+                    Value::from(format!("HTTP {}", status.as_u16())),
+                );
+            }
+            return Some(Value::Object(map));
         }
         // A 202 with no/!JSON body still means "enqueued"; anything else is an
         // error the caller should surface.
@@ -1201,6 +1208,24 @@ mod tests {
         assert_eq!(
             client(&server).regenerate(RRID, false, false).await,
             Some(json!({"error": "HTTP 400"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn regenerate_error_status_with_another_json_shape_is_still_an_error() {
+        // Without an `error` key a refusal would read as "enqueued".
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{RRID}/regenerate")))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(json!({"errors": [{"message": "bad"}], "status": 400})),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client(&server).regenerate(RRID, false, false).await,
+            Some(json!({"errors": [{"message": "bad"}], "status": 400, "error": "HTTP 400"}))
         );
     }
 

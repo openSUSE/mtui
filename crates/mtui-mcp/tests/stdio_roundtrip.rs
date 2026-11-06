@@ -358,3 +358,58 @@ async fn discover_2026_07_28_succeeds_over_stdio_and_the_session_stays_usable() 
     drop(write_half);
     let _ = server_task.await;
 }
+
+/// `initialize` and `server/discover` identify the server as `mtui-mcp` at the
+/// crate version, not as the rmcp library underneath.
+#[tokio::test]
+async fn server_info_names_mtui_mcp_on_initialize_and_discover() {
+    let info = with_client(|client| async move {
+        let info = client
+            .peer_info()
+            .expect("initialize result")
+            .server_info
+            .clone()
+            .expect("serverInfo");
+        drop(client);
+        info
+    })
+    .await;
+    assert_eq!(info.name, "mtui-mcp");
+    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let server = build_server().await;
+    let server_task = tokio::spawn(async move {
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+    let (read_half, mut write_half) = tokio::io::split(client_io);
+    let mut reader = tokio::io::BufReader::new(read_half);
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            }
+        }),
+    )
+    .await;
+    let discover = recv_line(&mut reader).await;
+    let server_info = &discover["result"]["_meta"]["io.modelcontextprotocol/serverInfo"];
+    assert_eq!(server_info["name"], "mtui-mcp", "{discover}");
+    assert_eq!(
+        server_info["version"],
+        env!("CARGO_PKG_VERSION"),
+        "{discover}"
+    );
+
+    drop(reader);
+    drop(write_half);
+    let _ = server_task.await;
+}

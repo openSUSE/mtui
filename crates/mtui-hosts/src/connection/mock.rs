@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
 
-use super::Connection;
 #[cfg(feature = "shell")]
 use super::ShellChannel;
 use super::sftp_session::SftpSession;
+use super::{CommandTimeout, Connection, SftpRead};
 use crate::error::{HostError, Result};
 
 /// The outcome scripted for a command run against a [`MockConnection`].
@@ -69,6 +69,13 @@ pub enum MockSftpOp {
     Listdir(PathBuf),
     /// `sftp_open(path)`.
     Open(PathBuf),
+    /// `sftp_read_capped(path, max_bytes)`.
+    ReadCapped {
+        /// The remote path read.
+        path: PathBuf,
+        /// The requested budget (`0` = unlimited).
+        max_bytes: usize,
+    },
     /// `sftp_write(path, .., exclusive)`.
     Write {
         /// The remote path written.
@@ -84,6 +91,8 @@ pub enum MockSftpOp {
     Rmdir(PathBuf),
     /// `sftp_readlink(path)`.
     Readlink(PathBuf),
+    /// `sftp_mtime(path)`.
+    Mtime(PathBuf),
 }
 
 /// A scriptable, in-memory [`Connection`] implementation for tests.
@@ -102,6 +111,11 @@ pub struct MockConnection {
     run_delay: std::time::Duration,
     /// Whether the transport reports as active.
     active: bool,
+    /// The per-command no-output window, as last set via
+    /// [`set_command_timeout`](Connection::set_command_timeout). Shared so a
+    /// test holding a clone observes what the target pushed to the live
+    /// connection.
+    command_timeout: Arc<Mutex<CommandTimeout>>,
     /// Commands issued, in order. Shared so `Clone`d handles observe the same
     /// log: a `Box<dyn Connection>` may be moved but tests keep a handle.
     issued: Arc<Mutex<Vec<String>>>,
@@ -142,6 +156,11 @@ pub struct MockConnection {
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
+    /// See [`with_mtime`](Self::with_mtime).
+    mtimes: HashMap<PathBuf, u64>,
+    /// Size attribute the server reports for `sftp_read_capped`, overriding the
+    /// stored length; `None` models a server that omits it.
+    size_attrs: HashMap<PathBuf, Option<u64>>,
     /// See [`failing_sftp_remove`](Self::failing_sftp_remove).
     sftp_remove_fails: bool,
     /// See `not_found_sftp_remove`.
@@ -191,6 +210,7 @@ impl MockConnection {
             default: Outcome::Ok(CommandLog::new("", "", "", 0, 0)),
             run_delay: std::time::Duration::ZERO,
             active: true,
+            command_timeout: Arc::new(Mutex::new(CommandTimeout::default())),
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
             block_close: None,
@@ -207,6 +227,8 @@ impl MockConnection {
             listings: HashMap::new(),
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
+            mtimes: HashMap::new(),
+            size_attrs: HashMap::new(),
             sftp_remove_fails: false,
             sftp_remove_not_found: false,
             sftp_get_fails: false,
@@ -449,6 +471,14 @@ impl MockConnection {
         self
     }
 
+    /// Scripts the size attribute reported for `path` by `sftp_read_capped`,
+    /// independent of the stored contents; `None` models a server that omits it.
+    #[must_use]
+    pub fn with_size_attr(mut self, path: impl Into<PathBuf>, size: Option<u64>) -> Self {
+        self.size_attrs.insert(path.into(), size);
+        self
+    }
+
     /// Returns the current in-memory contents of a remote file written via
     /// [`sftp_write`](Connection::sftp_write) (or seeded with
     /// [`with_file`](Self::with_file)), or `None` when absent.
@@ -478,6 +508,14 @@ impl MockConnection {
     #[must_use]
     pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
         self.links.insert(path.into(), target.into());
+        self
+    }
+
+    /// Scripts the modification time (Unix seconds) `sftp_mtime` reports for
+    /// `path`. An existing file without one reports no modification time.
+    #[must_use]
+    pub fn with_mtime(mut self, path: impl Into<PathBuf>, secs: u64) -> Self {
+        self.mtimes.insert(path.into(), secs);
         self
     }
 
@@ -516,6 +554,17 @@ impl MockConnection {
     #[must_use]
     pub fn reconnect_count(&self) -> usize {
         *self.reconnects.lock().expect("mock reconnects lock")
+    }
+
+    /// The per-command no-output window currently armed on this mock, as last
+    /// set via [`set_command_timeout`](Connection::set_command_timeout).
+    /// Returned as a plain [`Duration`](std::time::Duration) so tests outside
+    /// this crate can read it without reaching into [`CommandTimeout`].
+    pub fn command_timeout(&self) -> std::time::Duration {
+        self.command_timeout
+            .lock()
+            .expect("mock command_timeout lock")
+            .as_duration()
     }
 
     /// The `(retry, backoff)` args of the most recent
@@ -762,6 +811,13 @@ impl Connection for MockConnection {
         self.active
     }
 
+    fn set_command_timeout(&mut self, timeout: CommandTimeout) {
+        *self
+            .command_timeout
+            .lock()
+            .expect("mock command_timeout lock") = timeout;
+    }
+
     async fn close(&mut self) -> Result<()> {
         // A wedged teardown: a caller with a bounded close budget abandons the
         // await, so `closed` is only set once (if) the gate fires.
@@ -933,6 +989,50 @@ impl Connection for MockConnection {
         self.open_no_handshake(path)
     }
 
+    async fn sftp_read_capped(&mut self, path: &Path, max_bytes: usize) -> Result<SftpRead> {
+        if !self.sftp_session_delay.is_zero() {
+            tokio::time::sleep(self.sftp_session_delay).await;
+        }
+        self.record_sftp(MockSftpOp::ReadCapped {
+            path: path.to_path_buf(),
+            max_bytes,
+        });
+        if self.sftp_open_errors.contains(path) {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("open failed: {}", path.display()),
+            });
+        }
+        let files = self.files.lock().expect("mock files lock");
+        let contents = files.get(path).ok_or_else(|| HostError::SftpNotFound {
+            host: self.hostname.clone(),
+            path: path.display().to_string(),
+        })?;
+        if max_bytes == 0 {
+            return Ok(SftpRead {
+                bytes: contents.clone(),
+                size: contents.len() as u64,
+                truncated: false,
+            });
+        }
+        let size = match self.size_attrs.get(path) {
+            Some(Some(size)) => *size,
+            Some(None) => {
+                return Err(HostError::Sftp {
+                    host: self.hostname.clone(),
+                    reason: format!("server reported no size for {}", path.display()),
+                });
+            }
+            None => contents.len() as u64,
+        };
+        let kept = contents.len().min(max_bytes);
+        Ok(SftpRead {
+            bytes: contents[..kept].to_vec(),
+            size,
+            truncated: contents.len() > max_bytes,
+        })
+    }
+
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
         self.record_sftp(MockSftpOp::Write {
             path: path.to_path_buf(),
@@ -1015,6 +1115,22 @@ impl Connection for MockConnection {
         // end-to-end rather than only through the op log.
         self.files.lock().expect("mock files lock").remove(path);
         Ok(())
+    }
+
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>> {
+        self.record_sftp(MockSftpOp::Mtime(path.to_path_buf()));
+        if !self
+            .files
+            .lock()
+            .expect("mock files lock")
+            .contains_key(path)
+        {
+            return Err(HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
+        Ok(self.mtimes.get(path).copied())
     }
 
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
@@ -1268,6 +1384,110 @@ mod tests {
             .await
             .expect_err("should error");
         assert!(matches!(err, HostError::SftpNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_reports_truncation_at_every_boundary() {
+        let mut conn = MockConnection::new("h1")
+            .with_file("/empty", Vec::new())
+            .with_file("/short", b"ab".to_vec())
+            .with_file("/equal", b"abcd".to_vec())
+            .with_file("/long", b"abcde".to_vec());
+        for (path, bytes, size, truncated) in [
+            ("/empty", &b""[..], 0, false),
+            ("/short", b"ab", 2, false),
+            ("/equal", b"abcd", 4, false),
+            ("/long", b"abcd", 5, true),
+        ] {
+            let got = conn.sftp_read_capped(Path::new(path), 4).await.expect("ok");
+            assert_eq!(
+                got,
+                SftpRead {
+                    bytes: bytes.to_vec(),
+                    size,
+                    truncated
+                },
+                "{path}"
+            );
+        }
+        assert_eq!(
+            conn.sftp_ops().last(),
+            Some(&MockSftpOp::ReadCapped {
+                path: PathBuf::from("/long"),
+                max_bytes: 4
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_zero_budget_reads_everything() {
+        let mut conn = MockConnection::new("h1").with_file("/f", b"abcdefghij".to_vec());
+        let got = conn.sftp_read_capped(Path::new("/f"), 0).await.expect("ok");
+        assert_eq!(got.bytes, b"abcdefghij");
+        assert_eq!(got.size, 10);
+        assert!(!got.truncated);
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_size_attr_is_reported_not_derived() {
+        let mut conn = MockConnection::new("h1")
+            .with_file("/f", b"abcde".to_vec())
+            .with_size_attr("/f", Some(100));
+        let got = conn.sftp_read_capped(Path::new("/f"), 4).await.expect("ok");
+        assert_eq!(
+            (got.bytes.as_slice(), got.size, got.truncated),
+            (&b"abcd"[..], 100, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_missing_size_attr_errors_without_reading() {
+        let mut conn = MockConnection::new("h1")
+            .with_file("/f", b"abcde".to_vec())
+            .with_size_attr("/f", None);
+        let err = conn
+            .sftp_read_capped(Path::new("/f"), 4)
+            .await
+            .expect_err("a budgeted read needs a size");
+        assert!(matches!(err, HostError::Sftp { .. }), "{err:?}");
+        // Unlimited reads never consult the attribute.
+        let got = conn.sftp_read_capped(Path::new("/f"), 0).await.expect("ok");
+        assert_eq!(got.bytes, b"abcde");
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_missing_file_is_not_found() {
+        let mut conn = MockConnection::new("h1");
+        let err = conn
+            .sftp_read_capped(Path::new("/missing"), 4)
+            .await
+            .expect_err("missing");
+        assert!(matches!(err, HostError::SftpNotFound { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_mtime_reports_the_scripted_time_or_none_or_not_found() {
+        let mut conn = MockConnection::new("h1")
+            .with_file("/dated", b"x".to_vec())
+            .with_file("/undated", b"x".to_vec())
+            .with_mtime("/dated", 1_700_000_000);
+        assert_eq!(
+            conn.sftp_mtime(Path::new("/dated")).await.expect("ok"),
+            Some(1_700_000_000)
+        );
+        assert_eq!(
+            conn.sftp_mtime(Path::new("/undated")).await.expect("ok"),
+            None
+        );
+        let err = conn
+            .sftp_mtime(Path::new("/missing"))
+            .await
+            .expect_err("missing");
+        assert!(matches!(err, HostError::SftpNotFound { .. }));
+        assert!(
+            conn.sftp_ops()
+                .contains(&MockSftpOp::Mtime(PathBuf::from("/dated")))
+        );
     }
 
     #[tokio::test]

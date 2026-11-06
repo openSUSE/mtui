@@ -3,8 +3,14 @@ name = "mtui-hosts"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+description = "SSH targets, locks, and parallel host fan-out for mtui"
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its deps (russh/tokio) link once, not once per file.
 autotests = false
@@ -68,3 +74,5 @@ sha1.workspace = true
 data-encoding = "2"
 # Perf baseline benches: fan-out scaling / SFTP / lock reporting.
 criterion.workspace = true
+# Captures tracing events (every field) in the repository-redaction tests.
+tracing-subscriber.workspace = true

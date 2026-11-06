@@ -161,9 +161,93 @@ zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
 osc -A ibs whoami        # confirms the `ibs` alias resolves
 ```
 
+For the crates.io publish, the repository needs one environment and one secret
+(both one-time, in the GitHub web UI, needs repo admin):
+
+- the **`crates-io`** environment on `openSUSE/mtui` (optionally with required
+  reviewers, so a publish waits for a human click);
+- the **`CARGO_REGISTRY_TOKEN`** secret in that environment: a crates.io token
+  of the account that owns the crates, scoped to `suse-mtui` and the eight
+  `mtui-*` crates with the `publish-new` and `publish-update` scopes. Give it
+  an expiry. Once every crate has a published version, switch to crates.io
+  Trusted Publishing (repository `openSUSE/mtui`, workflow `release.yml`,
+  environment `crates-io`, configured per crate on crates.io), move the job to
+  `id-token: write` with `rust-lang/crates-io-auth-action`, then delete the
+  secret and revoke the token.
+
+### Release model
+
+`main` is development. Its version is `X.Y.0` and it never tags or publishes a
+release. A release is always cut on a per-minor branch (`26.3.x`, `26.4.x`, …,
+forked from `main` and never merged back):
+
+- The **stable branch** is the highest-numbered `X.Y.x` branch (compared as
+  numbers, so `26.10.x` is higher than `26.9.x`). Its versions are `X.Y.Z` with
+  `Z >= 1`.
+- Only a plain `X.Y.Z` tag (`Z >= 1`, no pre-release suffix) whose commit is on
+  the stable branch **publishes to crates.io**. The `gate` job in
+  `release.yml` decides this with `.github/scripts/crates-io-gate.sh` (tested
+  by `xtask/tests/crates_io_gate.rs`) plus a `git merge-base --is-ancestor`
+  check of the tagged commit.
+- Every tag still gets a GitHub release. A tag on an older branch, an `X.Y.0`
+  tag or a pre-release tag is not published to crates.io.
+- After `26.5.x` is forked and before `26.5.1` is tagged, a `26.4.z` tag does
+  not publish. That is by design.
+
+All nine publishable crates move together: the `suse-mtui` facade (binaries
+stay `mtui`/`mtui-mcp`) and the eight `mtui-*` libraries (`xtask` has
+`publish = false` and is skipped). Cargo publishes them in dependency order.
+
+### Release flow
+
+1. Cherry-pick the fixes onto the stable branch (for a new line, fork
+   `X.Y.x` from `main` and set the first patch version `X.Y.1`).
+2. Bump the version, as its own commit (`chore(release): bump version to
+   X.Y.Z`): `[workspace.package] version` plus the `=…` pins in
+   `[workspace.dependencies]`, then refresh `Cargo.lock` and run `cargo xtask
+   gen`. The pins cannot derive the workspace version with plain cargo, so the
+   bump is manual, and `cargo test -p xtask --test packaging` fails until all
+   match.
+3. Cut the changelog (`chore(release): cut X.Y.Z`): rename `## [Unreleased]`
+   to `## [X.Y.Z] - <date>`.
+4. Check the publish locally: `cargo publish --workspace --locked --dry-run`.
+5. Tag the commit (`git tag X.Y.Z`) and push the branch and the tag
+   (`git push origin X.Y.x X.Y.Z`). The tag is the bare version; a
+   `v`-prefixed tag is invalid.
+6. The tag push drives `.github/workflows/release.yml`: build and package, the
+   GitHub release, then, when the gate says so, `cargo publish --workspace
+   --locked` in the `crates-io` job.
+7. The OBS recipe below then ships the openSUSE RPM from the tag.
+
+`main` takes no release commit. Do not tag on `main`: an `X.Y.0` tag would get
+a GitHub release but never publishes.
+
+### Recovering from a partial publish
+
+`cargo publish --workspace` is not atomic, and a new crate name is rate limited
+(a burst of about five), so a run can stop with HTTP 429 after some crates are
+already published. A published version cannot be re-published. Wait out the
+limit, then re-run the failed job's command locally or in a re-run with the
+published crates excluded:
+
+```sh
+cargo publish --workspace --locked --exclude mtui-types --exclude mtui-config
+```
+
+If a published crate has a defect, `cargo yank` hides it, but the fix is a new
+patch release.
+
+### Maintenance branches (`X.Y.x`)
+
+The release flow above applies to every branch. Pushing the tag drives
+`release.yml` exactly like a stable-branch release, and its notes-base walk
+picks the predecessor by version order across the sibling branches — no
+ancestry needed.
+
 ### Release recipe (build.suse.de / IBS, project `QA:Maintenance:Test`)
 
-1. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
+1. **Tag the release commit** (step 5 of the [release flow](#release-flow)) so
+   `tar_scm`'s `revision=@PARENT_TAG@` resolves and
    `git describe --tags` stamps the version into the binaries. The `_service`
    `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
    require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.

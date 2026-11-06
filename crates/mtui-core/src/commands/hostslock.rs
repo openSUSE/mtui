@@ -177,6 +177,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lock_reports_an_invalid_lock_file_as_a_failure_and_leaves_it() {
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, Vec::new());
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+        );
+        let args = matches(&HostLock, &[]);
+
+        let err = HostLock.call(&mut session, &args).await.unwrap_err();
+
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1")));
+        let out = buf.contents();
+        assert!(
+            out.contains("h1: FAILED (h1: lock file /var/lock/mtui.lock is invalid")
+                && out.contains("unlock --force"),
+            "{out}"
+        );
+        assert_eq!(conn.file_contents(TARGET_LOCK_PATH), Some(Vec::new()));
+    }
+
+    #[tokio::test]
     async fn lock_scoped_by_t_never_touches_the_unselected_host() {
         // Mutation to catch: reverting to the whole-group `targets.lock(..)`
         // fan-out would also lock h2, and this only fails on the file, not the

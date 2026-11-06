@@ -64,6 +64,7 @@ pub use repo_manager::{RepoFailure, RepoManager, RepoOp, SetRepo};
 pub(crate) use spinner::suspend_async;
 pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinner, suspend};
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
@@ -71,10 +72,11 @@ use mtui_types::enums::TargetState;
 use mtui_types::hostlog::{CommandLog, HostLog};
 use mtui_types::package::{Package, VersionCheck};
 use mtui_types::system::{System, SystemProduct};
+use mtui_types::url_redaction::sanitize_urls_in_text;
 
 #[cfg(feature = "shell")]
 use crate::connection::ShellChannel;
-use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
+use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SftpRead, SshConnection};
 use crate::error::{HostError, Result};
 
 /// A single reference host and its execution state.
@@ -363,13 +365,16 @@ impl Target {
 
     /// Sets the connect/command timeout for this target, in whole seconds.
     ///
-    /// The `Target` owns the timeout directly, so this updates the field
-    /// that later [`connect`](Self::connect) calls apply and that
-    /// [`timeout_secs`](Self::timeout_secs) reports. `0` disables the timeout,
-    /// which [`CommandTimeout`] represents as a zero
-    /// duration.
-    pub const fn set_timeout(&mut self, secs: u64) {
-        self.timeout = CommandTimeout::from_secs(secs);
+    /// Updates the field that later [`connect`](Self::connect) calls apply
+    /// and that [`timeout_secs`](Self::timeout_secs) reports, and pushes the
+    /// value to the live connection if there is one — otherwise a timeout
+    /// set after dialling would only take effect at the next connect. Applies
+    /// to subsequently started runs, not to one already in flight.
+    pub fn set_timeout(&mut self, secs: NonZeroU64) {
+        self.timeout = CommandTimeout::from_secs(secs.get());
+        if let Some(conn) = self.connection.as_mut() {
+            conn.set_command_timeout(self.timeout);
+        }
     }
 
     /// Returns a [`RepoManager`] bound to this target for zypper-repo lifecycle.
@@ -600,6 +605,9 @@ impl Target {
             return Ok(None);
         };
         let snap = pool.snapshot().await?;
+        if snap.invalid {
+            return Ok(Some(String::new()));
+        }
         if snap.lock.user.is_empty() {
             return Ok(None);
         }
@@ -659,6 +667,9 @@ impl Target {
             let Ok(snap) = lock.snapshot().await else {
                 return LockRow::default();
             };
+            if snap.invalid {
+                return LockRow::invalid();
+            }
             if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
@@ -672,6 +683,7 @@ impl Target {
                 // from the `mtui pool <RRID> [<owner>]` stamp), not the raw
                 // comment the operation lock carries.
                 comment: snap.rrid,
+                invalid: false,
             }
         } else {
             let Some(lock) = self.lock.as_mut() else {
@@ -681,6 +693,9 @@ impl Target {
             let Ok(snap) = lock.snapshot().await else {
                 return LockRow::default();
             };
+            if snap.invalid {
+                return LockRow::invalid();
+            }
             if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
@@ -691,6 +706,7 @@ impl Target {
                 locked_by: snap.lock.user,
                 time,
                 comment: snap.lock.comment,
+                invalid: false,
             }
         }
     }
@@ -851,21 +867,23 @@ impl Target {
     ///
     /// Driven by the `reload_products`
     /// command: re-runs [`parse_system`] and stores the
-    /// `(System, transactional)` pair via [`set_system`](Self::set_system). A
-    /// no-op (logged) when the target is not connected; a parse failure is
-    /// logged and the previously recorded system is left untouched, matching the
-    /// crate's best-effort degradation elsewhere.
-    pub async fn reload_system(&mut self) {
+    /// `(System, transactional)` pair via [`set_system`](Self::set_system). On
+    /// failure the previously recorded system is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::Connect`] when the target is not connected, or the
+    /// [`parse_system`] error.
+    pub async fn reload_system(&mut self) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
-            tracing::debug!(host = %self.hostname, "reload_system: not connected");
-            return;
+            return Err(HostError::Connect {
+                host: self.hostname.clone(),
+                reason: "not connected".to_owned(),
+            });
         };
-        match parsers::parse_system(conn.as_mut()).await {
-            Ok((system, transactional)) => self.set_system(system, transactional),
-            Err(e) => {
-                tracing::warn!(host = %self.hostname, error = %e, "reload_system: parse failed");
-            }
-        }
+        let (system, transactional) = parsers::parse_system(conn.as_mut()).await?;
+        self.set_system(system, transactional);
+        Ok(())
     }
 
     /// The per-host tracked packages.
@@ -1158,28 +1176,34 @@ impl Target {
     async fn run(&mut self, command: &str) {
         match self.state {
             TargetState::Enabled => {
-                tracing::debug!(host = %self.hostname, %command, "running");
+                // The command may embed repository credentials: it runs as
+                // given, but only this masked copy is logged or stored.
+                let shown = sanitize_urls_in_text(command);
+                tracing::debug!(host = %self.hostname, command = %shown, "running");
                 let log = match self.connection.as_mut() {
                     Some(conn) => match conn.run(command).await {
-                        Ok(log) => log,
+                        Ok(log) => log.with_urls_masked(),
                         Err(HostError::Timeout { .. }) => {
-                            tracing::error!(host = %self.hostname, %command, "command timed out");
-                            CommandLog::new(command, "", "", -1, 0)
+                            tracing::error!(
+                                host = %self.hostname, command = %shown, "command timed out"
+                            );
+                            CommandLog::new(shown, "", "", -1, 0).with_flags(false, true)
                         }
                         Err(e) => {
                             tracing::error!(
-                                host = %self.hostname, %command, error = %e,
+                                host = %self.hostname, command = %shown,
+                                error = %sanitize_urls_in_text(&e.to_string()),
                                 "failed to run command"
                             );
-                            CommandLog::new(command, "", "", -1, 0)
+                            CommandLog::new(shown, "", "", -1, 0)
                         }
                     },
                     None => {
                         tracing::error!(
-                            host = %self.hostname, %command,
+                            host = %self.hostname, command = %shown,
                             "run on unconnected target"
                         );
-                        CommandLog::new(command, "", "", -1, 0)
+                        CommandLog::new(shown, "", "", -1, 0)
                     }
                 };
                 self.out.push(log);
@@ -1286,9 +1310,9 @@ impl Target {
                     }
                 };
             }
-            // Left as `None` (not attempted) so the `put` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
+            // `None` (not attempted) so the `put` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => self.last_upload = None,
         }
     }
 
@@ -1329,9 +1353,12 @@ impl Target {
                 };
                 self.last_upload.clone()
             }
-            // Left as `None` (not attempted) so the `put` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => None,
+            // `None` (not attempted) so the `put` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => {
+                self.last_upload = None;
+                None
+            }
         }
     }
 
@@ -1376,9 +1403,9 @@ impl Target {
                     }
                 };
             }
-            // Left as `None` (not attempted) so the `get` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
+            // `None` (not attempted) so the `get` aggregation treats a disabled
+            // host as skipped rather than replaying an earlier outcome.
+            TargetState::Disabled => self.last_download = None,
         }
     }
 
@@ -1414,6 +1441,34 @@ impl Target {
                 }
             }
             // Not attempted, so a map-returning fan-out simply omits the host.
+            TargetState::Disabled => None,
+        }
+    }
+
+    /// Like [`sftp_read`](Self::sftp_read), but retaining at most `max_bytes`
+    /// (`0` = unlimited) and reporting the file size and whether it was cut.
+    pub async fn sftp_read_capped(
+        &mut self,
+        remote: &Path,
+        max_bytes: usize,
+    ) -> Option<std::result::Result<SftpRead, String>> {
+        match self.state {
+            TargetState::Enabled => {
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "sftp_read on unconnected target");
+                    return Some(Err("not connected".into()));
+                };
+                match conn.sftp_read_capped(remote, max_bytes).await {
+                    Ok(read) => Some(Ok(read)),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, remote = %remote.display(), error = %e,
+                            "failed to read"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                }
+            }
             TargetState::Disabled => None,
         }
     }
@@ -1515,11 +1570,20 @@ mod tests {
     #[test]
     fn set_timeout_updates_reported_seconds() {
         let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
-        t.set_timeout(120);
+        t.set_timeout(NonZeroU64::new(120).unwrap());
         assert_eq!(t.timeout_secs(), 120);
-        // `0` disables the timeout: zero duration.
-        t.set_timeout(0);
-        assert_eq!(t.timeout_secs(), 0);
+    }
+
+    #[tokio::test]
+    async fn set_timeout_reaches_the_live_connection() {
+        // A timeout set after dialling must move the live connection's
+        // window, not just the stored value the next connect would use.
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_timeout(NonZeroU64::new(42).unwrap());
+        assert_eq!(t.timeout_secs(), 42);
+        assert_eq!(handle.command_timeout(), std::time::Duration::from_secs(42));
     }
 
     #[test]
@@ -1541,17 +1605,17 @@ mod tests {
         // Starts with the `unknown` placeholder before any parse.
         assert_eq!(t.system().get_base().name, "unknown");
 
-        t.reload_system().await;
+        t.reload_system().await.unwrap();
 
         assert_eq!(t.system().get_base().name, "SLES");
         assert_eq!(t.system().get_base().version, "15-SP5");
     }
 
     #[tokio::test]
-    async fn reload_system_on_unconnected_is_noop() {
+    async fn reload_system_on_unconnected_errors_and_keeps_the_system() {
         let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
-        t.reload_system().await;
-        // No connection -> system untouched (still the unknown placeholder).
+        let err = t.reload_system().await.unwrap_err();
+        assert!(matches!(err, HostError::Connect { .. }), "{err:?}");
         assert_eq!(t.system().get_base().name, "unknown");
     }
 
@@ -1607,6 +1671,125 @@ mod tests {
         t.run("echo hi").await;
 
         assert_eq!(t.lastexit(), Some(-1));
+    }
+
+    mod credential_masking {
+        use std::cell::RefCell;
+        use std::fmt::Write as _;
+        use std::sync::OnceLock;
+
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        use super::*;
+
+        const URL: &str = "https://audituser:MTUI_SECRET_CANARY@repo.example/r/";
+
+        thread_local! {
+            static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        }
+
+        struct CaptureLayer;
+
+        struct FieldVisitor(String);
+
+        impl Visit for FieldVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                let _ = write!(self.0, " {}={value:?}", field.name());
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut v = FieldVisitor(String::new());
+                        event.record(&mut v);
+                        buf.push(v.0);
+                    }
+                });
+            }
+        }
+
+        /// Every event emitted by `f` on this thread, all fields included. The
+        /// subscriber is global and only the sink is thread-local, so a
+        /// callsite first reached from another thread cannot be cached as
+        /// disabled.
+        async fn capture_events(f: impl std::future::Future<Output = ()>) -> String {
+            static ONCE: OnceLock<()> = OnceLock::new();
+            ONCE.get_or_init(|| {
+                let _ =
+                    tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+            });
+            SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+            f.await;
+            SINK.with(|s| s.borrow_mut().take())
+                .unwrap_or_default()
+                .join("\n")
+        }
+
+        fn assert_masked(what: &str, text: &str) {
+            assert!(
+                !text.contains("MTUI_SECRET_CANARY") && !text.contains("audituser"),
+                "{what} leaked repository credentials"
+            );
+        }
+
+        #[tokio::test]
+        async fn timed_out_command_is_logged_and_stored_masked() {
+            let cmd = format!("zypper rr {URL}");
+            let conn = MockConnection::new("h1").with_timeout(cmd.clone());
+            let handle = conn.clone();
+            let mut t = enabled_with(conn);
+
+            let events = capture_events(async { t.run(&cmd).await }).await;
+
+            assert!(
+                events.contains("command timed out"),
+                "the timeout event was not captured; the secrecy assertions would be vacuous"
+            );
+            assert_masked("tracing events", &events);
+            assert_masked("stored command", t.lastin());
+            assert!(t.lastin().starts_with("zypper rr https://***@repo.example"));
+            assert_eq!(t.lastexit(), Some(-1));
+            assert!(
+                t.out().last().expect("logged").timed_out,
+                "timeout must set the flag"
+            );
+            assert_eq!(handle.commands(), [cmd], "the host still got the real URL");
+        }
+
+        #[tokio::test]
+        async fn unconnected_run_is_logged_and_stored_masked() {
+            let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+
+            let events = capture_events(async { t.run(&format!("zypper rr {URL}")).await }).await;
+
+            assert!(
+                events.contains("run on unconnected target"),
+                "the event was not captured; the secrecy assertions would be vacuous"
+            );
+            assert_masked("tracing events", &events);
+            assert_masked("stored command", t.lastin());
+            assert_eq!(t.lastexit(), Some(-1));
+        }
+
+        #[tokio::test]
+        async fn output_without_urls_is_stored_untouched() {
+            let conn = MockConnection::new("h1").with_response(
+                "ls",
+                CommandLog::new("ls", "user@host: ok\n", "warn: a@b\n", 2, 1),
+            );
+            let mut t = enabled_with(conn);
+
+            t.run("ls").await;
+
+            assert_eq!(
+                (t.lastin(), t.lastout(), t.lasterr(), t.lastexit()),
+                ("ls", "user@host: ok\n", "warn: a@b\n", Some(2))
+            );
+        }
     }
 
     // --- last* accessors ----------------------------------------------------
@@ -1788,6 +1971,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sftp_read_capped_enabled_returns_outcome() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"abcdefgh".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        assert_eq!(
+            got,
+            Some(Ok(SftpRead {
+                bytes: b"abc".to_vec(),
+                size: 8,
+                truncated: true
+            }))
+        );
+        assert_eq!(
+            handle.sftp_ops(),
+            [MockSftpOp::ReadCapped {
+                path: PathBuf::from("/remote/f"),
+                max_bytes: 3
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_disabled_is_none_and_untouched() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"abc".to_vec());
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
+
+        assert_eq!(t.sftp_read_capped(Path::new("/remote/f"), 3).await, None);
+        assert!(
+            handle.sftp_ops().is_empty(),
+            "disabled host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_unconnected_is_some_err() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        let Some(Err(reason)) = got else {
+            panic!("expected Some(Err), got {got:?}");
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_failure_is_attributed_error() {
+        let conn = MockConnection::new("h1")
+            .with_file("/remote/f", b"abcdef".to_vec())
+            .with_size_attr("/remote/f", None);
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        let Some(Err(reason)) = got else {
+            panic!("expected Some(Err), got {got:?}");
+        };
+        assert!(reason.contains("no size"), "reason was {reason:?}");
+    }
+
+    /// Like `sftp_read`, a capped read must not write `last_download`; a
+    /// preseeded outcome from an earlier command has to survive it.
+    #[tokio::test]
+    async fn sftp_read_capped_does_not_touch_last_download() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"h1-bytes".to_vec());
+        let mut t = enabled_with(conn);
+        t.last_download = Some(Err("earlier failure".into()));
+
+        let _ = t.sftp_read_capped(Path::new("/remote/f"), 3).await;
+
+        assert_eq!(t.last_download(), Some(&Err("earlier failure".to_owned())));
+    }
+
+    #[tokio::test]
     async fn sftp_put_unconnected_records_failure() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
 
@@ -1900,6 +2161,29 @@ mod tests {
         t.sftp_get("/remote/file", Path::new("/local")).await;
 
         assert_eq!(t.last_download(), None);
+    }
+
+    /// A host disabled since its last transfer must read as skipped, not
+    /// replay that transfer's outcome into the next `put`/`get` aggregation.
+    #[tokio::test]
+    async fn disabling_a_host_clears_its_earlier_transfer_outcomes() {
+        let mut t = enabled_with(MockConnection::new("h1"));
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        t.sftp_get("/remote/file", Path::new("/local/file")).await;
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+        assert_eq!(t.last_download(), Some(&Ok(())));
+
+        t.set_state(TargetState::Disabled);
+        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
+        assert_eq!(t.last_upload(), None);
+        t.sftp_get("/remote/file", Path::new("/local")).await;
+        assert_eq!(t.last_download(), None);
+
+        t.set_state(TargetState::Enabled);
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        t.set_state(TargetState::Disabled);
+        assert_eq!(t.sftp_put_bytes(b"x", Path::new("/remote")).await, None);
+        assert_eq!(t.last_upload(), None);
     }
 
     // --- connect() ----------------------------------------------------------
@@ -2046,6 +2330,26 @@ mod tests {
             !t.is_locked().await.expect("is_locked ok"),
             "host should read unlocked after reap"
         );
+    }
+
+    #[tokio::test]
+    async fn connect_reaps_an_old_invalid_lockfile_and_keeps_a_young_one() {
+        let now = SystemClock.now_unix();
+        for (age, reaped) in [(200_000, true), (100, false)] {
+            let conn = MockConnection::new("h1")
+                .with_file(TARGET_LOCK_PATH, Vec::new())
+                .with_mtime(TARGET_LOCK_PATH, now - age);
+            let handle = conn.clone();
+            let mut t = enabled_with(conn);
+
+            t.connect().await.expect("connect");
+
+            assert_eq!(
+                handle.file_contents(TARGET_LOCK_PATH).is_none(),
+                reaped,
+                "age {age}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2348,6 +2652,33 @@ mod tests {
         assert_eq!(row.locked_by, "alice");
         assert_eq!(row.comment, "busy testing");
         assert!(row.time.ends_with("UTC"));
+    }
+
+    #[tokio::test]
+    async fn lock_status_reports_an_invalid_lock_file_as_locked_and_invalid() {
+        for pool in [false, true] {
+            let path = if pool {
+                POOL_LOCK_PATH
+            } else {
+                TARGET_LOCK_PATH
+            };
+            let mut t = enabled_with(MockConnection::new("h1").with_file(path, Vec::new()));
+            let row = t.lock_status(pool).await;
+            assert_eq!(row, LockRow::invalid(), "pool {pool}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_pool_claim_is_a_claim_that_names_no_rrid_and_cannot_be_won() {
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, b"junk".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        assert_eq!(t.pool_claim_rrid().await.unwrap(), Some(String::new()));
+        let err = t.pool_claim("mtui pool X [X]").await.unwrap_err();
+
+        assert!(matches!(err, HostError::InvalidLockFile { .. }), "{err:?}");
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), b"junk");
     }
 
     #[tokio::test]
@@ -2673,6 +3004,29 @@ mod tests {
                 .unwrap(),
             "a fresh foreign claim must not be claimable"
         );
+    }
+
+    #[tokio::test]
+    async fn pool_claim_reattaches_to_own_claim_from_another_process() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let me = Config::default().session_user;
+        let other_pid = std::process::id() + 1;
+        let own = format!("{now}:{me}:{other_pid}:mtui pool SUSE:Maintenance:1:2 [previous]")
+            .into_bytes();
+        let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, own.clone());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
+                .await
+                .unwrap(),
+            "a claim recording our user and RRID is ours whatever its PID"
+        );
+        assert_eq!(handle.file_contents(crate::POOL_LOCK_PATH).unwrap(), own);
     }
 
     #[tokio::test]

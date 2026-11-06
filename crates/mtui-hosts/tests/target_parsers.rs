@@ -5,7 +5,7 @@
 //! the whole SUSE/non-SUSE/dangling/transactional branch matrix is exercised
 //! end-to-end.
 
-use mtui_hosts::{Connection, MockConnection, parse_system};
+use mtui_hosts::{Connection, MockConnection, MockSftpOp, parse_system};
 
 /// Builds a minimal `<product>` XML document for the given fields. When
 /// `patchlevel` is `Some`, a `<baseversion>`+`<patchlevel>` pair is emitted (so
@@ -22,6 +22,9 @@ fn prod_xml(name: &str, baseversion: &str, patchlevel: Option<&str>, arch: &str)
 
 const PRODUCTS_DIR: &str = "/etc/products.d";
 const BASEPRODUCT: &str = "/etc/products.d/baseproduct";
+const MOUNTS: &str = "/proc/self/mounts";
+const RO_ROOT: &[u8] = b"/dev/vda3 / btrfs ro,relatime,subvol=/@/.snapshots/5/snapshot 0 0\n";
+const RW_ROOT: &[u8] = b"/dev/vda2 / btrfs rw,relatime,subvol=/@/.snapshots/413/snapshot 0 0\n";
 
 #[tokio::test]
 async fn parse_suse_system() {
@@ -84,7 +87,8 @@ async fn parse_transactional_system_usr_etc() {
             "/etc/products.d/SL-Micro-Extras.prod",
             prod_xml("SL-Micro-Extras", "6.1", None, "x86_64"),
         )
-        .with_file("/usr/etc/transactional-update.conf", b"".to_vec());
+        .with_file("/usr/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RO_ROOT.to_vec());
 
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "SL-Micro");
@@ -102,10 +106,115 @@ async fn parse_transactional_system_etc_config() {
             "/etc/products.d/SLE-Micro.prod",
             prod_xml("SLE-Micro", "5.5", None, "x86_64"),
         )
-        .with_file("/etc/transactional-update.conf", b"".to_vec());
+        .with_file("/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RO_ROOT.to_vec());
 
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
     assert!(transactional);
+}
+
+/// A SLES 16 host carrying the transactional-update config file.
+fn sles16_with_conf() -> MockConnection {
+    MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "16.0", None, "x86_64"),
+        )
+        .with_file("/usr/etc/transactional-update.conf", b"".to_vec())
+}
+
+/// #686: the config file on a read-write root is not a transactional host.
+#[tokio::test]
+async fn parse_read_write_root_with_conf_is_not_transactional() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, RW_ROOT.to_vec());
+    let (system, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert_eq!(system.get_base().version, "16.0");
+    assert!(!transactional);
+}
+
+/// The same host with a read-only root is transactional.
+#[tokio::test]
+async fn parse_read_only_root_with_conf_is_transactional() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, RO_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// When the mount table is missing, the config file still decides, as before
+/// #686.
+#[tokio::test]
+async fn parse_missing_mounts_keeps_the_conf_answer() {
+    let mut conn = sles16_with_conf();
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// Any other error reading the mount table is propagated, like the config
+/// probes, instead of being taken for a read-only root.
+#[tokio::test]
+async fn parse_mounts_open_error_propagates() {
+    let mut conn = sles16_with_conf().with_open_error(MOUNTS);
+    assert!(parse_system(&mut conn).await.is_err());
+}
+
+/// A mount table without a `/` entry gives no answer, so the config file
+/// decides.
+#[tokio::test]
+async fn parse_mounts_without_root_keeps_the_conf_answer() {
+    let mut conn = sles16_with_conf().with_file(MOUNTS, b"/dev/vda4 /var btrfs ro 0 0\n".to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(transactional);
+}
+
+/// A full mount table: other mounts are ignored, `errors=remount-ro` is not
+/// `ro`, and the `/` mounted on top decides.
+#[tokio::test]
+async fn parse_reads_root_from_a_full_mount_table() {
+    let table = b"proc /proc proc rw,nosuid 0 0\n\
+/dev/vda4 /var btrfs ro,relatime 0 0\n\
+/dev/vda3 / btrfs ro,relatime 0 0\n\
+/dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\n";
+    let mut conn = sles16_with_conf().with_file(MOUNTS, table.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional, "the read-write / on top wins");
+}
+
+/// The older `/etc` config layout with a read-write root is not transactional
+/// either.
+#[tokio::test]
+async fn parse_read_write_root_with_etc_conf_is_not_transactional() {
+    let mut conn = MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "16.0", None, "x86_64"),
+        )
+        .with_file("/etc/transactional-update.conf", b"".to_vec())
+        .with_file(MOUNTS, RW_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional);
+}
+
+/// A read-only root alone, without the config file, is not transactional.
+#[tokio::test]
+async fn parse_read_only_root_without_conf_is_not_transactional() {
+    let mut conn = MockConnection::new("host1")
+        .with_listing(PRODUCTS_DIR, ["SLES.prod"])
+        .with_link(BASEPRODUCT, "SLES.prod")
+        .with_file(
+            "/etc/products.d/SLES.prod",
+            prod_xml("SLES", "15", Some("6"), "x86_64"),
+        )
+        .with_file(MOUNTS, RO_ROOT.to_vec());
+    let (_, transactional) = parse_system(&mut conn).await.expect("parse");
+    assert!(!transactional);
+    assert!(
+        !conn.sftp_ops().contains(&MockSftpOp::Open(MOUNTS.into())),
+        "without the config file the mount table is not read"
+    );
 }
 
 #[tokio::test]

@@ -42,6 +42,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::connection::SftpRead;
 use crate::error::{HostError, Result};
 
 use mtui_types::package::VersionCheck;
@@ -71,7 +72,8 @@ use super::{LockOwner, LockRow, Target};
 ///   should **not** count this as a
 ///   failure.
 /// * [`Failed`](LockOutcome::Failed) — a real transport/SFTP error acquiring or
-///   releasing the lock; the caller may name the host.
+///   releasing the lock, or an invalid lock file
+///   ([`HostError::InvalidLockFile`]); the caller may name the host.
 /// * [`Skipped`](LockOutcome::Skipped) — nothing was attempted on the wire (an
 ///   unconnected host has no built lock to act on); the reason is
 ///   display-ready. Distinct from `Acquired`/`Released`'s own "nothing to do"
@@ -512,7 +514,7 @@ impl HostsGroup {
         &mut self,
         remote: &Path,
     ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        self.sftp_read_where(remote, |_t| true).await
+        bytes_only(self.sftp_read_capped(remote, 0).await)
     }
 
     /// Reads `remote` into memory from only the named hosts, otherwise
@@ -526,25 +528,48 @@ impl HostsGroup {
         remote: &Path,
         names: &std::collections::BTreeSet<String>,
     ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        self.sftp_read_where(remote, |t| names.contains(t.hostname()))
+        bytes_only(self.sftp_read_capped_selected(remote, names, 0).await)
+    }
+
+    /// Like [`sftp_read`](Self::sftp_read), but each host retains at most
+    /// `max_bytes` (`0` = unlimited) and reports its file size and whether the
+    /// content was cut.
+    pub async fn sftp_read_capped(
+        &mut self,
+        remote: &Path,
+        max_bytes: usize,
+    ) -> BTreeMap<String, std::result::Result<SftpRead, String>> {
+        self.sftp_read_capped_where(remote, max_bytes, |_t| true)
             .await
     }
 
-    /// Shared implementation for [`sftp_read`](Self::sftp_read) /
-    /// [`sftp_read_selected`](Self::sftp_read_selected), the
-    /// [`lock_where`](Self::lock_where) pattern over [`Target::sftp_read`].
-    async fn sftp_read_where<S>(
+    /// Like [`sftp_read_selected`](Self::sftp_read_selected), with the per-host
+    /// budget of [`sftp_read_capped`](Self::sftp_read_capped).
+    pub async fn sftp_read_capped_selected(
         &mut self,
         remote: &Path,
+        names: &std::collections::BTreeSet<String>,
+        max_bytes: usize,
+    ) -> BTreeMap<String, std::result::Result<SftpRead, String>> {
+        self.sftp_read_capped_where(remote, max_bytes, |t| names.contains(t.hostname()))
+            .await
+    }
+
+    /// Shared implementation for the in-memory read fan-outs, the
+    /// [`lock_where`](Self::lock_where) pattern over [`Target::sftp_read_capped`].
+    async fn sftp_read_capped_where<S>(
+        &mut self,
+        remote: &Path,
+        max_bytes: usize,
         select: S,
-    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>>
+    ) -> BTreeMap<String, std::result::Result<SftpRead, String>>
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
         use std::sync::Mutex;
 
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: Mutex<BTreeMap<String, std::result::Result<Vec<u8>, String>>> =
+        let collected: Mutex<BTreeMap<String, std::result::Result<SftpRead, String>>> =
             Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
@@ -558,7 +583,7 @@ impl HostsGroup {
                 Box::pin(async move {
                     // `None` = not attempted (disabled): the host stays out of
                     // the map rather than masquerading as an outcome.
-                    if let Some(outcome) = t.sftp_read(&remote).await {
+                    if let Some(outcome) = t.sftp_read_capped(&remote, max_bytes).await {
                         collected
                             .lock()
                             .unwrap()
@@ -1410,7 +1435,7 @@ impl HostsGroup {
                     let foreign = locked
                         && target
                             .lock_mut()
-                            .is_some_and(|l| !l.is_mine().unwrap_or(false));
+                            .is_some_and(|l| !l.is_invalid() && !l.is_mine().unwrap_or(false));
                     if foreign {
                         let hostname = target.hostname().to_owned();
                         let lock = target.lock_mut().expect("foreign implies a built lock");
@@ -1899,6 +1924,16 @@ impl HostsGroup {
             Ok(())
         }
     }
+}
+
+/// Drops the size and truncation report from a per-host read outcome.
+fn bytes_only(
+    outcomes: BTreeMap<String, std::result::Result<SftpRead, String>>,
+) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
+    outcomes
+        .into_iter()
+        .map(|(host, res)| (host, res.map(|read| read.bytes)))
+        .collect()
 }
 
 /// Classifies a reboot failure for the [`OperationGroup`] seam.
@@ -2568,6 +2603,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sftp_read_capped_gives_each_attempted_host_its_own_budget() {
+        let m1 = MockConnection::new("h1").with_file("/remote/f", b"aaaaaaaaaa".to_vec());
+        let m2 = MockConnection::new("h2").with_file("/remote/f", b"bbbbbb".to_vec());
+        let off = MockConnection::new("h3").with_file("/remote/f", b"cccccccc".to_vec());
+        let h3 = off.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
+                Target::with_connection("h3", TargetState::Disabled, Box::new(off)),
+            ],
+            false,
+        );
+
+        let got = g.sftp_read_capped(Path::new("/remote/f"), 4).await;
+
+        assert_eq!(got.len(), 2, "disabled host is absent: {got:?}");
+        assert_eq!(
+            got["h1"],
+            Ok(SftpRead {
+                bytes: b"aaaa".to_vec(),
+                size: 10,
+                truncated: true
+            })
+        );
+        assert_eq!(
+            got["h2"],
+            Ok(SftpRead {
+                bytes: b"bbbb".to_vec(),
+                size: 6,
+                truncated: true
+            })
+        );
+        assert!(
+            h3.sftp_ops().is_empty(),
+            "disabled host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_capped_selected_only_touches_named() {
+        let m1 = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
+        let m2 = MockConnection::new("h2").with_file("/remote/f", b"beta".to_vec());
+        let h2 = m2.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into();
+        let got = g
+            .sftp_read_capped_selected(Path::new("/remote/f"), &names, 3)
+            .await;
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            got["h1"],
+            Ok(SftpRead {
+                bytes: b"alp".to_vec(),
+                size: 5,
+                truncated: true
+            })
+        );
+        assert!(
+            h2.sftp_ops().is_empty(),
+            "unselected host must not be touched"
+        );
+    }
+
+    #[tokio::test]
     async fn sftp_put_bytes_group_all_hosts_receive_bytes_once() {
         let (m1, m2) = (MockConnection::new("h1"), MockConnection::new("h2"));
         let (h1, h2) = (m1.clone(), m2.clone());
@@ -3156,6 +3264,64 @@ mod tests {
         assert!(matches!(err, HostError::Update(_)));
         // h1's lock was released during the abort.
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    fn invalid_lock_host(name: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(name)
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, Vec::new());
+        let handle = conn.clone();
+        (
+            Target::with_connection(name, TargetState::Enabled, Box::new(conn)),
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn update_lock_names_an_invalid_lock_file_instead_of_a_phantom_owner() {
+        let (h2, h2_handle) = invalid_lock_host("h2");
+        let mut g = HostsGroup::new(vec![enabled("h1"), h2], false);
+
+        let err = g.update_lock().await.expect_err("invalid lock -> abort");
+
+        let HostError::Update(msg) = err else {
+            panic!("expected Update, got {err:?}");
+        };
+        assert!(
+            msg.contains("h2") && msg.contains("invalid (empty or unparseable)"),
+            "{msg}"
+        );
+        assert!(!msg.contains("held by"), "{msg}");
+        assert_eq!(h2_handle.file_contents(TARGET_LOCK_PATH).unwrap(), b"");
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn lock_and_unlock_report_an_invalid_lock_file_as_failed_not_contended() {
+        let (h1, handle) = invalid_lock_host("h1");
+        let mut g = HostsGroup::new(vec![h1], false);
+
+        let locked = g.lock("").await;
+        let LockOutcome::Failed(reason) = &locked["h1"] else {
+            panic!("expected Failed, got {:?}", locked["h1"]);
+        };
+        assert!(
+            reason.contains("invalid (empty or unparseable)"),
+            "{reason}"
+        );
+        let unlocked = g.unlock().await;
+        assert!(
+            matches!(&unlocked["h1"], LockOutcome::Failed(r) if r.contains("--force")),
+            "{:?}",
+            unlocked["h1"]
+        );
+        assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), b"");
+
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.unlock_force(&names, &collected).await;
+        assert_eq!(collected.into_inner().unwrap()["h1"], LockOutcome::Released);
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_none());
     }
 
     #[tokio::test]

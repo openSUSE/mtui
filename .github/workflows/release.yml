@@ -548,3 +548,66 @@ jobs:
             args+=(--notes-start-tag "$NOTES_START_TAG")
           fi
           gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/publish/*
+
+  gate:
+    # Decides whether this tag also publishes to crates.io: only a plain
+    # X.Y.Z (Z >= 1) tag whose commit is on the highest X.Y.x branch does.
+    # `main` is development and never publishes. The workflow file is the
+    # tag's own, so this job and its script must exist on every release branch.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
+    steps:
+      # Full history: the ancestry check needs the release branches' commits.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag against the stable branch
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(git for-each-ref --format='%(refname:strip=3)' \
+              'refs/remotes/origin/*.*.x' \
+            | bash .github/scripts/crates-io-gate.sh "$GITHUB_REF_NAME")"
+          echo "$out"
+          publish="$(sed -n 's/^publish=//p' <<<"$out")"
+          branch="$(sed -n 's/^branch=//p' <<<"$out")"
+          if [ "$publish" = true ]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$branch" || {
+              echo "::warning::$GITHUB_REF_NAME is not on origin/$branch; not publishing"
+              publish=false
+            }
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  crates-io:
+    # After the GitHub release, so a crates.io failure never hides the
+    # artifacts. `cargo publish --workspace` is not atomic: after a partial
+    # failure re-run with `--exclude <already published crates>` (see
+    # docs/src/installation.md).
+    needs: [release, gate]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: crates-io
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --locked

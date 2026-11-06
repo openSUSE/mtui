@@ -11,7 +11,9 @@
 //!   connect.
 //! * **`run` timeout.** The per-command timeout bounds the *no-output* window,
 //!   not total runtime, and a command silent for the whole window is aborted
-//!   with [`HostError::Timeout`].
+//!   with [`HostError::Timeout`]. The SSH link itself is kept alive with
+//!   periodic keepalives, so a quiet command is never cut by a transport idle
+//!   limit; only this window decides when it is aborted.
 //! * **`run` bounds (th4o.6) — deliberate DoS hardening.** Output is capped at
 //!   [`MAX_STREAM_BYTES`] per stream / [`MAX_TOTAL_BYTES`] combined, the
 //!   overflow discarded and the [`CommandLog`] flagged `truncated`.
@@ -36,6 +38,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
+use mtui_types::url_redaction::sanitize_urls_in_text;
 use russh::client::{self, Handle};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
@@ -50,7 +53,7 @@ use tokio::time::{Duration, timeout};
 use super::ShellChannel;
 use super::sftp_session::SftpSession;
 use super::timeout::{CommandTimeout, HostKeyPolicy};
-use super::{Connection, DEFAULT_USER};
+use super::{Connection, DEFAULT_USER, SftpRead};
 use crate::error::{HostError, Result};
 
 /// Number of reconnect+retry attempts before giving up.
@@ -87,6 +90,33 @@ const COMMAND_DEADLINE_FACTOR: u32 = 12;
 /// entry names one.
 const DEFAULT_SSH_PORT: u16 = 22;
 
+/// Keepalive probe interval: a quiet command's link stays busy, so the peer
+/// never sees it idle and the inactivity backstop below never trips.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Dead-peer backstop: a session that receives nothing, keepalive replies
+/// included, for this long is torn down.
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Unanswered keepalives tolerated before the session is declared dead.
+const KEEPALIVE_MAX: usize = 3;
+
+/// Transport liveness timers handed to the russh client config.
+#[derive(Debug, Clone, Copy)]
+struct TransportTimers {
+    keepalive: Option<Duration>,
+    inactivity: Option<Duration>,
+}
+
+impl Default for TransportTimers {
+    fn default() -> Self {
+        Self {
+            keepalive: Some(KEEPALIVE_INTERVAL),
+            inactivity: Some(INACTIVITY_TIMEOUT),
+        }
+    }
+}
+
 /// Accumulates a command's stdout/stderr under fixed per-stream and combined
 /// byte caps, discarding overflow instead of buffering it.
 ///
@@ -113,6 +143,16 @@ impl CaptureBuf {
         let room = MAX_STREAM_BYTES.saturating_sub(self.stderr.len());
         let take = self.take(room, data);
         self.stderr.extend_from_slice(&data[..take]);
+    }
+
+    /// Appends an mtui-authored line to stderr outside the caps, so it is
+    /// never dropped, never latches [`truncated`](Self::truncated), and starts
+    /// on its own line.
+    fn push_note(&mut self, note: &str) {
+        if self.stderr.last().is_some_and(|&b| b != b'\n') {
+            self.stderr.push(b'\n');
+        }
+        self.stderr.extend_from_slice(note.as_bytes());
     }
 
     /// Returns how many leading bytes of `data` fit under both `stream_room`
@@ -372,6 +412,9 @@ pub struct SshConnection {
     /// [`invalidate_sftp_if_fatal`](Self::invalidate_sftp_if_fatal), so the next
     /// call re-handshakes rather than reusing a dead session.
     sftp: Option<Arc<RusshSftpSession>>,
+    /// Applied on the next [`establish`], so a connect and every reconnect
+    /// agree on the same liveness behaviour.
+    transport: TransportTimers,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -411,12 +454,14 @@ impl SshConnection {
     ) -> Result<Self> {
         let hostname = hostname.into();
         let resolved = resolve(&hostname, port);
+        let transport = TransportTimers::default();
         let handle = establish(
             &hostname,
             &resolved,
             policy,
             connect_timeout,
             known_hosts.clone(),
+            transport,
         )
         .await?;
         Ok(Self {
@@ -431,6 +476,7 @@ impl SshConnection {
             known_hosts,
             reconnect_backoff_base: Duration::from_secs(10),
             sftp: None,
+            transport,
         })
     }
 
@@ -455,6 +501,23 @@ impl SshConnection {
     #[must_use]
     pub fn with_command_timeout(mut self, timeout: CommandTimeout) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Overrides the keepalive interval and inactivity timeout. They take
+    /// effect on the next (re)connect, so call this before a `close()` +
+    /// [`reconnect`](Connection::reconnect).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_transport_timers(
+        mut self,
+        keepalive: Option<Duration>,
+        inactivity: Option<Duration>,
+    ) -> Self {
+        self.transport = TransportTimers {
+            keepalive,
+            inactivity,
+        };
         self
     }
 
@@ -602,20 +665,25 @@ impl SshConnection {
 
     /// Runs a verb's *first* SFTP request (`open`/`read`/`read_dir`/
     /// `read_link`/`open_with_flags` — i.e. before anything has been written)
-    /// with one retry against a freshly-handshaked session, but only when the
-    /// failed attempt used a session pulled from the cache.
+    /// against the cached subsystem, replaying it once on a freshly-handshaked
+    /// session only when the failure is session-fatal ([`is_session_fatal`]; a
+    /// status reply is a normal outcome from a healthy session) and either
+    ///
+    /// - `replay` is [`FirstRequestReplay::Repeatable`], or
+    /// - the request provably never left the client ([`is_never_sent`]).
     ///
     /// A long-lived shared subsystem can be silently closed by the peer (idle
-    /// timeout, restarted sshd), and its *first* request is safe to retry
-    /// because nothing has been written yet. A session opened fresh in this
-    /// same call is not retried (a different, likely permanent problem), and
-    /// neither is any request past the first: retrying a write/append could
-    /// duplicate a remote-history row (the append-only contract).
+    /// timeout, restarted sshd), which is the case the replay recovers. A
+    /// session opened fresh in this same call is never replayed (a different,
+    /// likely permanent problem), nor is any request past the first. A
+    /// session-fatal failure, including the replay's own, always drops the
+    /// cached subsystem so the next verb re-handshakes.
     ///
     /// Returns the session alongside the result so the caller can issue further
     /// requests against the same subsystem.
     async fn sftp_first_request<T, ReqFut>(
         &mut self,
+        replay: FirstRequestReplay,
         req: impl Fn(Arc<RusshSftpSession>) -> ReqFut,
         map_err: impl Fn(&mut Self, russh_sftp::client::error::Error) -> HostError,
     ) -> Result<(Arc<RusshSftpSession>, T)>
@@ -624,21 +692,31 @@ impl SshConnection {
     {
         let from_cache = self.sftp.is_some();
         let sftp = self.sftp().await?;
+        let e = match req(Arc::clone(&sftp)).await {
+            Ok(v) => return Ok((sftp, v)),
+            Err(e) => e,
+        };
+        let fatal = is_session_fatal(&e);
+        if fatal {
+            self.sftp = None;
+        }
+        let replayable = replay == FirstRequestReplay::Repeatable || is_never_sent(&e);
+        if !(from_cache && fatal && replayable) {
+            return Err(map_err(self, e));
+        }
+        tracing::debug!(
+            host = %self.hostname, error = %e,
+            "stale cached sftp session on first request; re-handshaking and retrying once"
+        );
+        let sftp = self.sftp().await?;
         match req(Arc::clone(&sftp)).await {
             Ok(v) => Ok((sftp, v)),
-            Err(e) if from_cache => {
-                tracing::debug!(
-                    host = %self.hostname, error = %e,
-                    "stale cached sftp session on first request; re-handshaking and retrying once"
-                );
-                self.sftp = None;
-                let sftp = self.sftp().await?;
-                match req(Arc::clone(&sftp)).await {
-                    Ok(v) => Ok((sftp, v)),
-                    Err(e) => Err(map_err(self, e)),
+            Err(e) => {
+                if is_session_fatal(&e) {
+                    self.sftp = None;
                 }
+                Err(map_err(self, e))
             }
-            Err(e) => Err(map_err(self, e)),
         }
     }
 
@@ -648,6 +726,51 @@ impl SshConnection {
             reason: e.to_string(),
         }
     }
+}
+
+/// Whether [`SshConnection::sftp_first_request`] may replay a request that
+/// reached the server before its session failed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstRequestReplay {
+    /// Repeating the request gives the same outcome: a read, or an open whose
+    /// truncate/append effect is identical the second time because the payload
+    /// follows in later writes.
+    Repeatable,
+    /// Repeating the request collides with its own first effect (an exclusive
+    /// create finds the file it just made). Only a request that never left the
+    /// client is replayed.
+    UndeliveredOnly,
+}
+
+/// Whether `e` leaves the SFTP subsystem unusable, as opposed to being one
+/// request's own outcome. A status reply proves the session is alive, and a
+/// `Limited` error rejects the request before it is sent.
+fn is_session_fatal(e: &russh_sftp::client::error::Error) -> bool {
+    use russh_sftp::client::error::Error as SftpError;
+    match e {
+        SftpError::Status(_) | SftpError::Limited(_) => false,
+        SftpError::Timeout
+        | SftpError::IO(_)
+        | SftpError::UnexpectedPacket
+        | SftpError::UnexpectedBehavior(_) => true,
+    }
+}
+
+/// Whether `e` proves the request was never queued for sending, so replaying
+/// it cannot duplicate an effect under any [`FirstRequestReplay`] policy.
+///
+/// russh-sftp raises both cases as `UnexpectedBehavior(String)` with no
+/// dedicated variant, so the two messages its `send_bytes` produces before
+/// anything leaves the client are matched literally: the closed-channel check
+/// (`session closed`) and a failed queue send (`SendError: …`). Any other
+/// `UnexpectedBehavior`, e.g. `sender dropped` after a request was queued, is
+/// ambiguous and stays unmatched.
+fn is_never_sent(e: &russh_sftp::client::error::Error) -> bool {
+    use russh_sftp::client::error::Error as SftpError;
+    matches!(
+        e,
+        SftpError::UnexpectedBehavior(m) if m == "session closed" || m.starts_with("SendError: ")
+    )
 }
 
 /// Builds a generic [`HostError::Sftp`] for `host` from a displayable error.
@@ -864,9 +987,12 @@ async fn establish(
     policy: HostKeyPolicy,
     connect_timeout: CommandTimeout,
     known_hosts: Option<PathBuf>,
+    transport: TransportTimers,
 ) -> Result<Handle<ClientHandler>> {
     let config = Arc::new(ClientConfig {
-        inactivity_timeout: Some(Duration::from_secs(60)),
+        inactivity_timeout: transport.inactivity,
+        keepalive_interval: transport.keepalive,
+        keepalive_max: KEEPALIVE_MAX,
         ..ClientConfig::default()
     });
     let handler = ClientHandler {
@@ -1091,11 +1217,15 @@ impl Connection for SshConnection {
             known_hosts: self.known_hosts.clone(),
             reconnect_backoff_base: self.reconnect_backoff_base,
             sftp: None,
+            transport: self.transport,
         })
     }
 
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
         let started = Instant::now();
+        // `command` is executed as given; every log, prompt, error and stored
+        // log below carries this copy with URL credentials masked.
+        let shown = sanitize_urls_in_text(command);
 
         // Open a channel, reconnecting + retrying on a lost link.
         let mut attempt = 0;
@@ -1128,6 +1258,8 @@ impl Connection for SshConnection {
 
         let mut capture = CaptureBuf::default();
         let mut exitcode: i16 = NO_EXIT_CODE;
+        let mut saw_close = false;
+        let mut saw_exit = false;
         let window = self.timeout.as_duration();
         // Non-interactive runs (headless / `mtui-mcp`) have no user to answer
         // the keep-waiting prompt, and a command trickling output forever never
@@ -1144,12 +1276,12 @@ impl Connection for SshConnection {
             {
                 tracing::warn!(
                     host = %self.hostname,
-                    command,
+                    command = %shown,
                     "command exceeded absolute deadline; aborting (non-interactive)",
                 );
                 let _ = channel.close().await;
                 return Err(HostError::Timeout {
-                    command: command.to_owned(),
+                    command: shown.clone(),
                 });
             }
 
@@ -1170,17 +1302,17 @@ impl Connection for SshConnection {
                         // orphaned.
                         tracing::warn!(
                             host = %self.hostname,
-                            command,
+                            command = %shown,
                             "command exceeded absolute deadline; aborting (non-interactive)",
                         );
                         let _ = channel.close().await;
                         return Err(HostError::Timeout {
-                            command: command.to_owned(),
+                            command: shown.clone(),
                         });
                     }
                     let decision = on_command_timeout(
                         &self.hostname,
-                        command,
+                        &shown,
                         self.is_repl,
                         self.timeout_prompt.as_ref(),
                     )
@@ -1191,7 +1323,7 @@ impl Connection for SshConnection {
                             // Reclaim the abandoned command's remote process.
                             let _ = channel.close().await;
                             return Err(HostError::Timeout {
-                                command: command.to_owned(),
+                                command: shown.clone(),
                             });
                         }
                     }
@@ -1201,19 +1333,43 @@ impl Connection for SshConnection {
                     ChannelMsg::Data { data } => capture.push_stdout(&data),
                     ChannelMsg::ExtendedData { data, .. } => capture.push_stderr(&data),
                     ChannelMsg::ExitStatus { exit_status } => {
+                        saw_exit = true;
                         exitcode = i16::try_from(exit_status).unwrap_or(NO_EXIT_CODE);
                     }
+                    ChannelMsg::ExitSignal { .. } => saw_exit = true,
                     ChannelMsg::Eof => {}
-                    ChannelMsg::Close => break,
+                    ChannelMsg::Close => {
+                        saw_close = true;
+                        break;
+                    }
                     _ => {}
                 },
+            }
+        }
+
+        if !saw_close {
+            let elapsed = started.elapsed().as_secs_f64();
+            tracing::warn!(
+                host = %self.hostname,
+                command = %shown,
+                elapsed,
+                saw_exit,
+                "SSH session lost mid-command",
+            );
+            // A command that already reported an exit status or signal has
+            // finished; only silence leaves its fate unknown.
+            if !saw_exit {
+                capture.push_note(&format!(
+                    "mtui: SSH session to {} lost after {elapsed:.1}s; the command may still be running\n",
+                    self.hostname
+                ));
             }
         }
 
         if capture.truncated {
             tracing::warn!(
                 host = %self.hostname,
-                command,
+                command = %shown,
                 "command output exceeded capture caps; truncated",
             );
         }
@@ -1225,11 +1381,16 @@ impl Connection for SshConnection {
             exitcode,
             runtime,
         )
+        .with_urls_masked()
         .with_flags(capture.truncated, false))
     }
 
     fn is_active(&self) -> bool {
         self.handle.as_ref().is_some_and(|h| !h.is_closed())
+    }
+
+    fn set_command_timeout(&mut self, timeout: CommandTimeout) {
+        self.timeout = timeout;
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -1267,6 +1428,7 @@ impl Connection for SshConnection {
                 self.policy,
                 self.connect_timeout,
                 self.known_hosts.clone(),
+                self.transport,
             )
             .await
             {
@@ -1347,6 +1509,7 @@ impl Connection for SshConnection {
         let open_path = remote_str.clone();
         let (sftp, mut file) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open_with_flags(open_path, flags).await }
@@ -1370,6 +1533,7 @@ impl Connection for SshConnection {
         let open_path = remote.to_string_lossy().to_string();
         let (_sftp, mut src) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open(open_path).await }
@@ -1399,6 +1563,7 @@ impl Connection for SshConnection {
         let list_path = remote_str.clone();
         let (sftp, dir) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let list_path = list_path.clone();
                     async move { sftp.read_dir(list_path).await }
@@ -1473,6 +1638,7 @@ impl Connection for SshConnection {
         let list_path = path.to_string_lossy().to_string();
         let (_sftp, dir) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let list_path = list_path.clone();
                     async move { sftp.read_dir(list_path).await }
@@ -1487,6 +1653,7 @@ impl Connection for SshConnection {
         let read_path = path.to_string_lossy().to_string();
         let (_sftp, data) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let read_path = read_path.clone();
                     async move { sftp.read(read_path).await }
@@ -1495,6 +1662,70 @@ impl Connection for SshConnection {
             )
             .await?;
         Ok(data)
+    }
+
+    async fn sftp_read_capped(&mut self, path: &Path, max_bytes: usize) -> Result<SftpRead> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let open_path = path.to_string_lossy().to_string();
+        let (_sftp, mut file) = self
+            .sftp_first_request(
+                FirstRequestReplay::Repeatable,
+                move |sftp| {
+                    let open_path = open_path.clone();
+                    async move { sftp.open(open_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+
+        let read = if max_bytes == 0 {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .await
+                .map_err(|e| self.sftp_verb_err(e))?;
+            SftpRead {
+                size: bytes.len() as u64,
+                bytes,
+                truncated: false,
+            }
+        } else {
+            // The size is reported, never used to size an allocation.
+            let size = file
+                .metadata()
+                .await
+                .map_err(|e| self.sftp_verb_err_at(e, path))?
+                .size
+                .ok_or_else(|| {
+                    self.sftp_err(format!(
+                        "server reported no size for {}; refusing an unbounded read",
+                        path.display()
+                    ))
+                })?;
+            let cap = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            let mut bytes = Vec::new();
+            (&mut file)
+                .take(cap)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| self.sftp_verb_err(e))?;
+            let truncated = if bytes.len() as u64 == cap {
+                let mut probe = [0u8; 1];
+                file.read(&mut probe)
+                    .await
+                    .map_err(|e| self.sftp_verb_err(e))?
+                    > 0
+            } else {
+                false
+            };
+            SftpRead {
+                bytes,
+                size,
+                truncated,
+            }
+        };
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
+        Ok(read)
     }
 
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
@@ -1511,6 +1742,7 @@ impl Connection for SshConnection {
             let open_path = path_str.clone();
             let (_sftp, file) = self
                 .sftp_first_request(
+                    FirstRequestReplay::UndeliveredOnly,
                     move |sftp| {
                         let open_path = open_path.clone();
                         async move { sftp.open_with_flags(open_path, flags).await }
@@ -1522,10 +1754,14 @@ impl Connection for SshConnection {
         } else {
             // Truncating overwrite. Explicit CREATE: the `write` convenience
             // opens WRITE-only and fails with NO_SUCH_FILE on a missing file.
+            // Replayed after a lost reply so the file is not left truncated;
+            // an original open still queued on the dead session could truncate
+            // once more after the replayed write.
             let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
             let open_path = path_str;
             let (_sftp, file) = self
                 .sftp_first_request(
+                    FirstRequestReplay::Repeatable,
                     move |sftp| {
                         let open_path = open_path.clone();
                         async move { sftp.open_with_flags(open_path, flags).await }
@@ -1547,13 +1783,14 @@ impl Connection for SshConnection {
         use tokio::io::AsyncWriteExt;
 
         // O_APPEND: every write lands at the current EOF, so concurrent
-        // appenders extend the file without a read-modify-write race. Only the
-        // open is retried on a stale cached session — retrying the
-        // write/shutdown would duplicate a remote-history row.
+        // appenders extend the file without a read-modify-write race. Nothing
+        // here is replayed: a repeated open or write could duplicate a
+        // remote-history row.
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND;
         let open_path = path.to_string_lossy().to_string();
         let (_sftp, mut file) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let open_path = open_path.clone();
                     async move { sftp.open_with_flags(open_path, flags).await }
@@ -1572,8 +1809,23 @@ impl Connection for SshConnection {
         let sftp = self.sftp().await?;
         sftp.remove_file(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_verb_err(e))?;
+            .map_err(|e| self.sftp_verb_err_at(e, path))?;
         Ok(())
+    }
+
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>> {
+        let stat_path = path.to_string_lossy().to_string();
+        let (_sftp, meta) = self
+            .sftp_first_request(
+                FirstRequestReplay::Repeatable,
+                move |sftp| {
+                    let stat_path = stat_path.clone();
+                    async move { sftp.metadata(stat_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+        Ok(meta.mtime.map(u64::from))
     }
 
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
@@ -1595,6 +1847,7 @@ impl Connection for SshConnection {
         let link_path = path.to_string_lossy().to_string();
         let (_sftp, target) = self
             .sftp_first_request(
+                FirstRequestReplay::Repeatable,
                 move |sftp| {
                     let link_path = link_path.clone();
                     async move { sftp.read_link(link_path).await }
@@ -1754,6 +2007,72 @@ mod tests {
         })
     }
 
+    #[test]
+    fn session_fatal_covers_every_non_status_failure_but_not_a_rejected_request() {
+        use russh_sftp::client::error::Error as SftpError;
+        use russh_sftp::protocol::StatusCode;
+
+        for code in [
+            StatusCode::Ok,
+            StatusCode::Eof,
+            StatusCode::NoSuchFile,
+            StatusCode::PermissionDenied,
+            StatusCode::Failure,
+            StatusCode::BadMessage,
+            StatusCode::NoConnection,
+            StatusCode::ConnectionLost,
+            StatusCode::OpUnsupported,
+        ] {
+            assert!(
+                !is_session_fatal(&sftp_status(code)),
+                "a status reply is not session-fatal: {code:?}"
+            );
+        }
+        assert!(!is_session_fatal(&SftpError::Limited("too big".to_owned())));
+        for fatal in [
+            SftpError::Timeout,
+            SftpError::IO("broken pipe".to_owned()),
+            SftpError::UnexpectedPacket,
+            SftpError::UnexpectedBehavior("RecvError".to_owned()),
+        ] {
+            assert!(is_session_fatal(&fatal), "{fatal:?}");
+        }
+    }
+
+    #[test]
+    fn never_sent_matches_only_the_errors_raised_before_a_request_is_queued() {
+        use russh_sftp::client::error::Error as SftpError;
+        use russh_sftp::protocol::StatusCode;
+
+        for never in [
+            SftpError::UnexpectedBehavior("session closed".to_owned()),
+            SftpError::UnexpectedBehavior("SendError: channel closed".to_owned()),
+        ] {
+            assert!(is_never_sent(&never), "{never:?}");
+            assert!(is_session_fatal(&never), "{never:?}");
+        }
+        for ambiguous in [
+            SftpError::UnexpectedBehavior("sender dropped".to_owned()),
+            SftpError::UnexpectedBehavior("RecvError: channel closed".to_owned()),
+            SftpError::Timeout,
+            SftpError::IO("session closed".to_owned()),
+            SftpError::UnexpectedPacket,
+            sftp_status(StatusCode::ConnectionLost),
+        ] {
+            assert!(!is_never_sent(&ambiguous), "{ambiguous:?}");
+        }
+    }
+
+    #[test]
+    fn default_timers_keep_a_quiet_link_alive() {
+        let t = TransportTimers::default();
+        assert!(
+            t.keepalive
+                .is_some_and(|k| t.inactivity.is_none_or(|i| k < i)),
+            "keepalives must fire inside the inactivity backstop: {t:?}"
+        );
+    }
+
     // --- CaptureBuf: bounded output capture (th4o.6). ---
 
     #[test]
@@ -1819,6 +2138,28 @@ mod tests {
         assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
         assert_eq!(&c.stdout[MAX_STREAM_BYTES - 2..], b"XY");
         assert!(c.truncated);
+    }
+
+    #[test]
+    fn note_starts_on_its_own_line() {
+        let mut c = CaptureBuf::default();
+        c.push_note("note\n");
+        assert_eq!(c.stderr, b"note\n");
+        c.push_stderr(b"partial");
+        c.push_note("note\n");
+        assert_eq!(c.stderr, b"note\npartial\nnote\n");
+        c.push_note("again\n");
+        assert_eq!(c.stderr, b"note\npartial\nnote\nagain\n");
+    }
+
+    #[test]
+    fn note_survives_a_full_stderr_without_latching_truncated() {
+        let mut c = CaptureBuf::default();
+        c.push_stderr(&vec![b'e'; MAX_STREAM_BYTES]);
+        assert!(!c.truncated);
+        c.push_note("note\n");
+        assert!(c.stderr.ends_with(b"\nnote\n"));
+        assert!(!c.truncated);
     }
 
     #[test]
@@ -1983,6 +2324,7 @@ mod tests {
             known_hosts: None,
             reconnect_backoff_base: Duration::from_secs(10),
             sftp: None,
+            transport: TransportTimers::default(),
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");
@@ -2016,6 +2358,7 @@ mod tests {
             known_hosts: None,
             reconnect_backoff_base: base,
             sftp: None,
+            transport: TransportTimers::default(),
         }
     }
 

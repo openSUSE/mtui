@@ -32,6 +32,19 @@ use mtui_types::hostlog::CommandLog;
 
 use crate::error::Result;
 
+/// The outcome of a budgeted [`Connection::sftp_read_capped`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SftpRead {
+    /// The bytes retained: at most the requested budget when one was set.
+    pub bytes: Vec<u8>,
+    /// The file size. For a budgeted read this is the size the server reported
+    /// when the file was opened, so it can disagree with `bytes` if the file
+    /// changed during the read; for an unlimited read it is `bytes.len()`.
+    pub size: u64,
+    /// Whether the file held more bytes than were retained.
+    pub truncated: bool,
+}
+
 /// The default SSH login user when `~/.ssh/config` names none.
 pub(crate) const DEFAULT_USER: &str = "root";
 
@@ -62,6 +75,13 @@ pub trait Connection: Send + Sync {
     /// [`HostError::Timeout`](crate::HostError::Timeout) on a timeout with no
     /// output, or a connection/reconnect error if the link is lost.
     async fn run(&mut self, command: &str) -> Result<CommandLog>;
+
+    /// Replaces the per-command no-output window on the live connection.
+    ///
+    /// Lets [`Target::set_timeout`](crate::Target::set_timeout) reach a host
+    /// that is already dialled: without this the stored value would only take
+    /// effect at the next [`connect`](crate::Target::connect).
+    fn set_command_timeout(&mut self, timeout: CommandTimeout);
 
     /// Reports whether the underlying transport is currently active.
     fn is_active(&self) -> bool;
@@ -136,6 +156,15 @@ pub trait Connection: Send + Sync {
     /// current caller (small config/metadata reads).
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>>;
 
+    /// Reads at most `max_bytes` of a remote file over SFTP, never retaining
+    /// more than that: the memory-bounded counterpart of
+    /// [`sftp_open`](Self::sftp_open).
+    ///
+    /// `max_bytes == 0` means unlimited (the whole file is read, as
+    /// `sftp_open` does). A budgeted read needs the file size from the server
+    /// and fails rather than guessing when it is absent.
+    async fn sftp_read_capped(&mut self, path: &Path, max_bytes: usize) -> Result<SftpRead>;
+
     /// Writes `data` to a remote file over SFTP.
     ///
     /// The write counterpart to [`sftp_open`](Self::sftp_open) and the
@@ -164,6 +193,18 @@ pub trait Connection: Send + Sync {
 
     /// Deletes a remote file over SFTP.
     async fn sftp_remove(&mut self, path: &Path) -> Result<()>;
+
+    /// Reads a remote file's modification time over SFTP, in Unix seconds.
+    ///
+    /// `Ok(None)` means the server reported no modification time.
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::SftpNotFound`](crate::HostError::SftpNotFound) when the file
+    /// is missing, [`HostError::SftpTimeout`](crate::HostError::SftpTimeout) /
+    /// [`HostError::Sftp`](crate::HostError::Sftp) otherwise, as for
+    /// [`sftp_open`](Self::sftp_open).
+    async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>>;
 
     /// Recursively deletes a remote directory over SFTP (files then the dir).
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()>;

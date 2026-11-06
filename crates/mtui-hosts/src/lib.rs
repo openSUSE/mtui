@@ -27,7 +27,7 @@ pub mod target;
 pub use connection::ShellChannel;
 pub use connection::{
     CommandTimeout, Connection, HostKeyPolicy, MAX_STREAM_BYTES, MockConnection, MockSftpOp,
-    SshConnection, TimeoutPrompt,
+    SftpRead, SshConnection, TimeoutPrompt,
 };
 pub use error::{HostError, Result};
 pub use prompter::{Prompter, Reader};

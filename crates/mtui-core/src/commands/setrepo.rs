@@ -1,8 +1,11 @@
 //! The `set_repo` command.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
 use mtui_hosts::RepoOp;
+use mtui_testreport::reports::warn_on_unlock_failures;
 
 use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
@@ -14,7 +17,9 @@ use crate::session::Session;
 /// The required, mutually-exclusive `-A/--add` vs `-R/--remove` picks the
 /// operation, fanned out via
 /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup) and driven by the
-/// active report's [`SetRepo`](mtui_hosts::SetRepo) impl.
+/// active report's [`SetRepo`](mtui_hosts::SetRepo) impl. Takes the operation
+/// lock first, like `prepare`/`update` do: while another owner holds a host,
+/// the command refuses instead of changing that host's repos.
 pub struct SetRepo;
 
 #[async_trait]
@@ -24,7 +29,10 @@ impl Command for SetRepo {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Adds or removes an issue repository to or from hosts.")
+        Some(
+            "Adds or removes an issue repository to or from hosts. Takes the operation lock first, \
+             like `prepare`/`update`: refuses while another owner holds a host.",
+        )
     }
 
     fn scope(&self) -> Scope {
@@ -92,6 +100,14 @@ impl Command for SetRepo {
         // SL/PI/OBS can set repos; the null report cannot.
         let has_set_repo = session.metadata().as_set_repo().is_some();
         let result = if has_set_repo {
+            // Serialize against other testers' zypper transactions, as
+            // prepare/update do: refuse while another owner holds a host
+            // rather than changing its repos under them (#665).
+            let locked: BTreeSet<String> = selected.names().into_iter().collect();
+            if let Err(e) = selected.update_lock_selected(&locked).await {
+                session.restore_split_targets(selected, remainder);
+                return Err(CommandError::Other(e.to_string()));
+            }
             let set_repo = session.metadata().as_set_repo().expect("checked above");
             selected.fanout_set_repo(operation, set_repo).await;
             // `last_repo()` aggregates the whole per-host `zypper ar/rr` +
@@ -115,6 +131,11 @@ impl Command for SetRepo {
             for line in &lines {
                 session.display.println(line);
             }
+            // Exactly the set locked above: releasing a host never locked
+            // would report a failure for a lock nobody took.
+            let unlock_outcomes = selected.unlock_selected(&locked).await;
+            // Report a stranded lock like prepare/update do.
+            warn_on_unlock_failures("set_repo", &unlock_outcomes);
             if failed.is_empty() {
                 Ok(())
             } else {
@@ -135,8 +156,13 @@ impl Command for SetRepo {
 mod tests {
     use super::*;
     use crate::commands::testkit::{
-        empty_session, matches, session_with_hosts, session_with_setrepo_outcomes,
+        empty_session, log_capture, matches, session_with_hosts, session_with_setrepo_outcomes,
+        session_with_targets_and_set_repo,
     };
+    use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH, Target};
+    use mtui_types::enums::TargetState;
+    use mtui_types::hostlog::CommandLog;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn complete_offers_addremove_group_and_hosts() {
@@ -229,6 +255,171 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("h1: ok"), "{out}");
         assert!(out.contains("h2: FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn set_repo_refuses_when_a_host_is_locked_by_another_owner() {
+        // h2 carries a foreign operation lock: the command must refuse
+        // without running any repo change on either host.
+        let h1conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let h1handle = h1conn.clone();
+        let h2conn = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let (mut session, _buf) = session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(h1conn)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(h2conn)),
+            ],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        let err = SetRepo.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => assert!(msg.contains("h2"), "{msg}"),
+            other => panic!("expected a lock refusal, got {other:?}"),
+        }
+        assert!(
+            h1handle.commands().is_empty(),
+            "refusal must precede any repo change"
+        );
+        // h1's lockfile write proves its lock was taken before the abort;
+        // its absence now proves `update_lock_where` rolled the partial take
+        // back instead of stranding it on the refusal path.
+        assert!(
+            h1handle.sftp_ops().iter().any(|op| {
+                matches!(op, MockSftpOp::Write { path, exclusive }
+                if path == Path::new(TARGET_LOCK_PATH) && *exclusive)
+            }),
+            "h1 must have taken the lock before the abort"
+        );
+        assert!(
+            h1handle.file_contents(TARGET_LOCK_PATH).is_none(),
+            "refusal must roll back h1's partial take"
+        );
+        // The split group is restored even on the lock-refusal path.
+        assert_eq!(
+            session.targets().names(),
+            vec!["h1".to_owned(), "h2".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn set_repo_takes_and_releases_the_operation_lock() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let handle = conn.clone();
+        let (mut session, _buf) = session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn),
+            )],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        SetRepo.call(&mut session, &args).await.unwrap();
+        // The lockfile write in the SFTP op log proves the lock was taken:
+        // without the `update_lock_selected` call above there is no write
+        // and this fails. The shell `issued` log cannot pin that ordering —
+        // it records no SFTP ops — so presence on both logs is the oracle.
+        let ops = handle.sftp_ops();
+        let take = ops
+            .iter()
+            .position(|op| {
+                matches!(op, MockSftpOp::Write { path, exclusive }
+                if path == Path::new(TARGET_LOCK_PATH) && *exclusive)
+            })
+            .expect("taking the lock must write the lockfile");
+        assert!(
+            handle.commands().iter().any(|c| c == "zypper -n ref"),
+            "the repo change must run while the lock is held; got {:?}",
+            handle.commands()
+        );
+        let release = ops
+            .iter()
+            .position(|op| op == &MockSftpOp::Remove(PathBuf::from(TARGET_LOCK_PATH)))
+            .expect("releasing the lock must remove the lockfile");
+        assert!(
+            take < release,
+            "the lockfile write must precede its removal"
+        );
+        // A stranded lock would still read back here.
+        assert!(
+            !session
+                .targets_mut()
+                .get_mut("h1")
+                .unwrap()
+                .is_locked()
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn set_repo_warns_when_the_lock_does_not_release() {
+        // The repo change succeeds but the unlock's remove fails, so the
+        // outcome map carries a `Failed` the command must not swallow.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .failing_sftp_remove();
+        let (mut session, _buf) = session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn),
+            )],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        log_capture::start();
+        SetRepo
+            .call(&mut session, &args)
+            .await
+            .expect("the repo change itself succeeds");
+        let logged = log_capture::take();
+        assert!(
+            logged.iter().any(|c| c.message.as_deref().is_some_and(|m| m
+                .contains("the set_repo operation lock did not release")
+                && m.contains("h1"))),
+            "a stranded lock must warn naming the op and host; got: {:?}",
+            logged
+                .iter()
+                .filter_map(|c| c.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn set_repo_releases_the_lock_when_the_repo_fails() {
+        // The repo fan-out fails, so the command errors — but the lock taken
+        // for it must not be stranded.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new(
+            "zypper -n ref",
+            "",
+            "refresh failed",
+            1,
+            0,
+        ));
+        let (mut session, _buf) = session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn),
+            )],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        SetRepo.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            !session
+                .targets_mut()
+                .get_mut("h1")
+                .unwrap()
+                .is_locked()
+                .await
+                .unwrap(),
+            "a failed set_repo must not strand its lock"
+        );
     }
 
     #[tokio::test]

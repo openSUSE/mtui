@@ -850,7 +850,7 @@ impl Config {
                     Some(v) => {
                         tracing::error!(
                             option = $field,
-                            value = %v,
+                            value = %mtui_types::url_redaction::sanitize_url(&v),
                             "invalid endpoint URL (need http(s):// with a host and, if given, a numeric port); using default"
                         );
                         $default
@@ -1143,6 +1143,57 @@ mod tests {
         assert_eq!(c.openqa_instance, "http://oqa.local");
         assert_eq!(c.openqa_instance_baremetal, "http://oqa-bm.local");
         assert_eq!(c.openqa_install_distri, "sle-micro");
+    }
+
+    /// Every field of every event emitted by `f` on this thread. Installed
+    /// globally: see `mtui-datasources/tests/log_capture.rs` for why.
+    fn capture_fields(f: impl FnOnce()) -> String {
+        use std::cell::RefCell;
+        use std::fmt::Write as _;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+        thread_local! {
+            static SINK: RefCell<Option<String>> = const { RefCell::new(None) };
+        }
+        struct Fields<'a>(&'a mut String);
+        impl tracing::field::Visit for Fields<'_> {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                let _ = write!(self.0, "{}={v:?} ", f.name());
+            }
+        }
+        struct Capture;
+        impl<S: tracing::Subscriber> Layer<S> for Capture {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        event.record(&mut Fields(buf));
+                    }
+                });
+            }
+        }
+        static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        ONCE.get_or_init(|| {
+            let _ = tracing::subscriber::set_global_default(
+                tracing_subscriber::registry::Registry::default().with(Capture),
+            );
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(String::new()));
+        f();
+        SINK.with(|s| s.borrow_mut().take()).unwrap_or_default()
+    }
+
+    #[test]
+    fn rejected_url_is_logged_without_its_userinfo() {
+        let raw: RawConfig =
+            toml::from_str("[gitea]\nurl = \"https://bot:s3cret@src.example:44e3\"\n").unwrap();
+        let logs = capture_fields(|| {
+            Config::from_raw(raw);
+        });
+        assert!(
+            logs.contains("src.example:44e3"),
+            "nothing captured: {logs}"
+        );
+        assert!(!logs.contains("s3cret") && !logs.contains("bot:"), "{logs}");
     }
 
     #[test]

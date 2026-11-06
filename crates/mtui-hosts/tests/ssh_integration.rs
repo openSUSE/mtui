@@ -27,6 +27,9 @@ use mtui_hosts::{
 };
 use mtui_types::enums::TargetState;
 
+/// How long the `quiet-then-exit` scripted command stays silent.
+const QUIET_COMMAND_DURATION: Duration = Duration::from_millis(2500);
+
 /// Bytes the `flood-stdout` scripted command emits: comfortably past the
 /// per-stream capture cap so `run` must truncate.
 const FLOOD_BYTES: usize = MAX_STREAM_BYTES + 512 * 1024;
@@ -43,6 +46,50 @@ struct FakeFs {
     dirs: HashMap<String, Vec<String>>,
     /// link path -> target
     links: HashMap<String, String>,
+    /// path -> size attribute `fstat` reports instead of the stored length;
+    /// `None` omits the attribute.
+    size_attrs: HashMap<String, Option<u64>>,
+    /// path -> modification time `stat` reports; absent omits the attribute.
+    mtimes: HashMap<String, u32>,
+    /// `(offset, len)` of every `read` request received.
+    reads: Vec<(u64, u32)>,
+    /// Total bytes served by `read`.
+    read_bytes: usize,
+    /// Paths whose `read` requests fail with a generic status.
+    failing_reads: std::collections::HashSet<String>,
+    /// Number of `open` requests received per path, across every subsystem.
+    open_counts: HashMap<String, usize>,
+    /// Paths whose `open` is answered with this status, before any effect.
+    open_status: HashMap<String, StatusCode>,
+    /// Queued holds per path, one consumed per `open`: it applies its effects,
+    /// then withholds its reply.
+    open_holds: HashMap<String, std::collections::VecDeque<OpenHold>>,
+    /// Session handle and channel id of the most recent SFTP subsystem, so a
+    /// test can close that channel from the server side.
+    sftp_channel: Option<(russh::server::Handle, ChannelId)>,
+}
+
+/// Lets a test observe an `open`'s filesystem effects while its reply is still
+/// withheld, so a lost reply can be modelled after the file has appeared.
+#[derive(Clone)]
+struct OpenHold {
+    /// Signalled once the `open`'s effects are visible in the filesystem.
+    landed: Arc<tokio::sync::Notify>,
+    /// The `open` replies only after this is signalled.
+    release: Arc<tokio::sync::Notify>,
+    /// Applies only to a non-exclusive truncating open, so reads and the
+    /// exclusive create of the same path pass through.
+    truncating_only: bool,
+}
+
+impl OpenHold {
+    fn new() -> Self {
+        Self {
+            landed: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            truncating_only: false,
+        }
+    }
 }
 
 type SharedFs = Arc<Mutex<FakeFs>>;
@@ -51,6 +98,11 @@ type SharedFs = Arc<Mutex<FakeFs>>;
 /// One-shot: `open` consumes it the instant it reads a nonzero value, *before*
 /// sleeping, so a retry right behind a timed-out request is not also delayed.
 type SharedDelay = Arc<Mutex<Duration>>;
+
+/// Every `exec` request the server received, verbatim: what the client really
+/// sent, independent of what it chose to log.
+static EXEC_LOG: LazyLock<std::sync::Mutex<Vec<String>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
 
 /// Counts `subsystem_request(name == "sftp")` calls server-side, so a test can
 /// assert exactly how many SFTP handshakes a sequence of client verbs caused.
@@ -122,15 +174,53 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8_lossy(data).to_string();
+        EXEC_LOG
+            .lock()
+            .expect("exec log lock")
+            .push(command.clone());
 
         // Never produces output and never exits: the client's no-output timeout
         // is the only thing that can end it.
-        if command == "sleep-forever" {
+        if command == "sleep-forever" || command.starts_with("sleep-forever ") {
+            return Ok(());
+        }
+
+        // Silent for a while, then exits cleanly. The wait runs in a spawned
+        // task so this session loop stays free to answer keepalives.
+        if command == "quiet-then-exit" {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                tokio::time::sleep(QUIET_COMMAND_DURATION).await;
+                let _ = handle.exit_status_request(channel_id, 0).await;
+                let _ = handle.eof(channel_id).await;
+                let _ = handle.close(channel_id).await;
+            });
+            return Ok(());
+        }
+
+        // Writes an unterminated stderr line, then goes silent without an exit
+        // status or Close, as a link dying mid-output does.
+        if command == "partial-stderr-then-silent"
+            || command.starts_with("partial-stderr-then-silent ")
+        {
+            session.extended_data(channel_id, 1, b"partial".to_vec())?;
+            return Ok(());
+        }
+
+        // Reports an exit status, then goes silent without Close.
+        if command == "exit-then-silent" {
+            session.exit_status_request(channel_id, 3)?;
+            return Ok(());
+        }
+
+        // Reports death by signal, then goes silent without Close.
+        if command == "signal-then-silent" {
+            session.exit_signal_request(channel_id, russh::Sig::KILL, false, "", "")?;
             return Ok(());
         }
 
         // Floods stdout past the client's capture cap, then exits cleanly.
-        if command == "flood-stdout" {
+        if command == "flood-stdout" || command.starts_with("flood-stdout ") {
             let chunk = vec![b'a'; 64 * 1024];
             let mut sent = 0;
             while sent < FLOOD_BYTES {
@@ -150,6 +240,24 @@ impl russh::server::Handler for TestSshSession {
                 session.data(channel_id, b".".to_vec())?;
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+        }
+
+        // Like `trickle-forever`, but the output is pushed from a spawned task
+        // so it is actually delivered while the command runs. `flood-async`
+        // never pauses, so the client always has a message ready.
+        if command.starts_with("trickle-async ") || command.starts_with("flood-async ") {
+            let pause = command
+                .starts_with("trickle-async ")
+                .then_some(Duration::from_millis(20));
+            let handle = session.handle();
+            tokio::spawn(async move {
+                while handle.data(channel_id, b".".to_vec()).await.is_ok() {
+                    if let Some(pause) = pause {
+                        tokio::time::sleep(pause).await;
+                    }
+                }
+            });
+            return Ok(());
         }
 
         let (stdout, stderr, code) = scripted_command(&command);
@@ -174,6 +282,7 @@ impl russh::server::Handler for TestSshSession {
     ) -> Result<(), Self::Error> {
         if name == "sftp" {
             self.subsystem_count.fetch_add(1, Ordering::SeqCst);
+            self.fs.lock().await.sftp_channel = Some((session.handle(), channel_id));
             let channel = self.channels.lock().await.remove(&channel_id).unwrap();
             session.channel_success(channel_id)?;
             let handler = SftpHandler {
@@ -309,27 +418,58 @@ impl russh_sftp::server::Handler for SftpHandler {
         use russh_sftp::protocol::OpenFlags;
         // Consumed before sleeping, so a retry issued while this call is still
         // asleep is not also delayed.
+        *self
+            .fs
+            .lock()
+            .await
+            .open_counts
+            .entry(filename.clone())
+            .or_default() += 1;
         let delay = std::mem::replace(&mut *self.delay.lock().await, Duration::ZERO);
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        // O_EXCL against an existing file fails as a real sshd would — what the
-        // lock protocol relies on.
-        if pflags.contains(OpenFlags::EXCLUDE) {
-            let fs = self.fs.lock().await;
-            if fs.files.contains_key(&filename) {
+        // Effects run under one lock acquisition so the O_EXCL presence check
+        // and the create cannot interleave with another open.
+        let hold = {
+            let mut fs = self.fs.lock().await;
+            if let Some(code) = fs.open_status.get(&filename) {
+                return Err(*code);
+            }
+            if !pflags.contains(OpenFlags::CREATE) && !fs.files.contains_key(&filename) {
+                return Err(StatusCode::NoSuchFile);
+            }
+            // O_EXCL against an existing file fails as a real sshd would — what
+            // the lock protocol relies on.
+            if pflags.contains(OpenFlags::EXCLUDE) && fs.files.contains_key(&filename) {
                 return Err(StatusCode::Failure);
             }
-        }
-        // A create materialises the file so a later exclusive create sees it
-        // and a read observes the write; TRUNCATE resets existing contents.
-        if pflags.contains(OpenFlags::CREATE) {
-            let mut fs = self.fs.lock().await;
-            if pflags.contains(OpenFlags::TRUNCATE) {
-                fs.files.insert(filename.clone(), Vec::new());
-            } else {
-                fs.files.entry(filename.clone()).or_default();
+            // A create materialises the file so a later exclusive create sees it
+            // and a read observes the write; TRUNCATE resets existing contents.
+            if pflags.contains(OpenFlags::CREATE) {
+                if pflags.contains(OpenFlags::TRUNCATE) {
+                    fs.files.insert(filename.clone(), Vec::new());
+                } else {
+                    fs.files.entry(filename.clone()).or_default();
+                }
             }
+            fs.open_holds
+                .get_mut(&filename)
+                .and_then(|q| match q.front() {
+                    Some(h)
+                        if h.truncating_only
+                            && !(pflags.contains(OpenFlags::TRUNCATE)
+                                && !pflags.contains(OpenFlags::EXCLUDE)) =>
+                    {
+                        None
+                    }
+                    Some(_) => q.pop_front(),
+                    None => None,
+                })
+        };
+        if let Some(hold) = hold {
+            hold.landed.notify_one();
+            hold.release.notified().await;
         }
         // russh-sftp's client does not seek to EOF, so O_APPEND has to be
         // tracked per handle here.
@@ -351,13 +491,18 @@ impl russh_sftp::server::Handler for SftpHandler {
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
-        let fs = self.fs.lock().await;
+        let mut fs = self.fs.lock().await;
+        fs.reads.push((offset, len));
+        if fs.failing_reads.contains(&handle) {
+            return Err(StatusCode::Failure);
+        }
         let contents = fs.files.get(&handle).cloned().unwrap_or_default();
         let start = offset as usize;
         if start >= contents.len() {
             return Err(StatusCode::Eof);
         }
         let end = (start + len as usize).min(contents.len());
+        fs.read_bytes += end - start;
         Ok(Data {
             id,
             data: contents[start..end].to_vec(),
@@ -438,7 +583,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         if fs.files.contains_key(&path) || fs.dirs.contains_key(&path) {
             Ok(russh_sftp::protocol::Attrs {
                 id,
-                attrs: FileAttributes::default(),
+                attrs: FileAttributes {
+                    mtime: fs.mtimes.get(&path).copied(),
+                    ..FileAttributes::default()
+                },
             })
         } else {
             Err(StatusCode::NoSuchFile)
@@ -453,9 +601,32 @@ impl russh_sftp::server::Handler for SftpHandler {
         self.stat(id, path).await
     }
 
+    async fn fstat(
+        &mut self,
+        id: u32,
+        handle: String,
+    ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
+        let fs = self.fs.lock().await;
+        let contents = fs.files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
+        let size = fs
+            .size_attrs
+            .get(&handle)
+            .copied()
+            .unwrap_or(Some(contents.len() as u64));
+        Ok(russh_sftp::protocol::Attrs {
+            id,
+            attrs: FileAttributes {
+                size,
+                ..FileAttributes::default()
+            },
+        })
+    }
+
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
-        self.fs.lock().await.files.remove(&filename);
-        Ok(Self::ok(id))
+        match self.fs.lock().await.files.remove(&filename) {
+            Some(_) => Ok(Self::ok(id)),
+            None => Err(StatusCode::NoSuchFile),
+        }
     }
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
@@ -629,6 +800,117 @@ async fn run_times_out_on_silent_command() {
     );
 }
 
+/// `set_command_timeout` re-arms the live no-output window: a silent command
+/// aborts after the new window, not the one the link was dialled with.
+#[tokio::test]
+async fn set_command_timeout_rearms_the_live_window() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(30)).await;
+    conn.set_command_timeout(CommandTimeout::new(Duration::from_millis(300)));
+    let start = std::time::Instant::now();
+    let err = tokio::time::timeout(Duration::from_secs(10), conn.run("sleep-forever"))
+        .await
+        .expect("a broken timeout must fail the test, not hang it")
+        .expect_err("should time out");
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Timeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "aborted by the new window, not the 30 s dial window"
+    );
+}
+
+/// `Target::set_timeout` reaches the live connection: a silent command past
+/// the new window fails instead of completing on the dial window.
+#[tokio::test]
+async fn target_set_timeout_reaches_the_live_connection() {
+    let port = start_server(SharedFs::default()).await;
+    let mut target = connect_target("h1", port, TargetState::Enabled).await;
+    target.set_timeout(std::num::NonZeroU64::new(1).unwrap());
+    // On the 5 s dial window the 2.5 s silent command would complete with
+    // exit 0, so exit -1 proves the abort came from the new 1 s window. The
+    // outer timeout fails a hang instead of hanging the suite.
+    let mut group = HostsGroup::new(vec![target], false);
+    tokio::time::timeout(Duration::from_secs(15), group.run("quiet-then-exit"))
+        .await
+        .expect("a broken timeout must fail the test, not hang it");
+    let t = group.get("h1").expect("member present");
+    assert_eq!(
+        t.lastexit(),
+        Some(-1),
+        "the 2.5 s silent command must abort on the 1 s window"
+    );
+    let log = t.out().last().expect("one command must be logged");
+    assert!(
+        log.timed_out,
+        "a channel failure also records -1, so only the timeout flag proves the abort: {log:?}"
+    );
+}
+
+#[tokio::test]
+async fn keepalive_keeps_a_quiet_command_alive() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    conn.close().await.expect("close");
+    let mut conn = conn.with_transport_timers(
+        Some(Duration::from_millis(200)),
+        Some(Duration::from_secs(1)),
+    );
+    conn.reconnect(0, false).await.expect("reconnect");
+    let log = tokio::time::timeout(Duration::from_secs(10), conn.run("quiet-then-exit"))
+        .await
+        .expect("run must return before the test-level timeout")
+        .expect("run");
+    assert_eq!(log.exitcode, 0, "stderr: {}", log.stderr);
+    assert!(!log.stderr.contains("lost after"), "stderr: {}", log.stderr);
+}
+
+/// Runs `command` on a link whose inactivity timeout fires with no keepalives
+/// to prevent it, so the session ends without a Close.
+async fn run_on_a_dying_link(command: &str) -> mtui_types::hostlog::CommandLog {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    conn.close().await.expect("close");
+    let mut conn = conn.with_transport_timers(None, Some(Duration::from_secs(1)));
+    conn.reconnect(0, false).await.expect("reconnect");
+    tokio::time::timeout(Duration::from_secs(10), conn.run(command))
+        .await
+        .expect("run must return before the test-level timeout")
+        .expect("run")
+}
+
+#[tokio::test]
+async fn run_reports_a_session_lost_mid_command() {
+    let log = run_on_a_dying_link("partial-stderr-then-silent").await;
+    assert_eq!(log.exitcode, -1);
+    let (output, note) = log
+        .stderr
+        .split_once('\n')
+        .unwrap_or_else(|| panic!("note must start on its own line: {:?}", log.stderr));
+    assert_eq!(output, "partial");
+    assert!(
+        note.starts_with("mtui: SSH session to 127.0.0.1 lost after ")
+            && note.ends_with("s; the command may still be running\n"),
+        "note: {note:?}"
+    );
+    assert!(!log.truncated);
+}
+
+#[tokio::test]
+async fn run_does_not_claim_a_finished_command_may_still_be_running() {
+    let log = run_on_a_dying_link("exit-then-silent").await;
+    assert_eq!(log.exitcode, 3);
+    assert!(!log.stderr.contains("still be running"), "{}", log.stderr);
+}
+
+#[tokio::test]
+async fn run_does_not_claim_a_signalled_command_may_still_be_running() {
+    let log = run_on_a_dying_link("signal-then-silent").await;
+    assert!(!log.stderr.contains("still be running"), "{}", log.stderr);
+}
+
 #[tokio::test]
 async fn run_truncates_oversized_stdout() {
     let port = start_server(SharedFs::default()).await;
@@ -744,6 +1026,179 @@ async fn sftp_open_reads_remote_bytes() {
         .await
         .expect("open");
     assert_eq!(bytes, b"SLES\n");
+}
+
+/// A budgeted read keeps and transfers only a bounded prefix of a large file:
+/// the fixture counts what the server actually served.
+#[tokio::test]
+async fn sftp_read_capped_bounds_retention_and_transfer() {
+    const FILE_LEN: usize = 8 * 1024 * 1024;
+    let fs = SharedFs::default();
+    let content: Vec<u8> = (0..FILE_LEN).map(|i| (i % 251) as u8).collect();
+    fs.lock()
+        .await
+        .files
+        .insert("/big.bin".to_owned(), content.clone());
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/big.bin"), 32)
+        .await
+        .expect("capped read");
+
+    assert_eq!(got.bytes, content[..32]);
+    assert_eq!(got.size, FILE_LEN as u64);
+    assert!(got.truncated);
+    let served = fs.lock().await.read_bytes;
+    assert!(
+        served <= 256 * 1024,
+        "a 32-byte budget must not pull the file across the link: served {served} of {FILE_LEN}"
+    );
+}
+
+#[tokio::test]
+async fn sftp_read_capped_reports_truncation_at_every_boundary() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        for (name, bytes) in [
+            ("/empty", &b""[..]),
+            ("/short", b"ab"),
+            ("/equal", b"abcd"),
+            ("/long", b"abcde"),
+        ] {
+            g.files.insert(name.to_owned(), bytes.to_vec());
+        }
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    for (name, bytes, size, truncated) in [
+        ("/empty", &b""[..], 0, false),
+        ("/short", b"ab", 2, false),
+        ("/equal", b"abcd", 4, false),
+        ("/long", b"abcd", 5, true),
+    ] {
+        let got = conn
+            .sftp_read_capped(std::path::Path::new(name), 4)
+            .await
+            .expect("capped read");
+        assert_eq!(
+            (got.bytes.as_slice(), got.size, got.truncated),
+            (bytes, size, truncated),
+            "{name}"
+        );
+    }
+}
+
+/// `size` is the server's handle metadata, not the length of what was kept.
+#[tokio::test]
+async fn sftp_read_capped_reports_the_server_size_snapshot() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.size_attrs.insert("/f".to_owned(), Some(100));
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 4)
+        .await
+        .expect("capped read");
+
+    assert_eq!(got.bytes, b"abcd");
+    assert_eq!(got.size, 100);
+    assert!(got.truncated);
+}
+
+/// Without a size the budget cannot be reported honestly: fail, and read nothing.
+#[tokio::test]
+async fn sftp_read_capped_without_size_attr_fails_before_reading() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.size_attrs.insert("/f".to_owned(), None);
+    }
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 4)
+        .await
+        .expect_err("a budgeted read needs a size");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::Sftp { .. }),
+        "expected Sftp, got {err:?}"
+    );
+    assert!(
+        fs.lock().await.reads.is_empty(),
+        "no read may be issued once the size is unknown"
+    );
+}
+
+#[tokio::test]
+async fn sftp_read_capped_zero_budget_reads_the_whole_file() {
+    let fs = SharedFs::default();
+    let content = vec![b'x'; 300 * 1024];
+    fs.lock()
+        .await
+        .files
+        .insert("/f".to_owned(), content.clone());
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let got = conn
+        .sftp_read_capped(std::path::Path::new("/f"), 0)
+        .await
+        .expect("unlimited read");
+
+    assert_eq!(got.bytes, content);
+    assert_eq!(got.size, content.len() as u64);
+    assert!(!got.truncated);
+}
+
+#[tokio::test]
+async fn sftp_read_capped_read_failure_is_an_sftp_error_in_both_modes() {
+    let fs = SharedFs::default();
+    {
+        let mut g = fs.lock().await;
+        g.files.insert("/f".to_owned(), b"abcde".to_vec());
+        g.failing_reads.insert("/f".to_owned());
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    for max_bytes in [0, 4] {
+        let err = conn
+            .sftp_read_capped(std::path::Path::new("/f"), max_bytes)
+            .await
+            .expect_err("a failing read must not look like an empty file");
+        assert!(
+            matches!(err, mtui_hosts::HostError::Sftp { .. }),
+            "max_bytes={max_bytes}: expected Sftp, got {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sftp_read_capped_missing_file_is_not_found() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_read_capped(std::path::Path::new("/nope"), 4)
+        .await
+        .expect_err("missing file");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "expected SftpNotFound, got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -1013,6 +1468,23 @@ async fn sftp_remove_and_readlink() {
     assert_eq!(target, "/tmp/target");
 }
 
+/// The lock release paths read `SftpNotFound` as "already released".
+#[tokio::test]
+async fn sftp_remove_of_a_missing_file_is_not_found() {
+    let fs = SharedFs::default();
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let err = conn
+        .sftp_remove(std::path::Path::new("/tmp/gone"))
+        .await
+        .expect_err("nothing to remove");
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "{err:?}"
+    );
+}
+
 #[cfg(feature = "shell")]
 #[tokio::test]
 async fn shell_spawns_pty_and_bridges_bytes() {
@@ -1220,6 +1692,72 @@ async fn lock_reaps_stale_foreign_lock_over_sftp() {
 }
 
 #[tokio::test]
+async fn sftp_mtime_reports_the_servers_modification_time() {
+    let fs = SharedFs::default();
+    {
+        let mut fs = fs.lock().await;
+        fs.files.insert("/dated".to_owned(), b"x".to_vec());
+        fs.files.insert("/undated".to_owned(), b"x".to_vec());
+        fs.mtimes.insert("/dated".to_owned(), 1_700_000_000);
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    assert_eq!(
+        conn.sftp_mtime(std::path::Path::new("/dated"))
+            .await
+            .expect("dated"),
+        Some(1_700_000_000)
+    );
+    assert_eq!(
+        conn.sftp_mtime(std::path::Path::new("/undated"))
+            .await
+            .expect("undated"),
+        None
+    );
+    let err = conn
+        .sftp_mtime(std::path::Path::new("/missing"))
+        .await
+        .expect_err("missing");
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_lock_file_is_invalid_and_reaped_by_its_modification_time_over_sftp() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let fs = SharedFs::default();
+    {
+        let mut fs = fs.lock().await;
+        fs.files.insert(TARGET_LOCK_PATH.to_owned(), Vec::new());
+        fs.mtimes.insert(TARGET_LOCK_PATH.to_owned(), now - 60);
+    }
+    let port = start_server(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+
+    let err = lock.try_claim("mtui operation").await.expect_err("young");
+    assert!(
+        matches!(err, mtui_hosts::HostError::InvalidLockFile { .. }),
+        "{err:?}"
+    );
+    assert_eq!(fs.lock().await.files[TARGET_LOCK_PATH], b"");
+
+    fs.lock()
+        .await
+        .mtimes
+        .insert(TARGET_LOCK_PATH.to_owned(), now - 200_000);
+    assert!(lock.try_claim("mtui operation").await.expect("old"));
+    let line = String::from_utf8(fs.lock().await.files[TARGET_LOCK_PATH].clone()).unwrap();
+    assert!(line.contains(":alice:"), "reaped and re-claimed: {line}");
+}
+
+#[tokio::test]
 async fn sftp_request_budget_follows_connect_timeout_not_the_hardcoded_ten_seconds() {
     // A 2s server-side `open` delay against a 1s `connect_timeout`: the
     // request must fail well under russh-sftp's fixed 10s default, proving the
@@ -1302,4 +1840,641 @@ async fn sftp_transparently_rehandshakes_after_a_stale_cached_sessions_first_req
         2,
         "the timed-out cached session must be invalidated and re-handshaked exactly once"
     );
+}
+
+// ----------------------------------------------------------------------------
+// SFTP first-request retry: only a replay-safe request on a cached session,
+// and only after a session-fatal failure, may be replayed.
+// ----------------------------------------------------------------------------
+
+/// Connects with a 1s request budget and warms the SFTP subsystem with an
+/// unrelated write, so the verb under test runs against a cached session.
+async fn warm_sftp_connection(fs: &SharedFs) -> (SshConnection, SharedSubsystemCount) {
+    let (port, _delay, count) = start_server_with_delay_and_counter(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(1)).await;
+    conn.sftp_write(std::path::Path::new("/warm"), b"w", false)
+        .await
+        .expect("warm-up write opens the subsystem");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "warm-up opens one subsystem"
+    );
+    (conn, count)
+}
+
+async fn open_count(fs: &SharedFs, path: &str) -> usize {
+    fs.lock().await.open_counts.get(path).copied().unwrap_or(0)
+}
+
+async fn file_bytes(fs: &SharedFs, path: &str) -> Option<Vec<u8>> {
+    fs.lock().await.files.get(path).cloned()
+}
+
+async fn hold_next_open(fs: &SharedFs, path: &str) -> OpenHold {
+    let hold = OpenHold::new();
+    fs.lock()
+        .await
+        .open_holds
+        .entry(path.to_owned())
+        .or_default()
+        .push_back(hold.clone());
+    hold
+}
+
+#[tokio::test]
+async fn sftp_retry_fixture_exposes_an_open_effect_before_its_reply() {
+    let fs = SharedFs::default();
+    let (port, _delay, count) = start_server_with_delay_and_counter(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let hold = hold_next_open(&fs, "/held").await;
+
+    let task = tokio::spawn(async move {
+        conn.sftp_write(std::path::Path::new("/held"), b"payload", true)
+            .await
+    });
+    hold.landed.notified().await;
+
+    assert_eq!(
+        file_bytes(&fs, "/held").await,
+        Some(Vec::new()),
+        "the create's effect must be visible while its reply is withheld"
+    );
+    assert_eq!(open_count(&fs, "/held").await, 1);
+    assert!(!task.is_finished(), "the reply is still withheld");
+
+    hold.release.notify_one();
+    task.await
+        .expect("join")
+        .expect("write completes once released");
+    assert_eq!(file_bytes(&fs, "/held").await, Some(b"payload".to_vec()));
+    assert_eq!(open_count(&fs, "/held").await, 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn sftp_retry_status_not_found_keeps_cached_subsystem() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    {
+        let mut guard = fs.lock().await;
+        guard.files.insert("/target".to_owned(), b"data".to_vec());
+        guard
+            .open_status
+            .insert("/target".to_owned(), StatusCode::NoSuchFile);
+    }
+
+    let err = conn
+        .sftp_open(std::path::Path::new("/target"))
+        .await
+        .expect_err("scripted NoSuchFile");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpNotFound { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(
+        open_count(&fs, "/target").await,
+        1,
+        "the open is not replayed"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1, "no re-handshake");
+
+    fs.lock().await.open_status.clear();
+    let bytes = conn
+        .sftp_open(std::path::Path::new("/target"))
+        .await
+        .expect("follow-up read");
+    assert_eq!(bytes, b"data", "the status override changed no bytes");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "the cached subsystem survives an ordinary status failure"
+    );
+}
+
+#[tokio::test]
+async fn sftp_retry_permission_denied_is_not_replayed() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .open_status
+        .insert("/locked".to_owned(), StatusCode::PermissionDenied);
+
+    let err = conn
+        .sftp_write(std::path::Path::new("/locked"), b"x", false)
+        .await
+        .expect_err("scripted PermissionDenied");
+
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Sftp { reason, .. } if reason.contains("Permission denied")),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(open_count(&fs, "/locked").await, 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(file_bytes(&fs, "/locked").await, None);
+
+    conn.sftp_open(std::path::Path::new("/warm"))
+        .await
+        .expect("the cached session is still usable");
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn sftp_retry_exclusive_collision_is_not_replayed() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/taken".to_owned(), b"mine".to_vec());
+
+    let err = conn
+        .sftp_write(std::path::Path::new("/taken"), b"theirs", true)
+        .await
+        .expect_err("exclusive create over an existing file");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::AlreadyExists { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(file_bytes(&fs, "/taken").await, Some(b"mine".to_vec()));
+    assert_eq!(open_count(&fs, "/taken").await, 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn sftp_retry_exclusive_timeout_does_not_replay_open() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    let hold = hold_next_open(&fs, "/claim").await;
+
+    let err = conn
+        .sftp_write(std::path::Path::new("/claim"), b"owner", true)
+        .await
+        .expect_err("the create reply never arrives");
+    hold.landed.notified().await;
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpTimeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(
+        open_count(&fs, "/claim").await,
+        1,
+        "the create is not replayed"
+    );
+    assert_eq!(file_bytes(&fs, "/claim").await, Some(Vec::new()));
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "no second subsystem was opened by the failed call"
+    );
+    hold.release.notify_one();
+
+    conn.sftp_open(std::path::Path::new("/warm"))
+        .await
+        .expect("the next verb re-handshakes");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        2,
+        "the timed-out session was dropped from the cache"
+    );
+}
+
+#[tokio::test]
+async fn sftp_retry_truncating_timeout_replays_the_open() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/config".to_owned(), b"old contents".to_vec());
+    let hold = hold_next_open(&fs, "/config").await;
+
+    conn.sftp_write(std::path::Path::new("/config"), b"new contents", false)
+        .await
+        .expect("the lost truncating open is replayed on a fresh subsystem");
+    hold.landed.notified().await;
+
+    assert_eq!(
+        open_count(&fs, "/config").await,
+        2,
+        "one attempt plus one replay"
+    );
+    assert_eq!(
+        file_bytes(&fs, "/config").await,
+        Some(b"new contents".to_vec()),
+        "the payload is written once, after the replayed open"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    hold.release.notify_one();
+}
+
+#[tokio::test]
+async fn sftp_retry_append_timeout_replays_the_open() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/history".to_owned(), b"row1\n".to_vec());
+    let hold = hold_next_open(&fs, "/history").await;
+
+    conn.sftp_append(std::path::Path::new("/history"), b"row2\n")
+        .await
+        .expect("the lost append open is replayed on a fresh subsystem");
+    hold.landed.notified().await;
+
+    assert_eq!(
+        open_count(&fs, "/history").await,
+        2,
+        "one attempt plus one replay"
+    );
+    assert_eq!(
+        file_bytes(&fs, "/history").await,
+        Some(b"row1\nrow2\n".to_vec()),
+        "the history row is written exactly once"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    hold.release.notify_one();
+}
+
+#[tokio::test]
+async fn sftp_retry_lost_reply_on_a_lock_restamp_keeps_the_new_stamp() {
+    let fs = SharedFs::default();
+    let (port, _delay, count) = start_server_with_delay_and_counter(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(1)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+    lock.lock("first").await.expect("acquire");
+    let mut hold = OpenHold::new();
+    hold.truncating_only = true;
+    fs.lock()
+        .await
+        .open_holds
+        .entry(TARGET_LOCK_PATH.to_owned())
+        .or_default()
+        .push_back(hold.clone());
+
+    lock.lock("second")
+        .await
+        .expect("the re-stamp's lost open is replayed");
+
+    let line = String::from_utf8(
+        file_bytes(&fs, TARGET_LOCK_PATH)
+            .await
+            .expect("lockfile present"),
+    )
+    .unwrap();
+    assert!(
+        line.ends_with(":second"),
+        "the lockfile must hold the new stamp, not an empty truncation: {line:?}"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    hold.release.notify_one();
+}
+
+/// Closes the most recent SFTP channel from the server side and waits for the
+/// client's SFTP runner to notice, so its next request is never sent.
+async fn close_sftp_channel(fs: &SharedFs) {
+    let (handle, id) = fs
+        .lock()
+        .await
+        .sftp_channel
+        .clone()
+        .expect("an sftp subsystem is open");
+    handle.eof(id).await.expect("eof");
+    handle.close(id).await.expect("close");
+    // The client observes the close asynchronously and exposes no signal for
+    // it; a request sent before it does would be queued, not refused.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+}
+
+#[tokio::test]
+async fn sftp_retry_never_sent_exclusive_create_is_replayed_on_a_closed_session() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    close_sftp_channel(&fs).await;
+
+    conn.sftp_write(std::path::Path::new("/claim"), b"owner", true)
+        .await
+        .expect("a request that was never sent is replayed on a fresh subsystem");
+
+    assert_eq!(
+        open_count(&fs, "/claim").await,
+        1,
+        "exactly one OPEN reached the server"
+    );
+    assert_eq!(file_bytes(&fs, "/claim").await, Some(b"owner".to_vec()));
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn sftp_retry_never_sent_append_is_replayed_on_a_closed_session() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    close_sftp_channel(&fs).await;
+
+    conn.sftp_append(std::path::Path::new("/history"), b"row1\n")
+        .await
+        .expect("a request that was never sent is replayed on a fresh subsystem");
+
+    assert_eq!(open_count(&fs, "/history").await, 1);
+    assert_eq!(file_bytes(&fs, "/history").await, Some(b"row1\n".to_vec()));
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn sftp_retry_read_on_a_closed_session_is_replayed() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    close_sftp_channel(&fs).await;
+
+    let bytes = conn
+        .sftp_open(std::path::Path::new("/warm"))
+        .await
+        .expect("read replayed on a fresh subsystem");
+
+    assert_eq!(bytes, b"w");
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn sftp_retry_replay_failure_evicts_the_session_even_when_the_mapper_does_not() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/slow".to_owned(), b"data".to_vec());
+    let first = hold_next_open(&fs, "/slow").await;
+    let replay = hold_next_open(&fs, "/slow").await;
+    let local = tempfile::tempdir().expect("tempdir");
+
+    let err = conn
+        .sftp_get(std::path::Path::new("/slow"), &local.path().join("out"))
+        .await
+        .expect_err("both attempts time out");
+    assert!(
+        matches!(err, mtui_hosts::HostError::Sftp { .. }),
+        "get maps a timeout to a generic sftp error: {err:?}"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+
+    // Released first, so a session that stayed cached would answer the next
+    // verb instead of timing it out into a replay of its own.
+    first.release.notify_one();
+    replay.release.notify_one();
+    conn.sftp_open(std::path::Path::new("/warm"))
+        .await
+        .expect("the next verb re-handshakes");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        3,
+        "the replay's timed-out session was dropped from the cache"
+    );
+}
+
+#[tokio::test]
+async fn sftp_retry_append_adds_exactly_one_row_on_a_cached_session() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+
+    conn.sftp_append(std::path::Path::new("/history"), b"row1\n")
+        .await
+        .expect("append");
+
+    assert_eq!(file_bytes(&fs, "/history").await, Some(b"row1\n".to_vec()));
+    assert_eq!(open_count(&fs, "/history").await, 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn sftp_retry_read_only_persistent_timeout_stops_after_one_replay() {
+    let fs = SharedFs::default();
+    let (mut conn, count) = warm_sftp_connection(&fs).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/slow".to_owned(), b"data".to_vec());
+    let first = hold_next_open(&fs, "/slow").await;
+    let replay = hold_next_open(&fs, "/slow").await;
+
+    let err = conn
+        .sftp_open(std::path::Path::new("/slow"))
+        .await
+        .expect_err("both attempts time out");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpTimeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(
+        open_count(&fs, "/slow").await,
+        2,
+        "one attempt plus one replay"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    first.release.notify_one();
+    replay.release.notify_one();
+}
+
+#[tokio::test]
+async fn sftp_retry_read_only_timeout_on_a_fresh_session_is_not_replayed() {
+    let fs = SharedFs::default();
+    let (port, _delay, count) = start_server_with_delay_and_counter(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(1)).await;
+    fs.lock()
+        .await
+        .files
+        .insert("/slow".to_owned(), b"data".to_vec());
+    let hold = hold_next_open(&fs, "/slow").await;
+
+    let err = conn
+        .sftp_open(std::path::Path::new("/slow"))
+        .await
+        .expect_err("the only attempt times out");
+
+    assert!(
+        matches!(err, mtui_hosts::HostError::SftpTimeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(open_count(&fs, "/slow").await, 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    hold.release.notify_one();
+}
+
+// ----------------------------------------------------------------------------
+// Repository URL credentials: executed verbatim, never logged or stored.
+// ----------------------------------------------------------------------------
+
+fn server_received(command: &str) -> bool {
+    EXEC_LOG
+        .lock()
+        .expect("exec log lock")
+        .iter()
+        .any(|c| c == command)
+}
+
+#[tokio::test]
+async fn run_sends_credentials_verbatim_but_stores_and_logs_them_masked() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let command = format!("zypper ar x {URL} x");
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(conn.run(&command).await.expect("run"));
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(
+        server_received(&command),
+        "the server must receive the exact credential-bearing command"
+    );
+    // The scripted server echoes the command back on stdout, so the output
+    // really did carry the credentials before being stored.
+    assert_no_credentials("log command", &log.command);
+    assert_no_credentials("log stdout", &log.stdout);
+    assert!(
+        log.stdout
+            .starts_with("ran: zypper ar x https://***@repo.example/")
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_eq!(log.exitcode, 0);
+}
+
+#[tokio::test]
+async fn run_timeout_error_and_log_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::new(Duration::from_millis(300))).await;
+    let command = format!("sleep-forever {URL}");
+
+    let mut err = None;
+    let events = capture_events(|| async {
+        err = Some(conn.run(&command).await.expect_err("should time out"));
+    })
+    .await;
+    let err = err.expect("ran");
+
+    assert!(
+        events.contains("command timed out with no output"),
+        "the timeout warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Timeout { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_no_credentials("timeout error display", &err.to_string());
+    assert_no_credentials("timeout error debug", &format!("{err:?}"));
+    assert!(
+        server_received(&command),
+        "the server must still receive the exact command"
+    );
+}
+
+#[tokio::test]
+async fn run_absolute_deadline_error_and_log_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    // `trickle-async` ends at the deadline-bounded wait; `flood-async` at the
+    // deadline check ahead of each message.
+    for verb in ["trickle-async", "flood-async"] {
+        let port = start_server(SharedFs::default()).await;
+        let mut conn = connect(port, CommandTimeout::from_secs(5))
+            .await
+            .with_command_timeout(CommandTimeout::new(Duration::from_millis(150)));
+        let command = format!("{verb} {URL}");
+
+        let mut err = None;
+        let events = capture_events(|| async {
+            err = Some(
+                conn.run(&command)
+                    .await
+                    .expect_err("should hit the deadline"),
+            );
+        })
+        .await;
+        let err = err.expect("ran");
+
+        assert!(
+            events.contains("command exceeded absolute deadline"),
+            "the deadline warning was not captured; the secrecy assertions would be vacuous"
+        );
+        assert_no_credentials("tracing events", &events);
+        assert_no_credentials("timeout error", &format!("{err} {err:?}"));
+    }
+}
+
+#[tokio::test]
+async fn run_session_loss_diagnostics_mask_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(run_on_a_dying_link(&format!("partial-stderr-then-silent {URL}")).await);
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(
+        events.contains("SSH session lost mid-command"),
+        "the session-loss warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_no_credentials("log command", &log.command);
+    assert_no_credentials("log stderr", &log.stderr);
+}
+
+#[tokio::test]
+async fn run_truncation_warning_masks_the_command_credentials() {
+    use crate::repository_redaction::{URL, assert_no_credentials, capture_events};
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let mut log = None;
+    let events = capture_events(|| async {
+        log = Some(conn.run(&format!("flood-stdout {URL}")).await.expect("run"));
+    })
+    .await;
+    let log = log.expect("ran");
+
+    assert!(log.truncated);
+    assert!(
+        events.contains("command output exceeded capture caps"),
+        "the truncation warning was not captured; the secrecy assertions would be vacuous"
+    );
+    assert_no_credentials("tracing events", &events);
+    assert_no_credentials("log command", &log.command);
+}
+
+#[tokio::test]
+async fn target_over_ssh_stores_timeout_and_output_masked() {
+    use crate::repository_redaction::{URL, assert_no_credentials};
+
+    let port = start_server(SharedFs::default()).await;
+    let conn = connect(port, CommandTimeout::new(Duration::from_millis(300))).await;
+    let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+    let mut group = HostsGroup::new(vec![target], false);
+
+    group.run(format!("sleep-forever {URL}").as_str()).await;
+    group.run(format!("zypper rr {URL}").as_str()).await;
+
+    let t = group.get("h1").expect("member present");
+    assert_eq!(t.out().len(), 2);
+    for entry in t.out().iter() {
+        assert_no_credentials("stored command", &entry.command);
+        assert_no_credentials("stored stdout", &entry.stdout);
+        assert_no_credentials("stored stderr", &entry.stderr);
+    }
+    assert_eq!(t.out()[0].exitcode, -1, "the timeout is still recorded");
+    assert_eq!(t.lastexit(), Some(0));
 }

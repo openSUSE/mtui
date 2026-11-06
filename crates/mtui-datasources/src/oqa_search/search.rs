@@ -340,6 +340,7 @@ fn get_group_id(groups: &[serde_json::Value], key: &str) -> Option<i64> {
 
 /// Browser-facing openQA overview URL.
 fn openqa_print_url(base_url: &str, version: &str, build: &str, group_id: i64) -> String {
+    let build = urlencoding::encode(build);
     format!(
         "{base_url}/tests/overview?distri=sle&version={version}&build={build}&groupid={group_id}"
     )
@@ -349,6 +350,7 @@ fn openqa_print_url(base_url: &str, version: &str, build: &str, group_id: i64) -
 /// build. Returns `None` for an unknown state.
 fn openqa_build_path(state: &str, version: &str, build: &str, group_id: i64) -> Option<String> {
     let suffix = oqa_query_string(state)?;
+    let build = urlencoding::encode(build);
     Some(format!(
         "/api/v1/jobs/overview?distri=sle&version={version}&build={build}&groupid={group_id}{suffix}"
     ))
@@ -910,6 +912,15 @@ pub async fn build_checks(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn build_is_query_encoded_so_a_plus_is_not_read_as_a_space() {
+        let build = ":34567:libsigc++2";
+        let path = openqa_build_path("failed", "15-SP5", build, 7).unwrap();
+        assert!(path.contains("&build=%3A34567%3Alibsigc%2B%2B2&"), "{path}");
+        let url = openqa_print_url("https://o.example", "15-SP5", build, 7);
+        assert!(url.contains("&build=%3A34567%3Alibsigc%2B%2B2&"), "{url}");
+    }
 
     fn group(id: i64, name: &str, template: &str) -> serde_json::Value {
         json!({"id": id, "name": name, "template": template})

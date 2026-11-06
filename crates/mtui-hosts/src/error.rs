@@ -162,6 +162,18 @@ pub enum HostError {
     #[error("{0}")]
     TargetLocked(String),
 
+    /// A remote lock file exists but is empty or unparseable, so the host is
+    /// neither free nor held by a known owner. Never treated as free.
+    #[error("{host}: lock file {path} is invalid (empty or unparseable); {remedy}")]
+    InvalidLockFile {
+        /// The host the lock file is on.
+        host: String,
+        /// The remote path of the invalid lock file.
+        path: String,
+        /// How to clear it, ready to display.
+        remedy: String,
+    },
+
     /// One or more hosts in the group were locked by another owner when the
     /// group operation lock was being acquired.
     ///

@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mtui_types::{RepoUrl, SystemProduct};
+use mtui_types::{RepoUrl, SystemProduct, sanitize_url};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use tracing::error;
@@ -50,7 +50,7 @@ fn validated_url(url: String) -> Option<String> {
     match RepoUrl::parse(&url) {
         Ok(_) => Some(url),
         Err(e) => {
-            error!(%url, error = %e, "skipping invalid repository URL");
+            error!(url = %sanitize_url(&url), error = %e, "skipping invalid repository URL");
             None
         }
     }

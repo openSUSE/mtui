@@ -27,6 +27,11 @@
 //! `comment` field keeps any embedded colons (parsed with a 3-way split); a
 //! `PoolLock` stores `mtui pool <RRID> [<owner>]` there.
 //!
+//! A missing file is a free host; a present file that is not such a line
+//! (empty, malformed, not UTF-8) is **invalid**, never free: claims refuse it
+//! with [`HostError::InvalidLockFile`], a forced unlock removes it, and the
+//! stale reap ages it by the file's modification time.
+//!
 //! ## Atomicity
 //!
 //! [`TargetLock::lock`] first attempts an **atomic exclusive create**
@@ -44,7 +49,7 @@
 //! * A contended lock surfaces as [`HostError::TargetLocked`] rather than a
 //!   distinct error type.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mtui_config::Config;
@@ -136,6 +141,20 @@ pub struct LockRow {
     /// [`Target::lock_status`](crate::Target::lock_status)). Empty when there is
     /// none.
     pub comment: String,
+    /// The lock file exists but is empty or unparseable. It is not free:
+    /// `is_locked` is set too, and no owner fields are filled.
+    pub invalid: bool,
+}
+
+impl LockRow {
+    /// The row for a lock file that exists but is empty or unparseable.
+    pub(crate) fn invalid() -> Self {
+        Self {
+            is_locked: true,
+            invalid: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// A single-read view of a lock's on-disk state plus derived ownership.
@@ -153,6 +172,9 @@ pub struct LockSnapshot {
     /// The owning template's RRID, for a [`PoolLock`] claim only; empty for an
     /// operation-lock snapshot or a non-pool comment.
     pub(crate) rrid: String,
+    /// The lock file exists but is empty or unparseable, as in
+    /// [`LockRow::invalid`]; [`lock`](Self::lock) is then the default.
+    pub(crate) invalid: bool,
 }
 
 /// Who holds a contended lock, for reporting it.
@@ -187,18 +209,15 @@ impl RemoteLock {
 
     /// Parses a lockfile line into a [`RemoteLock`].
     ///
-    /// An empty line yields the empty (unlocked) state. The line is split at
-    /// most 3 times so a comment keeps any embedded colons. Fewer than three
-    /// fields is a malformed lockfile.
+    /// The line is split at most 3 times so a comment keeps any embedded
+    /// colons. An empty or whitespace-only line, fewer than three fields, a
+    /// non-numeric pid or an empty user is not a lock line.
     ///
     /// # Errors
     ///
     /// Returns [`HostError::Sftp`] with a "weird format" reason when the line
-    /// has fewer than three colon-separated fields.
+    /// is not a valid lock line.
     pub fn from_lockfile(line: &str) -> Result<Self> {
-        if line.is_empty() {
-            return Ok(Self::default());
-        }
         let line = line.trim();
         // splitn(4) mirrors Python's split(":", 3): at most 4 parts, so the
         // 4th (comment) retains embedded colons.
@@ -213,6 +232,12 @@ impl RemoteLock {
             host: String::new(),
             reason: format!("got weird format in lockfile: bad pid {:?}", parts[2]),
         })?;
+        if parts[1].is_empty() {
+            return Err(HostError::Sftp {
+                host: String::new(),
+                reason: "got weird format in lockfile: empty user".to_owned(),
+            });
+        }
         Ok(Self {
             timestamp: parts[0].to_owned(),
             user: parts[1].to_owned(),
@@ -264,6 +289,10 @@ pub struct TargetLock<C: Clock = SystemClock> {
     lock_wait: u64,
     lock_wait_poll: u64,
     lock: RemoteLock,
+    /// Whether the last [`load`](Self::load) found the lockfile present but
+    /// empty or unparseable. [`lock`](Self::lock) is then the default, yet the
+    /// host is not free.
+    invalid: bool,
     /// The comment **this instance** stamped when it took the lock, or `None`
     /// when this instance is not holding it.
     ///
@@ -293,6 +322,14 @@ pub const TARGET_LOCK_PATH: &str = "/var/lock/mtui.lock";
 /// The default pool-claim-lock path, `/var/lock/mtui-pool.lock` — a
 /// cross-process contract, like [`TARGET_LOCK_PATH`].
 pub const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
+
+/// How long an invalid lockfile that cannot be proved older is treated as a
+/// claimant mid-write (its create and its write are two SFTP operations)
+/// before it is reported invalid.
+const INVALID_SETTLE_SECS: u64 = 5;
+
+/// Seconds between re-reads while an invalid lockfile settles.
+const INVALID_SETTLE_POLL_SECS: f64 = 1.0;
 
 impl TargetLock<SystemClock> {
     /// Builds a `TargetLock` over `connection` using config-derived identity and
@@ -331,9 +368,15 @@ impl<C: Clock> TargetLock<C> {
             lock_wait: config.lock_wait,
             lock_wait_poll: config.lock_wait_poll,
             lock: RemoteLock::default(),
+            invalid: false,
             held: None,
             path,
         }
+    }
+
+    /// Whether the last [`load`](Self::load) found an invalid lockfile.
+    pub(crate) fn is_invalid(&self) -> bool {
+        self.invalid
     }
 
     /// Whether **this** instance is holding the lock and stamped it with no
@@ -377,6 +420,34 @@ impl<C: Clock> TargetLock<C> {
         self.connection.hostname().to_owned()
     }
 
+    /// The error for a lockfile that is present but empty or unparseable,
+    /// stating how long ago it was last modified.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the modification-time read.
+    async fn invalid_error(&mut self) -> Result<HostError> {
+        let age = match self.invalid_age().await? {
+            Some(secs) => format!("last modified {secs}s ago"),
+            None => "last modification time unknown".to_owned(),
+        };
+        let remedy = if self.path == Path::new(POOL_LOCK_PATH) {
+            format!(
+                "{age}; if no other mtui is claiming it, `unlock --pool --force` removes \
+                 it, or it is reaped once older than `[lock] pool_stale_age`"
+            )
+        } else {
+            format!(
+                "{age}; if no other mtui is claiming it, `unlock --force` removes it, \
+                 or it is reaped once older than `[lock] stale_age`"
+            )
+        };
+        Ok(HostError::InvalidLockFile {
+            host: self.hostname(),
+            path: self.path.display().to_string(),
+            remedy,
+        })
+    }
+
     /// Loads the lock state from the remote host into [`Self::lock`].
     ///
     /// **Fails closed**: only a genuinely *missing* lockfile
@@ -385,14 +456,26 @@ impl<C: Clock> TargetLock<C> {
     /// permission-denied read, a transport blip, a truncated/garbled read — is
     /// propagated, because reporting "unlocked" for an *unknown* state would let
     /// us claim a host another owner already holds.
+    ///
+    /// A lockfile that is present but not a valid lock line (empty, not UTF-8,
+    /// malformed) sets [`invalid`](Self::invalid) and leaves the lock default:
+    /// the host is neither free nor held by a known owner.
     async fn load(&mut self) -> Result<()> {
         self.lock = RemoteLock::default();
+        self.invalid = false;
         let path = self.filename();
         match self.connection.sftp_open(&path).await {
             Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                let line = text.lines().next().unwrap_or("");
-                self.lock = RemoteLock::from_lockfile(line)?;
+                let parsed = std::str::from_utf8(&bytes).ok().and_then(|text| {
+                    RemoteLock::from_lockfile(text.lines().next().unwrap_or("")).ok()
+                });
+                match parsed {
+                    Some(lock) => self.lock = lock,
+                    None => {
+                        tracing::debug!(host = %self.hostname(), path = %path.display(), "invalid lockfile");
+                        self.invalid = true;
+                    }
+                }
                 Ok(())
             }
             Err(HostError::SftpNotFound { .. }) => {
@@ -409,17 +492,75 @@ impl<C: Clock> TargetLock<C> {
     /// Propagates an SFTP error from `load`.
     pub async fn is_locked(&mut self) -> Result<bool> {
         self.load().await?;
-        Ok(!self.lock.user.is_empty())
+        Ok(self.invalid || !self.lock.user.is_empty())
+    }
+
+    /// [`is_locked`](Self::is_locked) for a caller about to claim: an invalid
+    /// lockfile is given the chance to settle first.
+    async fn is_locked_settled(&mut self) -> Result<bool> {
+        self.load().await?;
+        self.settle().await?;
+        Ok(self.invalid || !self.lock.user.is_empty())
+    }
+
+    /// The time since an invalid lockfile was last modified, or `None` when the
+    /// server reports no modification time or one in the future.
+    async fn invalid_age(&mut self) -> Result<Option<u64>> {
+        match self.connection.sftp_mtime(&self.path).await {
+            Ok(Some(mtime)) => Ok(self.clock.now_unix().checked_sub(mtime)),
+            Ok(None) | Err(HostError::SftpNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Re-reads a just-loaded invalid lockfile that may still be being written.
+    ///
+    /// A claimant creates the file and writes its line in two steps, so a file
+    /// that reads empty may belong to a live claimant. One provably older than
+    /// [`INVALID_SETTLE_SECS`] is invalid at once; otherwise the file is re-read
+    /// every [`INVALID_SETTLE_POLL_SECS`] until it parses, vanishes, or the
+    /// window is spent. On return [`invalid`](Self::invalid) is true only if it
+    /// is still invalid.
+    async fn settle(&mut self) -> Result<()> {
+        if !self.invalid {
+            return Ok(());
+        }
+        if self
+            .invalid_age()
+            .await?
+            .is_some_and(|age| age >= INVALID_SETTLE_SECS)
+        {
+            return Ok(());
+        }
+        let deadline = self.clock.monotonic() + INVALID_SETTLE_SECS as f64;
+        while self.invalid {
+            let remaining = deadline - self.clock.monotonic();
+            if remaining <= 0.0 {
+                break;
+            }
+            self.clock
+                .sleep(INVALID_SETTLE_POLL_SECS.min(remaining))
+                .await;
+            self.load().await?;
+        }
+        Ok(())
     }
 
     /// The age of the current lock in seconds, or `None` when unlocked or the
     /// stored timestamp is missing/malformed (callers treat such a lock as
     /// "leave it alone").
     ///
+    /// An invalid lockfile has no stored timestamp, so its age is the time since
+    /// the remote file was last modified; `None` when the server reports no
+    /// modification time, or one in the future.
+    ///
     /// # Errors
-    /// Propagates an SFTP error from [`load`](Self::load).
+    /// Propagates an SFTP error from [`load`](Self::load) or the mtime read.
     async fn age_seconds(&mut self) -> Result<Option<u64>> {
         self.load().await?;
+        if self.invalid {
+            return self.invalid_age().await;
+        }
         if self.lock.user.is_empty() || self.lock.timestamp.is_empty() {
             return Ok(None);
         }
@@ -448,11 +589,40 @@ impl<C: Clock> TargetLock<C> {
         if age <= self.lock_stale_age {
             return Ok(false);
         }
+        if self.invalid {
+            tracing::warn!(
+                host = %self.hostname(), hours = age / 3600,
+                "removing stale invalid lockfile"
+            );
+            return self.remove_invalid().await;
+        }
         tracing::warn!(
             host = %self.hostname(), user = %self.lock.user, hours = age / 3600,
             "removing stale lock"
         );
         self.unlock(true).await?;
+        Ok(true)
+    }
+
+    /// Removes the lockfile only if it is still invalid on a fresh read, so a
+    /// claimant that finished writing its line in the meantime keeps it.
+    ///
+    /// Returns whether the file was removed (an already-missing one counts).
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the read or the remove.
+    async fn remove_invalid(&mut self) -> Result<bool> {
+        self.load().await?;
+        if !self.invalid {
+            return Ok(false);
+        }
+        let path = self.filename();
+        match self.connection.sftp_remove(&path).await {
+            Ok(()) | Err(HostError::SftpNotFound { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        self.invalid = false;
+        self.held = None;
         Ok(true)
     }
 
@@ -464,8 +634,12 @@ impl<C: Clock> TargetLock<C> {
     /// # Errors
     /// Propagates an SFTP error from the underlying calls.
     pub async fn try_claim(&mut self, comment: &str) -> Result<bool> {
-        if self.is_locked().await? && !self.is_mine()? && !self.reap_if_stale().await? {
-            return Ok(false);
+        if self.is_locked_settled().await? && !self.is_mine()? && !self.reap_if_stale().await? {
+            return if self.invalid {
+                Err(self.invalid_error().await?)
+            } else {
+                Ok(false)
+            };
         }
         match self.lock(comment).await {
             Ok(()) => Ok(true),
@@ -579,7 +753,8 @@ impl<C: Clock> TargetLock<C> {
 
             // 2) The file exists. Load it (fail-closed) and decide.
             self.load().await?;
-            if self.lock.user.is_empty() {
+            self.settle().await?;
+            if self.lock.user.is_empty() && !self.invalid {
                 // Freed between the create and the load — retry the create.
                 continue;
             }
@@ -630,11 +805,25 @@ impl<C: Clock> TargetLock<C> {
             if self.wait_for_lock().await? {
                 continue;
             }
-            return Err(HostError::TargetLocked(self.locked_by_msg().await?));
+            return Err(self.contention().await?);
         }
 
         // Exhausted retries: treat as contended and fail closed.
-        Err(HostError::TargetLocked(self.locked_by_msg().await?))
+        Err(self.contention().await?)
+    }
+
+    /// The error for a lock that cannot be taken: [`HostError::InvalidLockFile`]
+    /// when the lockfile is invalid, else [`HostError::TargetLocked`] naming the
+    /// holder.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from [`load`](Self::load).
+    async fn contention(&mut self) -> Result<HostError> {
+        let msg = self.locked_by_msg().await?;
+        if self.invalid {
+            return self.invalid_error().await;
+        }
+        Ok(HostError::TargetLocked(msg))
     }
 
     /// A "locked by" message suitable for display.
@@ -643,6 +832,9 @@ impl<C: Clock> TargetLock<C> {
     /// Propagates an SFTP error from [`load`](Self::load).
     pub(crate) async fn locked_by_msg(&mut self) -> Result<String> {
         self.load().await?;
+        if self.invalid {
+            return Ok(self.invalid_error().await?.to_string());
+        }
         Ok(format!("{} is {}", self.hostname(), self.lock))
     }
 
@@ -698,7 +890,7 @@ impl<C: Clock> TargetLock<C> {
             return Ok(());
         }
         if !self.is_mine()? && !force {
-            return Err(HostError::TargetLocked(self.locked_by_msg().await?));
+            return Err(self.contention().await?);
         }
         let path = self.filename();
         match self.connection.sftp_remove(&path).await {
@@ -715,6 +907,7 @@ impl<C: Clock> TargetLock<C> {
             }
         }
         self.lock = RemoteLock::default();
+        self.invalid = false;
         self.held = None;
         Ok(())
     }
@@ -728,6 +921,9 @@ impl<C: Clock> TargetLock<C> {
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
     /// lock is loaded.
     pub(crate) fn is_mine(&self) -> Result<bool> {
+        if self.invalid {
+            return Ok(false);
+        }
         if self.lock.user.is_empty() {
             return Err(HostError::TargetLocked("not locked".to_owned()));
         }
@@ -781,6 +977,7 @@ impl<C: Clock> TargetLock<C> {
             lock: self.lock.clone(),
             is_mine,
             rrid: String::new(),
+            invalid: self.invalid,
         })
     }
 }
@@ -861,6 +1058,9 @@ impl<C: Clock> PoolLock<C> {
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
     /// lock is loaded.
     fn is_mine(&self) -> Result<bool> {
+        if self.inner.invalid {
+            return Ok(false);
+        }
         let lock = self.inner.current();
         if lock.user.is_empty() {
             return Err(HostError::TargetLocked("not locked".to_owned()));
@@ -899,6 +1099,7 @@ impl<C: Clock> PoolLock<C> {
             lock,
             is_mine,
             rrid,
+            invalid: self.inner.invalid,
         })
     }
 
@@ -927,14 +1128,64 @@ impl<C: Clock> PoolLock<C> {
     /// Claims the pool lock, recording `comment` (the
     /// `mtui pool <RRID> [<owner>]` stamp).
     ///
-    /// Delegates to the inner [`TargetLock::lock`], which writes the pool
-    /// lockfile atomically.
+    /// Creates the pool lockfile atomically. A collision is reconciled by
+    /// **RRID** ownership, never the operation lock's PID check: a claim that is
+    /// already ours ([`is_mine`](Self::is_mine)) is adopted byte-for-byte —
+    /// without a truncating re-stamp, and without refreshing its timestamp — a
+    /// stale foreign claim is reaped and the create retried, and a fresh foreign
+    /// claim is refused untouched. Pool acquisition never waits.
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is claimed by another
-    /// owner, or an SFTP error from the write path.
+    /// owner, or an SFTP error from the read/write path.
     async fn lock(&mut self, comment: &str) -> Result<()> {
-        self.inner.lock(comment).await
+        let rl = RemoteLock {
+            user: self.inner.i_am_user.clone(),
+            timestamp: self.inner.clock.now_unix().to_string(),
+            pid: self.inner.i_am_pid,
+            comment: comment.to_owned(),
+        };
+        let path = self.filename();
+        let line = rl.to_lockfile();
+        // A timed-out create may have landed, so the next load is trusted once;
+        // a second timeout is a real error.
+        let mut timeout_reconciled = false;
+
+        for _ in 0..TargetLock::<C>::RECONCILE_RETRIES {
+            match self
+                .inner
+                .connection
+                .sftp_write(&path, line.as_bytes(), true)
+                .await
+            {
+                Ok(()) => {
+                    self.inner.held = Some(rl.comment.clone());
+                    self.inner.lock = rl;
+                    return Ok(());
+                }
+                Err(HostError::AlreadyExists { .. }) => {}
+                Err(HostError::SftpTimeout { .. }) if !timeout_reconciled => {
+                    timeout_reconciled = true;
+                }
+                Err(e) => return Err(e),
+            }
+
+            self.inner.load().await?;
+            self.inner.settle().await?;
+            if self.inner.lock.user.is_empty() && !self.inner.invalid {
+                continue;
+            }
+            if self.is_mine()? {
+                self.inner.held = Some(self.inner.lock.comment.clone());
+                return Ok(());
+            }
+            if self.reap_if_stale().await? {
+                continue;
+            }
+            return Err(self.inner.contention().await?);
+        }
+
+        Err(self.inner.contention().await?)
     }
 
     /// Force-removes the pool claim if it is older than the configured pool
@@ -960,6 +1211,14 @@ impl<C: Clock> PoolLock<C> {
         if age <= self.pool_stale_age {
             return Ok(false);
         }
+        if self.inner.invalid {
+            tracing::warn!(
+                host = %self.inner.hostname(),
+                hours = age / 3600,
+                "removing stale invalid pool lockfile"
+            );
+            return self.inner.remove_invalid().await;
+        }
         tracing::warn!(
             host = %self.inner.hostname(),
             user = %self.inner.current().user,
@@ -982,8 +1241,15 @@ impl<C: Clock> PoolLock<C> {
     /// # Errors
     /// Propagates an SFTP error from the underlying calls.
     pub(crate) async fn try_claim(&mut self, comment: &str) -> Result<bool> {
-        if self.is_locked().await? && !self.is_mine()? && !self.reap_if_stale().await? {
-            return Ok(false);
+        if self.inner.is_locked_settled().await?
+            && !self.is_mine()?
+            && !self.reap_if_stale().await?
+        {
+            return if self.inner.invalid {
+                Err(self.inner.invalid_error().await?)
+            } else {
+                Ok(false)
+            };
         }
         match self.lock(comment).await {
             Ok(()) => Ok(true),
@@ -1007,7 +1273,7 @@ impl<C: Clock> PoolLock<C> {
             return Ok(());
         }
         if !self.is_mine()? && !force {
-            return Err(HostError::TargetLocked(self.inner.locked_by_msg().await?));
+            return Err(self.inner.contention().await?);
         }
         let path = self.filename();
         match self.inner.connection.sftp_remove(&path).await {
@@ -1021,6 +1287,7 @@ impl<C: Clock> PoolLock<C> {
             }
         }
         self.inner.lock = RemoteLock::default();
+        self.inner.invalid = false;
         Ok(())
     }
 }
@@ -1066,8 +1333,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
     use crate::connection::MockConnection;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     // --- RemoteLock ---------------------------------------------------------
 
@@ -1103,13 +1370,6 @@ mod tests {
             rl.to_lockfile(),
             "1700000000:testuser:12345:update in progress"
         );
-    }
-
-    #[test]
-    fn from_lockfile_empty() {
-        let rl = RemoteLock::from_lockfile("").unwrap();
-        assert_eq!(rl.user, "");
-        assert_eq!(rl.pid, 0);
     }
 
     #[test]
@@ -2117,6 +2377,1214 @@ mod tests {
         };
         assert!(p.is_mine().unwrap());
     }
+
+    const POOL_COMMENT: &str = "mtui pool SUSE:Maintenance:1:2 [new owner]";
+
+    fn pool_line(user: &str, pid: u32, rrid: &str) -> Vec<u8> {
+        format!("{}:{user}:{pid}:mtui pool {rrid} [previous owner]", now()).into_bytes()
+    }
+
+    fn pool_writes(handle: &MockConnection) -> Vec<(PathBuf, bool)> {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                crate::connection::MockSftpOp::Write { path, exclusive } => Some((path, exclusive)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pool_removes(handle: &MockConnection) -> usize {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| matches!(op, crate::connection::MockSftpOp::Remove(_)))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_same_rrid_other_pid() {
+        let other_pid = std::process::id() + 1;
+        assert_ne!(other_pid, std::process::id());
+        let original = pool_line("testuser", other_pid, "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert!(p.snapshot().await.unwrap().is_mine);
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), original);
+        assert_eq!(pool_removes(&handle), 0);
+        assert!(
+            pool_writes(&handle).iter().all(|(_, excl)| *excl),
+            "adoption must not rewrite the claim"
+        );
+    }
+
+    /// Asserts a refused/adopted claim left `original` untouched with no
+    /// removal and no truncating write.
+    fn assert_pool_line_untouched(handle: &MockConnection, original: &[u8]) {
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), original);
+        assert_eq!(pool_removes(handle), 0);
+        assert!(pool_writes(handle).iter().all(|(_, excl)| *excl));
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_same_pid_adopts_identical_bytes() {
+        let original = pool_line("testuser", std::process::id(), "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_refuses_other_rrid_even_with_same_pid() {
+        let original = pool_line("testuser", std::process::id(), "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_refuses_other_user_with_same_rrid() {
+        let original = pool_line("otheruser", std::process::id(), "SUSE:Maintenance:1:2");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_without_session_rrid_matches_on_user_alone() {
+        let original = pool_line("testuser", std::process::id() + 1, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_free_host_is_an_exclusive_create_with_the_stamp() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+        assert_eq!(
+            pool_writes(&handle),
+            vec![(PathBuf::from(POOL_LOCK_PATH), true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_reaps_a_stale_foreign_claim_then_creates_exclusively() {
+        let stale = now() - 200_000;
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes(),
+        );
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        p.lock(POOL_COMMENT).await.unwrap();
+
+        assert_eq!(pool_removes(&handle), 1);
+        assert!(pool_writes(&handle).iter().all(|(_, excl)| *excl));
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_does_not_reap_a_fresh_claim_for_having_a_dead_pid() {
+        let original = pool_line("testuser", 4_000_000_000, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::TargetLocked(_))
+        ));
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    /// Forwards to a [`MockConnection`], planting `foreign` right before the
+    /// first exclusive write and logging every write/remove it forwards.
+    /// `on_mtime` is planted the same way, right before the first mtime read.
+    type LandOnOpen = (u32, Option<Vec<u8>>);
+
+    #[derive(Clone)]
+    struct RacingConnection {
+        inner: MockConnection,
+        foreign: Arc<Mutex<Option<Vec<u8>>>>,
+        on_mtime: Arc<Mutex<Option<Vec<u8>>>>,
+        /// `(n, line)`: the first `n` opens see the file as it is, the next one
+        /// finds `line` written (or, for `None`, the file removed), as a
+        /// claimant's WRITE landing after its OPEN.
+        land_on_open: Arc<Mutex<Option<LandOnOpen>>>,
+        forwarded_writes: Arc<Mutex<Vec<bool>>>,
+        forwarded_removes: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connection for RacingConnection {
+        fn hostname(&self) -> &str {
+            self.inner.hostname()
+        }
+        fn clone_box(&self) -> Box<dyn Connection> {
+            Box::new(self.clone())
+        }
+        async fn run(&mut self, command: &str) -> Result<mtui_types::hostlog::CommandLog> {
+            self.inner.run(command).await
+        }
+        fn is_active(&self) -> bool {
+            self.inner.is_active()
+        }
+        fn set_command_timeout(&mut self, timeout: crate::connection::CommandTimeout) {
+            self.inner.set_command_timeout(timeout)
+        }
+        async fn close(&mut self) -> Result<()> {
+            self.inner.close().await
+        }
+        async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
+            self.inner.reconnect(retry, backoff).await
+        }
+        async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+            self.inner.fire_and_forget(command).await
+        }
+        async fn sftp_put(
+            &mut self,
+            local: &std::path::Path,
+            remote: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_put(local, remote).await
+        }
+        async fn sftp_put_bytes(&mut self, data: &[u8], remote: &std::path::Path) -> Result<()> {
+            self.inner.sftp_put_bytes(data, remote).await
+        }
+        async fn sftp_get(
+            &mut self,
+            remote: &std::path::Path,
+            local: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_get(remote, local).await
+        }
+        async fn sftp_get_folder(
+            &mut self,
+            remote: &std::path::Path,
+            local: &std::path::Path,
+        ) -> Result<()> {
+            self.inner.sftp_get_folder(remote, local).await
+        }
+        async fn sftp_listdir(&mut self, path: &std::path::Path) -> Result<Vec<String>> {
+            self.inner.sftp_listdir(path).await
+        }
+        async fn sftp_open(&mut self, path: &std::path::Path) -> Result<Vec<u8>> {
+            let landed = {
+                let mut pending = self.land_on_open.lock().unwrap();
+                match pending.as_mut() {
+                    Some((n, _)) if *n > 0 => {
+                        *n -= 1;
+                        None
+                    }
+                    Some(_) => pending.take().map(|(_, line)| line),
+                    None => None,
+                }
+            };
+            if let Some(line) = landed {
+                match line {
+                    Some(line) => self.inner.clone().sftp_write(path, &line, false).await?,
+                    None => self.inner.clone().sftp_remove(path).await?,
+                }
+            }
+            self.inner.sftp_open(path).await
+        }
+        async fn sftp_read_capped(
+            &mut self,
+            path: &std::path::Path,
+            max_bytes: usize,
+        ) -> Result<crate::connection::SftpRead> {
+            self.inner.sftp_read_capped(path, max_bytes).await
+        }
+        async fn sftp_write(
+            &mut self,
+            path: &std::path::Path,
+            data: &[u8],
+            exclusive: bool,
+        ) -> Result<()> {
+            let planted = if exclusive {
+                self.foreign.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(foreign) = planted {
+                self.inner.clone().sftp_write(path, &foreign, false).await?;
+            }
+            self.forwarded_writes.lock().unwrap().push(exclusive);
+            self.inner.sftp_write(path, data, exclusive).await
+        }
+        async fn sftp_append(&mut self, path: &std::path::Path, data: &[u8]) -> Result<()> {
+            self.inner.sftp_append(path, data).await
+        }
+        async fn sftp_remove(&mut self, path: &std::path::Path) -> Result<()> {
+            *self.forwarded_removes.lock().unwrap() += 1;
+            self.inner.sftp_remove(path).await
+        }
+        async fn sftp_mtime(&mut self, path: &std::path::Path) -> Result<Option<u64>> {
+            let planted = self.on_mtime.lock().unwrap().take();
+            if let Some(content) = planted {
+                self.inner.clone().sftp_write(path, &content, false).await?;
+            }
+            self.inner.sftp_mtime(path).await
+        }
+        async fn sftp_rmdir(&mut self, path: &std::path::Path) -> Result<()> {
+            self.inner.sftp_rmdir(path).await
+        }
+        async fn sftp_readlink(&mut self, path: &std::path::Path) -> Result<String> {
+            self.inner.sftp_readlink(path).await
+        }
+        async fn sftp_session(&mut self) -> Result<Box<dyn crate::connection::SftpSession + '_>> {
+            self.inner.sftp_session().await
+        }
+        #[cfg(feature = "shell")]
+        async fn shell(
+            &mut self,
+            cols: u32,
+            rows: u32,
+        ) -> Result<Box<dyn crate::connection::ShellChannel>> {
+            self.inner.shell(cols, rows).await
+        }
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_never_overwrites_a_claim_that_appears_after_the_precheck() {
+        let foreign = pool_line("otheruser", 99, "SUSE:Maintenance:9:9");
+        let inner = MockConnection::new("h1");
+        let handle = inner.clone();
+        let racing = RacingConnection {
+            inner,
+            foreign: Arc::new(Mutex::new(Some(foreign.clone()))),
+            on_mtime: Arc::default(),
+            land_on_open: Arc::default(),
+            forwarded_writes: Arc::default(),
+            forwarded_removes: Arc::default(),
+        };
+        let writes = racing.forwarded_writes.clone();
+        let removes = racing.forwarded_removes.clone();
+        let mut p = PoolLock::with_clock(
+            Box::new(racing),
+            &cfg(),
+            "SUSE:Maintenance:1:2",
+            FakeClock::new(now()),
+        );
+
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), foreign);
+        assert_eq!(*writes.lock().unwrap(), vec![true]);
+        assert_eq!(*removes.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_adopts_a_create_whose_reply_timed_out_exactly_once() {
+        let conn = MockConnection::new("h1").with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        p.lock(POOL_COMMENT).await.unwrap();
+
+        assert!(p.snapshot().await.unwrap().is_mine);
+        assert_eq!(
+            handle.sftp_ops()[..2],
+            [
+                crate::connection::MockSftpOp::Write {
+                    path: PathBuf::from(POOL_LOCK_PATH),
+                    exclusive: true,
+                },
+                crate::connection::MockSftpOp::Open(PathBuf::from(POOL_LOCK_PATH)),
+            ]
+        );
+        assert_eq!(pool_writes(&handle).len(), 1);
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_does_not_adopt_a_foreign_claim_after_a_timeout() {
+        let original = pool_line("otheruser", 99, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1")
+            .with_file(POOL_LOCK_PATH, original.clone())
+            .with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::TargetLocked(msg)) if msg.contains("otheruser")
+        ));
+
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_propagates_an_unreadable_claim() {
+        let conn = MockConnection::new("h1")
+            .with_file(
+                POOL_LOCK_PATH,
+                pool_line("testuser", 1, "SUSE:Maintenance:1:2"),
+            )
+            .with_open_error(POOL_LOCK_PATH);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::Sftp { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn pool_reacquire_propagates_a_second_create_timeout() {
+        let stale = now() - 200_000;
+        let conn = MockConnection::new("h1")
+            .with_file(
+                POOL_LOCK_PATH,
+                format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes(),
+            )
+            .with_exclusive_write_timeout(POOL_LOCK_PATH);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            p.lock(POOL_COMMENT).await,
+            Err(HostError::SftpTimeout { .. })
+        ));
+    }
+    // --- invalid lock files -------------------------------------------------
+
+    /// Content that must never read as free: empty, whitespace-only, wrong
+    /// field count, a non-numeric pid, no user, not UTF-8.
+    const INVALID_CONTENTS: [&[u8]; 9] = [
+        b"",
+        b"  \n\t\n",
+        b"\n",
+        b"just some text",
+        b"1700000000:alice",
+        b"1700000000:alice:notapid",
+        b"1700000000::4242",
+        b"\xff\xfe\xfd",
+        b"1700000000:alice:4242:note-\xe9",
+    ];
+
+    const VALID_FOREIGN: &[u8] = b"1700000000:otheruser:4242:busy";
+
+    fn creates(handle: &MockConnection, path: &str) -> usize {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| {
+                matches!(op, crate::connection::MockSftpOp::Write { path: p, exclusive: true }
+                    if p == std::path::Path::new(path))
+            })
+            .count()
+    }
+
+    fn removes(handle: &MockConnection, path: &str) -> usize {
+        handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| {
+                matches!(op, crate::connection::MockSftpOp::Remove(p)
+                    if p == std::path::Path::new(path))
+            })
+            .count()
+    }
+
+    fn assert_invalid(err: HostError, path: &str) {
+        match err {
+            HostError::InvalidLockFile {
+                host,
+                path: p,
+                remedy,
+            } => {
+                assert_eq!(host, "h1");
+                assert_eq!(p, path);
+                assert!(remedy.contains("--force"), "{remedy}");
+            }
+            other => panic!("expected InvalidLockFile, got {other:?}"),
+        }
+    }
+
+    /// `(remote mtime, whether the stale policy reaps)` against the default
+    /// 24 h stale age at [`now`].
+    fn mtime_cases() -> [(Option<u64>, bool); 5] {
+        [
+            (Some(now() - 86_401), true),
+            (Some(now() - 86_400), false),
+            (Some(now() - 60), false),
+            (Some(now() + 60), false),
+            (None, false),
+        ]
+    }
+
+    fn with_mtime(conn: MockConnection, path: &str, mtime: Option<u64>) -> MockConnection {
+        match mtime {
+            Some(m) => conn.with_mtime(path, m),
+            None => conn,
+        }
+    }
+
+    #[test]
+    fn from_lockfile_rejects_what_is_not_a_lock_line() {
+        for bad in [
+            "",
+            "   ",
+            "1700000000:alice",
+            "1:alice:x",
+            "1700000000::4242",
+        ] {
+            assert!(RemoteLock::from_lockfile(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_op_lock_is_locked_and_reported_invalid() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec());
+            let mut lock = tl(conn, FakeClock::new(now()));
+            assert!(lock.is_locked().await.unwrap(), "{content:?}");
+            let snap = lock.snapshot().await.unwrap();
+            assert!(snap.invalid, "{content:?}");
+            assert!(!snap.is_mine, "{content:?}");
+            assert!(snap.lock.user.is_empty(), "{content:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_or_valid_op_lock_is_not_invalid() {
+        let mut lock = tl(MockConnection::new("h1"), FakeClock::new(now()));
+        assert!(!lock.is_locked().await.unwrap());
+        assert!(!lock.snapshot().await.unwrap().invalid);
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, VALID_FOREIGN.to_vec());
+        let mut lock = tl(conn, FakeClock::new(now()));
+        assert!(lock.is_locked().await.unwrap());
+        assert!(!lock.snapshot().await.unwrap().invalid);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_op_lock_refuses_a_claim_after_one_create() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut lock = tl(conn, FakeClock::new(now()));
+
+            let err = lock.lock("").await.unwrap_err();
+
+            assert_invalid(err, TARGET_LOCK_PATH);
+            assert_eq!(creates(&handle, TARGET_LOCK_PATH), 1, "{content:?}");
+            assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), content);
+            assert_eq!(removes(&handle, TARGET_LOCK_PATH), 0);
+            assert!(!lock.holds());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_op_lock_fails_try_claim_without_writing() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut lock = reaping_lock(conn);
+
+            let err = lock.try_claim("").await.unwrap_err();
+
+            assert_invalid(err, TARGET_LOCK_PATH);
+            assert_eq!(creates(&handle, TARGET_LOCK_PATH), 0, "{content:?}");
+            assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), content);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_valid_foreign_op_lock_still_reads_as_contended_not_invalid() {
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, VALID_FOREIGN.to_vec());
+        let handle = conn.clone();
+        let mut lock = reaping_lock(conn);
+        assert!(matches!(
+            lock.lock("").await,
+            Err(HostError::TargetLocked(_))
+        ));
+        assert!(!lock.try_claim("").await.unwrap());
+        assert!(matches!(
+            lock.unlock(false).await,
+            Err(HostError::TargetLocked(_))
+        ));
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            VALID_FOREIGN
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plain_unlock_leaves_an_invalid_op_lock_alone() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut lock = tl(conn, FakeClock::new(now()));
+
+            let err = lock.unlock(false).await.unwrap_err();
+
+            assert_invalid(err, TARGET_LOCK_PATH);
+            assert_eq!(handle.file_contents(TARGET_LOCK_PATH).unwrap(), content);
+            assert_eq!(removes(&handle, TARGET_LOCK_PATH), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forced_unlock_removes_an_invalid_op_lock_and_the_host_can_then_be_claimed() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut lock = tl(conn, FakeClock::new(now()));
+
+            lock.unlock(true).await.unwrap();
+
+            assert!(
+                handle.file_contents(TARGET_LOCK_PATH).is_none(),
+                "{content:?}"
+            );
+            assert!(!lock.is_invalid());
+            assert!(!lock.is_locked().await.unwrap());
+            lock.lock("").await.unwrap();
+            assert!(lock.holds());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_old_invalid_op_lock_is_reaped_by_its_modification_time() {
+        for content in INVALID_CONTENTS {
+            for (mtime, reaped) in mtime_cases() {
+                let conn = with_mtime(
+                    MockConnection::new("h1").with_file(TARGET_LOCK_PATH, content.to_vec()),
+                    TARGET_LOCK_PATH,
+                    mtime,
+                );
+                let handle = conn.clone();
+                let mut lock = reaping_lock(conn);
+
+                assert_eq!(
+                    lock.reap_if_stale().await.unwrap(),
+                    reaped,
+                    "{content:?} mtime {mtime:?}"
+                );
+
+                assert_eq!(
+                    handle.file_contents(TARGET_LOCK_PATH).is_none(),
+                    reaped,
+                    "{content:?} mtime {mtime:?}"
+                );
+                assert_eq!(lock.is_invalid(), !reaped, "{content:?} mtime {mtime:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_age_of_an_invalid_lock_is_its_mtime_age_and_unknown_without_one() {
+        for (mtime, age) in [
+            (Some(now() - 3600), Some(3600)),
+            (Some(now()), Some(0)),
+            (Some(now() + 60), None),
+            (None, None),
+        ] {
+            let conn = with_mtime(
+                MockConnection::new("h1").with_file(TARGET_LOCK_PATH, Vec::new()),
+                TARGET_LOCK_PATH,
+                mtime,
+            );
+            let mut lock = reaping_lock(conn);
+            assert_eq!(lock.age_seconds().await.unwrap(), age, "mtime {mtime:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_stale_policy_switches_still_gate_an_invalid_op_lock() {
+        let old = Some(now() - 200_000);
+        let mut off = reaping_cfg();
+        off.lock_reap_stale = false;
+        let mut zero = reaping_cfg();
+        zero.lock_stale_age = 0;
+        for c in [off, zero] {
+            let conn = with_mtime(
+                MockConnection::new("h1").with_file(TARGET_LOCK_PATH, Vec::new()),
+                TARGET_LOCK_PATH,
+                old,
+            );
+            let handle = conn.clone();
+            let mut lock = TargetLock::with_clock(Box::new(conn), &c, FakeClock::new(now()));
+            assert!(!lock.reap_if_stale().await.unwrap());
+            assert!(handle.file_contents(TARGET_LOCK_PATH).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_valid_op_lock_is_never_reaped_by_its_modification_time() {
+        let fresh = now() - 60;
+        let conn = MockConnection::new("h1")
+            .with_file(
+                TARGET_LOCK_PATH,
+                format!("{fresh}:otheruser:99999").into_bytes(),
+            )
+            .with_mtime(TARGET_LOCK_PATH, now() - 200_000);
+        let handle = conn.clone();
+        let mut lock = reaping_lock(conn);
+        assert!(!lock.reap_if_stale().await.unwrap());
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failed_remove_of_a_stale_invalid_lock_propagates_and_keeps_it_invalid() {
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, Vec::new())
+            .with_file(POOL_LOCK_PATH, Vec::new())
+            .with_mtime(TARGET_LOCK_PATH, now() - 200_000)
+            .with_mtime(POOL_LOCK_PATH, now() - 200_000)
+            .failing_sftp_remove();
+        let mut lock = reaping_lock(conn.clone());
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(matches!(
+            lock.reap_if_stale().await,
+            Err(HostError::Sftp { .. })
+        ));
+        assert!(matches!(
+            p.reap_if_stale().await,
+            Err(HostError::Sftp { .. })
+        ));
+        assert!(lock.is_invalid());
+        assert!(p.inner.invalid);
+    }
+
+    #[tokio::test]
+    async fn the_op_reap_keeps_a_lock_that_became_valid_before_the_remove() {
+        let racing = RacingConnection {
+            inner: MockConnection::new("h1")
+                .with_file(TARGET_LOCK_PATH, Vec::new())
+                .with_mtime(TARGET_LOCK_PATH, now() - 200_000),
+            foreign: Arc::default(),
+            on_mtime: Arc::new(Mutex::new(Some(VALID_FOREIGN.to_vec()))),
+            land_on_open: Arc::default(),
+            forwarded_writes: Arc::default(),
+            forwarded_removes: Arc::default(),
+        };
+        let handle = racing.inner.clone();
+        let removes = racing.forwarded_removes.clone();
+        let mut lock =
+            TargetLock::with_clock(Box::new(racing), &reaping_cfg(), FakeClock::new(now()));
+
+        assert!(!lock.reap_if_stale().await.unwrap());
+
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            VALID_FOREIGN
+        );
+        assert_eq!(*removes.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_waiting_claim_reaps_an_old_invalid_op_lock_and_takes_the_host() {
+        let mut c = reaping_cfg();
+        c.lock_wait = 5;
+        c.lock_wait_poll = 1;
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, Vec::new())
+            .with_mtime(TARGET_LOCK_PATH, now() - 200_000);
+        let handle = conn.clone();
+        let mut lock = TargetLock::with_clock(Box::new(conn), &c, FakeClock::new(now()));
+
+        lock.lock("").await.unwrap();
+
+        assert!(lock.holds());
+        assert!(
+            String::from_utf8(handle.file_contents(TARGET_LOCK_PATH).unwrap())
+                .unwrap()
+                .contains("testuser")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_waiting_claim_gives_up_on_a_young_invalid_op_lock_with_the_invalid_error() {
+        let mut c = reaping_cfg();
+        c.lock_wait = 2;
+        c.lock_wait_poll = 1;
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, Vec::new())
+            .with_mtime(TARGET_LOCK_PATH, now() - 60);
+        let handle = conn.clone();
+        let mut lock = TargetLock::with_clock(Box::new(conn), &c, FakeClock::new(now()));
+
+        let err = lock.lock("").await.unwrap_err();
+
+        assert_invalid(err, TARGET_LOCK_PATH);
+        assert_eq!(creates(&handle, TARGET_LOCK_PATH), 1);
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn the_invalid_error_names_the_host_the_path_and_the_way_out() {
+        for (path, flag, key) in [
+            (TARGET_LOCK_PATH, "unlock --force", "stale_age"),
+            (POOL_LOCK_PATH, "unlock --pool --force", "pool_stale_age"),
+        ] {
+            let mut lock = TargetLock::with_clock_and_path(
+                Box::new(
+                    MockConnection::new("h1")
+                        .with_file(path, Vec::new())
+                        .with_mtime(path, now() - 90),
+                ),
+                &cfg(),
+                FakeClock::new(now()),
+                PathBuf::from(path),
+            );
+            let msg = lock.invalid_error().await.unwrap().to_string();
+            assert!(msg.contains("h1") && msg.contains(path), "{msg}");
+            assert!(msg.contains("invalid (empty or unparseable)"), "{msg}");
+            assert!(msg.contains(flag) && msg.contains(key), "{msg}");
+            assert!(msg.contains("last modified 90s ago"), "{msg}");
+            assert!(msg.contains("if no other mtui is claiming it"), "{msg}");
+        }
+    }
+
+    // --- invalid pool claims ------------------------------------------------
+
+    #[tokio::test]
+    async fn an_invalid_pool_claim_is_locked_and_reported_invalid() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
+            let mut p = pool(conn, "SUSE:Maintenance:1:2");
+            assert!(p.is_locked().await.unwrap(), "{content:?}");
+            let snap = p.snapshot().await.unwrap();
+            assert!(snap.invalid, "{content:?}");
+            assert!(!snap.is_mine, "{content:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_pool_claim_refuses_a_claim_after_one_create() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+            let err = p.lock(POOL_COMMENT).await.unwrap_err();
+
+            assert_invalid(err, POOL_LOCK_PATH);
+            assert_eq!(creates(&handle, POOL_LOCK_PATH), 1, "{content:?}");
+            assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), content);
+            assert_eq!(removes(&handle, POOL_LOCK_PATH), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_pool_claim_fails_try_claim_without_writing() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+            let err = p.try_claim(POOL_COMMENT).await.unwrap_err();
+
+            assert_invalid(err, POOL_LOCK_PATH);
+            assert_eq!(creates(&handle, POOL_LOCK_PATH), 0, "{content:?}");
+            assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), content);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_valid_foreign_pool_claim_is_still_just_busy() {
+        let original = pool_line("otheruser", 99, "SUSE:Maintenance:9:9");
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, original.clone());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(!p.try_claim(POOL_COMMENT).await.unwrap());
+        assert!(matches!(
+            p.unlock(false).await,
+            Err(HostError::TargetLocked(_))
+        ));
+        assert_pool_line_untouched(&handle, &original);
+    }
+
+    #[tokio::test]
+    async fn a_plain_pool_unlock_leaves_an_invalid_claim_alone() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+            let err = p.unlock(false).await.unwrap_err();
+
+            assert_invalid(err, POOL_LOCK_PATH);
+            assert_eq!(handle.file_contents(POOL_LOCK_PATH).unwrap(), content);
+            assert_eq!(removes(&handle, POOL_LOCK_PATH), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forced_pool_unlock_removes_an_invalid_claim_and_the_host_can_then_be_claimed() {
+        for content in INVALID_CONTENTS {
+            let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
+            let handle = conn.clone();
+            let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+            p.unlock(true).await.unwrap();
+
+            assert!(
+                handle.file_contents(POOL_LOCK_PATH).is_none(),
+                "{content:?}"
+            );
+            assert!(!p.inner.invalid);
+            assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_old_invalid_pool_claim_is_reaped_by_its_modification_time() {
+        for content in INVALID_CONTENTS {
+            for (mtime, reaped) in mtime_cases() {
+                let conn = with_mtime(
+                    MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec()),
+                    POOL_LOCK_PATH,
+                    mtime,
+                );
+                let handle = conn.clone();
+                let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+                assert_eq!(
+                    p.reap_if_stale().await.unwrap(),
+                    reaped,
+                    "{content:?} mtime {mtime:?}"
+                );
+
+                assert_eq!(
+                    handle.file_contents(POOL_LOCK_PATH).is_none(),
+                    reaped,
+                    "{content:?} mtime {mtime:?}"
+                );
+                assert_eq!(p.inner.invalid, !reaped, "{content:?} mtime {mtime:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pool_claim_attempt_reaps_an_old_invalid_claim_and_takes_the_host() {
+        let conn = MockConnection::new("h1")
+            .with_file(POOL_LOCK_PATH, Vec::new())
+            .with_mtime(POOL_LOCK_PATH, now() - 200_000);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+
+        assert!(p.try_claim(POOL_COMMENT).await.unwrap());
+
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!("{}:testuser:{}:{POOL_COMMENT}", now(), std::process::id()).into_bytes()
+        );
+        assert_eq!(removes(&handle, POOL_LOCK_PATH), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pool_stale_switches_still_gate_an_invalid_claim() {
+        let mut off = cfg();
+        off.pool_reap_stale = false;
+        let mut zero = cfg();
+        zero.pool_stale_age = 0;
+        for c in [off, zero] {
+            let conn = MockConnection::new("h1")
+                .with_file(POOL_LOCK_PATH, Vec::new())
+                .with_mtime(POOL_LOCK_PATH, now() - 200_000);
+            let handle = conn.clone();
+            let mut p = PoolLock::with_clock(
+                Box::new(conn),
+                &c,
+                "SUSE:Maintenance:1:2",
+                FakeClock::new(now()),
+            );
+            assert!(!p.reap_if_stale().await.unwrap());
+            assert!(handle.file_contents(POOL_LOCK_PATH).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pool_reap_keeps_a_claim_that_became_valid_before_the_remove() {
+        let racing = RacingConnection {
+            inner: MockConnection::new("h1")
+                .with_file(POOL_LOCK_PATH, Vec::new())
+                .with_mtime(POOL_LOCK_PATH, now() - 200_000),
+            foreign: Arc::default(),
+            on_mtime: Arc::new(Mutex::new(Some(pool_line(
+                "otheruser",
+                99,
+                "SUSE:Maintenance:9:9",
+            )))),
+            land_on_open: Arc::default(),
+            forwarded_writes: Arc::default(),
+            forwarded_removes: Arc::default(),
+        };
+        let handle = racing.inner.clone();
+        let removes = racing.forwarded_removes.clone();
+        let mut p = PoolLock::with_clock(
+            Box::new(racing),
+            &cfg(),
+            "SUSE:Maintenance:1:2",
+            FakeClock::new(now()),
+        );
+
+        assert!(!p.reap_if_stale().await.unwrap());
+
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            pool_line("otheruser", 99, "SUSE:Maintenance:9:9")
+        );
+        assert_eq!(*removes.lock().unwrap(), 0);
+    }
+
+    // --- a claimant between its create and its write --------------------------
+
+    /// How the settle tests seed the file's modification time.
+    #[derive(Clone, Copy, Debug)]
+    enum Age {
+        /// Seconds before [`now`].
+        Ago(u64),
+        Future,
+        Unknown,
+    }
+
+    /// Op-lock or pool-claim side of a settle scenario.
+    #[derive(Clone, Copy, Debug)]
+    enum Side {
+        OpLock,
+        OpTryClaim,
+        PoolLock,
+        PoolTryClaim,
+    }
+
+    const SIDES: [Side; 4] = [
+        Side::OpLock,
+        Side::OpTryClaim,
+        Side::PoolLock,
+        Side::PoolTryClaim,
+    ];
+
+    impl Side {
+        fn path(self) -> &'static str {
+            match self {
+                Self::OpLock | Self::OpTryClaim => TARGET_LOCK_PATH,
+                Self::PoolLock | Self::PoolTryClaim => POOL_LOCK_PATH,
+            }
+        }
+
+        fn valid_line(self) -> Vec<u8> {
+            match self {
+                Self::OpLock | Self::OpTryClaim => VALID_FOREIGN.to_vec(),
+                Self::PoolLock | Self::PoolTryClaim => {
+                    pool_line("otheruser", 99, "SUSE:Maintenance:9:9")
+                }
+            }
+        }
+    }
+
+    /// Runs bob's claim on `side` against an empty file seeded with `age`, whose
+    /// owner's line lands after `lands_after` reads (`None`: it never does).
+    /// Returns bob's outcome (`Ok(claimed)`), the fake clock's elapsed seconds,
+    /// and a handle on the remote file.
+    async fn claim_against_empty_file(
+        side: Side,
+        age: Age,
+        lands_after: Option<u32>,
+    ) -> (Result<bool>, f64, MockConnection) {
+        let path = side.path();
+        let mut inner = MockConnection::new("h1").with_file(path, Vec::new());
+        match age {
+            Age::Ago(s) => inner = inner.with_mtime(path, now() - s),
+            Age::Future => inner = inner.with_mtime(path, now() + 60),
+            Age::Unknown => {}
+        }
+        let handle = inner.clone();
+        let racing = RacingConnection {
+            inner,
+            foreign: Arc::default(),
+            on_mtime: Arc::default(),
+            land_on_open: Arc::new(Mutex::new(
+                lands_after.map(|n| (n, Some(side.valid_line()))),
+            )),
+            forwarded_writes: Arc::default(),
+            forwarded_removes: Arc::default(),
+        };
+        let clock = FakeClock::new(now());
+        let outcome = match side {
+            Side::OpLock | Side::OpTryClaim => {
+                let mut lock =
+                    TargetLock::with_clock(Box::new(racing), &reaping_cfg(), clock.clone());
+                if matches!(side, Side::OpLock) {
+                    lock.lock("").await.map(|()| true)
+                } else {
+                    lock.try_claim("").await
+                }
+            }
+            Side::PoolLock | Side::PoolTryClaim => {
+                let mut p = PoolLock::with_clock(
+                    Box::new(racing),
+                    &cfg(),
+                    "SUSE:Maintenance:1:2",
+                    clock.clone(),
+                );
+                if matches!(side, Side::PoolLock) {
+                    p.lock(POOL_COMMENT).await.map(|()| true)
+                } else {
+                    p.try_claim(POOL_COMMENT).await
+                }
+            }
+        };
+        (outcome, clock.monotonic(), handle)
+    }
+
+    #[tokio::test]
+    async fn a_claimant_whose_line_lands_after_its_create_is_contended_never_invalid() {
+        for side in SIDES {
+            for age in [Age::Ago(1), Age::Unknown, Age::Future] {
+                for reads in [1, 2, 3] {
+                    let (outcome, _, handle) =
+                        claim_against_empty_file(side, age, Some(reads)).await;
+                    let ctx = format!("{side:?} {age:?} reads {reads}");
+                    match (side, outcome) {
+                        (Side::OpLock | Side::PoolLock, Err(HostError::TargetLocked(msg))) => {
+                            assert!(!msg.contains("force"), "{ctx}: {msg}");
+                        }
+                        (Side::OpTryClaim | Side::PoolTryClaim, Ok(false)) => {}
+                        (_, other) => panic!("{ctx}: {other:?}"),
+                    }
+                    assert_eq!(
+                        handle.file_contents(side.path()).unwrap(),
+                        side.valid_line()
+                    );
+                    assert_eq!(removes(&handle, side.path()), 0, "{ctx}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_old_empty_file_is_invalid_at_once_and_says_how_old_it_is() {
+        for side in SIDES {
+            let (outcome, elapsed, handle) =
+                claim_against_empty_file(side, Age::Ago(600), None).await;
+            let Err(err) = outcome else {
+                panic!("{side:?}: {outcome:?}");
+            };
+            assert!(
+                matches!(err, HostError::InvalidLockFile { .. }),
+                "{side:?}: {err:?}"
+            );
+            let msg = err.to_string();
+            assert!(msg.contains("last modified 600s ago"), "{side:?}: {msg}");
+            assert!(
+                msg.contains("if no other mtui is claiming it"),
+                "{side:?}: {msg}"
+            );
+            assert_eq!(elapsed, 0.0, "{side:?} must not wait on an old file");
+            assert_eq!(
+                creates(&handle, side.path()),
+                usize::from(matches!(side, Side::OpLock | Side::PoolLock))
+            );
+            assert_eq!(handle.file_contents(side.path()).unwrap(), b"");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_that_cannot_be_proved_old_is_given_the_settle_window_then_reported_invalid() {
+        for side in SIDES {
+            for (age, window, said) in [
+                (Age::Ago(2), 5.0, "last modified 2s ago"),
+                (Age::Unknown, 5.0, "last modification time unknown"),
+                (Age::Future, 5.0, "last modification time unknown"),
+            ] {
+                let (outcome, elapsed, handle) = claim_against_empty_file(side, age, None).await;
+                let ctx = format!("{side:?} {age:?}");
+                let Err(err) = outcome else {
+                    panic!("{ctx}: {outcome:?}");
+                };
+                assert!(
+                    matches!(err, HostError::InvalidLockFile { .. }),
+                    "{ctx}: {err:?}"
+                );
+                assert!(err.to_string().contains(said), "{ctx}: {err}");
+                assert_eq!(elapsed, window, "{ctx}");
+                assert_eq!(
+                    creates(&handle, side.path()),
+                    usize::from(matches!(side, Side::OpLock | Side::PoolLock)),
+                    "{ctx}"
+                );
+                assert_eq!(handle.file_contents(side.path()).unwrap(), b"", "{ctx}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_that_vanishes_while_settling_is_claimed_as_free() {
+        for side in [Side::OpLock, Side::PoolLock] {
+            let path = side.path();
+            let inner = MockConnection::new("h1").with_file(path, Vec::new());
+            let handle = inner.clone();
+            let racing = RacingConnection {
+                inner,
+                foreign: Arc::default(),
+                on_mtime: Arc::default(),
+                land_on_open: Arc::new(Mutex::new(Some((1, None)))),
+                forwarded_writes: Arc::default(),
+                forwarded_removes: Arc::default(),
+            };
+            let clock = FakeClock::new(now());
+            match side {
+                Side::PoolLock => {
+                    let mut p = PoolLock::with_clock(
+                        Box::new(racing),
+                        &cfg(),
+                        "SUSE:Maintenance:1:2",
+                        clock,
+                    );
+                    p.lock(POOL_COMMENT).await.unwrap();
+                }
+                _ => {
+                    let mut lock = TargetLock::with_clock(Box::new(racing), &reaping_cfg(), clock);
+                    lock.lock("").await.unwrap();
+                    assert!(lock.holds());
+                }
+            }
+            assert_ne!(handle.file_contents(path).unwrap(), b"", "{side:?}");
+        }
+    }
+
     // --- civil date ---------------------------------------------------------
 
     #[test]

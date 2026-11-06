@@ -29,6 +29,11 @@ const TRANSACTIONAL_CONFS: [&str; 2] = [
     "/usr/etc/transactional-update.conf",
     "/etc/transactional-update.conf",
 ];
+/// The mount table of the SFTP server process. It shows the host's `/` when
+/// the server runs in the host's mount namespace, as a stock `sftp-server`
+/// does; under a `ChrootDirectory` or another namespace it may not, and the
+/// parse then falls back as described in [`parse_system`].
+const MOUNTS: &str = "/proc/self/mounts";
 
 /// Parses the system information of a target host over SFTP.
 ///
@@ -126,12 +131,11 @@ pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
 
     // Step 5: transactional-update.conf may live in /usr/etc (newer) or /etc
     // (older). Probe both so the older layout is not misdetected.
-    let mut transactional = false;
+    let mut has_conf = false;
     for conf in TRANSACTIONAL_CONFS {
         match sftp.open(Path::new(conf)).await {
             Ok(_) => {
-                transactional = true;
-                tracing::info!(host = %hostname, "host is a transactional system");
+                has_conf = true;
                 break;
             }
             Err(HostError::SftpNotFound { .. }) => continue,
@@ -139,7 +143,61 @@ pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
         }
     }
 
+    // The config file alone is not enough: a read-write host can carry it too
+    // (#686). Only a read-only `/` makes the host transactional.
+    //
+    // When the mount table gives no answer (the file is missing, or it has no
+    // `/` entry), keep the config-file answer from before #686. That is the
+    // safer mistake: a transactional host taken for a standard one would run
+    // zypper on its read-only root, while the reverse only refuses commands.
+    // Any other error reading it is propagated, like the config probes above,
+    // so a transport or permission failure is not taken for either answer.
+    let transactional = has_conf
+        && match sftp.open(Path::new(MOUNTS)).await {
+            Ok(bytes) => match root_is_read_only(&bytes) {
+                Some(read_only) => read_only,
+                None => {
+                    warn!(host = %hostname, "no / entry in {MOUNTS}; keeping the transactional-update.conf answer");
+                    true
+                }
+            },
+            Err(HostError::SftpNotFound { .. }) => {
+                warn!(host = %hostname, "{MOUNTS} not found; keeping the transactional-update.conf answer");
+                true
+            }
+            Err(e) => return Err(e),
+        };
+    if transactional {
+        tracing::info!(host = %hostname, "host is a transactional system");
+    } else if has_conf {
+        tracing::info!(
+            host = %hostname,
+            "host has transactional-update.conf but a read-write root; not transactional"
+        );
+    }
+
     Ok((System::new(base, addons, dangling_base), transactional))
+}
+
+/// Whether `/` is mounted read-only according to a mount table in the format
+/// of `/proc/self/mounts`, or `None` when the table has no `/` entry.
+///
+/// The last `/` entry wins, as it is the one mounted on top. The options field
+/// is matched by whole option, so `errors=remount-ro` does not count as `ro`.
+fn root_is_read_only(mounts: &[u8]) -> Option<bool> {
+    String::from_utf8_lossy(mounts)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (_device, mountpoint, _fstype, options) = (
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+            );
+            (mountpoint == "/").then(|| options.split(',').any(|o| o == "ro"))
+        })
+        .next_back()
 }
 
 /// Handles the non-SUSE path: `/etc/os-release` → parsed product, or RHEL 6 when
@@ -231,6 +289,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parse_system_reads_the_mount_table_in_the_same_session() {
+        // With transactional-update.conf present the mount table is read too
+        // (listdir + readlink + 3 opens + 1 conf probe + mounts = 7 reads),
+        // still through the one batched session.
+        let mut conn = sles_with_two_addons()
+            .with_file("/usr/etc/transactional-update.conf", b"".to_vec())
+            .with_file(
+                "/proc/self/mounts",
+                b"/dev/vda2 / btrfs rw,relatime 0 0\n".to_vec(),
+            );
+        let (_system, transactional) = super::parse_system(&mut conn).await.expect("parse ok");
+        assert!(!transactional);
+        assert_eq!(conn.sftp_session_count(), 1);
+    }
+
+    #[tokio::test]
     async fn parse_system_output_is_unchanged_by_batching() {
         // Isomorphism proof: the parsed System (base + addons + dangling flag)
         // and the transactional flag are byte-for-byte the expected values —
@@ -289,5 +363,27 @@ mod tests {
         assert!(matches!(err, crate::error::HostError::Sftp { .. }));
         // Still only one session was opened (the failure was mid-batch).
         assert_eq!(conn.sftp_session_count(), 1);
+    }
+
+    #[test]
+    fn root_is_read_only_reads_the_last_root_entry_by_whole_option() {
+        use super::root_is_read_only;
+        let ro = b"proc /proc proc rw,nosuid 0 0\n/dev/vda3 / btrfs ro,relatime,subvol=/@/.snapshots/5/snapshot 0 0\n";
+        assert_eq!(root_is_read_only(ro), Some(true));
+        // #686: SLES 16 with a read-write root.
+        let rw = b"/dev/vda2 / btrfs rw,relatime,subvol=/@/.snapshots/413/snapshot 0 0\n";
+        assert_eq!(root_is_read_only(rw), Some(false));
+        // `errors=remount-ro` is not the `ro` option.
+        let ext4 = b"/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 0\n";
+        assert_eq!(root_is_read_only(ext4), Some(false));
+        // The entry mounted on top wins.
+        let over = b"rootfs / rootfs rw 0 0\n/dev/vda3 / btrfs ro 0 0\n";
+        assert_eq!(root_is_read_only(over), Some(true));
+        let rw_on_top = b"/dev/vda3 / btrfs ro 0 0\n/dev/vda2 / btrfs rw 0 0\n";
+        assert_eq!(root_is_read_only(rw_on_top), Some(false));
+        // `/var` being read-only says nothing about `/`.
+        let no_root = b"/dev/vda4 /var btrfs ro 0 0\n";
+        assert_eq!(root_is_read_only(no_root), None);
+        assert_eq!(root_is_read_only(b""), None);
     }
 }

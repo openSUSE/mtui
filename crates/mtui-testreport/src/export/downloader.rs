@@ -116,8 +116,9 @@ fn join_url(base: &str, parts: &[&str]) -> String {
     s
 }
 
-/// The last `/`-segment of `host`.
+/// The last non-empty `/`-segment of `host` (a parsed base URL ends in `/`).
 fn host_tail(host: &str) -> &str {
+    let host = host.trim_end_matches('/');
     host.rsplit('/').next().unwrap_or(host)
 }
 
@@ -130,7 +131,7 @@ fn host_tail(host: &str) -> &str {
 /// overwrite arbitrary files. Mirrors
 /// `mtui_hosts::connection::ssh::validate_sftp_component`, ported rather than
 /// shared because `mtui-testreport` must not depend on the lower `mtui-hosts`.
-fn is_safe_component(s: &str) -> bool {
+pub(super) fn is_safe_component(s: &str) -> bool {
     // `\` is rejected regardless of host OS: the *local* side may be Windows.
     if s.is_empty()
         || s == "."
@@ -370,7 +371,23 @@ mod tests {
         assert!(plan("http://h", &test_arch("ltp", "a/b"), r, i).is_none());
         // Unsafe host tail.
         assert!(plan("http://h/..", &test("install_k"), r, i).is_none());
-        assert!(plan("http://h/", &test("install_k"), r, i).is_none());
+    }
+
+    #[test]
+    fn plan_accepts_the_trailing_slash_a_parsed_base_url_carries() {
+        // `url::Url` (ruoqa's base URL) serialises a bare host with a `/`.
+        let (remote, local) = plan(
+            "https://openqa.example/",
+            &test("install_k"),
+            Path::new("/res"),
+            Path::new("/inst"),
+        )
+        .expect("a real base URL must be downloadable");
+        assert!(
+            remote.starts_with("https://openqa.example/tests/"),
+            "{remote}"
+        );
+        assert_eq!(local, Path::new("/inst/openqa.example-zypper-x86_64.log"));
     }
 
     #[test]

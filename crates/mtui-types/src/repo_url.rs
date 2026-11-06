@@ -28,6 +28,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::RepoUrlParseError;
+use crate::url_redaction::sanitize_url;
 
 /// URI schemes zypper/libzypp accept for a repository (`zypper modifyrepo -m`).
 const ALLOWED_SCHEMES: [&str; 12] = [
@@ -48,7 +49,14 @@ fn is_url_char(ch: char) -> bool {
 
 /// A validated repository URL safe to place on a remote command line (once
 /// shell-quoted at the boundary).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// The URL may carry credentials (`https://user:token@host/…`): [`Display`]
+/// yields the exact string to execute, while [`Debug`] and the rejection errors
+/// mask the userinfo.
+///
+/// [`Display`]: fmt::Display
+/// [`Debug`]: fmt::Debug
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RepoUrl(String);
 
 impl RepoUrl {
@@ -64,19 +72,19 @@ impl RepoUrl {
         }
         if raw.starts_with('-') {
             return Err(RepoUrlParseError::OptionLike {
-                url: raw.to_owned(),
+                url: sanitize_url(raw),
             });
         }
         if let Some(ch) = raw.chars().find(|&c| !is_url_char(c)) {
             return Err(RepoUrlParseError::IllegalChar {
                 ch,
-                url: raw.to_owned(),
+                url: sanitize_url(raw),
             });
         }
 
         let Some((scheme, _rest)) = raw.split_once("://") else {
             return Err(RepoUrlParseError::MissingScheme {
-                url: raw.to_owned(),
+                url: sanitize_url(raw),
             });
         };
         let scheme_lc = scheme.to_ascii_lowercase();
@@ -85,6 +93,14 @@ impl RepoUrl {
         }
 
         Ok(Self(raw.to_owned()))
+    }
+}
+
+impl fmt::Debug for RepoUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RepoUrl")
+            .field(&sanitize_url(&self.0))
+            .finish()
     }
 }
 
@@ -222,6 +238,46 @@ mod tests {
             Err(RepoUrlParseError::OptionLike { .. })
         ));
         assert_eq!(RepoUrl::parse(""), Err(RepoUrlParseError::Empty));
+    }
+
+    #[test]
+    fn rejected_urls_do_not_echo_userinfo() {
+        for bad in [
+            "https://audituser:CANARY@h/repo;reboot",
+            "https://audituser:CANARY@h/a b",
+            "-https://audituser:CANARY@h/r",
+            "audituser:CANARY@h/r",
+        ] {
+            let err = RepoUrl::parse(bad).expect_err("rejected");
+            for rendered in [err.to_string(), format!("{err:?}")] {
+                assert!(
+                    !rendered.contains("CANARY") && !rendered.contains("audituser"),
+                    "rejection of a credential-bearing URL leaked its userinfo"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_urls_keep_the_host_for_diagnosis() {
+        let err = RepoUrl::parse("https://u:p@h.example/repo;reboot").expect_err("rejected");
+        assert_eq!(
+            err,
+            RepoUrlParseError::IllegalChar {
+                ch: ';',
+                url: "https://***@h.example/repo;reboot".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn valid_credential_url_keeps_raw_display_but_masks_debug() {
+        let raw = "https://audituser:CANARY@repo.example/r/";
+        let url = RepoUrl::parse(raw).expect("valid");
+        assert_eq!(url.to_string(), raw);
+        let debug = format!("{url:?}");
+        assert!(!debug.contains("CANARY") && !debug.contains("audituser"));
+        assert_eq!(debug, "RepoUrl(\"https://***@repo.example/r/\")");
     }
 
     #[test]

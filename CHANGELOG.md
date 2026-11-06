@@ -8,6 +8,154 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Published on crates.io as `suse-mtui` (`cargo install suse-mtui`); the
+  binaries are still `mtui`/`mtui-mcp`.
+
+### Fixed
+
+- A command that prints nothing for about 60 seconds no longer loses its SSH
+  session and returns `exit -1`: the link now carries keepalives, so only
+  `connection_timeout` decides when a quiet command is aborted (#683).
+- A command whose SSH session is lost before it reports an exit status or
+  signal now says so in its stderr (`mtui: SSH session to <host> lost after
+  <N.N>s; …`) instead of returning a bare `exit -1` (#683).
+- `mtui-mcp`'s `initialize` and `server/discover` replies now report
+  `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
+  version (#657).
+- `load_template` given a short RRID (`S:M:…`) now reports the template under
+  its canonical id, in both the success and the failure line (#680).
+- A repeated `add_host` no longer replaces a host a test-target slot already
+  has (losing its command log and `update` record) or re-takes its pool claim,
+  and `add_host -t` no longer attaches reference hosts nobody named (#678).
+- Automatic `export` now refuses install-log filenames derived from dashboard
+  metadata that contain a path separator or control character (or are an
+  absolute path), before fetching or writing anything, so a hostile dashboard
+  entry can no longer overwrite files outside the install-logs directory. The
+  remaining logs are still exported.
+- The Slack review gate on `approve` now requires the recorded message to name
+  this exact request: a message for `SUSE:Maintenance:1:10` no longer counts as
+  a review request for `SUSE:Maintenance:1:1`.
+- The Slack review gate on `approve` now refuses when Slack cannot say who the
+  bot is (`auth.test` failed, or returned no or a blank user ID), instead of
+  carrying on without excluding the bot's own `+1`; `request_review` likewise
+  rejects a blank bot user ID.
+- `testreport_read` now honours `[mcp] max_input_bytes` mid-line: a file with a
+  line longer than the cap used to be read whole before the cap applied, so it
+  could return far more than the budget. The read now stops at the cap, cutting
+  that line, and `line_count` counts the lines read so far; the notice says the
+  remaining size is unknown.
+- A template can reattach to its own pool claim on a host after mtui restarts:
+  a claim recording the same user and request is adopted whatever PID it
+  records, instead of the host being skipped as busy. The existing claim is
+  left as it is, so its timestamp is not refreshed.
+- A repository URL that embeds credentials (`https://user:token@host/…`) is
+  still sent to `zypper` exactly as given, but its userinfo no longer reaches
+  logs, prompts, errors or the per-host command log: the `Adding repo` /
+  `Removing repo` lines, the failed-removal message, a rejected-URL error, the
+  command-timeout prompt and error, and the command and output stored for
+  `showlog`, `export` and the report all show `https://***@host/…` instead.
+  Output that merely echoes such a URL (a zypper error line) is masked the same
+  way. Only a `scheme://…@` authority is recognised: a password printed on its
+  own, or carried in a URL path or query, is not.
+- The MCP `get` tool now applies `[mcp] max_input_bytes` while reading each
+  remote file, instead of downloading the whole file per host and clipping it
+  afterwards, so a large file can no longer exhaust memory before the cap
+  applies. With a cap set, `size` is the file size the server reports when the
+  file is opened (it can differ from the returned bytes if the file changes
+  during the read), and a server that reports none now fails the call naming the
+  host rather than being read without a bound. `max_input_bytes = 0` still reads
+  everything.
+- An SFTP request that fails with an ordinary status (file not found,
+  permission denied, an exclusive create that lost the race) no longer makes
+  mtui drop its cached SFTP session and replay the request. A create, truncate
+  or append whose reply is lost is likewise no longer replayed on a fresh
+  session: the timeout is returned as it happened, so the lock layer can
+  inspect the host instead of mistaking its own file for another tester's.
+  Read-only requests still retry once on a new session after a session failure.
+  mtui drop its cached SFTP session and replay the request. An exclusive create
+  whose reply is lost is returned as a timeout instead of being replayed, so
+  the lock layer can inspect the host instead of mistaking its own file for
+  another tester's. Reads, appends, truncating writes and requests that never
+  reached the server still retry once on a new session after the cached one
+  fails.
+- An empty or unparseable `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock`
+  (left by a claim that died between creating the file and writing its line)
+  no longer reads as a free host, which wedged it: every claim retried against
+  it and reported the host as claimed by an unknown owner, `unlock --force`
+  did nothing, and a stale reap never fired. It is now an invalid lock file:
+  `list_locks` reports it as such, `lock` and pool claims refuse with an error
+  naming the host and the file and how to clear it, `unlock --force` (`--pool`
+  for the pool claim) removes it, and a plain `unlock` leaves it alone. The
+  `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
+  file's modification time because it has no timestamp of its own; a missing or
+  future modification time never reaps. A lock line holding non-UTF-8 bytes or
+  an empty user is invalid the same way, instead of being read leniently.
+- `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
+  (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
+  release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
+  when there is none.
+- A host is detected as transactional only when it has a
+  `transactional-update.conf` and `/` is mounted read-only (from
+  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
+  marked transactional, so `prepare`, `update` and `downgrade` refused it and
+  `set_repo` refreshed inside a new default snapshot. When the mount table is
+  missing or has no `/` entry, the config file decides as before, since taking
+  a transactional host for a standard one would run zypper on a read-only
+  root; any other error reading it fails the probe (#686).
+- Standalone `set_repo` takes the operation lock before changing repos and
+  releases it afterwards, like `prepare`/`update` do — while another owner
+  holds a host it now refuses (`Hosts locked: …`) instead of adding or
+  removing that host's test repo under them (#665).
+- `set_timeout` pushes the new window to already-connected hosts instead of
+  only storing it for the next connect, so a timeout raised before a long
+  quiet step (or lowered to fail fast) takes effect immediately. `set_timeout
+  0` is refused: a zero window would give a headless run a deadline of now.
+  Commands aborted by the timeout are now also recorded as timed out,
+  instead of looking like any other failed command (#687).
+- `prepare` and `downgrade` abort before locking with the names of every
+  transactional host they cannot resolve a command for — `host (Product
+  version, transactional|non-transactional)` — instead of refusing the whole
+  group with a bare `missing preparer` / `missing downgrader`. The
+  `install`/`uninstall` message spells the key out the same way. `update`
+  resolves every eligible host's updater before its own lock and repo steps,
+  so a missing updater aborts with no lock taken and no repo added or removed —
+  even a host whose repo add would have failed aborts here first. With prepare
+  enabled the prepare step still runs first, so this gate is the first check
+  only under `--noprepare` (#682).
+- Session-level `list_refhosts`/`updates` (and the other template-free
+  commands) no longer hold the active template's entry for the call, so a
+  concurrent call on that template no longer fails `template busy` (#666).
+- `export` on a kernel update downloads the openQA install and LTP logs again:
+  every one was refused as an "unsafe export path component" because the
+  openQA base URL ends in `/`.
+- Unlocking a lock that someone else removed in the meantime reports it
+  released instead of failing with an SFTP "No such file" error.
+- `get`/`put` no longer report the previous transfer's `ok` or `FAILED` for a
+  host disabled since then.
+- `put` of an unreadable local file fails on every host instead of printing
+  nothing and succeeding.
+- `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
+  download no longer fails on every host; the result line names
+  `downloads/<dir>/*.<host>`.
+- `reload_products` fails, naming the host, when the products cannot be
+  re-read, instead of printing the previously recorded product as reloaded.
+- The openQA overview no longer reports a build whose package name contains
+  `+` (e.g. `libsigc++2`) as passed: the build was sent unencoded, so openQA
+  matched no jobs.
+- `regenerate` no longer waits for, and may report success on, a regeneration
+  TeReGen refused with a JSON error body lacking an `error` key.
+- Gitea review comments reach the PR when the owner or repository name
+  contains `pulls`.
+- An update whose rpm output lacks its end marker can no longer crash mtui on a
+  multi-byte character.
+- An invalid endpoint URL in the config file, and a failed `refhosts.yml`
+  download, no longer write the URL's `user:password@` to the log.
+- `openqa_overview` no longer reports every version as FAILED "Not a valid
+  version" when the openQA job-group list is large (#762): the openQA response
+  cap is now 64 MiB (openqa.suse.de answers about 19 MB).
+
 ## [26.3.5] - 2026-10-27
 
 ### Fixed

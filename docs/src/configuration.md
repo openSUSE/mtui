@@ -59,7 +59,7 @@ Defaults below are the built-in values.
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `connection_timeout` | seconds (>0) | `300` | SSH per-command no-output timeout. Does not bound the connect handshake — see `connect_timeout`. |
+| `connection_timeout` | seconds (>0) | `300` | SSH per-command no-output timeout. The SSH link is kept alive, so this window, not a transport idle limit, decides when a quiet command is aborted. Does not bound the connect handshake — see `connect_timeout`. |
 | `connect_timeout` | seconds (>0) | `60` | SSH connect handshake budget (TCP connect, banner, and auth). Also bounds each SFTP request (lock/history file operations), which otherwise defaults to a fixed 10s. Raise it for a host with a genuinely slow banner or link (e.g. a loaded s390x LPAR, a jump-path host, or a WAN/VPN refhost); a host slower than this to respond is dropped from a batch with a warning instead of eventually connecting. |
 | `reboot_timeout` | seconds (>0) | `10` | Backoff base for reconnecting after a reboot (`prepare`/`reboot`/`update`). Sleeps grow as `2*(reboot_timeout + 5*count)` across attempts. |
 | `reboot_retries` | int (>0) | `10` | Number of post-reboot reconnect attempts beyond the first. With the defaults this gives a rebooting host up to ~12.7 minutes to come back. |
@@ -255,6 +255,13 @@ oscrc.
 - Configured datasource URLs may embed credentials
   (`scheme://user:pass@host`). mtui sanitises the userinfo to `***` before any
   URL reaches a log or an error message, keeping the host visible for diagnosis.
+- A repository URL from the report metadata may carry userinfo
+  (`https://user:token@host/repo/`) and is sent to `zypper` unchanged, so
+  authenticated repositories keep working. Everything mtui records about the
+  command — log lines, the timeout prompt, errors, and the command and output
+  kept in the per-host log that `showlog` and `export` print — masks the userinfo
+  to `***`, including a URL a remote tool echoes back in its output. A password
+  that appears without a `scheme://…@` URL around it is not recognised.
 
 ## Example
 
