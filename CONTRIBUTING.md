@@ -44,8 +44,8 @@ cargo build --workspace
 Run mtui from the checkout:
 
 ```sh
-cargo run -p mtui -- --help
-cargo run -p mtui --bin mtui-mcp -- --help
+cargo run -p suse-mtui -- --help
+cargo run -p suse-mtui --bin mtui-mcp -- --help
 ```
 
 ## Quality gates

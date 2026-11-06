@@ -49,7 +49,7 @@ workspace = true
 default = ["mcp"]
 # Gates the rmcp server so the root facade's `cli`-only build and the `mtui`
 # REPL never drag in the MCP SDK. The stdio runner + tool synthesiser live
-# behind this; the facade names it explicitly, so `-p mtui
+# behind this; the facade names it explicitly, so `-p suse-mtui
 # --no-default-features` genuinely drops it.
 mcp = [
     "dep:rmcp",

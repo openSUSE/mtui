@@ -19,7 +19,7 @@ The server lives behind the `mcp` feature, enabled by default alongside the
 `mtui` REPL's `cli` feature (see [Installation](installation.md)):
 
 ```sh
-cargo run -p mtui --bin mtui-mcp -- --help
+cargo run -p suse-mtui --bin mtui-mcp -- --help
 ```
 
 Two transports are served:
