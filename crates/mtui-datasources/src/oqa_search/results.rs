@@ -8,7 +8,9 @@ use serde::Serialize;
 /// One row in a Single Incidents / Aggregated Updates section.
 ///
 /// `status` is one of: `"passed"`, `"failed"`, `"running"`, `"missing"` (no
-/// openQA build found in the date window for aggregated updates).
+/// openQA job group, or no build found in the date window for aggregated
+/// updates), `"error"` (the job-group lookup or the openQA query failed; `note`
+/// carries the cause).
 ///
 /// `Serialize` (only) lets Phase 4's `authoring::overview` park these rows
 /// verbatim under a `testing.openqa.extra` key (P4-D6) — nothing here reads
@@ -19,13 +21,13 @@ pub struct VersionResult {
     pub version: String,
     /// The browser-facing openQA overview URL (empty when unresolved).
     pub url: String,
-    /// One of `passed` / `failed` / `running` / `missing`.
+    /// One of `passed` / `failed` / `running` / `missing` / `error`.
     pub status: String,
     /// Number of failed jobs (populated when `status == "failed"`).
     pub failed_count: usize,
     /// Number of running/scheduled jobs (populated when `status == "running"`).
     pub running_count: usize,
-    /// A free-form note (e.g. the reason for a `missing`/`failed` row).
+    /// A free-form note (e.g. the reason for a `missing`/`error` row).
     pub note: String,
 }
 
