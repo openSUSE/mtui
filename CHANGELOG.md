@@ -8,6 +8,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Published on crates.io as `suse-mtui` (`cargo install suse-mtui`); the
+  binaries are still `mtui`/`mtui-mcp`.
+
 ### Fixed
 
 - A command that prints nothing for about 60 seconds no longer loses its SSH
