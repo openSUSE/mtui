@@ -181,7 +181,7 @@ members = ["crates/*", "xtask"]
 default-members = [".", "crates/*", "xtask"]
 
 [workspace.package]
-version = "26.3.5"
+version = "26.3.6"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-or-later"   # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
@@ -327,14 +327,14 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 dhat = "0.3"
 tempfile = "3"
 # internal crates (path deps)
-mtui-types = { version = "=26.3.5", path = "crates/mtui-types" }
-mtui-config = { version = "=26.3.5", path = "crates/mtui-config" }
-mtui-hosts = { version = "=26.3.5", path = "crates/mtui-hosts" }
-mtui-datasources = { version = "=26.3.5", path = "crates/mtui-datasources" }
-mtui-testreport = { version = "=26.3.5", path = "crates/mtui-testreport" }
-mtui-core = { version = "=26.3.5", path = "crates/mtui-core" }
-mtui-cli = { version = "=26.3.5", path = "crates/mtui-cli" }
-mtui-mcp = { version = "=26.3.5", path = "crates/mtui-mcp", default-features = false }
+mtui-types = { version = "=26.3.6", path = "crates/mtui-types" }
+mtui-config = { version = "=26.3.6", path = "crates/mtui-config" }
+mtui-hosts = { version = "=26.3.6", path = "crates/mtui-hosts" }
+mtui-datasources = { version = "=26.3.6", path = "crates/mtui-datasources" }
+mtui-testreport = { version = "=26.3.6", path = "crates/mtui-testreport" }
+mtui-core = { version = "=26.3.6", path = "crates/mtui-core" }
+mtui-cli = { version = "=26.3.6", path = "crates/mtui-cli" }
+mtui-mcp = { version = "=26.3.6", path = "crates/mtui-mcp", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
