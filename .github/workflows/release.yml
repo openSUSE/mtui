@@ -597,6 +597,9 @@ jobs:
     environment: crates-io
     permissions:
       contents: read
+      # Trusted Publishing: the job swaps its OIDC token for a short-lived
+      # crates.io token; no long-lived registry secret exists.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -607,7 +610,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9  # v1.0.6
+
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --workspace --locked
