@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.6] - 2026-11-09
+
 ### Added
 
 - Published on crates.io as `suse-mtui` (`cargo install suse-mtui`); the
