@@ -161,19 +161,23 @@ zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
 osc -A ibs whoami        # confirms the `ibs` alias resolves
 ```
 
-For the crates.io publish, the repository needs one environment and one secret
-(both one-time, in the GitHub web UI, needs repo admin):
+The crates.io publish uses **Trusted Publishing**: no registry token is stored.
+One-time setup:
 
-- the **`crates-io`** environment on `openSUSE/mtui` (optionally with required
-  reviewers, so a publish waits for a human click);
-- the **`CARGO_REGISTRY_TOKEN`** secret in that environment: a crates.io token
-  of the account that owns the crates, scoped to `suse-mtui` and the eight
-  `mtui-*` crates with the `publish-new` and `publish-update` scopes. Give it
-  an expiry. Once every crate has a published version, switch to crates.io
-  Trusted Publishing (repository `openSUSE/mtui`, workflow `release.yml`,
-  environment `crates-io`, configured per crate on crates.io), move the job to
-  `id-token: write` with `rust-lang/crates-io-auth-action`, then delete the
-  secret and revoke the token.
+- the **`crates-io`** environment on `openSUSE/mtui` (GitHub web UI, needs repo
+  admin; optionally with required reviewers, so a publish waits for a human
+  click);
+- on crates.io, for each of the nine crates (`suse-mtui` and the eight `mtui-*`
+  crates; Settings → Trusted Publishing, as an owner): repository owner
+  `openSUSE`, repository `mtui`, workflow `release.yml`, environment
+  `crates-io`.
+
+The `crates-io` job requests `id-token: write`, and
+`rust-lang/crates-io-auth-action` swaps the job's OIDC token for a short-lived
+crates.io token that is revoked when the job ends. A crate that does not exist
+yet cannot be configured, so the very first publish of a new crate name needs a
+scoped API token (`publish-new`, with an expiry) exported as
+`CARGO_REGISTRY_TOKEN` and run locally.
 
 ### Release model
 
@@ -224,14 +228,18 @@ a GitHub release but never publishes.
 
 ### Recovering from a partial publish
 
-`cargo publish --workspace` is not atomic, and a new crate name is rate limited
-(a burst of about five), so a run can stop with HTTP 429 after some crates are
-already published. A published version cannot be re-published. Wait out the
-limit, then re-run the failed job's command locally or in a re-run with the
-published crates excluded:
+`cargo publish --workspace` is not atomic, and crates.io limits new crate names
+to a burst of five, then about one every ten minutes, so the first publish of a
+line with more than five new crates stops with HTTP 429 after some crates are
+out. Existing crate names are not limited, so later releases do not hit this.
+
+A published version cannot be re-published, and **re-running the failed job
+cannot work**: `cargo publish --workspace` does not skip crates that already
+exist and fails on the first one. Publish the rest by hand, in dependency order,
+from a checkout of the tag, retrying on a 429:
 
 ```sh
-cargo publish --workspace --locked --exclude mtui-types --exclude mtui-config
+cargo publish -p mtui-core --locked   # then mtui-cli, mtui-mcp, suse-mtui
 ```
 
 If a published crate has a defect, `cargo yank` hides it, but the fix is a new
