@@ -1,33 +1,92 @@
 //! Host-system detection for the `people.testers` entry an export authors.
 //!
-//! [`detect_system`] reads `/etc/os-release` and `/proc/version` to discover
-//! the distro, version id, and kernel of the machine running mtui.
+//! [`detect_system`] reports the OS and kernel of the machine running mtui.
+//! Both are schema-optional, so a value that cannot be detected is `None` and
+//! the export leaves the field out rather than sending a placeholder.
 
-/// Detects `(distro, version_id, kernel)` of the current machine.
+/// OS and kernel of the machine running mtui; `None` where undetectable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemInfo {
+    /// `NAME-VERSION_ID` from os-release, or `macOS-27.2 (26B123)` on macOS.
+    pub os: Option<String>,
+    /// The `uname(2)` release (`uname -r`).
+    pub kernel: Option<String>,
+}
+
+/// Detects the OS and kernel of the current machine.
 ///
-/// Parses `NAME=` / `VERSION_ID=` from `/etc/os-release` and the third
-/// whitespace-separated token of the first line of `/proc/version`. On
-/// failure the fields fall back to sentinels (`Unknown` / `None` for the
-/// os-release pair, `Unknown` for the kernel), so the result is always
-/// well-formed even off a Linux host.
+/// macOS reads `SystemVersion.plist`; every other target reads
+/// `/etc/os-release`, falling back to `/usr/lib/os-release`. The kernel is
+/// `uname(2).release` on Unix targets.
 #[must_use]
-pub fn detect_system() -> (String, String, String) {
-    let (distro, verid) = match std::fs::read_to_string("/etc/os-release") {
-        Ok(content) => {
-            let distro = extract_quoted(&content, "NAME=").unwrap_or_default();
-            let verid = extract_quoted(&content, "VERSION_ID=").unwrap_or_default();
-            (distro, verid)
-        }
-        Err(_) => ("Unknown".to_string(), "None".to_string()),
-    };
+pub fn detect_system() -> SystemInfo {
+    SystemInfo {
+        os: detect_os(),
+        kernel: kernel_release(),
+    }
+}
 
-    let kernel = std::fs::read_to_string("/proc/version")
-        .ok()
-        .and_then(|s| s.lines().next().map(str::to_string))
-        .and_then(|line| line.split(' ').nth(2).map(str::to_string))
-        .unwrap_or_else(|| "Unknown".to_string());
+#[cfg(target_os = "macos")]
+fn detect_os() -> Option<String> {
+    let plist = std::fs::read_to_string("/System/Library/CoreServices/SystemVersion.plist").ok()?;
+    os_from_system_version_plist(&plist)
+}
 
-    (distro, verid, kernel)
+#[cfg(not(target_os = "macos"))]
+fn detect_os() -> Option<String> {
+    ["/etc/os-release", "/usr/lib/os-release"]
+        .iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| os_from_os_release(&content))
+}
+
+#[cfg(unix)]
+fn kernel_release() -> Option<String> {
+    let release = nix::sys::utsname::uname()
+        .ok()?
+        .release()
+        .to_string_lossy()
+        .into_owned();
+    (!release.is_empty()).then_some(release)
+}
+
+#[cfg(not(unix))]
+fn kernel_release() -> Option<String> {
+    None
+}
+
+/// `NAME-VERSION_ID`, or just `NAME` when `VERSION_ID` is absent or empty.
+/// `None` without a non-empty `NAME`.
+#[cfg(any(not(target_os = "macos"), test))]
+fn os_from_os_release(content: &str) -> Option<String> {
+    let name = extract_quoted(content, "NAME=").filter(|n| !n.is_empty())?;
+    match extract_quoted(content, "VERSION_ID=").filter(|v| !v.is_empty()) {
+        Some(verid) => Some(format!("{name}-{verid}")),
+        None => Some(name),
+    }
+}
+
+/// `ProductName-ProductVersion (ProductBuildVersion)` from an XML
+/// `SystemVersion.plist`; the build suffix is dropped when absent. `None`
+/// without a non-empty name and version.
+#[cfg(any(target_os = "macos", test))]
+fn os_from_system_version_plist(content: &str) -> Option<String> {
+    let name = plist_string(content, "ProductName")?;
+    let version = plist_string(content, "ProductVersion")?;
+    match plist_string(content, "ProductBuildVersion") {
+        Some(build) => Some(format!("{name}-{version} ({build})")),
+        None => Some(format!("{name}-{version}")),
+    }
+}
+
+/// The non-empty `<string>` that directly follows `<key>{key}</key>`.
+#[cfg(any(target_os = "macos", test))]
+fn plist_string(content: &str, key: &str) -> Option<String> {
+    let marker = format!("<key>{key}</key>");
+    let after = content[content.find(&marker)? + marker.len()..].trim_start();
+    let value = after.strip_prefix("<string>")?;
+    let value = value[..value.find("</string>")?].trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Finds the first line beginning with `key` and returns its value with a
@@ -36,6 +95,7 @@ pub fn detect_system() -> (String, String, String) {
 /// An os-release value may be double-quoted, single-quoted or bare
 /// (`NAME=Fedora`, `VERSION_ID=15.6` are spec-legal); a value with mismatched
 /// delimiters is returned verbatim.
+#[cfg(any(not(target_os = "macos"), test))]
 fn extract_quoted(content: &str, key: &str) -> Option<String> {
     let line = content.lines().find(|l| l.starts_with(key))?;
     let raw = &line[key.len()..];
@@ -90,5 +150,104 @@ mod tests {
             extract_quoted("NAME=|weird|\n", "NAME=").as_deref(),
             Some("|weird|")
         );
+    }
+
+    const OS_RELEASE: &str = "NAME=\"SLES\"\nVERSION_ID=\"15.5\"\n";
+
+    const MACOS_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildID</key>
+	<string>A1B2C3D4-0000-0000-0000-000000000000</string>
+	<key>ProductBuildVersion</key>
+	<string>26B123</string>
+	<key>ProductName</key>
+	<string>macOS</string>
+	<key>ProductVersion</key>
+	<string>27.2</string>
+</dict>
+</plist>
+"#;
+
+    #[test]
+    fn os_release_joins_name_and_version_id() {
+        assert_eq!(os_from_os_release(OS_RELEASE).as_deref(), Some("SLES-15.5"));
+    }
+
+    #[test]
+    fn os_release_without_version_id_is_the_bare_name() {
+        assert_eq!(
+            os_from_os_release("NAME=\"Tumbleweed\"\n").as_deref(),
+            Some("Tumbleweed")
+        );
+        assert_eq!(
+            os_from_os_release("NAME=Arch\nVERSION_ID=\"\"\n").as_deref(),
+            Some("Arch")
+        );
+    }
+
+    #[test]
+    fn os_release_without_a_name_is_none() {
+        assert_eq!(os_from_os_release("VERSION_ID=\"15.5\"\n"), None);
+        assert_eq!(os_from_os_release("NAME=\"\"\nVERSION_ID=\"15.5\"\n"), None);
+        assert_eq!(os_from_os_release(""), None);
+    }
+
+    #[test]
+    fn plist_renders_name_version_and_build() {
+        assert_eq!(
+            os_from_system_version_plist(MACOS_PLIST).as_deref(),
+            Some("macOS-27.2 (26B123)")
+        );
+    }
+
+    #[test]
+    fn plist_without_a_build_drops_the_suffix() {
+        let plist = "<key>ProductName</key>\n<string>macOS</string>\n\
+                     <key>ProductVersion</key>\n<string>27.2</string>";
+        assert_eq!(
+            os_from_system_version_plist(plist).as_deref(),
+            Some("macOS-27.2")
+        );
+    }
+
+    #[test]
+    fn plist_missing_name_or_version_is_none() {
+        let no_version = "<key>ProductName</key><string>macOS</string>";
+        let no_name = "<key>ProductVersion</key><string>27.2</string>";
+        let empty = "<key>ProductName</key><string></string>\
+                     <key>ProductVersion</key><string>27.2</string>";
+        assert_eq!(os_from_system_version_plist(no_version), None);
+        assert_eq!(os_from_system_version_plist(no_name), None);
+        assert_eq!(os_from_system_version_plist(empty), None);
+    }
+
+    #[test]
+    fn plist_garbage_is_none() {
+        assert_eq!(os_from_system_version_plist("bplist00\u{1}\u{2}"), None);
+        assert_eq!(os_from_system_version_plist(""), None);
+        let unterminated = "<key>ProductName</key><string>macOS";
+        assert_eq!(os_from_system_version_plist(unterminated), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detects_the_macos_host() {
+        let info = detect_system();
+        assert!(
+            info.os
+                .as_deref()
+                .is_some_and(|os| os.starts_with("macOS-")),
+            "os: {:?}",
+            info.os
+        );
+        assert!(info.kernel.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_the_linux_kernel() {
+        assert!(detect_system().kernel.is_some());
     }
 }

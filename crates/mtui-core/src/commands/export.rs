@@ -395,12 +395,12 @@ fn build_tester_entry(session: &Session) -> Option<mtui_types::report_document::
             return None;
         }
     };
-    let (distro, verid, kernel) = mtui_testreport::detect_system();
+    let info = mtui_testreport::detect_system();
     Some(mtui_types::report_document::TesterEntry {
         name: creds.user,
         mtui: Some(env!("CARGO_PKG_VERSION").to_owned()),
-        os: Some(format!("{distro}-{verid}")),
-        kernel: Some(kernel),
+        os: info.os,
+        kernel: info.kernel,
         at: None,
     })
 }
