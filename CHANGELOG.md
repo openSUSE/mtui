@@ -424,6 +424,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The exported `people.testers` entry reports the real OS and kernel on macOS
+  (`macOS-27.2 (26B123)`, `27.2.0`). If the OS or kernel cannot be detected, mtui
+  leaves out those fields instead of sending `Unknown-None` / `Unknown`.
 - `openqa_overview` no longer reports every version as FAILED "Not a valid
   version" when the openQA job-group list is large (#762). The openQA response
   cap is now 64 MiB (openqa.suse.de answers about 19 MB), a job-group lookup or
