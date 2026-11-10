@@ -2764,6 +2764,7 @@ dependencies = [
  "mtui-datasources",
  "mtui-hosts",
  "mtui-types",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",
