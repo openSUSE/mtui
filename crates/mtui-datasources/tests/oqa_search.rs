@@ -786,25 +786,44 @@ async fn get_incident_info_sends_the_git_project_and_type() {
 
 // --- incident_jobs ---
 
+/// Serves `body` as the only page of `/api/v1/jobs`: the request without
+/// `before` gets it, and any follow-up page (with `before`) is empty, as
+/// openQA answers past the oldest job.
+async fn mount_single_page(server: &MockServer, body: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param_is_missing("before"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(|req: &wiremock::Request| req.url.query_pairs().any(|(k, _)| k == "before"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "jobs": [] })))
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn incident_jobs_drops_obsoleted_by_default() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/jobs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_single_page(
+        &server,
+        serde_json::json!({
             "jobs": [
                 {"id": 1, "test": "fips_smoke", "result": "passed", "settings": {"ARCH": "s390x"}},
                 {"id": 2, "test": "ha_2nodes", "result": "failed", "settings": {"ARCH": "s390x"}},
                 {"id": 3, "test": "old_run", "result": "obsoleted", "settings": {"ARCH": "x86_64"}}
             ]
-        })))
-        .mount(&server)
-        .await;
+        }),
+    )
+    .await;
 
-    let rows = incident_jobs(&oqa_client(&server.uri()), ":git:5137:libica", false)
+    let found = incident_jobs(&oqa_client(&server.uri()), ":git:5137:libica", false)
         .await
-        .expect("ok")
-        .jobs;
+        .expect("ok");
+    assert!(found.complete);
+    let rows = found.jobs;
     let results: Vec<&str> = rows.iter().map(|r| r.result.as_str()).collect();
     assert_eq!(results, vec!["failed", "passed"]);
     let failed = rows.iter().find(|r| r.result == "failed").unwrap();
@@ -816,17 +835,18 @@ async fn incident_jobs_drops_obsoleted_by_default() {
 #[tokio::test]
 async fn incident_jobs_include_obsoleted() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/jobs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_single_page(
+        &server,
+        serde_json::json!({
             "jobs": [{"id": 3, "test": "x", "result": "obsoleted", "settings": {"ARCH": "x86_64"}}]
-        })))
-        .mount(&server)
-        .await;
-    let rows = incident_jobs(&oqa_client(&server.uri()), ":b", true)
+        }),
+    )
+    .await;
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", true)
         .await
-        .expect("ok")
-        .jobs;
+        .expect("ok");
+    assert!(found.complete);
+    let rows = found.jobs;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].result, "obsoleted");
 }
@@ -836,9 +856,9 @@ async fn incident_jobs_include_obsoleted() {
 #[tokio::test]
 async fn incident_jobs_read_flavor_version_machine_from_settings() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/jobs"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_single_page(
+        &server,
+        serde_json::json!({
             "jobs": [
                 {"id": 1, "test": "a", "result": "passed", "settings": {
                     "ARCH": "x86_64", "FLAVOR": "Server-DVD-Incidents",
@@ -846,13 +866,14 @@ async fn incident_jobs_read_flavor_version_machine_from_settings() {
                 }},
                 {"id": 2, "test": "b", "result": "passed", "settings": {"ARCH": "x86_64"}}
             ]
-        })))
-        .mount(&server)
-        .await;
-    let rows = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        }),
+    )
+    .await;
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
         .await
-        .expect("ok")
-        .jobs;
+        .expect("ok");
+    assert!(found.complete);
+    let rows = found.jobs;
     let full = rows.iter().find(|r| r.test == "a").unwrap();
     assert_eq!(full.flavor, "Server-DVD-Incidents");
     assert_eq!(full.version, "15-SP6");
@@ -1422,6 +1443,7 @@ async fn incident_jobs_marks_a_page_without_ids_incomplete() {
     })
     .await;
     assert!(!found.complete);
+    assert!(found.jobs.is_empty(), "jobs without an id are not listed");
     assert_eq!(requests, 1);
 }
 
@@ -1514,4 +1536,62 @@ async fn incident_jobs_scenario_key_ignores_the_group() {
         .expect("ok");
     assert_eq!(found.jobs.len(), 1);
     assert_eq!(found.superseded.len(), 1);
+}
+
+/// A job without an id is skipped: it has no link and cannot be
+/// de-duplicated. The other jobs of the page are still listed.
+#[tokio::test]
+async fn incident_jobs_skip_jobs_without_an_id() {
+    let server = MockServer::start().await;
+    let mut no_id = oqa_job(0, "no_id", "64bit", "failed");
+    no_id.as_object_mut().unwrap().remove("id");
+    mount_single_page(
+        &server,
+        serde_json::json!({ "jobs": [oqa_job(20, "install", "64bit", "passed"), no_id] }),
+    )
+    .await;
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", true)
+        .await
+        .expect("ok");
+    let urls: Vec<String> = found.jobs.iter().map(|r| r.url.clone()).collect();
+    assert_eq!(urls, vec![format!("{}/t20", server.uri())]);
+    assert!(found.complete);
+}
+
+/// A response without a `jobs` list after the first page leaves the result
+/// incomplete; on the first page it means the build has no jobs.
+#[tokio::test]
+async fn incident_jobs_missing_jobs_key_mid_paging_is_incomplete() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param_is_missing("before"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jobs": [oqa_job(20, "install", "64bit", "passed")]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .and(query_param("before", "20"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    let found = incident_jobs(&oqa_client(&server.uri()), ":b", false)
+        .await
+        .expect("ok");
+    assert_eq!(found.jobs.len(), 1);
+    assert!(!found.complete);
+
+    let empty = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&empty)
+        .await;
+    let found = incident_jobs(&oqa_client(&empty.uri()), ":b", false)
+        .await
+        .expect("ok");
+    assert!(found.jobs.is_empty());
+    assert!(found.complete);
 }

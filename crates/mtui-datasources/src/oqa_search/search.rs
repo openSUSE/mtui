@@ -280,14 +280,15 @@ fn fetched_job(job: &serde_json::Value, openqa_trimmed: &str) -> FetchedJob {
             .unwrap_or("")
             .to_string()
     };
+    let (flavor, version, machine) = (setting("FLAVOR"), setting("VERSION"), setting("MACHINE"));
     FetchedJob {
         scenario: (
             setting("DISTRI"),
-            setting("VERSION"),
-            setting("FLAVOR"),
+            version.clone(),
+            flavor.clone(),
             arch.clone(),
             test.clone(),
-            setting("MACHINE"),
+            machine.clone(),
         ),
         row: JobResult {
             job_id: id,
@@ -296,9 +297,9 @@ fn fetched_job(job: &serde_json::Value, openqa_trimmed: &str) -> FetchedJob {
             result: text("result"),
             state: text("state"),
             group: text("group"),
-            flavor: setting("FLAVOR"),
-            version: setting("VERSION"),
-            machine: setting("MACHINE"),
+            flavor,
+            version,
+            machine,
             url: format!("{openqa_trimmed}/t{id}"),
         },
     }
@@ -329,8 +330,10 @@ async fn fetch_all_jobs(
             path.push_str(&format!("&before={id}"));
         }
         let data = oqa_request(oqa, &path).await?;
+        // A response without a `jobs` list ends paging: complete when it is
+        // the first page (no jobs), incomplete once jobs were read.
         let Some(page) = data.get("jobs").and_then(|j| j.as_array()) else {
-            break true;
+            break jobs.is_empty();
         };
         if page.is_empty() {
             break true;
@@ -339,9 +342,13 @@ async fn fetch_all_jobs(
             .iter()
             .filter_map(|j| j.get("id").and_then(serde_json::Value::as_i64))
             .min();
+        // A job without an id has no link and cannot be de-duplicated, so it
+        // is skipped; a page without any id ends paging incomplete below.
         for job in page {
-            let id = job.get("id").and_then(serde_json::Value::as_i64);
-            if id.is_none_or(|id| seen_ids.insert(id)) {
+            let Some(id) = job.get("id").and_then(serde_json::Value::as_i64) else {
+                continue;
+            };
+            if seen_ids.insert(id) {
                 jobs.push(fetched_job(job, openqa_trimmed));
             }
         }

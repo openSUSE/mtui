@@ -433,6 +433,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_jobs` skips openQA jobs without an id (they had no usable link),
+  treats a response without a `jobs` list after the first page as an
+  incomplete read, and words the incomplete-read note so it fits every cause
+  ("not every job of this build could be read; older jobs may be missing")
+  (#714 review follow-up).
 - The exported `people.testers` entry reports the real OS and kernel on macOS
   (`macOS-27.2 (26B123)`, `27.2.0`). If the OS or kernel cannot be detected, mtui
   leaves out those fields instead of sending `Unknown-None` / `Unknown`.
