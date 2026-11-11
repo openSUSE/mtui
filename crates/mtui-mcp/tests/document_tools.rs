@@ -14,7 +14,7 @@ use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
 use mtui_types::report_document::ReportDocument;
 use serde_json::{Map, Value, json};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:1:1";
@@ -710,6 +710,21 @@ fn artifact(name: &str, size: u64, origin: &str) -> Value {
     json!({"name": name, "size": size, "at": 1_700_000_000, "origin": origin})
 }
 
+fn artifact_in(name: &str, origin: &str, dir: &str) -> Value {
+    json!({"name": name, "size": 3, "at": 1_700_000_000, "origin": origin, "dir": dir})
+}
+
+impl Files {
+    async fn serve_file(&self, server: &MockServer, dir: &str, name: &str, body: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{}/artifacts/{dir}/{name}", self.id)))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+}
+
 fn paths(out: &Value) -> Vec<&str> {
     out["files"]
         .as_array()
@@ -998,6 +1013,209 @@ async fn a_missing_file_is_told_apart_from_a_server_only_one() {
         msg.contains("no such file") && !msg.contains("T15"),
         "{msg}"
     );
+}
+
+#[tokio::test]
+async fn a_server_only_file_is_read_from_the_server() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("x.log", "pipeline", "build_checks"),
+            artifact_in("h1.log", "uploaded", "uploads"),
+        ]}),
+    )
+    .await;
+    f.serve_file(&server, "build_checks", "x.log", "checks\n")
+        .await;
+    f.serve_file(&server, "uploads", "h1.log", "result\n").await;
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "build_checks/x.log"}),
+    )
+    .await;
+    assert_eq!(out["content"], "checks\n");
+    assert_eq!(out["source"], "server");
+    assert_eq!(out["total_lines"], 1);
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log"}),
+    )
+    .await;
+    assert_eq!(out["content"], "result\n");
+    assert_eq!(out["source"], "server");
+}
+
+#[tokio::test]
+async fn the_committed_copy_wins_over_the_pipeline_install_log() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("h.log", "pipeline", "install_logs"),
+            artifact_in("h.log", "uploaded", "uploads"),
+        ]}),
+    )
+    .await;
+    f.serve_file(&server, "uploads", "h.log", "tester\n").await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/reports/{}/artifacts/install_logs/h.log",
+            f.id
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_string("pipeline\n"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "install_logs/h.log"}),
+    )
+    .await;
+    assert_eq!(out["content"], "tester\n");
+}
+
+#[tokio::test]
+async fn a_server_read_is_bounded_by_the_input_cap() {
+    let server = MockServer::start().await;
+    let f = Files::with_input_cap(&server, 4).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("h1.log", "uploaded", "uploads")]}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{}/artifacts/uploads/h1.log", f.id)))
+        .and(header("range", "bytes=0-4"))
+        .respond_with(ResponseTemplate::new(206).set_body_string("abcde"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log"}),
+    )
+    .await;
+    let content = out["content"].as_str().unwrap();
+    assert!(content.starts_with("abcd\n…["), "{content}");
+    assert!(
+        content.contains("source read stopped at 4 bytes"),
+        "{content}"
+    );
+}
+
+#[tokio::test]
+async fn a_server_read_honours_the_line_window() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("h1.log", "uploaded", "uploads")]}),
+    )
+    .await;
+    f.serve_file(&server, "uploads", "h1.log", "l1\nl2\nl3\n")
+        .await;
+
+    let out = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log", "offset": 2, "limit": 1}),
+    )
+    .await;
+    assert_eq!(out["content"], "l2\n");
+    assert_eq!(out["returned_lines"], 1);
+    assert_eq!(out["source"], "server");
+}
+
+#[tokio::test]
+async fn a_name_the_server_does_not_list_is_not_fetched() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("other.log", "uploaded", "uploads"),
+            artifact_in("h.log", "pipeline", "install_logs"),
+        ]}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(r"/artifacts/[^/]+/[^/]+$"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Absent by name, and present only in a directory that path cannot map to.
+    for rel in ["results/c.log", "results/h.log"] {
+        let msg = refusal(&f.session, "report_file_read", json!({"path": rel})).await;
+        assert!(msg.contains("no such file"), "{rel}: {msg}");
+    }
+}
+
+#[tokio::test]
+async fn a_file_that_vanishes_between_listing_and_fetch_is_not_found() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("h1.log", "uploaded", "uploads")]}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{}/artifacts/uploads/h1.log", f.id)))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log"}),
+    )
+    .await;
+    assert!(msg.contains("no such file"), "{msg}");
+}
+
+#[tokio::test]
+async fn a_report_that_is_generating_asks_for_a_retry() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("h1.log", "uploaded", "uploads")]}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{}/artifacts/uploads/h1.log", f.id)))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log"}),
+    )
+    .await;
+    assert!(msg.contains("generating") && msg.contains("retry"), "{msg}");
 }
 
 #[tokio::test]

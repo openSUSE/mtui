@@ -13,12 +13,14 @@ use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
 use mtui_core::ReportAccess;
-use mtui_datasources::teregen::{ArtifactEntry, TeregenV2};
+use mtui_datasources::teregen::{ArtifactEntry, TeregenV2, TeregenV2Error};
 use mtui_testreport::TestReportBase;
 use mtui_types::report_document::{Section, SectionWriteError};
 use serde_json::{Map, Value, json};
 
-use crate::report_files::{LocalLookup, list_local, resolve_local, stream_read};
+use crate::report_files::{
+    LocalLookup, list_local, read_bytes, resolve_local, server_dirs, stream_read,
+};
 use crate::session::{
     DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
 };
@@ -256,7 +258,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
              `results/` and `checkers.log` — each with its report-relative `path`, `name` and \
              `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or \
              null when the server has none; sizes differ until `commit` uploads. `server_only` \
-             lists server files with no local copy: they cannot be read yet. A failed server \
+             lists server files with no local copy: report_file_read can read them. A failed server \
              listing leaves the local list and sets `server_error`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(vec![("template", template_prop())], &[]),
@@ -269,8 +271,9 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
             "Read one report file as text: `content` and `total_lines`. `path` is relative to \
              the report directory and must be `checkers.log` or sit directly in `build_checks/`, \
              the install-log directory or `results/` (see report_files). `offset`/`limit` page a \
-             1-indexed line window; a window also returns `offset` and `returned_lines`. \
-             {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+             1-indexed line window; a window also returns `offset` and `returned_lines`. A file with \
+             no local copy falls back to the server's, and the result then carries \
+             `\"source\": \"server\"`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -512,6 +515,48 @@ async fn server_listing(config: &Config, id: &str) -> Result<Vec<ArtifactEntry>,
     client.list_artifacts(id).await.map_err(|e| e.to_string())
 }
 
+/// Fetches the server's copy of the report file `rel` that has no local one,
+/// found through the listing in the first server directory that holds it.
+async fn read_from_server(
+    config: &Config,
+    id: &str,
+    rel: &str,
+    install_logs: &Path,
+    max_bytes: usize,
+) -> Result<Vec<u8>, McpCommandError> {
+    let missing = || refuse(format!("no such file in the report directory: {rel}"));
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let entries = server_listing(config, id)
+        .await
+        .map_err(|e| refuse(format!("{} (server listing failed: {e})", missing())))?;
+    let named: Vec<&ArtifactEntry> = entries.iter().filter(|e| e.name == name).collect();
+    if named.is_empty() {
+        return Err(missing());
+    }
+    if named.iter().all(|e| e.dir.is_none()) {
+        return Err(refuse(format!(
+            "{name} exists only on the server; this teregen cannot serve it (needs T15)"
+        )));
+    }
+    let Some(dir) = server_dirs(rel, install_logs)
+        .iter()
+        .find(|dir| named.iter().any(|e| e.dir.as_deref() == Some(**dir)))
+    else {
+        return Err(missing());
+    };
+
+    let client =
+        TeregenV2::new(config, &config.teregen_api_v2).map_err(|e| refuse(e.to_string()))?;
+    client
+        .read_artifact(id, dir, name, max_bytes)
+        .await
+        .map_err(|e| match e {
+            TeregenV2Error::NotFound => missing(),
+            TeregenV2Error::Generating => refuse("the report is generating; retry shortly"),
+            other => refuse(format!("failed to read {rel} from the server: {other}")),
+        })
+}
+
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, McpCommandError> {
@@ -584,22 +629,22 @@ async fn report_file_read(
     } = file_scope(session, template).await?;
 
     let rel = path.to_owned();
-    let (lookup, rel) = blocking(move || resolve_local(&dir, &install_logs, &rel)).await??;
-    let LocalLookup::Found(file) = lookup else {
-        let name = rel.rsplit('/').next().unwrap_or(&rel);
-        let on_server = server_listing(&config, &id)
-            .await
-            .is_ok_and(|entries| entries.iter().any(|e| e.name == name));
-        return Err(refuse(if on_server {
-            format!("{name} exists only on the server; reading server artifacts needs teregen T15")
-        } else {
-            format!("no such file in the report directory: {rel}")
-        }));
-    };
+    let logs = install_logs.clone();
+    let (lookup, rel) = blocking(move || resolve_local(&dir, &logs, &rel)).await??;
 
     let window = (offset != 1 || limit.is_some()).then_some((offset, limit));
     let max_input = session.max_input_bytes();
-    let (read, _) = blocking(move || stream_read(&file, max_input, window)).await??;
+    let (read, source) = match lookup {
+        LocalLookup::Found(file) => {
+            let (read, _) = blocking(move || stream_read(&file, max_input, window)).await??;
+            (read, None)
+        }
+        LocalLookup::Missing => {
+            let bytes = read_from_server(&config, &id, &rel, &install_logs, max_input).await?;
+            let read = blocking(move || read_bytes(&bytes, max_input, window)).await?;
+            (read, Some("server"))
+        }
+    };
     let content = cap_output(read.content, session.max_output_bytes());
 
     let mut out = json!({
@@ -608,6 +653,9 @@ async fn report_file_read(
         "total_lines": read.line_count,
         "content": content,
     });
+    if let Some(source) = source {
+        out["source"] = json!(source);
+    }
     if let Some(returned) = read.returned_lines {
         out["offset"] = json!(offset);
         out["returned_lines"] = json!(returned);

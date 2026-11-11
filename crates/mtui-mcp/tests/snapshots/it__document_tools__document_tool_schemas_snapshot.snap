@@ -185,7 +185,7 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: they cannot be read yet. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy: report_file_read can read them. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -200,7 +200,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Read one report file as text: `content` and `total_lines`. `path` is relative to the report directory and must be `checkers.log` or sit directly in `build_checks/`, the install-log directory or `results/` (see report_files). `offset`/`limit` page a 1-indexed line window; a window also returns `offset` and `returned_lines`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Read one report file as text: `content` and `total_lines`. `path` is relative to the report directory and must be `checkers.log` or sit directly in `build_checks/`, the install-log directory or `results/` (see report_files). `offset`/`limit` page a 1-indexed line window; a window also returns `offset` and `returned_lines`. A file with no local copy falls back to the server's, and the result then carries `\"source\": \"server\"`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
