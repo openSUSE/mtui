@@ -18,14 +18,14 @@
 use mtui_config::Config;
 use mtui_types::report_document::{DocumentError, ReportDocument, parse_and_warn_on_dropped_keys};
 use reqwest::StatusCode;
-use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH};
+use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE};
 use serde::Deserialize;
 use thiserror::Error;
 
 use crate::error::HttpError;
 use crate::http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
-    sanitize_url,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, read_body_prefix,
+    resolve_verify, sanitize_url,
 };
 use crate::teregen::auth::{TeregenAuth, TeregenAuthError};
 
@@ -439,6 +439,68 @@ impl TeregenV2 {
             .map_err(|e| TeregenV2Error::Transport(format!("malformed artifact list: {e}")))
     }
 
+    /// `GET /reports/{rrid}/artifacts/{dir}/{name}`: the bytes of one server
+    /// file, at most `max_bytes + 1` of them (`0` means no limit). The extra
+    /// byte lets the caller tell "longer than the cap" from "exactly the cap".
+    /// Anonymous, like [`list_artifacts`](Self::list_artifacts).
+    ///
+    /// # Errors
+    ///
+    /// [`TeregenV2Error::RejectedId`] (`400`), [`TeregenV2Error::NotFound`]
+    /// (`404`), [`TeregenV2Error::Generating`] (`503`); an unsatisfiable range
+    /// (`416`, an empty file) is an empty body. A transport failure or any
+    /// other status is [`TeregenV2Error::Transport`].
+    pub async fn read_artifact(
+        &self,
+        rrid: &str,
+        dir: &str,
+        name: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, TeregenV2Error> {
+        let url = format!(
+            "{}/reports/{rrid}/artifacts/{}/{}",
+            self.base,
+            urlencoding::encode(dir),
+            urlencoding::encode(name)
+        );
+        let mut request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
+        if max_bytes > 0 {
+            request = request.header(RANGE, format!("bytes=0-{max_bytes}"));
+        }
+        let response = request.send().await.map_err(|e| {
+            let e = HttpError::from(e);
+            tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts/{dir}/<name> failed: {e}");
+            TeregenV2Error::Transport(e.to_string())
+        })?;
+
+        match response.status() {
+            StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
+                let limit = if max_bytes > 0 {
+                    max_bytes.saturating_add(1)
+                } else {
+                    usize::MAX
+                };
+                read_body_prefix(response, limit)
+                    .await
+                    .map_err(|e| TeregenV2Error::Transport(e.to_string()))
+            }
+            StatusCode::RANGE_NOT_SATISFIABLE => Ok(Vec::new()),
+            StatusCode::NOT_FOUND => Err(TeregenV2Error::NotFound),
+            StatusCode::SERVICE_UNAVAILABLE => Err(TeregenV2Error::Generating),
+            StatusCode::BAD_REQUEST => {
+                let detail = read_body_capped(response, MAX_API_BODY)
+                    .await
+                    .ok()
+                    .map(|bytes| error_detail(&bytes))
+                    .unwrap_or_default();
+                Err(TeregenV2Error::RejectedId { detail })
+            }
+            other => Err(TeregenV2Error::Transport(format!(
+                "unexpected status {other}"
+            ))),
+        }
+    }
+
     /// `PUT /reports/{rrid}`: upload `document`, adopting the server's `202`
     /// response as the new authoritative document and `ETag` (P5-D4).
     ///
@@ -666,6 +728,11 @@ pub struct ArtifactEntry {
     pub at: i64,
     /// Which server directory the file lives in.
     pub origin: ArtifactOrigin,
+    /// The server directory's name (`install_logs`, `build_checks`, `uploads`),
+    /// which addresses the file in [`TeregenV2::read_artifact`]. `None` from a
+    /// server that predates artifact download.
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 /// Where the server holds an [`ArtifactEntry`].

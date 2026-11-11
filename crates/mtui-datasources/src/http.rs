@@ -275,6 +275,24 @@ pub(crate) async fn read_body_capped(
     Ok(body)
 }
 
+/// Read at most `limit` bytes of `response`'s body, dropping the rest.
+///
+/// Unlike [`read_body_capped`] an overlong body is truncated, not an error;
+/// dropping `response` closes the connection instead of draining the overflow.
+pub(crate) async fn read_body_prefix(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while body.len() < limit
+        && let Some(chunk) = response.chunk().await?
+    {
+        let room = limit - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+    }
+    Ok(body)
+}
+
 /// Read a PEM CA bundle from `path` into reqwest certificates.
 fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
     let pem = std::fs::read(path).map_err(|source| HttpError::CaBundle {

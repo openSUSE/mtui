@@ -517,3 +517,165 @@ async fn list_artifacts_unreachable_base_is_a_transport_error() {
     let err = unreachable_client().list_artifacts(RRID).await.unwrap_err();
     assert!(matches!(err, TeregenV2Error::Transport(_)));
 }
+
+#[tokio::test]
+async fn list_artifacts_parses_dir_and_gives_none_when_the_server_omits_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifacts_path(RRID)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": RRID,
+            "artifacts": [
+                {"name": "a.log", "size": 1, "at": 1, "origin": "uploaded", "dir": "uploads"},
+                {"name": "b.log", "size": 1, "at": 1, "origin": "pipeline"},
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let dirs: Vec<_> = client(&server)
+        .list_artifacts(RRID)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.dir)
+        .collect();
+    assert_eq!(dirs, [Some("uploads".to_owned()), None]);
+}
+
+fn artifact_path(id: &str, dir: &str, name: &str) -> String {
+    format!("/reports/{id}/artifacts/{dir}/{name}")
+}
+
+#[tokio::test]
+async fn read_artifact_sends_a_range_one_byte_past_the_cap() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(RRID, "uploads", "h1.log")))
+        .and(header("range", "bytes=0-4"))
+        .respond_with(ResponseTemplate::new(206).set_body_bytes(b"abcde".to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let bytes = client(&server)
+        .read_artifact(RRID, "uploads", "h1.log", 4)
+        .await
+        .unwrap();
+    assert_eq!(bytes, b"abcde");
+}
+
+#[tokio::test]
+async fn read_artifact_with_no_cap_sends_no_range() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(RRID, "build_checks", "x.log")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"whole".to_vec()))
+        .mount(&server)
+        .await;
+
+    let bytes = client(&server)
+        .read_artifact(RRID, "build_checks", "x.log", 0)
+        .await
+        .unwrap();
+    assert_eq!(bytes, b"whole");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("range"));
+}
+
+#[tokio::test]
+async fn read_artifact_truncates_a_server_that_ignores_range() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(RRID, "uploads", "big.log")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 1000]))
+        .mount(&server)
+        .await;
+
+    let bytes = client(&server)
+        .read_artifact(RRID, "uploads", "big.log", 10)
+        .await
+        .unwrap();
+    assert_eq!(bytes.len(), 11);
+}
+
+#[tokio::test]
+async fn read_artifact_maps_each_refusal_to_its_own_variant() {
+    let server = MockServer::start().await;
+    for (status, name) in [(404, "nf.log"), (503, "gen.log"), (400, "bad.log")] {
+        Mock::given(method("GET"))
+            .and(path(artifact_path(RRID, "uploads", name)))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(serde_json::json!({"error": "nope"})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let c = client(&server);
+    let read = |name: &'static str| {
+        let c = &c;
+        async move { c.read_artifact(RRID, "uploads", name, 0).await.unwrap_err() }
+    };
+    assert!(matches!(read("nf.log").await, TeregenV2Error::NotFound));
+    assert!(matches!(read("gen.log").await, TeregenV2Error::Generating));
+    assert!(matches!(
+        read("bad.log").await,
+        TeregenV2Error::RejectedId { .. }
+    ));
+}
+
+#[tokio::test]
+async fn read_artifact_unsatisfiable_range_is_an_empty_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(RRID, "uploads", "empty.log")))
+        .respond_with(ResponseTemplate::new(416))
+        .mount(&server)
+        .await;
+
+    let bytes = client(&server)
+        .read_artifact(RRID, "uploads", "empty.log", 4)
+        .await
+        .unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn read_artifact_unmodelled_status_and_unreachable_base_are_transport_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(RRID, "uploads", "a.log")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let err = client(&server)
+        .read_artifact(RRID, "uploads", "a.log", 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TeregenV2Error::Transport(_)), "{err:?}");
+
+    let err = unreachable_client()
+        .read_artifact(RRID, "uploads", "a.log", 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TeregenV2Error::Transport(_)));
+}
+
+#[tokio::test]
+async fn read_artifact_keeps_a_dotted_slfo_id_intact() {
+    let slfo_id = "SUSE:SLFO:1.1.99:42";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(artifact_path(slfo_id, "uploads", "a.log")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let bytes = client(&server)
+        .read_artifact(slfo_id, "uploads", "a.log", 0)
+        .await
+        .unwrap();
+    assert_eq!(bytes, b"ok");
+}
