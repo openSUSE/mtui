@@ -1,7 +1,7 @@
 //! The report directory's files: the path guard and bounded line reader shared
 //! by the `report_*` file tools.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 use crate::session::McpCommandError;
@@ -129,6 +129,15 @@ pub(crate) fn stream_read(
         read,
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
     ))
+}
+
+/// [`stream_read`] over bytes already in memory, such as a server fetch.
+pub(crate) fn read_bytes(
+    bytes: &[u8],
+    max_bytes: usize,
+    window: Option<(usize, Option<usize>)>,
+) -> StreamRead {
+    stream_read_from(Cursor::new(bytes), max_bytes, window).expect("an in-memory read cannot fail")
 }
 
 fn stream_read_from<R: BufRead>(
@@ -285,6 +294,19 @@ pub(crate) fn list_local(dir: &Path, install_logs: &Path) -> Vec<LocalFile> {
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     files
+}
+
+/// The server directories that can hold the file at the normalised report path
+/// `rel`, preferred first: a tester's committed copy in `uploads` wins over the
+/// pipeline's `install_logs` file of the same name. Empty for any other path.
+pub(crate) fn server_dirs(rel: &str, install_logs: &Path) -> &'static [&'static str] {
+    match rel.split_once('/') {
+        None if rel == CHECKERS_LOG => &["uploads"],
+        Some((BUILD_CHECKS, _)) => &["build_checks"],
+        Some((RESULTS, _)) => &["uploads"],
+        Some((root, _)) if Path::new(root) == install_logs => &["uploads", "install_logs"],
+        _ => &[],
+    }
 }
 
 /// What [`resolve_local`] found at an allowed path.
@@ -555,5 +577,48 @@ mod tests {
         assert_eq!(source, "A\u{FFFD}");
         assert!(noticed);
         assert_eq!(r.line_count, 1);
+    }
+
+    #[test]
+    fn server_dirs_maps_each_local_path_to_its_server_directories() {
+        let logs = Path::new("install_logs");
+        assert_eq!(server_dirs("build_checks/x.log", logs), ["build_checks"]);
+        assert_eq!(
+            server_dirs("install_logs/h.log", logs),
+            ["uploads", "install_logs"]
+        );
+        assert_eq!(server_dirs("results/h1.log", logs), ["uploads"]);
+        assert_eq!(server_dirs("checkers.log", logs), ["uploads"]);
+        assert!(server_dirs("elsewhere/x.log", logs).is_empty());
+        assert!(server_dirs("other.log", logs).is_empty());
+    }
+
+    #[test]
+    fn server_dirs_follows_a_renamed_install_logs_directory() {
+        let logs = Path::new("logs");
+        assert_eq!(server_dirs("logs/h.log", logs), ["uploads", "install_logs"]);
+        assert!(server_dirs("install_logs/h.log", logs).is_empty());
+    }
+
+    #[test]
+    fn read_bytes_notices_one_byte_past_the_cap() {
+        let r = read_bytes(b"abcde", 4, None);
+        let (source, noticed) = split_notice(&r.content);
+        assert_eq!(source, "abcd");
+        assert!(noticed);
+    }
+
+    #[test]
+    fn read_bytes_of_exactly_the_cap_has_no_notice() {
+        let r = read_bytes(b"abcd", 4, None);
+        assert_eq!(r.content, "abcd");
+    }
+
+    #[test]
+    fn read_bytes_windows_the_fetched_lines() {
+        let r = read_bytes(b"a\nb\nc\n", 0, Some((2, Some(1))));
+        assert_eq!(r.content, "b\n");
+        assert_eq!(r.line_count, 3);
+        assert_eq!(r.returned_lines, Some(1));
     }
 }
