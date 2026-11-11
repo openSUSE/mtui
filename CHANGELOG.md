@@ -10,6 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `report_file_read` falls back to the server's copy of a file the report
+  directory lacks, such as pipeline `build_checks/` or a tester upload from
+  another machine, and marks that result `"source": "server"`. The read is
+  bounded by `[mcp] max_input_bytes` through an HTTP `Range` request. It needs
+  a teregen that serves `GET /reports/{id}/artifacts/{dir}/{name}` and tags
+  each artifact listing entry with its `dir`; an older teregen still gets the
+  "exists only on the server" refusal. **MCP schema note:** additive only — a
+  `source` key on the result, and updated `report_files`/`report_file_read`
+  descriptions.
 - Tester-filed bugs (`new_issues`): the report document models the list teregen
   derives from `new: true` issues and keeps it in step with `issues` on every
   write, so an edit made through `issues` is not reverted by the upload. New

@@ -459,7 +459,7 @@ teregen holds for the report.
   `server` is `{ "origin", "size", "at" }` for the server's file of that name
   (`origin` is `pipeline` or `uploaded`), or `null` when it has none; sizes
   differ until `commit` uploads. `server_only` lists server files with no local
-  copy.
+  copy; `report_file_read` can read them.
 - A failed server listing (not found, still generating, unreachable) never
   fails the call: the local list is returned with `server_error` set.
 
@@ -477,10 +477,29 @@ Reads one of those files as text.
   (`0` disables the cap), cutting a line that crosses it. A capped read ends
   with a notice, and `total_lines` then counts only the lines read up to the
   cap; the size of the unread rest is unknown.
+- A file the report directory lacks is read from the server instead, and the
+  result then carries `"source": "server"` (a local read has no `source` key).
+  The listing decides where the file is: mtui takes the first of these server
+  directories that lists the file's name.
+
+  | Local path | Server directories, in order |
+  |---|---|
+  | `build_checks/<name>` | `build_checks` |
+  | `<install_logs>/<name>` | `uploads`, then `install_logs` |
+  | `results/<name>` | `uploads` |
+  | `checkers.log` | `uploads` |
+
+  The tester's committed copy in `uploads` wins over the pipeline's
+  `install_logs` file of the same name. With `[mcp] max_input_bytes` set, mtui
+  sends `Range: bytes=0-<cap>` and so fetches at most one byte past the cap,
+  which makes the usual capped-read notice appear; with `0` the whole file is
+  fetched. The fetch is anonymous, like the listing.
 - Refuses a path that escapes the report directory (`..`, an absolute path, a
-  symlink out), one outside the readable set, and a missing file. A file the
-  server lists but the report directory lacks is refused with a distinct
-  message: server-side files cannot be fetched yet (needs teregen T15).
+  symlink out), one outside the readable set, and a file that is neither local
+  nor listed by the server. A server that lists the file but does not tag it
+  with a directory (a teregen without artifact download) is refused with a
+  message saying so; a report that is still generating is refused with a
+  retry hint.
 
 A result larger than `[mcp] max_output_bytes` comes back as `{ "truncated":
 true, "size", "content" }`, where `content` is the capped JSON text, rather than
