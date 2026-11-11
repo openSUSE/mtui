@@ -73,10 +73,9 @@ fn fetch_notes(superseded: usize, complete: bool) -> Vec<String> {
         ));
     }
     if !complete {
-        notes.push(format!(
-            "…[not every job of this build could be read (at most the newest {}); older jobs may be missing]",
-            oqa::MAX_INCIDENT_JOBS
-        ));
+        notes.push(
+            "…[not every job of this build could be read; older jobs may be missing]".to_string(),
+        );
     }
     notes
 }
@@ -305,7 +304,7 @@ impl Command for OpenQAJobs {
             .iter()
             .filter(|j| matches(j) && (!only_failed || is_failed(j)))
             .count();
-        let fetch_notes = fetch_notes(superseded, fetched.complete);
+        let notes = fetch_notes(superseded, fetched.complete);
 
         if jobs.is_empty() {
             let msg = session
@@ -318,7 +317,7 @@ impl Command for OpenQAJobs {
                     .yellow(&format!("{pending_count} still pending"));
                 session.display.println(&pending);
             }
-            for note in &fetch_notes {
+            for note in &notes {
                 session.display.println(note);
             }
             return Ok(());
@@ -343,7 +342,7 @@ impl Command for OpenQAJobs {
                 .yellow(&format!("{pending_count} still pending"));
             session.display.println(&pending);
         }
-        for note in &fetch_notes {
+        for note in &notes {
             session.display.println(note);
         }
         session.display.println("");
@@ -937,11 +936,9 @@ mod tests {
             fetch_notes(3, true),
             vec!["3 earlier attempts not listed (--all lists every attempt)"]
         );
-        let notes = fetch_notes(0, false);
-        assert_eq!(notes.len(), 1);
-        assert!(
-            notes[0].contains(&oqa::MAX_INCIDENT_JOBS.to_string()),
-            "{notes:?}"
+        assert_eq!(
+            fetch_notes(0, false),
+            vec!["…[not every job of this build could be read; older jobs may be missing]"]
         );
     }
 
