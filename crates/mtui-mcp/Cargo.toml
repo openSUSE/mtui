@@ -43,7 +43,7 @@ path = "benches/dispatch_concurrency.rs"
 required-features = ["mcp"]
 
 [dependencies]
-anyhow.workspace = true
+anyhow = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 base64ct = { version = "1", features = ["alloc"], optional = true }
 clap.workspace = true
@@ -108,6 +108,7 @@ default = ["mcp"]
 # behind this; the facade names it explicitly, so `-p suse-mtui
 # --no-default-features` genuinely drops it.
 mcp = [
+  "dep:anyhow",
   "dep:axum",
   "dep:base64ct",
   "dep:futures",
