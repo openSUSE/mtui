@@ -336,7 +336,7 @@ impl Repl {
                     }
                 }
                 // Ctrl-C on a partial line: clear it and reprompt, never exit.
-                Signal::CtrlC => {
+                Signal::CtrlC(_) => {
                     let mut session = self
                         .session
                         .lock()
