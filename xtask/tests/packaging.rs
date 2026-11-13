@@ -524,10 +524,10 @@ impl FakeHome {
 
     /// The build script's captured stdout (`cargo:` directives) for the
     /// scratch crate built by [`build_scratch`](Self::build_scratch): cargo
-    /// saves it as an `output` file under `target/debug/build/`. (Recent
-    /// cargo splits the compiled script and its execution output across two
-    /// hashed dirs, so this collects every `output` file rather than
-    /// assuming a single `pkg-*` dir.)
+    /// saves it under `target/debug/build/` (see [`is_build_script_stdout`]).
+    /// Recent cargo splits the compiled script and its execution output across
+    /// two hashed dirs, so this collects every match rather than assuming a
+    /// single `pkg-*` dir.
     fn build_directives(&self, ws: &str) -> String {
         let build = self.root.join(ws).join("crates/pkg/target/debug/build");
         let mut found = Vec::new();
@@ -542,7 +542,7 @@ impl FakeHome {
                         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
                         .map(|e| e.expect("build entry").path()),
                 );
-            } else if path.file_name().is_some_and(|n| n == "output") {
+            } else if is_build_script_stdout(&path) {
                 found.push(path);
             }
         }
@@ -574,6 +574,18 @@ impl FakeHome {
             directives.contains("cargo:rerun-if-changed=../../.git/HEAD"),
             "{krate}: unpackaged build lost its HEAD watch: {directives:?}"
         );
+    }
+}
+
+/// Older cargo saves the script's stdout as `output`; newer cargo as `run/stdout`.
+fn is_build_script_stdout(path: &Path) -> bool {
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some("output") => true,
+        Some("stdout") => path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|d| d == "run"),
+        _ => false,
     }
 }
 
