@@ -323,6 +323,10 @@ wiremock = "0.6"
 [workspace.lints.rust]
 unsafe_code = "warn"
 
+# homepage and documentation deliberately share the mdBook URL (see above).
+[workspace.lints.cargo]
+redundant_homepage = "allow"
+
 # Both bins are two-line `main` stubs with nothing worth documenting; `mtui-mcp`
 # also collides on `target/doc/mtui_mcp/` with the `mtui_mcp` library's own
 # rustdoc output, which the bin would otherwise win silently (Cargo only warns).
