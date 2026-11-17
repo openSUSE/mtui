@@ -10,6 +10,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New command and read-only MCP tool `openqa_summary` prints the QEM
+  Dashboard's `Results from openQA jobs` block (per-group counts, failing jobs
+  listed) for the loaded update, the same text `export` writes into the report,
+  without touching the report document. It queries the dashboard on every call
+  and joins the core profile. **MCP schema note:** additive only — one new tool
+  with no arguments.
 - `report_file_read` falls back to the server's copy of a file the report
   directory lacks, such as pipeline `build_checks/` or a tester upload from
   another machine, and marks that result `"source": "server"`. The read is

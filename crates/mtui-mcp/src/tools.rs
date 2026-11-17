@@ -77,7 +77,7 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// Exact names that escape the prefix rule but are still side-effect-free.
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
 /// Same double duty as [`READ_ONLY_PREFIXES`].
-const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
+const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs", "openqa_summary"];
 
 /// Tool-call keys still accepted, and ignored, after their property left the
 /// tool's schema in 26.4 (#597, #410): inert there, and a pinned client must
@@ -1368,7 +1368,13 @@ mod tests {
     #[test]
     fn read_only_hints_follow_allow_list() {
         let tools = build_tools(&register_all());
-        for ro in ["whoami", "openqa_overview", "openqa_jobs", "list_hosts"] {
+        for ro in [
+            "whoami",
+            "openqa_overview",
+            "openqa_jobs",
+            "openqa_summary",
+            "list_hosts",
+        ] {
             assert!(descriptor(&tools, ro).read_only, "{ro} should be read-only");
         }
         for rw in ["run", "update", "approve", "reload_products"] {

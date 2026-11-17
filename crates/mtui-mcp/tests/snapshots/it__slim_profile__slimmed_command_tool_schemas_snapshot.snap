@@ -904,6 +904,24 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
+          "description": "Act on every loaded template (the default for this command); =false narrows to the active or sole one",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "openqa_summary",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
           "type": "boolean"
         },

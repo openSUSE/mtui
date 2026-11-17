@@ -40,6 +40,7 @@ mod approve;
 mod checkers;
 mod openqa_jobs;
 mod openqa_overview;
+mod openqa_summary;
 mod regenerate;
 mod reload_openqa;
 mod request_review;
@@ -104,6 +105,7 @@ pub use approve::Approve;
 pub use checkers::Checkers;
 pub use openqa_jobs::OpenQAJobs;
 pub use openqa_overview::OpenQAOverview;
+pub use openqa_summary::OpenQASummary;
 pub use regenerate::Regenerate;
 pub use reload_openqa::ReloadOpenQA;
 pub use request_review::RequestReview;
@@ -1171,6 +1173,7 @@ mod mcp_nonempty_success_guard {
         "updates",
         "openqa_overview",
         "openqa_jobs",
+        "openqa_summary",
         "reload_openqa",
         "regenerate",
         // why: rebuilds the QEM incident + openQA "auto" result on every mode
@@ -1600,6 +1603,7 @@ mod explicit_and_fanout_scope_guard {
         "list_versions",
         "openqa_jobs",
         "openqa_overview",
+        "openqa_summary",
         "reload_openqa",
         "show_diff",
         "analyze_diff",
