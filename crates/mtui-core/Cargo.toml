@@ -58,7 +58,7 @@ wiremock.workspace = true
 # `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`).
 # Already deep in the tree.
 libc = "0.2"
-nix = { version = "0.31", features = ["user"] }
+nix = { version = "0.32", features = ["user"] }
 
 [lints]
 workspace = true

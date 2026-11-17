@@ -95,11 +95,11 @@ wiremock.workspace = true
 # `mtui-core`, so this adds no crate to the build.
 [target."cfg(unix)".dependencies]
 libc = "0.2"
-nix = { version = "0.31", features = ["user"] }
+nix = { version = "0.32", features = ["user"] }
 
 # `mkfifo` plants the non-regular sink the vetted open must refuse.
 [target."cfg(unix)".dev-dependencies]
-nix = { version = "0.31", features = ["fs", "user"] }
+nix = { version = "0.32", features = ["fs", "user"] }
 
 [features]
 default = ["mcp"]
