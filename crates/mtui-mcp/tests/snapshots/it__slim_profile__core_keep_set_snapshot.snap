@@ -23,6 +23,7 @@ list_versions
 load_template
 openqa_jobs
 openqa_overview
+openqa_summary
 prepare
 reject
 report_file_read

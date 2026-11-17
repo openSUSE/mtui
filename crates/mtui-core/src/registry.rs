@@ -188,6 +188,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Updates));
     registry.register(Arc::new(commands::OpenQAOverview));
     registry.register(Arc::new(commands::OpenQAJobs));
+    registry.register(Arc::new(commands::OpenQASummary));
     registry.register(Arc::new(commands::ReloadOpenQA));
     registry.register(Arc::new(commands::SetWorkflow));
     registry.register(Arc::new(commands::SetLogLevel));
@@ -327,6 +328,7 @@ mod tests {
             "updates",
             "openqa_overview",
             "openqa_jobs",
+            "openqa_summary",
             "set_log_level",
             "assign",
             "unassign",
@@ -344,8 +346,8 @@ mod tests {
     fn register_all_command_count() {
         // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
         // (export, list_refhosts, load_template, list_locks) + reload_openqa +
-        // set_workflow + 3 REPL-only (help, edit, teregen_login) = 61.
-        assert_eq!(register_all().names().count(), 61);
+        // set_workflow + openqa_summary + 3 REPL-only (help, edit, teregen_login) = 62.
+        assert_eq!(register_all().names().count(), 62);
     }
 
     #[test]
