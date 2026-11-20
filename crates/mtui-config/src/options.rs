@@ -475,6 +475,7 @@ pub(crate) struct McpSection {
     pub tools_deny: Option<Vec<String>>,
     pub audit_log: Option<PathBuf>,
     pub audit_log_max_bytes: Option<u64>,
+    pub put_dirs: Option<Vec<PathBuf>>,
 }
 
 /// `[obs]` table — the native OBS/IBS QAM review backend.
@@ -580,6 +581,7 @@ impl RawConfig {
         take!(mcp, tools_deny);
         take!(mcp, audit_log);
         take!(mcp, audit_log_max_bytes);
+        take!(mcp, put_dirs);
         take!(obs, api_url);
         take!(obs, request_timeout);
     }
@@ -783,6 +785,13 @@ pub struct Config {
     /// housekeeping: it never blocks the dispatch worker and never refuses a
     /// call. Default 268435456 (256 MiB).
     pub mcp_audit_log_max_bytes: u64,
+    /// Opt-in allowlist for the MCP `put` tool's `source` argument: directories
+    /// on the `mtui-mcp` server host whose files `put` may upload without the
+    /// bytes passing through the call. Entries are absolute (a leading `~` is
+    /// expanded); an empty or relative entry is dropped with an error. Empty
+    /// (the default) disables `source`. List only directories that nobody but
+    /// the operator can write to.
+    pub mcp_put_dirs: Vec<PathBuf>,
 
     // [obs]
     /// The OBS/IBS API URL the native QAM review backend acts against; must
@@ -851,6 +860,7 @@ impl Default for Config {
             mcp_tools_deny: Vec::new(),
             mcp_audit_log: None,
             mcp_audit_log_max_bytes: default_mcp_audit_log_max_bytes(),
+            mcp_put_dirs: Vec::new(),
             obs_api_url: default_obs_api_url(),
             obs_request_timeout: default_obs_request_timeout(),
         }
@@ -1074,6 +1084,25 @@ impl Config {
                 Some(bytes) => bytes,
                 None => d.mcp_audit_log_max_bytes,
             },
+            mcp_put_dirs: raw
+                .mcp
+                .put_dirs
+                .map(|dirs| {
+                    dirs.iter()
+                        .map(|p| expanduser(p))
+                        .filter(|p| {
+                            let ok = p.is_absolute();
+                            if !ok {
+                                tracing::error!(
+                                    option = "put_dirs",
+                                    "expected an absolute directory path; dropping the entry"
+                                );
+                            }
+                            ok
+                        })
+                        .collect()
+                })
+                .unwrap_or(d.mcp_put_dirs),
             obs_api_url: validated_url!(raw.obs.api_url, "obs_api_url", d.obs_api_url),
             obs_request_timeout: validated_positive!(
                 raw.obs.request_timeout,
@@ -1453,6 +1482,39 @@ mod tests {
     fn mcp_audit_log_empty_string_falls_back_to_unset() {
         let raw: RawConfig = toml::from_str("[mcp]\naudit_log = \"\"\n").unwrap();
         assert_eq!(Config::from_raw(raw).mcp_audit_log, None);
+    }
+
+    #[test]
+    fn mcp_put_dirs_defaults_to_empty() {
+        assert!(Config::default().mcp_put_dirs.is_empty());
+    }
+
+    #[test]
+    fn mcp_put_dirs_parses_and_survives_the_file_merge() {
+        let raw: RawConfig =
+            toml::from_str("[mcp]\nput_dirs = [\"/srv/a\", \"/srv/b\"]\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).mcp_put_dirs,
+            vec![PathBuf::from("/srv/a"), PathBuf::from("/srv/b")]
+        );
+        // A per-user file replaces the /etc list wholesale (the `take!` line in `merge`).
+        let mut base: RawConfig = toml::from_str("[mcp]\nput_dirs = [\"/srv/a\"]\n").unwrap();
+        let user: RawConfig = toml::from_str("[mcp]\nput_dirs = [\"~/uploads\"]\n").unwrap();
+        base.merge(user);
+        let c = Config::from_raw(base);
+        if let Some(dirs) = directories::BaseDirs::new() {
+            assert_eq!(c.mcp_put_dirs, vec![dirs.home_dir().join("uploads")]);
+        }
+    }
+
+    #[test]
+    fn mcp_put_dirs_drops_relative_and_empty_entries_keeping_siblings() {
+        let raw: RawConfig =
+            toml::from_str("[mcp]\nput_dirs = [\"rel/dir\", \"\", \"/srv/ok\"]\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).mcp_put_dirs,
+            vec![PathBuf::from("/srv/ok")]
+        );
     }
 
     #[test]

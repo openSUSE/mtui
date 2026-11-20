@@ -165,6 +165,10 @@
 # (.1 through .5); the oldest is discarded. 0 disables rotation; any other
 # value below 4096 is raised to it.
 # audit_log_max_bytes = 268435456
+# Directories on this machine from which the MCP `put` tool may upload a file
+# by `source` path. Empty (the default) disables it. List only directories
+# that nobody but you can write to.
+# put_dirs = []
 
 [obs]
 # The OBS/IBS API URL the native QAM review backend acts against. Must equal
