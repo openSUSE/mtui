@@ -392,7 +392,9 @@ Replaces one tester section with `value`.
 
 - Parameters (required): `section` (`verdict`, `comment`, `people`, `issues`,
   `new_issues`, `testing` or `review`), `value` (any JSON — `null` is a legitimate value
-  for an unanswered `verdict` or `comment`). Plus optional `template`.
+  for an unanswered `verdict` or `comment`). Plus optional `template`. A
+  string holding a JSON object or array is decoded for every section except
+  `verdict` and `comment`, whose strings are always taken literally.
 - `update` and `install` are pipeline-owned and refused. A section the report
   lacks refuses. An `issues` write must keep exactly the same issue keys; use
   `report_issue_write` for one entry. A `new_issues` write replaces the whole

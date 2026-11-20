@@ -354,7 +354,10 @@ async fn dispatch_document_tool_inner(
         }
         "report_section_write" => {
             let section = section_arg(kwargs)?;
-            let value = value_arg(kwargs)?;
+            let value = value_arg(
+                kwargs,
+                !matches!(section, Section::Verdict | Section::Comment),
+            )?;
             report_section_write(session, section, value, template).await?
         }
         "report_issue_read" => {
@@ -363,7 +366,7 @@ async fn dispatch_document_tool_inner(
         "report_issue_write" => {
             let issue_id =
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
-            let value = value_arg(kwargs)?;
+            let value = value_arg(kwargs, true)?;
             report_issue_write(session, issue_id, value, template).await?
         }
         "report_new_issue_write" => {
@@ -425,12 +428,19 @@ fn section_arg(kwargs: &Map<String, Value>) -> Result<Section, McpCommandError> 
 }
 
 /// `value` is any JSON, `null` included (an unanswered `verdict`), so only its
-/// absence is refused.
-fn value_arg(kwargs: &Map<String, Value>) -> Result<Value, McpCommandError> {
-    kwargs
+/// absence is refused. For a `container` target a string holding a JSON object
+/// or array is decoded, as some clients send nested values stringified.
+fn value_arg(kwargs: &Map<String, Value>, container: bool) -> Result<Value, McpCommandError> {
+    let value = kwargs
         .get("value")
-        .cloned()
-        .ok_or_else(|| refuse("`value` is required"))
+        .ok_or_else(|| refuse("`value` is required"))?;
+    if container
+        && let Value::String(text) = value
+        && let Ok(decoded @ (Value::Object(_) | Value::Array(_))) = serde_json::from_str(text)
+    {
+        return Ok(decoded);
+    }
+    Ok(value.clone())
 }
 
 /// Bounds an over-budget result without breaking its JSON: the capped text

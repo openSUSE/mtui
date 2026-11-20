@@ -386,6 +386,89 @@ async fn an_unanswered_value_can_be_written_as_null() {
 }
 
 #[tokio::test]
+async fn a_stringified_object_section_value_is_decoded() {
+    let value = json!({"regression": {"verdict": "PASSED", "comment": "all green"}});
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    call(
+        &session,
+        "report_section_write",
+        json!({"section": "testing", "value": value.to_string()}),
+    )
+    .await;
+
+    let read = call(
+        &session,
+        "report_section_read",
+        json!({"section": "testing"}),
+    )
+    .await;
+    assert_eq!(read["data"], value);
+}
+
+#[tokio::test]
+async fn a_stringified_issue_value_is_decoded() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let mut issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bnc#1276308"}),
+    )
+    .await["issue"]
+        .clone();
+    issue["status"] = json!("FIXED");
+
+    call(
+        &session,
+        "report_issue_write",
+        json!({"issue_id": "bnc#1276308", "value": issue.to_string()}),
+    )
+    .await;
+
+    let back = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bnc#1276308"}),
+    )
+    .await;
+    assert_eq!(back["issue"], issue);
+}
+
+#[tokio::test]
+async fn a_comment_that_is_valid_json_stays_literal_text() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    call(
+        &session,
+        "report_section_write",
+        json!({"section": "comment", "value": "{\"a\":1}"}),
+    )
+    .await;
+
+    let read = call(
+        &session,
+        "report_section_read",
+        json!({"section": "comment"}),
+    )
+    .await;
+    assert_eq!(read["data"], "{\"a\":1}");
+}
+
+#[tokio::test]
+async fn a_non_json_string_for_a_container_section_is_still_refused() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    let msg = refusal(
+        &session,
+        "report_section_write",
+        json!({"section": "testing", "value": "all green"}),
+    )
+    .await;
+
+    assert!(msg.contains("invalid type: string"), "{msg}");
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
 async fn bad_arguments_are_refused() {
     let session = loaded(Some(MAINTENANCE_OBS)).await;
 
