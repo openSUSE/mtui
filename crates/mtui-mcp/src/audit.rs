@@ -63,7 +63,8 @@
 //!   record) when one was written, plus `trace`/`tracestate` when the client
 //!   supplied valid ones. `duration_ms` is measured from arrival like `ts`,
 //!   so for a mutating tool it includes the intent record's own open and
-//!   fsync.
+//!   fsync. A successful `put` that uploaded a `source` file also carries
+//!   `upload`: `{path, bytes, sha256}` of the resolved file, never its body.
 //! * `dispatch`: a backgrounded start — as `call`, plus the started `job_ids`.
 //! * `terminal`: a background job reaching Done/Failed/Cancelled — `v`, `ts`,
 //!   `session`, `principal`, `tool`, `job_id`, `job_state`, `outcome`,
