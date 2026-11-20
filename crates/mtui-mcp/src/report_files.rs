@@ -68,7 +68,7 @@ fn resolve_existing_ancestor(path: &Path) -> PathBuf {
 }
 
 /// Lexically normalise a path, collapsing `.` and `..` without touching disk.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for comp in path.components() {

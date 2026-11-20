@@ -772,21 +772,24 @@ fn payload_keys_for(tool: &str) -> Option<&'static [&'static str]> {
 /// JSON shape hashes as its canonical encoding, so a mistyped payload still
 /// cannot leak verbatim.
 fn fingerprint_value(value: &Value) -> Value {
-    use sha2::{Digest as _, Sha256};
     let raw: Vec<u8> = match value {
         Value::String(s) => s.as_bytes().to_vec(),
         other => serde_json::to_vec(other).unwrap_or_default(),
     };
-    let mut hasher = Sha256::new();
-    hasher.update(&raw);
-    let digest = hasher.finalize();
+    serde_json::json!({"bytes": raw.len(), "sha256": sha256_hex(&raw)})
+}
+
+/// Lower-case hex SHA-256 of `bytes`.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let digest = Sha256::digest(bytes);
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
         hex.push(HEX[(byte >> 4) as usize] as char);
         hex.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    serde_json::json!({"bytes": raw.len(), "sha256": hex})
+    hex
 }
 
 #[cfg(test)]
