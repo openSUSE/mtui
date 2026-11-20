@@ -10,6 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- MCP `put` takes a `source`: an absolute path of a file on the `mtui-mcp`
+  server, uploaded byte for byte without passing through the call, so a file
+  such as a baseline-check script no longer has to be reproduced by the model.
+  It works on both transports and is off until `[mcp] put_dirs` lists the
+  directories it may read; the file must resolve to a regular file inside one
+  of them. `filename` defaults to the basename, and the reply carries
+  `source: {path, bytes, sha256}` (#778). **MCP schema note:** additive only —
+  a new optional `source`, `filename` no longer required, and a `source`
+  object on the reply.
 - New command and read-only MCP tool `openqa_summary` prints the QEM
   Dashboard's `Results from openQA jobs` block (per-group counts, failing jobs
   listed) for the loaded update, the same text `export` writes into the report,

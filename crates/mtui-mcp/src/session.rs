@@ -47,6 +47,7 @@
 //!
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -565,6 +566,8 @@ pub struct McpSession {
     max_output_bytes: usize,
     /// `config.mcp_max_input_bytes`; `0` disables the cap.
     max_input_bytes: usize,
+    /// `config.mcp_put_dirs`: where the `put` tool's `source` may read from.
+    put_dirs: Vec<PathBuf>,
     /// `config.mcp_profile`, consumed by
     /// [`McpServer::new`](crate::server::McpServer::new) to narrow the tools.
     profile: String,
@@ -662,6 +665,7 @@ impl McpSession {
     ) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
         let max_input_bytes = config.mcp_max_input_bytes;
+        let put_dirs = config.mcp_put_dirs.clone();
         let profile = config.mcp_profile.clone();
         let tools_allow = config.mcp_tools_allow.clone();
         let tools_deny = config.mcp_tools_deny.clone();
@@ -679,6 +683,7 @@ impl McpSession {
             output,
             max_output_bytes,
             max_input_bytes,
+            put_dirs,
             profile,
             tools_allow,
             tools_deny,
@@ -730,6 +735,13 @@ impl McpSession {
     #[must_use]
     pub(crate) fn max_input_bytes(&self) -> usize {
         self.max_input_bytes
+    }
+
+    /// The directories `put`'s `source` may read from (`[mcp] put_dirs`); empty
+    /// disables it.
+    #[must_use]
+    pub(crate) fn put_dirs(&self) -> &[PathBuf] {
+        &self.put_dirs
     }
 
     /// The configured tool-surface profile (`full` / `core`), consumed by

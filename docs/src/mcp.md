@@ -279,14 +279,32 @@ call with the host named — partial content is never returned as success.
 
 ### `put`
 
-Uploads a payload carried in the call — `content` (UTF-8) or `content_b64`,
-exactly one of the two — to `<target tempdir>/<filename>` on every enabled
-host, the same destination the REPL `put` uses. `filename` must be a bare name
-(no path separators). A payload above `[mcp] max_input_bytes` is refused
-outright: truncating an upload would corrupt it. Any host failure fails the
-call with the host named.
+Uploads a payload — `content` (UTF-8), `content_b64` or `source`, exactly one
+of the three — to `<target tempdir>/<filename>` on every enabled host, the same
+destination the REPL `put` uses. `filename` must be a bare name (no path
+separators); with `source` it defaults to the basename of the path you named.
+A payload above `[mcp] max_input_bytes` is refused outright: truncating an
+upload would corrupt it. Any host failure fails the call with the host named.
 
-The destination path and the tool's schema are unchanged, but a file is
+`source` is an absolute path of a file on the machine running `mtui-mcp`, so the
+bytes never pass through the model. It works on both transports and is off
+until the operator lists directories in `[mcp] put_dirs`; without it the call
+is refused. The file must be a regular file whose resolved path (symlinks
+followed) lies strictly inside a listed directory, in any depth; anything else
+is refused before a lock is taken or a byte is sent, and a path outside every
+listed directory is refused the same way whether or not it exists. The refusal
+lists `put_dirs`. The file is read once, so the bytes that are size-checked,
+hashed and uploaded are the same buffer. The reply gains
+`source: {path, bytes, sha256}` — the resolved path, the byte count and the
+SHA-256 of what was uploaded.
+
+> **List only directories whose contents may leave the machine and that only
+> the operator can write.** A file that someone else can place or swap in a
+> listed directory (or in one of its parents) is uploaded to every host. Final
+> symlinks are refused at open, but a directory component swapped between the
+> check and the read is not defended against.
+
+The destination path is unchanged, but a file is
 published atomically (see [Uploads](configuration.md#remote-uploads)): readers
 of `<filename>` see the whole old file or the whole new one, an existing
 symlink or hardlink at that name is replaced rather than written through, and

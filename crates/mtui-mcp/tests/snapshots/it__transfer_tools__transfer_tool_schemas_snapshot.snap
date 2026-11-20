@@ -33,20 +33,24 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Upload `content` (utf-8) or `content_b64` (exactly one) to `<target tempdir>/<filename>` on every enabled host. Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Upload `content` (utf-8), `content_b64` or `source` (exactly one) to `<target tempdir>/<filename>` on every enabled host. `source` is an absolute path of a file on the mtui-mcp server inside an [mcp] put_dirs directory (refused when put_dirs is unset); it is uploaded byte for byte without passing through the call, `filename` defaults to its basename, and the reply carries `source` {path, bytes, sha256}. Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "content": {
-          "description": "UTF-8 payload; exactly one of content/content_b64.",
+          "description": "UTF-8 payload; exactly one of content/content_b64/source.",
           "type": "string"
         },
         "content_b64": {
-          "description": "Base64 payload; exactly one of content/content_b64.",
+          "description": "Base64 payload; exactly one of content/content_b64/source.",
           "type": "string"
         },
         "filename": {
-          "description": "Bare file name to create on the hosts (no path separators).",
+          "description": "Bare file name to create on the hosts (no path separators); defaults to the basename of `source`.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Absolute path of a file on the mtui-mcp server, inside an [mcp] put_dirs directory; uploaded byte for byte without passing through the call. Exactly one of content/content_b64/source.",
           "type": "string"
         },
         "template": {
@@ -54,9 +58,6 @@ expression: pretty
           "type": "string"
         }
       },
-      "required": [
-        "filename"
-      ],
       "type": "object"
     },
     "name": "put",
