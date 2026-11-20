@@ -13,13 +13,15 @@
 //! `{report_wd}/downloads/{name}.{host}` layout, and their messages all stay.
 //!
 //! Content encoding: UTF-8 payloads travel as `content`, anything else as
-//! `content_b64`. Downloads are capped twice — per host at
+//! `content_b64`. The one exception is `put`'s `source`: a file already on the
+//! server, inside an operator-listed `[mcp] put_dirs` directory, which is read
+//! there and uploaded without passing through the call. Downloads are capped twice — per host at
 //! `[mcp] max_input_bytes` (enforced while reading, so a host never buffers more
 //! than the cap), then at an equal share of `[mcp] max_output_bytes` on the wire —
 //! with an explicit `truncated` flag and the remote `size`, never a silent clip.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64ct::{Base64, Encoding};
 use mtui_core::{
@@ -28,7 +30,9 @@ use mtui_core::{
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::sha256_hex;
 use crate::capture::SharedBuf;
+use crate::report_files::normalize;
 use crate::session::{
     CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
     run_with_heartbeat,
@@ -110,8 +114,12 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
     let put = ToolDescriptor {
         name: "put".to_owned(),
         description: format!(
-            "Upload `content` (utf-8) or `content_b64` (exactly one) to \
-             `<target tempdir>/<filename>` on every enabled host. Payloads above [mcp] \
+            "Upload `content` (utf-8), `content_b64` or `source` (exactly one) to \
+             `<target tempdir>/<filename>` on every enabled host. `source` is an absolute \
+             path of a file on the mtui-mcp server inside an [mcp] put_dirs directory \
+             (refused when put_dirs is unset); it is uploaded byte for byte without \
+             passing through the call, `filename` defaults to its basename, and the reply \
+             carries `source` {{path, bytes, sha256}}. Payloads above [mcp] \
              max_input_bytes are refused, not truncated. Any host failure fails the \
              call, naming the host. {TEMPLATE_NOTE}"
         ),
@@ -119,19 +127,26 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
             vec![
                 (
                     "filename",
-                    json!({ "type": "string", "description": "Bare file name to create on the hosts (no path separators)." }),
+                    json!({ "type": "string", "description": "Bare file name to create on the hosts (no path separators); defaults to the basename of `source`." }),
                 ),
                 (
                     "content",
-                    json!({ "type": "string", "description": "UTF-8 payload; exactly one of content/content_b64." }),
+                    json!({ "type": "string", "description": "UTF-8 payload; exactly one of content/content_b64/source." }),
                 ),
                 (
                     "content_b64",
-                    json!({ "type": "string", "description": "Base64 payload; exactly one of content/content_b64." }),
+                    json!({ "type": "string", "description": "Base64 payload; exactly one of content/content_b64/source." }),
+                ),
+                (
+                    "source",
+                    json!({
+                        "type": "string",
+                        "description": "Absolute path of a file on the mtui-mcp server, inside an [mcp] put_dirs directory; uploaded byte for byte without passing through the call. Exactly one of content/content_b64/source.",
+                    }),
                 ),
                 ("template", template_prop()),
             ],
-            &["filename"],
+            &[],
         ),
         read_only: false,
     };
@@ -205,12 +220,34 @@ async fn dispatch_transfer_tool_inner(
             transfer_get(session, &remote, hosts, template).await
         }
         "put" => {
-            let filename = opt_str(kwargs, "filename")?
-                .ok_or_else(|| refuse("`filename` is required"))?
-                .to_owned();
-            let content = opt_str(kwargs, "content")?.map(str::to_owned);
-            let content_b64 = opt_str(kwargs, "content_b64")?.map(str::to_owned);
-            transfer_put(session, &filename, content, content_b64, template).await
+            let content = opt_str(kwargs, "content")?;
+            let content_b64 = opt_str(kwargs, "content_b64")?;
+            let source = opt_str(kwargs, "source")?;
+            let payload = match (content, content_b64, source) {
+                (Some(text), None, None) => PutPayload::Content(text.to_owned()),
+                (None, Some(b64), None) => PutPayload::ContentB64(b64.to_owned()),
+                (None, None, Some(src)) => PutPayload::Source(src.to_owned()),
+                (None, None, None) => {
+                    return Err(refuse(
+                        "one of `content`, `content_b64` or `source` is required",
+                    ));
+                }
+                _ => {
+                    return Err(refuse(
+                        "pass exactly one of `content`, `content_b64` or `source`",
+                    ));
+                }
+            };
+            let filename = match (opt_str(kwargs, "filename")?, &payload) {
+                (Some(name), _) => name.to_owned(),
+                (None, PutPayload::Source(src)) => Path::new(src)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                    .ok_or_else(|| refuse("`filename` is required: `source` has no file name"))?,
+                (None, _) => return Err(refuse("`filename` is required unless `source` is given")),
+            };
+            transfer_put(session, &filename, payload, template).await
         }
         other => Err(refuse(format!("unknown transfer tool: {other}"))),
     }
@@ -454,12 +491,128 @@ async fn transfer_get(
     Ok(json!({ "remote": remote, "hosts": Value::Object(hosts_json) }))
 }
 
+/// Where a `put` payload comes from; exactly one per call.
+enum PutPayload {
+    Content(String),
+    ContentB64(String),
+    Source(String),
+}
+
+/// The resolved path and fingerprint of a server-side `source` upload.
+struct SourceUpload {
+    path: PathBuf,
+    sha256: String,
+}
+
+/// The directories as the caller sees them in a refusal.
+fn listed(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|d| d.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Resolve `source` to the canonical path of a file strictly inside one of
+/// `dirs`.
+///
+/// The lexical containment check runs first and touches nothing the caller
+/// named, so a path outside every directory is refused identically whether or
+/// not it exists; only then is the path canonicalised and re-checked, which
+/// catches a symlink that leaves the directory.
+fn resolve_put_source(dirs: &[PathBuf], source: &str) -> Result<PathBuf, McpCommandError> {
+    if dirs.is_empty() {
+        return Err(refuse(
+            "`source` is disabled: no [mcp] put_dirs is configured",
+        ));
+    }
+    let path = Path::new(source);
+    if !path.is_absolute() {
+        return Err(refuse(format!(
+            "`source` must be an absolute path: {source:?}"
+        )));
+    }
+    let outside = || {
+        refuse(format!(
+            "`source` {source:?} is not inside an allowed directory (put_dirs: {})",
+            listed(dirs)
+        ))
+    };
+    let canonical_dirs: Vec<PathBuf> = dirs.iter().filter_map(|d| d.canonicalize().ok()).collect();
+    let strictly_under = |p: &Path, set: &[PathBuf]| set.iter().any(|d| p != d && p.starts_with(d));
+
+    let lexical = normalize(path);
+    if !strictly_under(&lexical, dirs) && !strictly_under(&lexical, &canonical_dirs) {
+        return Err(outside());
+    }
+    let resolved = path
+        .canonicalize()
+        .map_err(|e| refuse(format!("cannot resolve source {source:?}: {e}")))?;
+    if !strictly_under(&resolved, &canonical_dirs) {
+        return Err(outside());
+    }
+    Ok(resolved)
+}
+
+/// Open `path` for reading without following a final symlink or blocking on a
+/// FIFO.
+#[cfg(unix)]
+fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
+/// Read a regular file in one open, so the bytes that are size-checked, hashed
+/// and uploaded are the same buffer. `max_input` of `0` disables the cap.
+fn read_put_source(path: &Path, max_input: usize) -> Result<Vec<u8>, McpCommandError> {
+    use std::io::Read as _;
+
+    let over = |len: u64| {
+        refuse(format!(
+            "source is {len} bytes, above the [mcp] max_input_bytes={max_input} budget — \
+             truncating an upload would corrupt it, so it is refused"
+        ))
+    };
+    let io_err = |e: std::io::Error| refuse(format!("cannot read source {}: {e}", path.display()));
+    let file = open_source(path).map_err(io_err)?;
+    let meta = file.metadata().map_err(io_err)?;
+    if !meta.is_file() {
+        return Err(refuse(format!(
+            "source {} is not a regular file",
+            path.display()
+        )));
+    }
+    let cap = u64::try_from(max_input).unwrap_or(u64::MAX);
+    if max_input > 0 && meta.len() > cap {
+        return Err(over(meta.len()));
+    }
+    // A file that grows after the `fstat` is still bounded.
+    let limit = if max_input > 0 {
+        cap.saturating_add(1)
+    } else {
+        u64::MAX
+    };
+    let mut buf = Vec::new();
+    file.take(limit).read_to_end(&mut buf).map_err(io_err)?;
+    if max_input > 0 && buf.len() as u64 > cap {
+        return Err(over(buf.len() as u64));
+    }
+    Ok(buf)
+}
+
 /// The in-band `put` body.
 async fn transfer_put(
     session: &McpSession,
     filename: &str,
-    content: Option<String>,
-    content_b64: Option<String>,
+    payload: PutPayload,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
     if filename.is_empty()
@@ -474,27 +627,39 @@ async fn transfer_put(
         ));
     }
 
-    let payload: Vec<u8> = match (content, content_b64) {
-        (Some(text), None) => text.into_bytes(),
-        (None, Some(b64)) => Base64::decode_vec(&b64)
-            .map_err(|e| refuse(format!("content_b64 is not valid base64: {e}")))?,
-        (None, None) => {
-            return Err(refuse("one of `content` or `content_b64` is required"));
+    let max_input = session.max_input_bytes();
+    let (payload, source): (Vec<u8>, Option<SourceUpload>) = match payload {
+        PutPayload::Source(src) => {
+            // Before `transfer_fork`: a refused source takes no lock and
+            // transfers nothing.
+            let dirs = session.put_dirs().to_vec();
+            let (path, bytes) = tokio::task::spawn_blocking(move || {
+                let path = resolve_put_source(&dirs, &src)?;
+                let bytes = read_put_source(&path, max_input)?;
+                Ok::<_, McpCommandError>((path, bytes))
+            })
+            .await
+            .map_err(|e| refuse(format!("source read task failed: {e}")))??;
+            let sha256 = sha256_hex(&bytes);
+            (bytes, Some(SourceUpload { path, sha256 }))
         }
-        (Some(_), Some(_)) => {
-            return Err(refuse(
-                "pass exactly one of `content` or `content_b64`, not both",
-            ));
+        inline => {
+            let bytes = match inline {
+                PutPayload::Content(text) => text.into_bytes(),
+                PutPayload::ContentB64(b64) => Base64::decode_vec(&b64)
+                    .map_err(|e| refuse(format!("content_b64 is not valid base64: {e}")))?,
+                PutPayload::Source(_) => unreachable!("handled above"),
+            };
+            if max_input > 0 && bytes.len() > max_input {
+                return Err(refuse(format!(
+                    "payload is {} bytes, above the [mcp] max_input_bytes={max_input} budget — \
+                     truncating an upload would corrupt it, so it is refused",
+                    bytes.len()
+                )));
+            }
+            (bytes, None)
         }
     };
-    let max_input = session.max_input_bytes();
-    if max_input > 0 && payload.len() > max_input {
-        return Err(refuse(format!(
-            "payload is {} bytes, above the [mcp] max_input_bytes={max_input} budget — \
-             truncating an upload would corrupt it, so it is refused",
-            payload.len()
-        )));
-    }
 
     // Dispatch on a fork, so the SFTP fan-out does not hold the canonical
     // session mutex.
@@ -528,10 +693,18 @@ async fn transfer_put(
 
     let hosts_json: Map<String, Value> =
         map.keys().map(|host| (host.clone(), json!("ok"))).collect();
-    Ok(json!({
+    let mut reply = json!({
         "remote": remote.display().to_string(),
         "hosts": Value::Object(hosts_json),
-    }))
+    });
+    if let Some(src) = source {
+        reply["source"] = json!({
+            "path": src.path.display().to_string(),
+            "bytes": payload.len(),
+            "sha256": src.sha256,
+        });
+    }
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -1295,7 +1468,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(both.stderr.contains("not both"), "{}", both.stderr);
+        assert!(both.stderr.contains("exactly one"), "{}", both.stderr);
     }
 
     #[tokio::test]
@@ -1364,6 +1537,313 @@ mod tests {
         assert!(!err.stderr.contains("h1 ("), "{}", err.stderr);
         // The healthy host's upload still happened before the call failed.
         assert_eq!(h1.sftp_ops().len(), 1);
+    }
+
+    // ---- put source ------------------------------------------------------
+
+    /// Two mock hosts under one loaded template, `[mcp] put_dirs` set to
+    /// `<files>/allowed`, plus the `outside` sibling directory a refusal
+    /// test points at.
+    struct SourceEnv {
+        session: Arc<McpSession>,
+        files: tempfile::TempDir,
+        h1: MockConnection,
+        h2: MockConnection,
+        _template_dir: tempfile::TempDir,
+    }
+
+    impl SourceEnv {
+        async fn new(max_input: Option<usize>, with_put_dirs: bool) -> Self {
+            let files = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(files.path().join("allowed")).unwrap();
+            std::fs::create_dir_all(files.path().join("outside")).unwrap();
+            let allowed = files.path().join("allowed");
+            let (session, template_dir) = session_with(|c| {
+                if with_put_dirs {
+                    c.mcp_put_dirs = vec![allowed];
+                }
+                if let Some(max) = max_input {
+                    c.mcp_max_input_bytes = max;
+                }
+            });
+            let (h1, h2) = (MockConnection::new("h1"), MockConnection::new("h2"));
+            load_with_targets(
+                &session,
+                &template_dir,
+                RRID,
+                vec![enabled("h1", h1.clone()), enabled("h2", h2.clone())],
+            )
+            .await;
+            Self {
+                session,
+                files,
+                h1,
+                h2,
+                _template_dir: template_dir,
+            }
+        }
+
+        fn allowed(&self, name: &str) -> PathBuf {
+            self.files.path().join("allowed").join(name)
+        }
+
+        fn outside(&self, name: &str) -> PathBuf {
+            self.files.path().join("outside").join(name)
+        }
+
+        async fn put_source(&self, source: &Path) -> Result<Value, McpCommandError> {
+            call(
+                &self.session,
+                "put",
+                json!({ "source": source.to_str().unwrap() }),
+            )
+            .await
+        }
+
+        fn assert_nothing_transferred(&self) {
+            for h in [&self.h1, &self.h2] {
+                assert!(h.sftp_ops().is_empty(), "{:?}", h.sftp_ops());
+            }
+        }
+    }
+
+    /// The error text of a refused call, requiring the refusal.
+    fn refusal(result: Result<Value, McpCommandError>) -> String {
+        result.expect_err("the call must be refused").stderr
+    }
+
+    #[tokio::test]
+    async fn put_source_uploads_the_exact_bytes_to_every_host_with_a_fingerprint() {
+        let env = SourceEnv::new(None, true).await;
+        let body = "#!/bin/sh\n# ünïcödé — 日本語\necho ok\n"
+            .as_bytes()
+            .to_vec();
+        let file = env.allowed("host_baseline_check.sh");
+        std::fs::write(&file, &body).unwrap();
+
+        let v = env.put_source(&file).await.unwrap();
+
+        assert_eq!(v["hosts"], json!({ "h1": "ok", "h2": "ok" }), "{v}");
+        assert!(
+            v["remote"]
+                .as_str()
+                .unwrap()
+                .ends_with("/host_baseline_check.sh"),
+            "remote ends with the basename: {v}"
+        );
+        for h in [&env.h1, &env.h2] {
+            let ops = h.sftp_ops();
+            assert_eq!(ops.len(), 1, "{ops:?}");
+            assert!(
+                matches!(
+                    &ops[0],
+                    MockSftpOp::PutBytes { len, data, remote }
+                        if *len == body.len()
+                            && *data == body
+                            && remote.ends_with("host_baseline_check.sh")
+                ),
+                "{ops:?}"
+            );
+        }
+        // `/var` is `/private/var` on macOS: compare against the canonical path.
+        assert_eq!(
+            v["source"]["path"],
+            json!(file.canonicalize().unwrap().display().to_string())
+        );
+        assert_eq!(v["source"]["bytes"], json!(body.len()));
+        // sha256 of the bytes, computed independently of `sha256_hex`.
+        use sha2::{Digest as _, Sha256};
+        let expected: String = Sha256::digest(&body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(v["source"]["sha256"], json!(expected));
+    }
+
+    #[tokio::test]
+    async fn put_source_filename_overrides_the_basename() {
+        let env = SourceEnv::new(None, true).await;
+        let file = env.allowed("a.sh");
+        std::fs::write(&file, "x").unwrap();
+
+        let v = call(
+            &env.session,
+            "put",
+            json!({ "source": file.to_str().unwrap(), "filename": "renamed.sh" }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            v["remote"].as_str().unwrap().ends_with("/renamed.sh"),
+            "{v}"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_source_is_refused_when_put_dirs_is_unset() {
+        let env = SourceEnv::new(None, false).await;
+        let file = env.allowed("a.sh");
+        std::fs::write(&file, "x").unwrap();
+
+        let err = refusal(env.put_source(&file).await);
+
+        assert!(
+            err.contains("is disabled") && err.contains("put_dirs"),
+            "{err}"
+        );
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_in_a_sibling_directory_is_refused() {
+        let env = SourceEnv::new(None, true).await;
+        let file = env.outside("f");
+        std::fs::write(&file, "x").unwrap();
+
+        let err = refusal(env.put_source(&file).await);
+
+        assert!(err.contains("not inside"), "{err}");
+        assert!(err.contains("allowed"), "the refusal names put_dirs: {err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_dotdot_out_of_the_directory_is_refused() {
+        let env = SourceEnv::new(None, true).await;
+        std::fs::write(env.outside("f"), "x").unwrap();
+        let sneaky = env.allowed("../outside/f");
+
+        let err = refusal(env.put_source(&sneaky).await);
+
+        assert!(err.contains("not inside"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn put_source_symlink_leaving_the_directory_is_refused() {
+        let env = SourceEnv::new(None, true).await;
+        std::fs::write(env.outside("secret"), "x").unwrap();
+        let link = env.allowed("link");
+        std::os::unix::fs::symlink(env.outside("secret"), &link).unwrap();
+
+        let err = refusal(env.put_source(&link).await);
+
+        assert!(err.contains("not inside"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_outside_path_is_refused_whether_or_not_it_exists() {
+        let env = SourceEnv::new(None, true).await;
+
+        let err = refusal(env.put_source(&env.outside("does-not-exist")).await);
+
+        assert!(
+            err.contains("not inside") && !err.contains("cannot resolve"),
+            "an absent path outside must not read differently from a present one: {err}"
+        );
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_inside_but_missing_cannot_resolve() {
+        let env = SourceEnv::new(None, true).await;
+
+        let err = refusal(env.put_source(&env.allowed("absent")).await);
+
+        assert!(err.contains("cannot resolve"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_directory_is_not_a_regular_file() {
+        let env = SourceEnv::new(None, true).await;
+        let dir = env.allowed("sub");
+        std::fs::create_dir(&dir).unwrap();
+
+        let err = refusal(env.put_source(&dir).await);
+
+        assert!(err.contains("not a regular file"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn put_source_fifo_is_refused_without_blocking() {
+        let env = SourceEnv::new(None, true).await;
+        let fifo = env.allowed("pipe");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), env.put_source(&fifo))
+            .await
+            .expect("a FIFO must not block the open");
+
+        let err = refusal(result);
+        assert!(err.contains("not a regular file"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_must_be_absolute() {
+        let env = SourceEnv::new(None, true).await;
+
+        let err = refusal(call(&env.session, "put", json!({ "source": "relative/f" })).await);
+
+        assert!(err.contains("absolute"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_above_the_input_cap_is_refused() {
+        let env = SourceEnv::new(Some(4), true).await;
+        let file = env.allowed("big");
+        std::fs::write(&file, "12345").unwrap();
+
+        let err = refusal(env.put_source(&file).await);
+
+        assert!(err.contains("max_input_bytes"), "{err}");
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_source_at_the_input_cap_is_accepted() {
+        let env = SourceEnv::new(Some(4), true).await;
+        let file = env.allowed("edge");
+        std::fs::write(&file, "1234").unwrap();
+
+        let v = env.put_source(&file).await.unwrap();
+
+        assert_eq!(v["source"]["bytes"], json!(4), "{v}");
+    }
+
+    #[tokio::test]
+    async fn put_source_excludes_the_inline_payloads() {
+        let env = SourceEnv::new(None, true).await;
+        let file = env.allowed("a");
+        std::fs::write(&file, "x").unwrap();
+        let src = file.to_str().unwrap();
+
+        for extra in [json!({ "content": "y" }), json!({ "content_b64": "eQ==" })] {
+            let mut kwargs = json!({ "source": src, "filename": "f" });
+            kwargs
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let err = refusal(call(&env.session, "put", kwargs).await);
+            assert!(err.contains("exactly one"), "{err}");
+        }
+        env.assert_nothing_transferred();
+    }
+
+    #[tokio::test]
+    async fn put_without_filename_or_source_names_the_missing_filename() {
+        let env = SourceEnv::new(None, true).await;
+
+        let err = refusal(call(&env.session, "put", json!({ "content": "x" })).await);
+
+        assert!(err.contains("`filename` is required unless"), "{err}");
     }
 
     #[tokio::test]
