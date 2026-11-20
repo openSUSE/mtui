@@ -276,9 +276,9 @@ async fn transfer_tools_are_served_and_dispatched() {
             );
         }
 
-        // With no report loaded the tool refuses with its own message:
-        // method_not_found would mean the dispatch arm is missing, and a path in
-        // the output that the old synthesised command answered.
+        // With no report loaded and no host added the tool refuses with its own
+        // message: method_not_found would mean the dispatch arm is missing, and a
+        // path in the output that the old synthesised command answered.
         let out = client
             .call_tool(
                 CallToolRequestParams::new("get").with_arguments(
@@ -293,7 +293,7 @@ async fn transfer_tools_are_served_and_dispatched() {
         assert_eq!(out.is_error, Some(true));
         let text = format!("{:?}", out.content);
         assert!(
-            text.contains("no report loaded"),
+            text.contains("no enabled hosts"),
             "the in-band tool answered: {text}"
         );
     })

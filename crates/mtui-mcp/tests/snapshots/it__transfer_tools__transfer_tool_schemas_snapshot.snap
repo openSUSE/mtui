@@ -4,7 +4,7 @@ expression: pretty
 ---
 [
   {
-    "description": "Download a file from every enabled host, content in-band per host (`content` utf-8, `content_b64` binary, always with full remote `size` and `truncated`). Capped per host at [mcp] max_input_bytes plus an equal share of [mcp] max_output_bytes; pass `hosts` to retry or page a subset. No folders in-band (trailing / unsupported). Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Download a file from every enabled host, content in-band per host (`content` utf-8, `content_b64` binary, always with full remote `size` and `truncated`). Capped per host at [mcp] max_input_bytes plus an equal share of [mcp] max_output_bytes; pass `hosts` to retry or page a subset. No folders in-band (trailing / unsupported). Any host failure fails the call, naming the host. With no template loaded, acts on the hosts added with add_host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -33,7 +33,7 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Upload `content` (utf-8), `content_b64` or `source` (exactly one) to `<target tempdir>/<filename>` on every enabled host. `source` is an absolute path of a file on the mtui-mcp server inside an [mcp] put_dirs directory (refused when put_dirs is unset); it is uploaded byte for byte without passing through the call, `filename` defaults to its basename, and the reply carries `source` {path, bytes, sha256}. Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Upload `content` (utf-8), `content_b64` or `source` (exactly one) to `<target tempdir>/<filename>` on every enabled host. `source` is an absolute path of a file on the mtui-mcp server inside an [mcp] put_dirs directory (refused when put_dirs is unset); it is uploaded byte for byte without passing through the call, `filename` defaults to its basename, and the reply carries `source` {path, bytes, sha256}. Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. With no template loaded, acts on the hosts added with add_host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
