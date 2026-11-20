@@ -286,6 +286,19 @@ host, the same destination the REPL `put` uses. `filename` must be a bare name
 outright: truncating an upload would corrupt it. Any host failure fails the
 call with the host named.
 
+With `[mcp] put_dirs` configured, the payload can instead come from the
+server's own filesystem: pass `source` (an absolute path, exclusive with
+`content`/`content_b64`) instead of either content argument, and `filename`
+defaults to its basename. The path and every allowlisted directory are
+resolved — symlinks and `..` included — and the file must land inside one of
+them and be a regular file; anything else is refused, and the
+`max_input_bytes` budget applies to the file's size. The result carries the
+`source` path and `source_size` actually read, so a client can confirm the
+whole file went. This exists so a model need not copy a file the server
+already holds (an 11 KB health-check script costs that many output tokens
+per upload, and a single miscopied character still uploads cleanly); the
+allowlist, not the model, decides what may leave the machine.
+
 The destination path and the tool's schema are unchanged, but a file is
 published atomically (see [Uploads](configuration.md#remote-uploads)): readers
 of `<filename>` see the whole old file or the whole new one, an existing

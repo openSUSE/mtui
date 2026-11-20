@@ -111,27 +111,34 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "put".to_owned(),
         description: format!(
             "Upload `content` (utf-8) or `content_b64` (exactly one) to \
-             `<target tempdir>/<filename>` on every enabled host. Payloads above [mcp] \
-             max_input_bytes are refused, not truncated. Any host failure fails the \
+             `<target tempdir>/<filename>` on every enabled host, or — when \
+             `[mcp] put_dirs` is configured — read a server-side `source` file \
+             instead (exclusive with both content arguments; `filename` then \
+             defaults to its basename). Payloads above [mcp] max_input_bytes \
+             are refused, not truncated. Any host failure fails the \
              call, naming the host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
                 (
                     "filename",
-                    json!({ "type": "string", "description": "Bare file name to create on the hosts (no path separators)." }),
+                    json!({ "type": "string", "description": "Bare file name to create on the hosts (no path separators). Defaults to the basename of `source`." }),
                 ),
                 (
                     "content",
-                    json!({ "type": "string", "description": "UTF-8 payload; exactly one of content/content_b64." }),
+                    json!({ "type": "string", "description": "UTF-8 payload; exactly one of content/content_b64/source." }),
                 ),
                 (
                     "content_b64",
-                    json!({ "type": "string", "description": "Base64 payload; exactly one of content/content_b64." }),
+                    json!({ "type": "string", "description": "Base64 payload; exactly one of content/content_b64/source." }),
+                ),
+                (
+                    "source",
+                    json!({ "type": "string", "description": "Absolute path of a file on this server, read locally and uploaded instead of an in-band payload. Requires [mcp] put_dirs; the resolved path must be a regular file inside one of them." }),
                 ),
                 ("template", template_prop()),
             ],
-            &["filename"],
+            &[],
         ),
         read_only: false,
     };
@@ -205,12 +212,11 @@ async fn dispatch_transfer_tool_inner(
             transfer_get(session, &remote, hosts, template).await
         }
         "put" => {
-            let filename = opt_str(kwargs, "filename")?
-                .ok_or_else(|| refuse("`filename` is required"))?
-                .to_owned();
+            let filename = opt_str(kwargs, "filename")?.map(str::to_owned);
             let content = opt_str(kwargs, "content")?.map(str::to_owned);
             let content_b64 = opt_str(kwargs, "content_b64")?.map(str::to_owned);
-            transfer_put(session, &filename, content, content_b64, template).await
+            let source = opt_str(kwargs, "source")?.map(str::to_owned);
+            transfer_put(session, filename, content, content_b64, source, template).await
         }
         other => Err(refuse(format!("unknown transfer tool: {other}"))),
     }
@@ -454,39 +460,70 @@ async fn transfer_get(
     Ok(json!({ "remote": remote, "hosts": Value::Object(hosts_json) }))
 }
 
-/// The in-band `put` body.
+/// The `put` body: in-band (`content`/`content_b64`) or a server-side `source`
+/// file, uploaded to `<target tempdir>/<filename>` on every enabled host.
+///
+/// `source` (see #778) is an operator-gated escape from copying a file through
+/// the model: the path must resolve (symlinks, `..`) to a regular file inside
+/// one of `[mcp] put_dirs`, and the bytes never enter the tool call. Unset or
+/// empty `put_dirs` keeps `put` in-band only, so existing setups — and the http
+/// transport — see no change. The canonicalize→open gap below is accepted: the
+/// threat model is a *model* choosing paths, not a local attacker racing the
+/// read; the operator allowlist bounds what can leave the machine either way.
 async fn transfer_put(
     session: &McpSession,
-    filename: &str,
+    filename: Option<String>,
     content: Option<String>,
     content_b64: Option<String>,
+    source: Option<String>,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename == "."
-        || filename == ".."
-    {
-        return Err(refuse(
-            "filename must be a bare file name (no path separators or `..`); the file \
-             is placed under the report's remote working directory",
-        ));
-    }
-
-    let payload: Vec<u8> = match (content, content_b64) {
-        (Some(text), None) => text.into_bytes(),
-        (None, Some(b64)) => Base64::decode_vec(&b64)
-            .map_err(|e| refuse(format!("content_b64 is not valid base64: {e}")))?,
-        (None, None) => {
-            return Err(refuse("one of `content` or `content_b64` is required"));
+    let (filename, payload, source_path) = match source {
+        None => {
+            let Some(filename) = filename else {
+                return Err(refuse("`filename` is required without `source`"));
+            };
+            let payload: Vec<u8> = match (content, content_b64) {
+                (Some(text), None) => text.into_bytes(),
+                (None, Some(b64)) => Base64::decode_vec(&b64)
+                    .map_err(|e| refuse(format!("content_b64 is not valid base64: {e}")))?,
+                (None, None) => {
+                    return Err(refuse("one of `content` or `content_b64` is required"));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(refuse(
+                        "pass exactly one of `content` or `content_b64`, not both",
+                    ));
+                }
+            };
+            refuse_unless_bare_filename(&filename)?;
+            (filename, payload, None)
         }
-        (Some(_), Some(_)) => {
-            return Err(refuse(
-                "pass exactly one of `content` or `content_b64`, not both",
-            ));
+        Some(source) => {
+            if content.is_some() || content_b64.is_some() {
+                return Err(refuse(
+                    "`source` is exclusive with `content`/`content_b64` — the payload is \
+                     read from the server's file instead",
+                ));
+            }
+            // An explicit `filename` is validated before any disk I/O, so a bad
+            // name fails fast without a wasted read; the basename default is
+            // derived only after the read succeeds.
+            if let Some(name) = filename.as_deref() {
+                refuse_unless_bare_filename(name)?;
+            }
+            let payload = read_put_source(session, &source).await?;
+            let filename = filename.unwrap_or_else(|| {
+                Path::new(&source)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| source.clone())
+            });
+            refuse_unless_bare_filename(&filename)?;
+            (filename, payload, Some(source))
         }
     };
+
     let max_input = session.max_input_bytes();
     if max_input > 0 && payload.len() > max_input {
         return Err(refuse(format!(
@@ -501,7 +538,7 @@ async fn transfer_put(
     let (scope, mut call_session) = transfer_fork(session, template).await?;
     // Destination from the activated fork — the same source the REPL `put`
     // uses — so a `target_tempdir` of another loaded report cannot leak in.
-    let remote = call_session.metadata().target_wd(&[filename]);
+    let remote = call_session.metadata().target_wd(&[&filename]);
     let map = call_session
         .targets_mut()
         .sftp_put_bytes(&payload, &remote)
@@ -528,10 +565,145 @@ async fn transfer_put(
 
     let hosts_json: Map<String, Value> =
         map.keys().map(|host| (host.clone(), json!("ok"))).collect();
-    Ok(json!({
+    let mut out = json!({
         "remote": remote.display().to_string(),
         "hosts": Value::Object(hosts_json),
-    }))
+    });
+    // The in-band shapes stay byte-identical; a `source` upload adds its path
+    // and the size actually read, so a client can confirm the whole file went.
+    if let Some(source) = source_path {
+        out["source"] = json!(source);
+        out["source_size"] = json!(payload.len());
+    }
+    Ok(out)
+}
+
+/// Refuse a `filename` that is not a bare file name: the upload target is
+/// `<target tempdir>/<filename>`, so a separator or `..` in it must never
+/// reach the hosts.
+fn refuse_unless_bare_filename(filename: &str) -> Result<(), McpCommandError> {
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename == "."
+        || filename == ".."
+    {
+        return Err(refuse(
+            "filename must be a bare file name (no path separators or `..`); the file \
+             is placed under the report's remote working directory",
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve and read a `put` `source` file against `[mcp] put_dirs`.
+///
+/// The path and every allowlisted directory are resolved with
+/// [`std::fs::canonicalize`] — symlinks and `..` included — and the file must
+/// land inside one of the resolved directories and be a regular file, opened
+/// and checked through the same handle that is read. Blocking, so callers run
+/// it on the blocking pool.
+///
+/// # Errors
+///
+/// A refusal ([`McpCommandError`]) naming the
+/// rule that failed: unset allowlist, non-absolute path, unresolvable path,
+/// outside every allowed directory, not a regular file, unreadable, or above
+/// the `[mcp] max_input_bytes` budget.
+fn read_put_source_blocking(
+    dirs: &[std::path::PathBuf],
+    source: &str,
+    max_input: usize,
+) -> Result<Vec<u8>, McpCommandError> {
+    if dirs.is_empty() {
+        return Err(refuse(
+            "`source` needs [mcp] put_dirs listing the directories this server may \
+             upload from (unset — put stays in-band only)",
+        ));
+    }
+    let path = Path::new(source);
+    if !path.is_absolute() {
+        return Err(refuse("`source` must be an absolute path"));
+    }
+    // Resolve the caller's path first: a symlink or `..` inside it must not
+    // smuggle the final location outside the allowlist.
+    let resolved = std::fs::canonicalize(path).map_err(|e| {
+        refuse(format!(
+            "`source` {source} cannot be resolved on this server: {e}"
+        ))
+    })?;
+    let inside = dirs.iter().any(|dir| {
+        // Each allowlisted directory resolves too, so a symlinked entry covers
+        // its target, not its spelling. An entry that does not resolve simply
+        // never matches; the tool refusal below names the path instead.
+        std::fs::canonicalize(dir).is_ok_and(|root| resolved.strip_prefix(&root).is_ok())
+    });
+    if !inside {
+        return Err(refuse(format!(
+            "`source` {source} resolves outside every [mcp] put_dirs entry — the \
+             operator decides what this server may upload"
+        )));
+    }
+    // Open before checking the file type, and check through the same handle
+    // that is read: a swap between the checks would have to win the open.
+    let file = std::fs::File::open(&resolved)
+        .map_err(|e| refuse(format!("`source` {source} cannot be read: {e}")))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| refuse(format!("`source` {source} cannot be read: {e}")))?;
+    if !meta.is_file() {
+        return Err(refuse(format!(
+            "`source` {source} is not a regular file — [mcp] put_dirs allows files, \
+             not devices or directories"
+        )));
+    }
+    if max_input > 0 && meta.len() > max_input as u64 {
+        return Err(refuse(format!(
+            "`source` {source} is {} bytes, above the [mcp] max_input_bytes={max_input} \
+             budget — truncating an upload would corrupt it, so it is refused",
+            meta.len()
+        )));
+    }
+    // Bound the buffered read at one byte past the cap — enough to notice and
+    // refuse — so a file growing between the metadata check and the read
+    // cannot buffer past the budget. With the cap off (`0`) the read is
+    // unbounded, exactly like an in-band payload. The capacity hint never
+    // trusts the untrusted length beyond that bound either.
+    let limit = if max_input > 0 {
+        max_input.saturating_add(1) as u64
+    } else {
+        u64::MAX
+    };
+    let mut payload = Vec::with_capacity(meta.len().min(limit) as usize);
+    use std::io::Read as _;
+    file.take(limit)
+        .read_to_end(&mut payload)
+        .map_err(|e| refuse(format!("`source` {source} cannot be read: {e}")))?;
+    // The size can grow past the cap between the metadata check and the read;
+    // re-check on what was actually read, so the budget holds either way.
+    if max_input > 0 && payload.len() > max_input {
+        return Err(refuse(format!(
+            "`source` {source} read {} bytes, above the [mcp] max_input_bytes={max_input} \
+             budget — truncating an upload would corrupt it, so it is refused",
+            payload.len()
+        )));
+    }
+    Ok(payload)
+}
+
+async fn read_put_source(session: &McpSession, source: &str) -> Result<Vec<u8>, McpCommandError> {
+    // Clone only the allowlist under the session lock: a whole-`Config` clone
+    // would copy every other field's strings and vecs per upload for one read.
+    let dirs = {
+        let guard = session.session();
+        let s = guard.lock().await;
+        s.config.mcp_put_dirs.clone()
+    };
+    let max_input = session.max_input_bytes();
+    let source = source.to_owned();
+    tokio::task::spawn_blocking(move || read_put_source_blocking(&dirs, &source, max_input))
+        .await
+        .map_err(|e| refuse(format!("`source` read task failed: {e}")))?
 }
 
 #[cfg(test)]
@@ -1296,6 +1468,206 @@ mod tests {
         .await
         .unwrap_err();
         assert!(both.stderr.contains("not both"), "{}", both.stderr);
+    }
+
+    /// A `[mcp] put_dirs` allowlist plus one file inside it, with the handle
+    /// keeping the directory alive.
+    fn put_dir_with_file(name: &str, bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("put dir");
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("writing source file");
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn put_source_reads_an_allowlisted_file_and_names_it_after_the_basename() {
+        let (dir, source) = put_dir_with_file("host_baseline_check.sh", b"#!/bin/sh\nexit 0\n");
+        let m1 = MockConnection::new("h1");
+        let h1 = m1.clone();
+        let (session, tmp) = session_with(|c| {
+            c.mcp_put_dirs = vec![dir.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+
+        let v = call(
+            &session,
+            "put",
+            json!({ "source": source.display().to_string() }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(v["hosts"]["h1"], "ok");
+        let remote = v["remote"].as_str().unwrap();
+        assert!(
+            remote.ends_with("/host_baseline_check.sh"),
+            "filename defaults to the source basename: {remote}"
+        );
+        assert_eq!(v["source"], source.display().to_string());
+        assert_eq!(v["source_size"], 17);
+        let ops = h1.sftp_ops();
+        assert!(
+            matches!(&ops[0], MockSftpOp::PutBytes { data, remote: r, .. }
+                if data == b"#!/bin/sh\nexit 0\n" && r.ends_with("host_baseline_check.sh")),
+            "{ops:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_source_refused_while_put_dirs_is_unset() {
+        let (dir, source) = put_dir_with_file("f.txt", b"x");
+        let (session, tmp) = session_with(|_| {});
+        load_with_targets(&session, &tmp, RRID, vec![]).await;
+
+        let err = call(
+            &session,
+            "put",
+            json!({ "source": source.display().to_string() }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.stderr.contains("[mcp] put_dirs"), "{}", err.stderr);
+        drop(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn put_source_outside_the_allowlist_refused_in_every_spelling() {
+        let (dir, _) = put_dir_with_file("inside.txt", b"i");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let outside_file = outside.path().join("secret.txt");
+        std::fs::write(&outside_file, b"credentials").unwrap();
+        let (session, tmp) = session_with(|c| {
+            c.mcp_put_dirs = vec![dir.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![]).await;
+
+        // A plain outside path, a `..` escape, and a symlink pointing out all
+        // refuse: the resolved location, not the spelling, decides.
+        let dotdot = dir
+            .path()
+            .join("..")
+            .join(outside.path().file_name().unwrap())
+            .join("secret.txt");
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
+        for bad in [
+            outside_file.display().to_string(),
+            dotdot.display().to_string(),
+            link.display().to_string(),
+        ] {
+            let err = call(&session, "put", json!({ "source": bad }))
+                .await
+                .unwrap_err();
+            assert!(
+                err.stderr.contains("outside every [mcp] put_dirs"),
+                "{bad:?}: {}",
+                err.stderr
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn put_source_symlink_to_another_allowlisted_dir_is_allowed() {
+        // Two allowlisted directories, a file in the second reached through a
+        // symlink in the first: the resolved path is inside an entry, so the
+        // upload proceeds — the operator listed both.
+        let (dir_a, dir_b) = (
+            tempfile::tempdir().expect("dir a"),
+            tempfile::tempdir().expect("dir b"),
+        );
+        let target = dir_b.path().join("real.sh");
+        std::fs::write(&target, b"ok").unwrap();
+        let link = dir_a.path().join("linked.sh");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let m1 = MockConnection::new("h1");
+        let (session, tmp) = session_with(|c| {
+            c.mcp_put_dirs = vec![dir_a.path().to_path_buf(), dir_b.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+
+        let v = call(
+            &session,
+            "put",
+            json!({ "source": link.display().to_string() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["hosts"]["h1"], "ok");
+        assert_eq!(v["source_size"], 2);
+    }
+
+    #[tokio::test]
+    async fn put_source_is_exclusive_with_the_in_band_payloads() {
+        let (dir, source) = put_dir_with_file("f.txt", b"x");
+        let (session, tmp) = session_with(|c| {
+            c.mcp_put_dirs = vec![dir.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![]).await;
+
+        for kwargs in [
+            json!({ "source": source.display().to_string(), "content": "a" }),
+            json!({ "source": source.display().to_string(), "content_b64": "YQ==" }),
+        ] {
+            let err = call(&session, "put", kwargs.clone()).await.unwrap_err();
+            assert!(
+                err.stderr.contains("exclusive"),
+                "{}: {}",
+                kwargs,
+                err.stderr
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn put_source_above_the_input_budget_refused_before_any_transfer() {
+        let (dir, source) = put_dir_with_file("big.txt", b"12345");
+        let m1 = MockConnection::new("h1");
+        let h1 = m1.clone();
+        let (session, tmp) = session_with(|c| {
+            c.mcp_max_input_bytes = 4;
+            c.mcp_put_dirs = vec![dir.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+
+        let err = call(
+            &session,
+            "put",
+            json!({ "source": source.display().to_string() }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.stderr.contains("max_input_bytes") && err.stderr.contains("refused"),
+            "{}",
+            err.stderr
+        );
+        assert!(h1.sftp_ops().is_empty(), "nothing was transferred");
+    }
+
+    #[tokio::test]
+    async fn put_source_must_be_an_absolute_regular_file() {
+        let (dir, _) = put_dir_with_file("f.txt", b"x");
+        let (session, tmp) = session_with(|c| {
+            c.mcp_put_dirs = vec![dir.path().to_path_buf()];
+        });
+        load_with_targets(&session, &tmp, RRID, vec![]).await;
+
+        let relative = call(&session, "put", json!({ "source": "relative/f.txt" }))
+            .await
+            .unwrap_err();
+        assert!(relative.stderr.contains("absolute"), "{}", relative.stderr);
+
+        // The allowlisted directory itself is not a regular file.
+        let err = call(
+            &session,
+            "put",
+            json!({ "source": dir.path().display().to_string() }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.stderr.contains("not a regular file"), "{}", err.stderr);
     }
 
     #[tokio::test]

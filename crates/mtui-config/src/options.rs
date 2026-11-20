@@ -473,6 +473,7 @@ pub(crate) struct McpSection {
     pub profile: Option<String>,
     pub tools_allow: Option<Vec<String>>,
     pub tools_deny: Option<Vec<String>>,
+    pub put_dirs: Option<Vec<PathBuf>>,
     pub audit_log: Option<PathBuf>,
     pub audit_log_max_bytes: Option<u64>,
 }
@@ -578,6 +579,7 @@ impl RawConfig {
         take!(mcp, profile);
         take!(mcp, tools_allow);
         take!(mcp, tools_deny);
+        take!(mcp, put_dirs);
         take!(mcp, audit_log);
         take!(mcp, audit_log_max_bytes);
         take!(obs, api_url);
@@ -769,6 +771,12 @@ pub struct Config {
     pub mcp_tools_allow: Vec<String>,
     /// Tool names to remove regardless of profile/allow (deny wins last).
     pub mcp_tools_deny: Vec<String>,
+    /// Server-side directories the MCP `put` tool may read a `source` file
+    /// from (see #778): each entry is `~`-expanded, and the feature stays off
+    /// while the list is empty. An empty entry is dropped with an error log,
+    /// like an empty `audit_log` path. Unset (the default) keeps `put`
+    /// in-band only.
+    pub mcp_put_dirs: Vec<PathBuf>,
     /// Durable audit sink for `mtui-mcp` tool calls (JSONL): one or two records
     /// per call — an `intent` before and an outcome after for a tool without
     /// `readOnlyHint`, an outcome alone for a read-only one — plus a terminal
@@ -849,6 +857,7 @@ impl Default for Config {
             mcp_profile: default_mcp_profile(),
             mcp_tools_allow: Vec::new(),
             mcp_tools_deny: Vec::new(),
+            mcp_put_dirs: Vec::new(),
             mcp_audit_log: None,
             mcp_audit_log_max_bytes: default_mcp_audit_log_max_bytes(),
             obs_api_url: default_obs_api_url(),
@@ -1045,6 +1054,23 @@ impl Config {
             mcp_profile: raw.mcp.profile.unwrap_or(d.mcp_profile),
             mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
             mcp_tools_deny: raw.mcp.tools_deny.unwrap_or(d.mcp_tools_deny),
+            mcp_put_dirs: match raw.mcp.put_dirs {
+                Some(dirs) => dirs
+                    .into_iter()
+                    .filter_map(|p| {
+                        if p.as_os_str().is_empty() {
+                            tracing::error!(
+                                option = "put_dirs",
+                                "expected a directory path per entry; dropping the empty entry"
+                            );
+                            None
+                        } else {
+                            Some(expanduser(&p))
+                        }
+                    })
+                    .collect(),
+                None => d.mcp_put_dirs,
+            },
             mcp_audit_log: match raw.mcp.audit_log {
                 Some(p) if p.as_os_str().is_empty() => {
                     tracing::error!(
@@ -1453,6 +1479,45 @@ mod tests {
     fn mcp_audit_log_empty_string_falls_back_to_unset() {
         let raw: RawConfig = toml::from_str("[mcp]\naudit_log = \"\"\n").unwrap();
         assert_eq!(Config::from_raw(raw).mcp_audit_log, None);
+    }
+
+    #[test]
+    fn mcp_put_dirs_default_empty_and_unset_kept() {
+        // Unset means the feature is off, exactly as an empty list does.
+        assert!(Config::default().mcp_put_dirs.is_empty());
+        let raw: RawConfig = toml::from_str("").unwrap();
+        assert!(Config::from_raw(raw).mcp_put_dirs.is_empty());
+    }
+
+    #[test]
+    fn mcp_put_dirs_parses_and_drops_empty_entries() {
+        let raw: RawConfig =
+            toml::from_str("[mcp]\nput_dirs = [\"/srv/scripts\", \"/opt/share\"]\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).mcp_put_dirs,
+            vec![PathBuf::from("/srv/scripts"), PathBuf::from("/opt/share")]
+        );
+        // An empty entry is a config mistake, not an allow-all: dropped, like
+        // an empty `audit_log` path falls back to unset.
+        let raw: RawConfig =
+            toml::from_str("[mcp]\nput_dirs = [\"\", \"/srv/scripts\"]\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).mcp_put_dirs,
+            vec![PathBuf::from("/srv/scripts")]
+        );
+    }
+
+    #[test]
+    fn mcp_put_dirs_merge_replaces_the_whole_list() {
+        // A set list replaces the lower layer's list — `tools_allow`/
+        // `tools_deny` semantics, not a per-entry union.
+        let mut base: RawConfig = toml::from_str("[mcp]\nput_dirs = [\"/a\"]\n").unwrap();
+        let over: RawConfig = toml::from_str("[mcp]\nput_dirs = [\"/b\", \"/c\"]\n").unwrap();
+        base.merge(over);
+        assert_eq!(
+            Config::from_raw(base).mcp_put_dirs,
+            vec![PathBuf::from("/b"), PathBuf::from("/c")]
+        );
     }
 
     #[test]

@@ -10,6 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- The `put` MCP tool accepts `source`, an absolute server-side path read
+  locally and uploaded instead of an in-band `content`/`content_b64` payload
+  (`filename` then defaults to its basename). Gated by the new `[mcp]
+  put_dirs` allowlist (unset by default: `put` stays in-band only): the path
+  and each entry are resolved — symlinks and `..` included — and the file must
+  be a regular file inside one of them, under the same `max_input_bytes`
+  refusal. The audit log records the path, never the bytes (#778).
+  **MCP schema note:** additive — one optional property; `filename` is no
+  longer schema-required (it is still required without `source`).
 - New command and read-only MCP tool `openqa_summary` prints the QEM
   Dashboard's `Results from openQA jobs` block (per-group counts, failing jobs
   listed) for the loaded update, the same text `export` writes into the report,

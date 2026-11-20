@@ -33,20 +33,24 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Upload `content` (utf-8) or `content_b64` (exactly one) to `<target tempdir>/<filename>` on every enabled host. Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Upload `content` (utf-8) or `content_b64` (exactly one) to `<target tempdir>/<filename>` on every enabled host, or — when `[mcp] put_dirs` is configured — read a server-side `source` file instead (exclusive with both content arguments; `filename` then defaults to its basename). Payloads above [mcp] max_input_bytes are refused, not truncated. Any host failure fails the call, naming the host. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "content": {
-          "description": "UTF-8 payload; exactly one of content/content_b64.",
+          "description": "UTF-8 payload; exactly one of content/content_b64/source.",
           "type": "string"
         },
         "content_b64": {
-          "description": "Base64 payload; exactly one of content/content_b64.",
+          "description": "Base64 payload; exactly one of content/content_b64/source.",
           "type": "string"
         },
         "filename": {
-          "description": "Bare file name to create on the hosts (no path separators).",
+          "description": "Bare file name to create on the hosts (no path separators). Defaults to the basename of `source`.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Absolute path of a file on this server, read locally and uploaded instead of an in-band payload. Requires [mcp] put_dirs; the resolved path must be a regular file inside one of them.",
           "type": "string"
         },
         "template": {
@@ -54,9 +58,6 @@ expression: pretty
           "type": "string"
         }
       },
-      "required": [
-        "filename"
-      ],
       "type": "object"
     },
     "name": "put",
