@@ -17,8 +17,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   directories it may read; the file must resolve to a regular file inside one
   of them. `filename` defaults to the basename, and the reply carries
   `source: {path, bytes, sha256}` (#778). **MCP schema note:** additive only —
-  a new optional `source`, `filename` no longer required, and a `source`
-  object on the reply.
+  a new optional `source`, `filename` no longer required, a `source` object on
+  the reply, and an `upload` field on the audit `call` record.
 - New command and read-only MCP tool `openqa_summary` prints the QEM
   Dashboard's `Results from openQA jobs` block (per-group counts, failing jobs
   listed) for the loaded update, the same text `export` writes into the report,

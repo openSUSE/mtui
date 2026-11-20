@@ -499,6 +499,7 @@ impl McpServer {
         let mut event = AuditEvent::Call;
         let mut rrids: Vec<String> = Vec::new();
         let mut job_ids: Vec<String> = Vec::new();
+        let mut upload: Option<Value> = None;
         let outcome: AuditOutcome;
         let mut result: Result<CallToolResponse, McpError>;
 
@@ -588,6 +589,13 @@ impl McpServer {
                     } else {
                         AuditOutcome::Error
                     };
+                    if auditing && name == "put" {
+                        upload = dispatched
+                            .as_ref()
+                            .ok()
+                            .and_then(|v| v.get("source"))
+                            .cloned();
+                    }
                     result = Ok(render(dispatched.map(|v| v.to_string())).into());
                 }
             }
@@ -671,6 +679,9 @@ impl McpServer {
             }
             if let Some(bytes) = response_bytes {
                 record["response_bytes"] = serde_json::json!(bytes);
+            }
+            if let Some(upload) = upload {
+                record["upload"] = crate::audit::sanitize_value(upload);
             }
             // File first, seq order, off the worker via `spawn_blocking`. The
             // work is already done, so losing this record can no longer un-run
@@ -1342,11 +1353,24 @@ mod tests {
         tempfile::TempDir,
         std::path::PathBuf,
     ) {
+        audited_server_with(|_| {})
+    }
+
+    /// [`audited_server`] with `tweak` applied to the config first.
+    fn audited_server_with(
+        tweak: impl FnOnce(&mut Config),
+    ) -> (
+        McpServer,
+        Arc<McpSession>,
+        tempfile::TempDir,
+        std::path::PathBuf,
+    ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let mut config = Config::default();
         config.session_user = "testuser".to_owned();
         config.mcp_audit_log = Some(path.clone());
+        tweak(&mut config);
         let registry = Arc::new(register_all());
         let session = McpSession::new(config);
         let server = McpServer::new(registry, session.clone());
@@ -2717,6 +2741,47 @@ mod tests {
             );
             assert_eq!(record["args"]["filename"], json!("id_rsa"));
         }
+    }
+
+    #[tokio::test]
+    async fn audit_put_source_records_the_upload_fingerprint_not_the_body() {
+        let files = tempfile::tempdir().expect("tempdir");
+        let body = "SOURCE-BODY-MARKER-91c4\n";
+        let file = files.path().join("baseline.sh");
+        std::fs::write(&file, body).expect("write source");
+        let allowed = files.path().to_path_buf();
+        let (server, session, _dir, path) = audited_server_with(|c| c.mcp_put_dirs = vec![allowed]);
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let requested = file.to_str().expect("utf-8 path");
+
+        audited_call(&server, "put", json!({ "source": requested }))
+            .await
+            .expect("put dispatches");
+
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(
+            !raw.contains("SOURCE-BODY-MARKER"),
+            "the file body never reaches the sink: {raw}"
+        );
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "put mutates: intent then outcome");
+        assert_eq!(records[0]["args"]["source"], json!(requested));
+        assert!(records[0].get("upload").is_none(), "intent has no result");
+        let upload = &records[1]["upload"];
+        assert_eq!(
+            upload["path"],
+            json!(
+                file.canonicalize()
+                    .expect("canonical")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert_eq!(upload["bytes"], json!(body.len()));
+        assert_eq!(
+            upload["sha256"],
+            json!(crate::audit::sha256_hex(body.as_bytes()))
+        );
     }
 
     #[tokio::test]

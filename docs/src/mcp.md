@@ -711,6 +711,11 @@ Reading the log back: an `intent` that no later record points at means "started,
 outcome not recorded" — a crash or a kill, or a lost outcome write whose client
 was told in band (and which the OTLP stream may still hold).
 
+A `put` that uploaded a `source` file adds `upload: {path, bytes, sha256}` to
+its outcome record (the resolved path and a fingerprint, never the body). The
+intent record already holds the requested path in `args.source`; a call that
+failed on some host has no `upload`.
+
 No tool argument carrying a credential in bulk lands verbatim. File-body
 payloads (`put` `content`/`content_b64`,
 `report_section_write`/`report_issue_write` `value`,
