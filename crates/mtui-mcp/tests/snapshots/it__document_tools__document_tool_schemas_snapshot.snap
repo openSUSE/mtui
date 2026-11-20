@@ -74,6 +74,17 @@ expression: pretty
           "type": "string"
         },
         "value": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
           "description": "The section's new JSON value, shaped as report_section_read returns it."
         }
       },
@@ -119,7 +130,8 @@ expression: pretty
           "type": "string"
         },
         "value": {
-          "description": "The issue's new JSON value, shaped as report_issue_read returns it."
+          "description": "The issue's new JSON value, shaped as report_issue_read returns it.",
+          "type": "object"
         }
       },
       "required": [

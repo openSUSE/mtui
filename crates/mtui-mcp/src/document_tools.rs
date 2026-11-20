@@ -91,7 +91,11 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         })
     };
     let issue_id_prop = |what: &str| json!({ "type": "string", "description": what });
-    let value_prop = |what: &str| json!({ "description": what });
+    let value_prop = |what: &str, types: Value| {
+        let mut prop = types;
+        prop["description"] = json!(what);
+        prop
+    };
 
     let sections = ToolDescriptor {
         name: "report_sections".to_owned(),
@@ -148,6 +152,11 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
                     "value",
                     value_prop(
                         "The section's new JSON value, shaped as report_section_read returns it.",
+                        json!({ "anyOf": [
+                            { "type": "object" },
+                            { "type": "array" },
+                            { "type": "string" },
+                        ] }),
                     ),
                 ),
                 ("template", template_prop()),
@@ -193,6 +202,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
                     "value",
                     value_prop(
                         "The issue's new JSON value, shaped as report_issue_read returns it.",
+                        json!({ "type": "object" }),
                     ),
                 ),
                 ("template", template_prop()),

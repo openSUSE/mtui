@@ -439,6 +439,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `report_section_write` and `report_issue_write` declare a type for `value`
+  and accept a JSON-encoded string for an object or array target, which some
+  clients send for nested values (it was refused with `invalid type: string`).
+  `verdict` and `comment` strings are never decoded. **MCP schema note:** the
+  `value` property gains a type (`anyOf` object/array/string for sections; `null` is still accepted,
+  `object` for issues); every value accepted before is still accepted.
 - `openqa_jobs` skips openQA jobs without an id (they had no usable link),
   treats a response without a `jobs` list after the first page as an
   incomplete read, and words the incomplete-read note so it fits every cause
