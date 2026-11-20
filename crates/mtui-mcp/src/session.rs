@@ -1030,6 +1030,12 @@ impl McpSession {
         }
     }
 
+    /// The registry-wide exclusive hold a nothing-loaded dispatch takes, for a
+    /// hand-written tool that must act on the canonical session itself.
+    pub(crate) async fn exclusive_lock(&self) -> CommandLock {
+        CommandLock::Exclusive(self.gate.exclusive().await)
+    }
+
     /// Releases pool claims and disconnects every loaded template's hosts.
     ///
     /// Mirrors the REPL `quit` disconnect path but **without** its exit-flag /

@@ -232,6 +232,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- MCP `get` and `put` work with no report loaded: they act on the hosts added
+  with `add_host`, as the REPL `put` does, instead of refusing with "no report
+  loaded". A fleet pass no longer needs an unrelated update loaded as a
+  carrier. **MCP schema note:** the `get` and `put` descriptions only (#781).
 - `openqa_jobs` lists only the newest non-obsoleted attempt of each scenario
   (DISTRI, VERSION, FLAVOR, ARCH, TEST, MACHINE; not the job group) by default,
   as openQA's `latest=1` does; a note counts the earlier attempts it left out.

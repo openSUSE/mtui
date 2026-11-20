@@ -208,10 +208,9 @@ async fn sections_report_completeness_with_a_pointer_per_null_leaf() {
     assert_eq!(out["sections"].as_array().unwrap().len(), 8);
 }
 
-#[tokio::test]
-async fn a_report_without_a_document_refuses_every_tool() {
-    let session = loaded(None).await;
-    for (name, kwargs) in [
+/// One valid call per document tool.
+fn every_tool_call() -> [(&'static str, Value); 9] {
+    [
         ("report_sections", json!({})),
         ("report_section_read", json!({"section": "verdict"})),
         (
@@ -230,10 +229,31 @@ async fn a_report_without_a_document_refuses_every_tool() {
         ("report_new_issue_delete", json!({"issue_id": "bsc#1"})),
         ("report_files", json!({})),
         ("report_file_read", json!({"path": "checkers.log"})),
-    ] {
+    ]
+}
+
+#[tokio::test]
+async fn a_report_without_a_document_refuses_every_tool() {
+    let session = loaded(None).await;
+    for (name, kwargs) in every_tool_call() {
         let msg = refusal(&session, name, kwargs).await;
         assert!(
             msg.contains("no report document loaded — run load_template or regenerate"),
+            "{name}: {msg}"
+        );
+    }
+}
+
+/// The transfer tools fall back to hosts added with nothing loaded (#781); the
+/// document tools have no such fallback and must keep refusing.
+#[tokio::test]
+async fn nothing_loaded_refuses_every_document_tool() {
+    let session = McpSession::new(Config::default());
+
+    for (name, kwargs) in every_tool_call() {
+        let msg = refusal(&session, name, kwargs).await;
+        assert!(
+            msg.contains("no report loaded, please use load_template first"),
             "{name}: {msg}"
         );
     }
