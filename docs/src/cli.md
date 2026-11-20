@@ -832,6 +832,18 @@ Options:
           Print help
 ```
 
+## `openqa_summary`
+
+Prints the QEM Dashboard's openQA results summary for the loaded MU.
+
+```text
+Usage: openqa_summary
+
+Options:
+  -h, --help
+          Print help
+```
+
 ## `reload_openqa`
 
 Reloads information from the openQA instances.

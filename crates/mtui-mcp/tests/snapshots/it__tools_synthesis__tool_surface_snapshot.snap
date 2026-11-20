@@ -32,6 +32,7 @@ load_template read_only=false
 lock read_only=false
 openqa_jobs read_only=true
 openqa_overview read_only=true
+openqa_summary read_only=true
 prepare read_only=false
 reboot read_only=false
 regenerate read_only=false

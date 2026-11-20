@@ -56,6 +56,7 @@ pub const CORE: &[&str] = &[
     // openQA
     "openqa_overview",
     "openqa_jobs",
+    "openqa_summary",
     // hand-written tools (always kept)
     "report_sections",
     "report_section_read",
