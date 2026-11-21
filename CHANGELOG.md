@@ -232,6 +232,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- MCP `get` and `put` work with no report loaded: they act on the hosts added
+  with `add_host`, as the REPL `put` does, instead of refusing with "no report
+  loaded". A fleet pass no longer needs an unrelated update loaded as a
+  carrier. **MCP schema note:** the `get` and `put` descriptions only (#781).
 - `openqa_jobs` lists only the newest non-obsoleted attempt of each scenario
   (DISTRI, VERSION, FLAVOR, ARCH, TEST, MACHINE; not the job group) by default,
   as openQA's `latest=1` does; a note counts the earlier attempts it left out.
@@ -448,6 +452,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Audit records of a call made with no template loaded name the hosts added
+  with `add_host` that the call acts on (`run`, `lock`, `get`, `put`, …); they
+  had `hosts: []`, so a fleet pass's `put source=` recorded its fingerprint
+  against no host. A call that addresses no template still names none.
+  **MCP schema note:** values only — `hosts` is filled where it was empty, no
+  new field, no version bump (#783).
 - `report_section_write` and `report_issue_write` declare a type for `value`
   and accept a JSON-encoded string for an object or array target, which some
   clients send for nested values (it was refused with `invalid type: string`).

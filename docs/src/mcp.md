@@ -259,6 +259,13 @@ same names (#434), carrying content in-band in both directions. The REPL
 `get`/`put` commands work on literal paths instead, with downloads landing in
 `{report_wd}/downloads/{name}.{host}`.
 
+With no template loaded, both tools act on the hosts added with `add_host`, as
+the REPL `put` does, so a fleet pass needs no update loaded. A `template` that
+is not loaded is still refused. Such a transfer runs on the session itself, so
+it first waits for every call already running, such as a `list_refhosts --free`
+or `updates`, and holds new calls back until it finishes. A slow reply is that
+wait, not a lost call; do not send the transfer again.
+
 ### `get` (read-only)
 
 Downloads `remote` (an absolute file path; folders are not supported in-band)
@@ -635,6 +642,10 @@ name, the (redacted, see below) arguments, the outcome (`ok` / `error` /
 resolved to. An **`intent`** record carries the same header and the same
 arguments, and nothing that only exists afterwards. A **`terminal`** record
 carries no arguments at all.
+
+With no template loaded, a call that acts on a report, such as `run`, `lock` or
+`put`, names the hosts added with `add_host`, and its `rrids` stay empty. A call
+that addresses no template (`whoami`, the job tools) names no host.
 
 Host names on a record are **best-effort**: they are empty when the session is
 busy with an exclusive background job (a backgrounded `load_template` or

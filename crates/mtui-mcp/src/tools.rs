@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::deny::{is_denied, mcp_denied_args};
 use crate::schema::command_input_schema;
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
+    CallScope, DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
     ProgressSink, ToolOutcome, run_with_heartbeat,
 };
 
@@ -451,13 +451,12 @@ pub(crate) async fn dispatch_tool(
     // with the same resolver the lock and background paths use, so the three
     // cannot disagree. Audit-only: skipped when no sink is on, so unaudited
     // dispatch never takes the session mutex a second time (#613).
-    let rrids = if session.auditing() {
+    let scope = if session.auditing() {
         session
-            .resolve_job_rrids(registry, route.command, &argv)
+            .resolve_call_scope(registry, route.command, &argv)
             .await
-            .unwrap_or_default()
     } else {
-        Vec::new()
+        CallScope::default()
     };
 
     if background {
@@ -470,13 +469,13 @@ pub(crate) async fn dispatch_tool(
                 ToolDispatch {
                     outcome: ToolOutcome::Completed(Ok(reply)),
                     jobs: job_ids,
-                    rrids,
+                    scope,
                 }
             }
             Err(err) => ToolDispatch {
                 outcome: ToolOutcome::Completed(Err(err)),
                 jobs: Vec::new(),
-                rrids,
+                scope,
             },
         };
     }
@@ -508,18 +507,18 @@ pub(crate) async fn dispatch_tool(
     ToolDispatch {
         outcome,
         jobs: Vec::new(),
-        rrids,
+        scope,
     }
 }
 
 /// What [`dispatch_tool`] ran and what it touched: the engine outcome, the
 /// background job ids it minted (empty unless backgrounded), and the template
-/// scope its arguments resolved to (empty when the command addresses no
+/// scope its arguments resolved to (no RRIDs when the command addresses no
 /// template). The server layer records all three in the audit record.
 pub(crate) struct ToolDispatch {
     pub outcome: ToolOutcome,
     pub jobs: Vec<String>,
-    pub rrids: Vec<String>,
+    pub scope: CallScope,
 }
 
 impl From<ToolOutcome> for ToolDispatch {
@@ -527,7 +526,7 @@ impl From<ToolOutcome> for ToolDispatch {
         Self {
             outcome,
             jobs: Vec::new(),
-            rrids: Vec::new(),
+            scope: CallScope::default(),
         }
     }
 }
