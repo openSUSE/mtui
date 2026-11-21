@@ -22,12 +22,14 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64ct::{Base64, Encoding};
 use mtui_core::{
     Activation, ColorMode, CommandPromptDisplay, SingleTemplate, ambiguous_template_message,
 };
 use serde_json::{Map, Value, json};
+use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 
 use crate::audit::sha256_hex;
@@ -88,7 +90,8 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
              (`content` utf-8, `content_b64` binary, always with full remote `size` and \
              `truncated`). Capped per host at [mcp] max_input_bytes plus an equal share \
              of [mcp] max_output_bytes; pass `hosts` to retry or page a subset. No \
-             folders in-band (trailing / unsupported). Any host failure fails the call, naming the host. {TEMPLATE_NOTE}"
+             folders in-band (trailing / unsupported). Any host failure fails the call, naming the host. \
+             With no template loaded, acts on the hosts added with add_host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -121,7 +124,8 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
              passing through the call, `filename` defaults to its basename, and the reply \
              carries `source` {{path, bytes, sha256}}. Payloads above [mcp] \
              max_input_bytes are refused, not truncated. Any host failure fails the \
-             call, naming the host. {TEMPLATE_NOTE}"
+             call, naming the host. With no template loaded, acts on the hosts added \
+             with add_host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -299,22 +303,79 @@ pub(crate) fn resolve_rrid(
     }
 }
 
-/// Take the shared gate plus the template's per-RRID lock and dispatch on a
-/// per-call fork, returning the held lock with the activated fork.
+/// The session a transfer fans out on.
+enum CallSession {
+    /// A per-call fork activated on the target template.
+    Fork(Box<mtui_core::Session>),
+    /// The canonical session with nothing loaded: hosts added then live in its
+    /// private sentinel, which no fork can see.
+    Canonical(OwnedMutexGuard<mtui_core::Session>),
+}
+
+impl CallSession {
+    fn get_mut(&mut self) -> &mut mtui_core::Session {
+        match self {
+            Self::Fork(fork) => fork,
+            Self::Canonical(guard) => guard,
+        }
+    }
+}
+
+/// Take the lock a transfer needs and the session to run it on.
 ///
-/// Resolved inside the gate so the scope key and the fork stay on the same
-/// template. Drops any leftover active guard first: no exclusive dispatch can
-/// be in flight under the shared gate, so a guard present here is stale — and
-/// it would fail the fork's activation below with `Busy`. A transient `Busy`
-/// from a racing exclusive dispatch maps to the standard `template busy`
-/// refusal.
-async fn transfer_fork(
+/// With a template to target: the shared gate plus its per-RRID lock, and a
+/// per-call fork. With nothing loaded and no `template`: the exclusive gate
+/// and the canonical session, as every nothing-loaded dispatch runs. The
+/// registry is checked again under the exclusive gate, since a load can land
+/// between the two holds.
+async fn transfer_session(
     session: &McpSession,
     template: Option<&str>,
-) -> Result<(CommandLock, mtui_core::Session), McpCommandError> {
+) -> Result<(CommandLock, CallSession), McpCommandError> {
     let scope = session.scoped_lock(template).await;
     let mut guard = session.session().lock().await;
-    let rrid = resolve_rrid(&guard, template)?;
+    if matches!(
+        guard.resolve_single_template(template, false),
+        SingleTemplate::NothingLoaded
+    ) {
+        drop(guard);
+        drop(scope);
+        let exclusive = session.exclusive_lock().await;
+        let guard = Arc::clone(session.session()).lock_owned().await;
+        return Ok((exclusive, nothing_loaded_session(session, guard)?));
+    }
+    let fork = fork_activated(session, &mut guard, template)?;
+    Ok((scope, CallSession::Fork(Box::new(fork))))
+}
+
+/// The session for a call that found nothing loaded, decided again under the
+/// exclusive gate: the canonical session if the registry is still empty, else
+/// a fork of the template loaded in between.
+fn nothing_loaded_session(
+    session: &McpSession,
+    mut guard: OwnedMutexGuard<mtui_core::Session>,
+) -> Result<CallSession, McpCommandError> {
+    if guard.templates.is_empty() {
+        guard.release_active_guard();
+        return Ok(CallSession::Canonical(guard));
+    }
+    let fork = fork_activated(session, &mut guard, None)?;
+    Ok(CallSession::Fork(Box::new(fork)))
+}
+
+/// Resolve the target template and return a per-call fork activated on it.
+///
+/// The caller holds a gate covering that template. Drops any leftover active
+/// guard first: no exclusive dispatch can be in flight under the caller's
+/// hold, so a guard present here is stale — and it would fail the fork's
+/// activation below with `Busy`. A transient `Busy` from a racing exclusive
+/// dispatch maps to the standard `template busy` refusal.
+fn fork_activated(
+    session: &McpSession,
+    guard: &mut mtui_core::Session,
+    template: Option<&str>,
+) -> Result<mtui_core::Session, McpCommandError> {
+    let rrid = resolve_rrid(guard, template)?;
     guard.release_active_guard();
     let call_buf = SharedBuf::with_limit(session.max_output_bytes());
     let call_display = CommandPromptDisplay::with_sink(Box::new(call_buf), ColorMode::Never);
@@ -324,7 +385,7 @@ async fn transfer_fork(
     // fork's token onto the shared `HostsGroup`.
     fork.set_cancel_token(CancellationToken::default());
     match fork.activate(&rrid) {
-        Activation::Active => Ok((scope, fork)),
+        Activation::Active => Ok(fork),
         Activation::Busy => Err(refuse(format!("template busy: {rrid}"))),
         Activation::NotLoaded | Activation::Empty => {
             Err(refuse(format!("could not activate template {rrid}")))
@@ -348,12 +409,12 @@ async fn transfer_get(
 
     let max_input = session.max_input_bytes();
 
-    // Dispatch on a fork, so the SFTP fan-out does not hold the canonical
-    // session mutex.
-    let (scope, mut call_session) = transfer_fork(session, template).await?;
+    // A targeted template dispatches on a fork, so the SFTP fan-out does not
+    // hold the canonical session mutex.
+    let (scope, mut call_session) = transfer_session(session, template).await?;
 
     let outcome = {
-        let targets = call_session.targets_mut();
+        let targets = call_session.get_mut().targets_mut();
         let known: BTreeSet<String> = targets.names().into_iter().collect();
         if let Some(ref names) = hosts {
             // Unknown names refuse before any transfer; a named host absent from
@@ -379,9 +440,9 @@ async fn transfer_get(
             }
             None => targets.sftp_read_capped(Path::new(remote), max_input).await,
         };
-        // The fork (and its entry guard) is done: release it and the scope
-        // before formatting — both only guarded the fan-out, and the rest
-        // works on owned data.
+        // Release the call session (the fork's entry guard, or the canonical
+        // session mutex) and then the gate before formatting — both only
+        // guarded the fan-out, and the rest works on owned data.
         drop(call_session);
         drop(scope);
 
@@ -630,7 +691,7 @@ async fn transfer_put(
     let max_input = session.max_input_bytes();
     let (payload, source): (Vec<u8>, Option<SourceUpload>) = match payload {
         PutPayload::Source(src) => {
-            // Before `transfer_fork`: a refused source takes no lock and
+            // Before `transfer_session`: a refused source takes no lock and
             // transfers nothing.
             let dirs = session.put_dirs().to_vec();
             let (path, bytes) = tokio::task::spawn_blocking(move || {
@@ -661,19 +722,20 @@ async fn transfer_put(
         }
     };
 
-    // Dispatch on a fork, so the SFTP fan-out does not hold the canonical
-    // session mutex.
-    let (scope, mut call_session) = transfer_fork(session, template).await?;
-    // Destination from the activated fork — the same source the REPL `put`
-    // uses — so a `target_tempdir` of another loaded report cannot leak in.
-    let remote = call_session.metadata().target_wd(&[filename]);
-    let map = call_session
+    // A targeted template dispatches on a fork, so the SFTP fan-out does not
+    // hold the canonical session mutex.
+    let (scope, mut call_session) = transfer_session(session, template).await?;
+    let call_session_mut = call_session.get_mut();
+    // Destination from the call session's report — the same source the REPL
+    // `put` uses — so a `target_tempdir` of another loaded report cannot leak in.
+    let remote = call_session_mut.metadata().target_wd(&[filename]);
+    let map = call_session_mut
         .targets_mut()
         .sftp_put_bytes(&payload, &remote)
         .await;
-    // The fork (and its entry guard) is done: release it and the scope
-    // before formatting — both only guarded the fan-out, and the rest works
-    // on owned data.
+    // Release the call session (the fork's entry guard, or the canonical
+    // session mutex) and then the gate before formatting — both only guarded
+    // the fan-out, and the rest works on owned data.
     drop(call_session);
     drop(scope);
 
@@ -1554,6 +1616,16 @@ mod tests {
 
     impl SourceEnv {
         async fn new(max_input: Option<usize>, with_put_dirs: bool) -> Self {
+            Self::build(max_input, with_put_dirs, true).await
+        }
+
+        /// The hosts added with nothing loaded instead, and `target_tempdir`
+        /// at [`FLEET_TEMPDIR`].
+        async fn nothing_loaded() -> Self {
+            Self::build(None, true, false).await
+        }
+
+        async fn build(max_input: Option<usize>, with_put_dirs: bool, loaded: bool) -> Self {
             let files = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(files.path().join("allowed")).unwrap();
             std::fs::create_dir_all(files.path().join("outside")).unwrap();
@@ -1565,15 +1637,17 @@ mod tests {
                 if let Some(max) = max_input {
                     c.mcp_max_input_bytes = max;
                 }
+                if !loaded {
+                    c.target_tempdir = PathBuf::from(FLEET_TEMPDIR);
+                }
             });
             let (h1, h2) = (MockConnection::new("h1"), MockConnection::new("h2"));
-            load_with_targets(
-                &session,
-                &template_dir,
-                RRID,
-                vec![enabled("h1", h1.clone()), enabled("h2", h2.clone())],
-            )
-            .await;
+            let targets = vec![enabled("h1", h1.clone()), enabled("h2", h2.clone())];
+            if loaded {
+                load_with_targets(&session, &template_dir, RRID, targets).await;
+            } else {
+                add_unloaded_hosts(&session, targets).await;
+            }
             Self {
                 session,
                 files,
@@ -1658,6 +1732,42 @@ mod tests {
             .map(|b| format!("{b:02x}"))
             .collect();
         assert_eq!(v["source"]["sha256"], json!(expected));
+    }
+
+    /// #781's own scenario: a fleet pass uploads a server-side script with no
+    /// update loaded.
+    #[tokio::test]
+    async fn put_source_with_nothing_loaded_lands_in_the_target_tempdir() {
+        let env = SourceEnv::nothing_loaded().await;
+        let body = b"#!/bin/sh\necho baseline\n".to_vec();
+        let file = env.allowed("host_baseline_check.sh");
+        std::fs::write(&file, &body).unwrap();
+
+        let v = tokio::time::timeout(Duration::from_secs(10), env.put_source(&file))
+            .await
+            .expect("the call must not hang")
+            .unwrap();
+
+        let expected = Path::new(FLEET_TEMPDIR).join("host_baseline_check.sh");
+        assert_eq!(v["remote"], expected.display().to_string(), "{v}");
+        assert_eq!(v["hosts"], json!({ "h1": "ok", "h2": "ok" }), "{v}");
+        for h in [&env.h1, &env.h2] {
+            let ops = h.sftp_ops();
+            assert!(
+                matches!(
+                    ops.as_slice(),
+                    [MockSftpOp::PutBytes { data, remote, .. }]
+                        if *data == body && *remote == expected
+                ),
+                "{ops:?}"
+            );
+        }
+        use sha2::{Digest as _, Sha256};
+        let sha256: String = Sha256::digest(&body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(v["source"]["sha256"], json!(sha256));
     }
 
     #[tokio::test]
@@ -1856,6 +1966,249 @@ mod tests {
             .unwrap_err();
 
         assert!(err.stderr.contains("no enabled hosts"), "{}", err.stderr);
+    }
+
+    /// Attach `targets` with nothing loaded, where `add_host` puts them: the
+    /// canonical session's sentinel group, which no fork can see.
+    async fn add_unloaded_hosts(session: &McpSession, targets: Vec<Target>) {
+        let mut guard = session.session().lock().await;
+        assert!(guard.templates.is_empty(), "nothing may be loaded");
+        for t in targets {
+            guard.targets_mut().add(t);
+        }
+    }
+
+    /// The nothing-loaded tests' `target_tempdir`: not the default, so a
+    /// destination that ignores the config cannot pass.
+    const FLEET_TEMPDIR: &str = "/tmp/fleet";
+
+    fn fleet_session() -> (Arc<McpSession>, tempfile::TempDir) {
+        session_with(|c| c.target_tempdir = PathBuf::from(FLEET_TEMPDIR))
+    }
+
+    /// [`call`], failing instead of hanging when a hold leaks.
+    async fn call_in_time(
+        session: &McpSession,
+        name: &str,
+        kwargs: Value,
+    ) -> Result<Value, McpCommandError> {
+        tokio::time::timeout(Duration::from_secs(10), call(session, name, kwargs))
+            .await
+            .expect("the call must not hang")
+    }
+
+    /// #781: a fleet pass with no update at hand uploads to the hosts it added.
+    #[tokio::test]
+    async fn put_with_nothing_loaded_reaches_the_session_hosts() {
+        let (m1, m2) = (MockConnection::new("h1"), MockConnection::new("h2"));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(&session, vec![enabled("h1", m1), enabled("h2", m2)]).await;
+
+        let v = call_in_time(
+            &session,
+            "put",
+            json!({ "filename": "probe.sh", "content": "echo 781" }),
+        )
+        .await
+        .unwrap();
+
+        let expected = Path::new(FLEET_TEMPDIR).join("probe.sh");
+        assert_eq!(v["remote"], expected.display().to_string());
+        assert_eq!(v["hosts"]["h1"], "ok");
+        assert_eq!(v["hosts"]["h2"], "ok");
+        for handle in [&h1, &h2] {
+            let ops = handle.sftp_ops();
+            assert!(
+                matches!(
+                    ops.as_slice(),
+                    [MockSftpOp::PutBytes { data, remote, .. }]
+                        if data == b"echo 781" && *remote == expected
+                ),
+                "{ops:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_with_nothing_loaded_reads_the_session_hosts() {
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(
+            &session,
+            vec![
+                enabled(
+                    "h1",
+                    MockConnection::new("h1").with_file("/etc/os-release", b"alpha".to_vec()),
+                ),
+                enabled(
+                    "h2",
+                    MockConnection::new("h2").with_file("/etc/os-release", b"beta".to_vec()),
+                ),
+            ],
+        )
+        .await;
+
+        let v = call_in_time(&session, "get", json!({ "remote": "/etc/os-release" }))
+            .await
+            .unwrap();
+
+        assert_eq!(v["hosts"]["h1"]["content"], "alpha");
+        assert_eq!(v["hosts"]["h2"]["content"], "beta");
+    }
+
+    #[tokio::test]
+    async fn get_hosts_subset_with_nothing_loaded() {
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(
+            &session,
+            vec![
+                enabled(
+                    "h1",
+                    MockConnection::new("h1").with_file("/f", b"a".to_vec()),
+                ),
+                enabled(
+                    "h2",
+                    MockConnection::new("h2").with_file("/f", b"b".to_vec()),
+                ),
+            ],
+        )
+        .await;
+
+        let v = call_in_time(&session, "get", json!({ "remote": "/f", "hosts": ["h2"] }))
+            .await
+            .unwrap();
+        let hosts = v["hosts"].as_object().unwrap();
+        assert_eq!(hosts.keys().collect::<Vec<_>>(), ["h2"], "{v}");
+
+        let err = call_in_time(&session, "get", json!({ "remote": "/f", "hosts": ["h9"] }))
+            .await
+            .unwrap_err();
+        assert!(err.stderr.contains("unknown host(s): h9"), "{}", err.stderr);
+    }
+
+    #[tokio::test]
+    async fn put_with_nothing_loaded_and_no_hosts_refuses_no_enabled_hosts() {
+        let (session, _tmp) = fleet_session();
+
+        let err = call_in_time(&session, "put", json!({ "filename": "f", "content": "x" }))
+            .await
+            .unwrap_err();
+
+        assert!(err.stderr.contains("no enabled hosts"), "{}", err.stderr);
+    }
+
+    #[tokio::test]
+    async fn named_template_with_nothing_loaded_still_refuses() {
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(&session, vec![enabled("h1", MockConnection::new("h1"))]).await;
+
+        let err = call_in_time(
+            &session,
+            "put",
+            json!({ "filename": "f", "content": "x", "template": "SUSE:Maintenance:9:9" }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.stderr.contains("is not loaded"), "{}", err.stderr);
+    }
+
+    /// The sentinel keeps its hosts across a transfer, and the call releases
+    /// the gate and the session mutex: a second call and a direct lock both
+    /// get through.
+    #[tokio::test]
+    async fn nothing_loaded_transfer_keeps_the_hosts_and_releases_its_holds() {
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(
+            &session,
+            vec![
+                enabled(
+                    "h1",
+                    MockConnection::new("h1").with_file("/etc/os-release", b"alpha".to_vec()),
+                ),
+                enabled(
+                    "h2",
+                    MockConnection::new("h2").with_file("/etc/os-release", b"beta".to_vec()),
+                ),
+            ],
+        )
+        .await;
+
+        call_in_time(&session, "put", json!({ "filename": "f", "content": "x" }))
+            .await
+            .unwrap();
+        let v = call_in_time(&session, "get", json!({ "remote": "/etc/os-release" }))
+            .await
+            .unwrap();
+        assert_eq!(v["hosts"]["h1"]["content"], "alpha", "{v}");
+        assert_eq!(v["hosts"]["h2"]["content"], "beta", "{v}");
+
+        let guard = tokio::time::timeout(Duration::from_secs(10), session.session().lock())
+            .await
+            .expect("the session mutex must be free");
+        assert_eq!(guard.targets().names(), ["h1", "h2"]);
+    }
+
+    /// A nothing-loaded transfer runs on the canonical session, so it waits
+    /// for the exclusive gate: while any call holds the gate shared, the put
+    /// stays parked, and it completes once that call is done.
+    #[tokio::test]
+    async fn nothing_loaded_put_waits_for_the_exclusive_gate() {
+        let (session, _tmp) = fleet_session();
+        add_unloaded_hosts(&session, vec![enabled("h1", MockConnection::new("h1"))]).await;
+
+        let holder = session.scoped_lock(Some("SUSE:Maintenance:9:9")).await;
+        let mut put = tokio::spawn({
+            let session = Arc::clone(&session);
+            async move { call(&session, "put", json!({ "filename": "f", "content": "x" })).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut put)
+                .await
+                .is_err(),
+            "put must stay parked while the gate is held shared"
+        );
+        drop(holder);
+        let v = tokio::time::timeout(Duration::from_secs(10), put)
+            .await
+            .expect("put must not hang")
+            .expect("spawn ok")
+            .unwrap();
+        assert_eq!(v["hosts"]["h1"], "ok");
+    }
+
+    /// A template loaded between the scoped hold and the exclusive one: the
+    /// decision under the gate forks onto it, so the bytes go to its hosts and
+    /// not to the hosts attached while nothing was loaded.
+    #[tokio::test]
+    async fn template_loaded_between_the_holds_gets_the_transfer() {
+        let (session, tmp) = fleet_session();
+        let (attached, loaded) = (MockConnection::new("s1"), MockConnection::new("t1"));
+        add_unloaded_hosts(&session, vec![enabled("s1", attached.clone())]).await;
+        load_with_targets(&session, &tmp, RRID, vec![enabled("t1", loaded.clone())]).await;
+        let mut guard = Arc::clone(session.session()).lock_owned().await;
+        // As after any forked call: the template is loaded, no guard installed.
+        guard.release_active_guard();
+
+        let Ok(mut call_session) = nothing_loaded_session(&session, guard) else {
+            panic!("the loaded template must activate");
+        };
+        let remote = Path::new(FLEET_TEMPDIR).join("f");
+        let map = call_session
+            .get_mut()
+            .targets_mut()
+            .sftp_put_bytes(b"x", &remote)
+            .await;
+        drop(call_session);
+
+        assert_eq!(map.keys().collect::<Vec<_>>(), ["t1"], "{map:?}");
+        assert!(
+            matches!(loaded.sftp_ops().as_slice(), [MockSftpOp::PutBytes { .. }]),
+            "{:?}",
+            loaded.sftp_ops()
+        );
+        assert!(attached.sftp_ops().is_empty(), "{:?}", attached.sftp_ops());
     }
 
     #[tokio::test]
