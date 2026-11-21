@@ -595,9 +595,14 @@ every loaded template); which release failed (check with `list_locks` and retry
 **templates** could not be reached inside the release budget, whose lock state is
 therefore unknown. A cancel with no held lock to act on says nothing extra.
 
-The job's template scope is recorded when the job is minted. A job started
-without a resolvable scope falls back to every loaded template — the conservative
-reading for a dispatch that may have run across all of them.
+The release covers the templates the job's dispatch resolved once it held its
+lock, so a job that ran on one template leaves the others alone; a job cancelled
+before it got that far uses the scope recorded when it was minted. A dispatch
+run with nothing loaded releases only the hosts added with `add_host`, even if a
+template was loaded since. One that resolved no template at all — a
+session-level command — falls back to every loaded template and the hosts added
+with `add_host`, the conservative reading for a dispatch that may have run
+across all of them.
 
 Nothing else is done at the hosts. The remote command may still be running there;
 where it is a package transaction, the package manager's own system-wide lock
@@ -642,6 +647,12 @@ name, the (redacted, see below) arguments, the outcome (`ok` / `error` /
 resolved to. An **`intent`** record carries the same header and the same
 arguments, and nothing that only exists afterwards. A **`terminal`** record
 carries no arguments at all.
+
+With no template loaded, a call that acts on a report, such as `run`, `lock` or
+`put`, names the hosts added with `add_host`, and its `rrids` stay empty. A call
+that addresses no template (`whoami`, the job tools) names no host. The scope is
+the one the call ran under, so a call that waited for a `load_template` names
+the template it then ran on.
 
 Host names on a record are **best-effort**: they are empty when the session is
 busy with an exclusive background job (a backgrounded `load_template` or

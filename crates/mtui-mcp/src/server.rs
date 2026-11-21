@@ -45,7 +45,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::SessionHandle;
 use crate::provider::SessionGuard;
-use crate::session::{AbortUnlock, McpSession, ProgressSink, ToolOutcome, forced_abort_note};
+use crate::session::{
+    AbortUnlock, CallScope, McpSession, ProgressSink, ScopeSlot, ToolOutcome, forced_abort_note,
+};
 use crate::tools::{
     ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_call_waits,
     job_tool_descriptors, tool_routes,
@@ -497,7 +499,7 @@ impl McpServer {
         // Every arm below resolves to one audited outcome; the outcome record
         // is written once at the tail.
         let mut event = AuditEvent::Call;
-        let mut rrids: Vec<String> = Vec::new();
+        let mut scope = CallScope::None;
         let mut job_ids: Vec<String> = Vec::new();
         let mut upload: Option<Value> = None;
         let outcome: AuditOutcome;
@@ -543,15 +545,22 @@ impl McpServer {
         // memory, never the engine or a host, so a plain drop on cancel strands
         // nothing.
         else if self.document_tools.contains(name) {
-            if auditing {
-                let template = kwargs.get("template").and_then(Value::as_str);
-                rrids = self.session.audit_template_scope(template).await;
-            }
+            // Filled only once the tool resolved its template under its lock.
+            let ran_under = auditing.then(ScopeSlot::new);
             let dispatched = cancellable(
-                crate::document_tools::dispatch_document_tool(&self.session, name, kwargs, sink),
+                crate::document_tools::dispatch_document_tool_scoped(
+                    &self.session,
+                    name,
+                    kwargs,
+                    sink,
+                    ran_under.as_ref(),
+                ),
                 client_ct,
             )
             .await;
+            scope = ran_under
+                .and_then(ScopeSlot::into_inner)
+                .unwrap_or_default();
             match dispatched {
                 None => {
                     outcome = AuditOutcome::Error;
@@ -569,15 +578,22 @@ impl McpServer {
         }
         // A hand-written in-band transfer tool (get/put, #434).
         else if self.transfer_tools.contains(name) {
-            if auditing {
-                let template = kwargs.get("template").and_then(Value::as_str);
-                rrids = self.session.audit_template_scope(template).await;
-            }
+            // Filled only once the transfer chose its session under its holds.
+            let ran_under = auditing.then(ScopeSlot::new);
             let dispatched = cancellable(
-                crate::transfer_tools::dispatch_transfer_tool(&self.session, name, kwargs, sink),
+                crate::transfer_tools::dispatch_transfer_tool_scoped(
+                    &self.session,
+                    name,
+                    kwargs,
+                    sink,
+                    ran_under.as_ref(),
+                ),
                 client_ct,
             )
             .await;
+            scope = ran_under
+                .and_then(ScopeSlot::into_inner)
+                .unwrap_or_default();
             match dispatched {
                 None => {
                     outcome = AuditOutcome::Error;
@@ -614,7 +630,7 @@ impl McpServer {
                 Some(client_ct),
             )
             .await;
-            rrids = dispatched.rrids;
+            scope = dispatched.scope;
             match dispatched.outcome {
                 ToolOutcome::Completed(inner) => {
                     outcome = if inner.is_ok() {
@@ -646,7 +662,7 @@ impl McpServer {
             // Minted here, after the intent record, so `intent < outcome` holds
             // per call and the file's order tracks `seq`.
             let seq = crate::audit::next_seq();
-            let hosts = self.session.audit_hosts(&rrids).await;
+            let hosts = self.session.audit_hosts(&scope).await;
             let response_bytes = response_bytes_of(&result);
             let mut record = serde_json::json!({
                 "v": AUDIT_SCHEMA_VERSION,
@@ -660,7 +676,7 @@ impl McpServer {
                 "args": args,
                 "outcome": outcome.as_str(),
                 "duration_ms": start.elapsed().as_millis() as u64,
-                "rrids": rrids,
+                "rrids": scope.rrids(),
                 "hosts": hosts,
             });
             if let Some(intent) = intent_seq {
@@ -1249,6 +1265,7 @@ mod tests {
                         None,
                         DEFAULT_PROGRESS_INTERVAL,
                         &ct,
+                        None,
                     )
                     .await
             }
@@ -2243,7 +2260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audit_scope_helpers_degrade_rather_than_wait() {
+    async fn audit_hosts_degrade_rather_than_wait() {
         // The non-empty-`rrids` arm, which no tool call can reach while the
         // exclusive gate is held: a *second* background job's terminal record
         // resolves its own host names after releasing the gate, by which time
@@ -2260,26 +2277,17 @@ mod tests {
             "the probe must hold the session"
         );
 
-        let rrids = vec![AUDIT_RRID.to_owned()];
-        let held = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            (
-                session.audit_hosts(&rrids).await,
-                session.audit_template_scope(None).await,
-                session.audit_template_scope(Some(AUDIT_RRID)).await,
-            )
-        })
+        let scope = CallScope::Templates(vec![AUDIT_RRID.to_owned()]);
+        let held = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            session.audit_hosts(&scope),
+        )
         .await
-        .expect("the audit helpers must not wait on a running job");
-        assert_eq!(held.0, Vec::<String>::new(), "host names are best-effort");
-        assert_eq!(held.1, Vec::<String>::new(), "so is the implied scope");
-        assert_eq!(
-            held.2,
-            vec![AUDIT_RRID.to_owned()],
-            "an explicit template never needed the session at all"
-        );
+        .expect("host names must not wait on a running job");
+        assert_eq!(held, Vec::<String>::new(), "host names are best-effort");
 
-        // The fixture can express the difference: released, the same calls
-        // answer with the real host and the real active template.
+        // The fixture can express the difference: released, the same call
+        // answers with the real host.
         let _ = release.send(());
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -2292,21 +2300,8 @@ mod tests {
         .await
         .expect("the job releases the session");
         assert_eq!(
-            session.audit_hosts(&rrids).await,
+            session.audit_hosts(&scope).await,
             vec![AUDIT_HOST.to_owned()]
-        );
-        assert_eq!(
-            session.audit_template_scope(None).await,
-            vec![AUDIT_RRID.to_owned()]
-        );
-    }
-
-    #[tokio::test]
-    async fn audit_scope_names_the_canonical_template() {
-        let (_server, session, _dir, _path) = audited_server();
-        assert_eq!(
-            session.audit_template_scope(Some("S:M:1:1")).await,
-            vec![AUDIT_RRID.to_owned()]
         );
     }
 
@@ -2784,6 +2779,556 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------ nothing loaded
+
+    /// Attach `host` with nothing loaded, where `add_host` puts it: the
+    /// canonical session's null sentinel.
+    async fn seed_unloaded_host(session: &McpSession, host: &str) {
+        let mut guard = session.session().lock().await;
+        assert!(guard.templates.is_empty(), "nothing may be loaded");
+        guard.targets_mut().add(Target::with_connection(
+            host,
+            TargetState::Enabled,
+            Box::new(MockConnection::new(host)),
+        ));
+    }
+
+    /// A load landing between a nothing-loaded call and its record installs
+    /// an active guard; the record still names the hosts the call acted on.
+    #[tokio::test]
+    async fn audit_hosts_of_a_nothing_loaded_scope_read_the_sentinel_after_a_load() {
+        let (_server, session, _dir, _path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        assert!(
+            session
+                .session()
+                .lock()
+                .await
+                .activate(AUDIT_RRID)
+                .is_active(),
+            "the loaded template takes the active guard"
+        );
+
+        assert_eq!(
+            session.audit_hosts(&CallScope::NothingLoaded).await,
+            vec!["attached-host".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_nothing_loaded_call_names_the_attached_hosts() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        let response = audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts answers");
+        let text = response_text(&response);
+        assert!(
+            text.contains(AUDIT_HOST),
+            "the call reached the host: {text}"
+        );
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["rrids"], json!([]));
+        assert_eq!(records[0]["hosts"], json!([AUDIT_HOST]));
+    }
+
+    /// With hosts attached and nothing loaded, a call with no scope still
+    /// names none. `whoami` and `list_templates` address no template (the
+    /// resolver's `addresses_template` gate); `job_list` is a job tool and
+    /// `shell` an unknown one, which never reach the resolver.
+    #[tokio::test]
+    async fn audit_scopeless_calls_name_no_host_with_hosts_attached() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        for tool in ["whoami", "list_templates", "job_list", "shell"] {
+            let _ = audited_call(&server, tool, json!({})).await;
+        }
+
+        let records = audit_records(&path);
+        let outcomes: Vec<&Value> = records
+            .iter()
+            .filter(|r| r["event"] != json!("intent"))
+            .collect();
+        assert_eq!(outcomes.len(), 4, "{records:?}");
+        for record in outcomes {
+            assert_eq!(record["hosts"], json!([]), "{record}");
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_unloaded_template_names_no_host() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        let _ = audited_call(
+            &server,
+            "list_hosts",
+            json!({"template": "SUSE:Maintenance:9:9"}),
+        )
+        .await;
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["hosts"], json!([]), "{}", records[0]);
+    }
+
+    /// A document tool refuses with nothing loaded, so its record names none of
+    /// the attached hosts.
+    #[tokio::test]
+    async fn audit_nothing_loaded_document_tool_names_no_host() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        let _ = audited_call(&server, "report_sections", json!({})).await;
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["outcome"], json!("error"), "{}", records[0]);
+        assert_eq!(records[0]["hosts"], json!([]), "{}", records[0]);
+    }
+
+    /// Hosts attached before a load stay on the sentinel; a call on the loaded
+    /// template names only that template's hosts.
+    #[tokio::test]
+    async fn audit_loaded_template_names_only_its_hosts() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts answers");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["rrids"], json!([AUDIT_RRID]));
+        assert_eq!(records[0]["hosts"], json!([AUDIT_HOST]));
+    }
+
+    /// A fleet pass's `put source=` records its fingerprint
+    /// against the attached hosts.
+    #[tokio::test]
+    async fn audit_nothing_loaded_put_source_names_the_attached_hosts() {
+        let files = tempfile::tempdir().expect("tempdir");
+        let body = "echo baseline\n";
+        let file = files.path().join("host_baseline_check.sh");
+        std::fs::write(&file, body).expect("write source");
+        let allowed = files.path().to_path_buf();
+        let (server, session, _dir, path) = audited_server_with(|c| c.mcp_put_dirs = vec![allowed]);
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        audited_call(
+            &server,
+            "put",
+            json!({ "source": file.to_str().expect("utf-8 path") }),
+        )
+        .await
+        .expect("put dispatches");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "put mutates: intent then outcome");
+        let outcome = &records[1];
+        assert_eq!(outcome["outcome"], json!("ok"), "{outcome}");
+        assert_eq!(
+            outcome["upload"]["sha256"],
+            json!(crate::audit::sha256_hex(body.as_bytes()))
+        );
+        assert_eq!(outcome["rrids"], json!([]));
+        assert_eq!(outcome["hosts"], json!([AUDIT_HOST]));
+    }
+
+    #[tokio::test]
+    async fn audit_nothing_loaded_background_job_terminal_names_the_attached_hosts() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+
+        let records = await_records(&path, 3).await;
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(terminal["job_state"], json!("done"), "{terminal}");
+        assert_eq!(terminal["rrids"], json!([]));
+        assert_eq!(terminal["hosts"], json!([AUDIT_HOST]));
+    }
+
+    /// In-flight work on a template that is not loaded: a shared hold on the
+    /// registry gate, so a writer queues behind it.
+    const BUSY_RRID: &str = "SUSE:Maintenance:7:7";
+
+    /// Load `rrid` with one mock host named `host`, leaving the active
+    /// template alone.
+    fn add_template(session: &mut mtui_core::Session, rrid: &str, host: &str) {
+        let target = Target::with_connection(
+            host,
+            TargetState::Enabled,
+            Box::new(MockConnection::new(host)),
+        );
+        let mut report = ObsReport::new(session.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(rrid).expect("rrid"));
+        report.base_mut().targets = HostsGroup::new(vec![target], false);
+        session.templates.add(Box::new(report));
+    }
+
+    /// A nothing-loaded call that queued for the gate before a load landed
+    /// runs on the loaded template, so its record names that template and its
+    /// hosts.
+    #[tokio::test]
+    async fn audit_call_queued_behind_a_load_names_the_loaded_template() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        let busy = session.scoped_lock(Some(BUSY_RRID)).await;
+
+        let call = audited_call(&server, "list_hosts", json!({}));
+        let land = async {
+            session.await_queued_writer().await;
+            seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+            drop(busy);
+        };
+        let (response, ()) = tokio::join!(call, land);
+
+        let text = response_text(&response.expect("list_hosts answers"));
+        assert!(
+            text.contains(AUDIT_HOST) && !text.contains("attached-host"),
+            "the call ran on the loaded template: {text}"
+        );
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["rrids"], json!([AUDIT_RRID]), "{}", records[0]);
+        assert_eq!(records[0]["hosts"], json!([AUDIT_HOST]), "{}", records[0]);
+    }
+
+    /// The worker's terminal record of a nothing-loaded job that queued for
+    /// the gate before a load landed names the template the job ran on.
+    #[tokio::test]
+    async fn audit_job_queued_behind_a_load_names_the_loaded_template() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        let busy = session.scoped_lock(Some(BUSY_RRID)).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        session.await_queued_writer().await;
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        drop(busy);
+
+        let records = await_records(&path, 3).await;
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(terminal["rrids"], json!([AUDIT_RRID]), "{terminal}");
+        assert_eq!(terminal["hosts"], json!([AUDIT_HOST]), "{terminal}");
+    }
+
+    /// A command acting on the resolved template that signals once its body
+    /// runs, then parks until its job is cancelled.
+    struct SeamParkProbe {
+        entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for SeamParkProbe {
+        fn name(&self) -> &'static str {
+            "seam_park_probe"
+        }
+        async fn call(
+            &self,
+            session: &mut mtui_core::Session,
+            _args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            if let Some(tx) = self.entered.lock().expect("probe poisoned").take() {
+                let _ = tx.send(());
+            }
+            session.cancel_token().cancelled().await;
+            Err(mtui_core::CommandError::Cancelled(String::new()))
+        }
+    }
+
+    /// The cancel path's terminal record of a nothing-loaded job that queued
+    /// for the gate before a load landed names the template the job ran on.
+    #[tokio::test]
+    async fn audit_cancelled_job_queued_behind_a_load_names_the_loaded_template() {
+        let (_server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let mut registry = register_all();
+        registry.register(Arc::new(SeamParkProbe {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+        }));
+        let busy = session.scoped_lock(Some(BUSY_RRID)).await;
+
+        let job_id = session
+            .start_jobs(Arc::new(registry), "seam_park_probe", Vec::new())
+            .await
+            .expect("start_jobs succeeds")
+            .remove(0);
+        session.await_queued_writer().await;
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        drop(busy);
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered)
+            .await
+            .expect("the probe must reach its body")
+            .expect("the probe must signal entry");
+
+        session.job_cancel(&job_id).await.expect("cancel answers");
+
+        let records = audit_records(&path);
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(terminal["job_state"], json!("cancelled"), "{terminal}");
+        assert_eq!(terminal["rrids"], json!([AUDIT_RRID]), "{terminal}");
+        assert_eq!(terminal["hosts"], json!([AUDIT_HOST]), "{terminal}");
+    }
+
+    /// A job cancelled while still queued for its lock ran under no scope, so
+    /// its terminal record names none, whatever it was minted with.
+    #[tokio::test]
+    async fn audit_job_cancelled_while_queued_names_no_scope() {
+        let (_server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        let (entered_tx, _entered) = tokio::sync::oneshot::channel();
+        let mut registry = register_all();
+        registry.register(Arc::new(SeamParkProbe {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+        }));
+        let busy = session.scoped_lock(Some(BUSY_RRID)).await;
+
+        let job_id = session
+            .start_jobs(Arc::new(registry), "seam_park_probe", Vec::new())
+            .await
+            .expect("start_jobs succeeds")
+            .remove(0);
+        session.await_queued_writer().await;
+        session.job_cancel(&job_id).await.expect("cancel answers");
+        drop(busy);
+
+        let records = audit_records(&path);
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(terminal["job_state"], json!("cancelled"), "{terminal}");
+        assert_eq!(terminal["rrids"], json!([]), "{terminal}");
+        assert_eq!(terminal["hosts"], json!([]), "{terminal}");
+    }
+
+    /// A background call's record names the scope its job was minted with,
+    /// even when a load lands while the call resolves. Minted on one template
+    /// the job is pinned to it; minted with two loaded it refuses as
+    /// ambiguous; either way its terminal record names the same scope.
+    #[tokio::test]
+    async fn audit_background_call_names_the_scope_its_job_was_minted_with() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let mut held = Some(session.session().lock().await);
+
+        let call = audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        );
+        let land = async {
+            // The mutex is fair: a release hands it straight to a queued
+            // waiter, so a failed re-take means the call holds it now and
+            // resolves once before the re-lock below lands a second template.
+            let mut queued = false;
+            for _ in 0..400 {
+                drop(held.take());
+                match session.session().try_lock() {
+                    Ok(guard) => held = Some(guard),
+                    Err(_) => {
+                        queued = true;
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            assert!(queued, "the call never queued on the session mutex");
+            let mut guard = session.session().lock().await;
+            add_template(&mut guard, "SUSE:Maintenance:2:2", "second-host");
+        };
+        let (response, ()) = tokio::join!(call, land);
+        response.expect("background start answers");
+
+        let records = await_records(&path, 3).await;
+        let dispatch = only_event(&records, "dispatch");
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(
+            dispatch["rrids"], terminal["rrids"],
+            "{dispatch} / {terminal}"
+        );
+    }
+
+    /// A load landing between a nothing-loaded transfer's two holds: the
+    /// transfer forks onto the loaded template, and its record names it.
+    #[tokio::test]
+    async fn audit_transfer_loaded_between_the_holds_names_the_loaded_template() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, "attached-host").await;
+        // In-flight work the transfer's exclusive hold queues behind.
+        let busy = session.scoped_lock(Some(BUSY_RRID)).await;
+
+        let call = audited_call(&server, "put", json!({"filename": "f", "content": "x"}));
+        let land = async {
+            // Queued: the transfer has left its first hold for the exclusive one.
+            session.await_queued_writer().await;
+            seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+            drop(busy);
+        };
+        let (response, ()) = tokio::join!(call, land);
+
+        let text = response_text(&response.expect("put dispatches"));
+        assert!(
+            text.contains(AUDIT_HOST) && !text.contains("attached-host"),
+            "the upload went to the loaded template: {text}"
+        );
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "put mutates: intent then outcome");
+        let outcome = &records[1];
+        assert_eq!(outcome["rrids"], json!([AUDIT_RRID]), "{outcome}");
+        assert_eq!(outcome["hosts"], json!([AUDIT_HOST]), "{outcome}");
+    }
+
+    /// With two templates loaded and none named, a transfer and a document
+    /// tool refuse as ambiguous, so their records name no template.
+    #[tokio::test]
+    async fn audit_ambiguous_template_tools_name_no_template() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        add_template(
+            &mut *session.session().lock().await,
+            "SUSE:Maintenance:2:2",
+            "second-host",
+        );
+
+        let _ = audited_call(&server, "put", json!({"filename": "f", "content": "x"})).await;
+        let _ = audited_call(&server, "report_sections", json!({})).await;
+
+        let records = audit_records(&path);
+        let outcomes: Vec<&Value> = records
+            .iter()
+            .filter(|r| r["event"] != json!("intent"))
+            .collect();
+        assert_eq!(outcomes.len(), 2, "{records:?}");
+        for record in outcomes {
+            assert_eq!(record["outcome"], json!("error"), "{record}");
+            assert_eq!(record["rrids"], json!([]), "{record}");
+            assert_eq!(record["hosts"], json!([]), "{record}");
+        }
+    }
+
+    /// A transfer and a document tool naming a template that is not loaded are
+    /// refused, so their records name no template.
+    #[tokio::test]
+    async fn audit_unloaded_named_template_tools_name_no_template() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let unloaded = json!("SUSE:Maintenance:9:9");
+
+        let put = json!({"filename": "f", "content": "x", "template": unloaded});
+        let _ = audited_call(&server, "put", put).await;
+        let _ = audited_call(&server, "report_sections", json!({"template": unloaded})).await;
+
+        let records = audit_records(&path);
+        let outcomes: Vec<&Value> = records
+            .iter()
+            .filter(|r| r["event"] != json!("intent"))
+            .collect();
+        assert_eq!(outcomes.len(), 2, "{records:?}");
+        for record in outcomes {
+            assert_eq!(record["outcome"], json!("error"), "{record}");
+            assert_eq!(record["rrids"], json!([]), "{record}");
+            assert_eq!(record["hosts"], json!([]), "{record}");
+        }
+    }
+
+    /// A document tool queued behind a load acts on the loaded template, so
+    /// its record names that template.
+    #[tokio::test]
+    async fn audit_document_tool_queued_behind_a_load_names_the_loaded_template() {
+        let (server, session, _dir, path) = audited_server();
+        let load = session.exclusive_lock().await;
+
+        // Read-only, so no intent write: its first poll runs up to the gate.
+        let call = audited_call(&server, "report_sections", json!({}));
+        let land = async {
+            seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+            drop(load);
+        };
+        let (_, ()) = tokio::join!(call, land);
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["rrids"], json!([AUDIT_RRID]), "{}", records[0]);
+        assert_eq!(records[0]["hosts"], json!([AUDIT_HOST]), "{}", records[0]);
+    }
+
+    /// A transfer cancelled before it takes its holds ran on no session, so its
+    /// record names no host.
+    #[tokio::test]
+    async fn audit_transfer_cancelled_before_its_holds_names_no_host() {
+        let (server, session, _dir, path) = audited_server();
+        seed_unloaded_host(&session, AUDIT_HOST).await;
+        // A load in flight, which the transfer's first hold waits on.
+        let _load = session.exclusive_lock().await;
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        server
+            .dispatch_audited(
+                "put",
+                json!({"filename": "f", "content": "x"})
+                    .as_object()
+                    .expect("kwargs object"),
+                None,
+                &ct,
+                None,
+                None,
+            )
+            .await
+            .expect_err("the cancel wins");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "put mutates: intent then outcome");
+        assert_eq!(records[1]["outcome"], json!("error"), "{}", records[1]);
+        assert_eq!(records[1]["rrids"], json!([]), "{}", records[1]);
+        assert_eq!(records[1]["hosts"], json!([]), "{}", records[1]);
+    }
+
+    /// A background start refused at the job cap mints no job, so its record
+    /// names no template.
+    #[tokio::test]
+    async fn audit_refused_background_start_names_no_template() {
+        let (server, session, _dir, path) = audited_server_with(|c| c.mcp_max_active_jobs = 1);
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let _running = start_endless_job(&session);
+
+        let response = audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("a refused start still answers");
+        let text = response_text(&response);
+        assert!(text.contains("too many active jobs"), "{text}");
+
+        let records = audit_records(&path);
+        let outcome = only_event(&records, "call");
+        assert_eq!(outcome["outcome"], json!("error"), "{outcome}");
+        assert_eq!(outcome["rrids"], json!([]), "{outcome}");
+        assert_eq!(outcome["hosts"], json!([]), "{outcome}");
+    }
+
     #[tokio::test]
     async fn audit_report_write_value_is_fingerprinted_not_stored() {
         let (server, _session, _dir, path) = audited_server();
@@ -2827,10 +3372,10 @@ mod tests {
             None,
         )
         .await;
-        assert!(
-            dispatched.rrids.is_empty(),
-            "unaudited dispatch records no scope: {:?}",
-            dispatched.rrids
+        assert_eq!(
+            dispatched.scope,
+            CallScope::None,
+            "unaudited dispatch records no scope"
         );
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2849,7 +3394,10 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(dispatched.rrids, vec![AUDIT_RRID.to_owned()]);
+        assert_eq!(
+            dispatched.scope,
+            CallScope::Templates(vec![AUDIT_RRID.to_owned()])
+        );
     }
 
     #[tokio::test]

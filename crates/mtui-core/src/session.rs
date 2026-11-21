@@ -821,6 +821,13 @@ impl Session {
         !self.null.base().targets.is_empty()
     }
 
+    /// The null sentinel's host group, whatever active guard is installed —
+    /// unlike [`targets`](Self::targets), which follows the active report.
+    #[must_use]
+    pub fn null_targets(&self) -> &HostsGroup {
+        &self.null.base().targets
+    }
+
     /// Releases the operation locks the null sentinel's own targets took.
     ///
     /// The mid-session analogue of [`take_teardown_units`](Self::take_teardown_units)

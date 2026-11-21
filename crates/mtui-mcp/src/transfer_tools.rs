@@ -36,8 +36,8 @@ use crate::audit::sha256_hex;
 use crate::capture::SharedBuf;
 use crate::report_files::normalize;
 use crate::session::{
-    CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
-    run_with_heartbeat,
+    CallScope, CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
+    ScopeSlot, record_scope, run_with_heartbeat,
 };
 use crate::tools::ToolDescriptor;
 
@@ -165,7 +165,19 @@ pub async fn dispatch_transfer_tool(
     kwargs: &Map<String, Value>,
     sink: Option<&dyn ProgressSink>,
 ) -> Result<Value, McpCommandError> {
-    let body = dispatch_transfer_tool_inner(session, name, kwargs);
+    dispatch_transfer_tool_scoped(session, name, kwargs, sink, None).await
+}
+
+/// [`dispatch_transfer_tool`], filling `ran_under`, when given, with the scope
+/// of the session the transfer runs on once it holds its locks.
+pub(crate) async fn dispatch_transfer_tool_scoped(
+    session: &McpSession,
+    name: &str,
+    kwargs: &Map<String, Value>,
+    sink: Option<&dyn ProgressSink>,
+    ran_under: Option<&ScopeSlot>,
+) -> Result<Value, McpCommandError> {
+    let body = dispatch_transfer_tool_inner(session, name, kwargs, ran_under);
     match sink {
         None => body.await,
         Some(sink) => run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await,
@@ -177,6 +189,7 @@ async fn dispatch_transfer_tool_inner(
     session: &McpSession,
     name: &str,
     kwargs: &Map<String, Value>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     // The allowed keys are the descriptor's advertised properties.
     if let Some(desc) = transfer_tool_descriptors()
@@ -221,7 +234,7 @@ async fn dispatch_transfer_tool_inner(
                     )));
                 }
             };
-            transfer_get(session, &remote, hosts, template).await
+            transfer_get(session, &remote, hosts, template, ran_under).await
         }
         "put" => {
             let content = opt_str(kwargs, "content")?;
@@ -251,7 +264,7 @@ async fn dispatch_transfer_tool_inner(
                     .ok_or_else(|| refuse("`filename` is required: `source` has no file name"))?,
                 (None, _) => return Err(refuse("`filename` is required unless `source` is given")),
             };
-            transfer_put(session, &filename, payload, template).await
+            transfer_put(session, &filename, payload, template, ran_under).await
         }
         other => Err(refuse(format!("unknown transfer tool: {other}"))),
     }
@@ -319,6 +332,19 @@ impl CallSession {
             Self::Canonical(guard) => guard,
         }
     }
+
+    /// The scope a transfer on this session runs under.
+    fn scope(&self) -> CallScope {
+        match self {
+            Self::Fork(fork) => fork
+                .templates
+                .active_rrid()
+                .map_or(CallScope::None, |rrid| {
+                    CallScope::Templates(vec![rrid.to_owned()])
+                }),
+            Self::Canonical(_) => CallScope::NothingLoaded,
+        }
+    }
 }
 
 /// Take the lock a transfer needs and the session to run it on.
@@ -327,10 +353,12 @@ impl CallSession {
 /// per-call fork. With nothing loaded and no `template`: the exclusive gate
 /// and the canonical session, as every nothing-loaded dispatch runs. The
 /// registry is checked again under the exclusive gate, since a load can land
-/// between the two holds.
+/// between the two holds. `ran_under`, when given, gets the chosen session's
+/// scope.
 async fn transfer_session(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<(CommandLock, CallSession), McpCommandError> {
     let scope = session.scoped_lock(template).await;
     let mut guard = session.session().lock().await;
@@ -342,10 +370,13 @@ async fn transfer_session(
         drop(scope);
         let exclusive = session.exclusive_lock().await;
         let guard = Arc::clone(session.session()).lock_owned().await;
-        return Ok((exclusive, nothing_loaded_session(session, guard)?));
+        let call_session = nothing_loaded_session(session, guard)?;
+        record_scope(ran_under, || call_session.scope());
+        return Ok((exclusive, call_session));
     }
-    let fork = fork_activated(session, &mut guard, template)?;
-    Ok((scope, CallSession::Fork(Box::new(fork))))
+    let call_session = CallSession::Fork(Box::new(fork_activated(session, &mut guard, template)?));
+    record_scope(ran_under, || call_session.scope());
+    Ok((scope, call_session))
 }
 
 /// The session for a call that found nothing loaded, decided again under the
@@ -399,6 +430,7 @@ async fn transfer_get(
     remote: &str,
     hosts: Option<BTreeSet<String>>,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     if remote.ends_with('/') {
         return Err(refuse(
@@ -411,7 +443,7 @@ async fn transfer_get(
 
     // A targeted template dispatches on a fork, so the SFTP fan-out does not
     // hold the canonical session mutex.
-    let (scope, mut call_session) = transfer_session(session, template).await?;
+    let (scope, mut call_session) = transfer_session(session, template, ran_under).await?;
 
     let outcome = {
         let targets = call_session.get_mut().targets_mut();
@@ -675,6 +707,7 @@ async fn transfer_put(
     filename: &str,
     payload: PutPayload,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     if filename.is_empty()
         || filename.contains('/')
@@ -724,7 +757,7 @@ async fn transfer_put(
 
     // A targeted template dispatches on a fork, so the SFTP fan-out does not
     // hold the canonical session mutex.
-    let (scope, mut call_session) = transfer_session(session, template).await?;
+    let (scope, mut call_session) = transfer_session(session, template, ran_under).await?;
     let call_session_mut = call_session.get_mut();
     // Destination from the call session's report — the same source the REPL
     // `put` uses — so a `target_tempdir` of another loaded report cannot leak in.
@@ -2194,6 +2227,10 @@ mod tests {
         let Ok(mut call_session) = nothing_loaded_session(&session, guard) else {
             panic!("the loaded template must activate");
         };
+        assert_eq!(
+            call_session.scope(),
+            CallScope::Templates(vec![RRID.to_owned()])
+        );
         let remote = Path::new(FLEET_TEMPDIR).join("f");
         let map = call_session
             .get_mut()

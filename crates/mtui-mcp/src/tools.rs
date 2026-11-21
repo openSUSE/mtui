@@ -37,8 +37,8 @@ use tokio_util::sync::CancellationToken;
 use crate::deny::{is_denied, mcp_denied_args};
 use crate::schema::command_input_schema;
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
-    ProgressSink, ToolOutcome, run_with_heartbeat,
+    CallScope, DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
+    ProgressSink, ScopeSlot, ToolOutcome, run_with_heartbeat,
 };
 
 /// Commands that touch reference hosts and can run for minutes, so they gain a
@@ -447,40 +447,32 @@ pub(crate) async fn dispatch_tool(
     // missing required positionals, `config show`'s filter vanished.
     let argv = crate::argv::kwargs_to_argv(arg_source, &kwargs, &route.argv_prefix);
 
-    // The template scope this call resolves to, for the audit record. Resolved
-    // with the same resolver the lock and background paths use, so the three
-    // cannot disagree. Audit-only: skipped when no sink is on, so unaudited
-    // dispatch never takes the session mutex a second time (#613).
-    let rrids = if session.auditing() {
-        session
-            .resolve_job_rrids(registry, route.command, &argv)
-            .await
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
     if background {
-        return match session
-            .start_jobs(Arc::clone(registry), route.command, argv)
-            .await
-        {
+        // The scope the jobs are minted with is the one the call records.
+        let scope = session
+            .resolve_call_scope(registry, route.command, &argv)
+            .await;
+        return match session.mint_jobs(Arc::clone(registry), route.command, argv, scope.clone()) {
             Ok(job_ids) => {
                 let reply = started_jobs_reply(route.command, &job_ids);
                 ToolDispatch {
                     outcome: ToolOutcome::Completed(Ok(reply)),
                     jobs: job_ids,
-                    rrids,
+                    scope,
                 }
             }
+            // Refused before minting: no job runs under the scope.
             Err(err) => ToolDispatch {
                 outcome: ToolOutcome::Completed(Err(err)),
                 jobs: Vec::new(),
-                rrids,
+                scope: CallScope::None,
             },
         };
     }
 
+    // The scope the dispatch ran under, for the audit record: asked for only
+    // while auditing, and resolved under the dispatch's own lock.
+    let ran_under = session.auditing().then(ScopeSlot::new);
     let outcome = match client_ct {
         Some(ct) => {
             session
@@ -491,6 +483,7 @@ pub(crate) async fn dispatch_tool(
                     sink,
                     DEFAULT_PROGRESS_INTERVAL,
                     ct,
+                    ran_under.as_ref(),
                 )
                 .await
         }
@@ -501,6 +494,7 @@ pub(crate) async fn dispatch_tool(
                 &argv,
                 sink,
                 DEFAULT_PROGRESS_INTERVAL,
+                ran_under.as_ref(),
             )
             .await
             .into(),
@@ -508,18 +502,22 @@ pub(crate) async fn dispatch_tool(
     ToolDispatch {
         outcome,
         jobs: Vec::new(),
-        rrids,
+        scope: ran_under
+            .and_then(ScopeSlot::into_inner)
+            .unwrap_or_default(),
     }
 }
 
 /// What [`dispatch_tool`] ran and what it touched: the engine outcome, the
 /// background job ids it minted (empty unless backgrounded), and the template
-/// scope its arguments resolved to (empty when the command addresses no
-/// template). The server layer records all three in the audit record.
+/// scope it ran under — for background jobs, the one they were minted with;
+/// [`CallScope::None`] when the command addresses no template, no job was
+/// minted, or nothing audits a foreground call. The server layer records all
+/// three in the audit record.
 pub(crate) struct ToolDispatch {
     pub outcome: ToolOutcome,
     pub jobs: Vec<String>,
-    pub rrids: Vec<String>,
+    pub scope: CallScope,
 }
 
 impl From<ToolOutcome> for ToolDispatch {
@@ -527,7 +525,7 @@ impl From<ToolOutcome> for ToolDispatch {
         Self {
             outcome,
             jobs: Vec::new(),
-            rrids: Vec::new(),
+            scope: CallScope::None,
         }
     }
 }
