@@ -544,11 +544,44 @@ pub fn resolve_command_rrids(
     session: &Session,
     argv: &[String],
 ) -> Option<Vec<String>> {
+    match resolve_command_templates(command, session, argv) {
+        ResolvedTemplates::Loaded(rrids) => Some(rrids),
+        ResolvedTemplates::NullReport | ResolvedTemplates::Unresolved => None,
+    }
+}
+
+/// What a `command`/`argv` invocation resolves to, from
+/// [`resolve_command_templates`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedTemplates {
+    /// These loaded templates, in dispatch order.
+    Loaded(Vec<String>),
+    /// Nothing loaded and no template named: the null report, whose hosts are
+    /// the ones attached while nothing is loaded.
+    NullReport,
+    /// The argv does not parse here, names a template that is not loaded, or
+    /// is ambiguous; the real error surfaces at dispatch.
+    Unresolved,
+}
+
+/// [`resolve_command_rrids`] keeping the null report apart from a failed
+/// resolution.
+#[must_use]
+pub fn resolve_command_templates(
+    command: &dyn Command,
+    session: &Session,
+    argv: &[String],
+) -> ResolvedTemplates {
     let parser = crate::engine::command_parser(command);
-    let matches = parser.try_get_matches_from(argv).ok()?;
-    let resolved = resolve_templates(command.name(), command.scope(), session, &matches).ok()?;
-    let real: Vec<String> = resolved.into_iter().filter(|r| !r.is_empty()).collect();
-    if real.is_empty() { None } else { Some(real) }
+    let Ok(matches) = parser.try_get_matches_from(argv) else {
+        return ResolvedTemplates::Unresolved;
+    };
+    match resolve_templates(command.name(), command.scope(), session, &matches) {
+        // Only an empty registry resolves to the null report's empty RRID.
+        Ok(resolved) if resolved.iter().all(String::is_empty) => ResolvedTemplates::NullReport,
+        Ok(resolved) => ResolvedTemplates::Loaded(resolved),
+        Err(_) => ResolvedTemplates::Unresolved,
+    }
 }
 
 /// Reads an optional string argument, tolerating a subcommand that never
@@ -1130,6 +1163,38 @@ mod tests {
             rrids, None,
             "an ambiguous resolution must fall back to the exclusive gate, not panic or leak \
              the error"
+        );
+        assert_eq!(
+            resolve_command_templates(&ExplicitProbe, &session, &[]),
+            ResolvedTemplates::Unresolved
+        );
+    }
+
+    #[test]
+    fn resolve_command_templates_with_nothing_loaded_is_the_null_report() {
+        let (session, _buf) = crate::commands::testkit::empty_session();
+        assert_eq!(
+            resolve_command_templates(&ExplicitProbe, &session, &[]),
+            ResolvedTemplates::NullReport
+        );
+    }
+
+    #[test]
+    fn resolve_command_templates_naming_an_unloaded_template_is_unresolved() {
+        let (session, _buf) = crate::commands::testkit::empty_session();
+        let argv = ["-T".to_owned(), "SUSE:Maintenance:9:9".to_owned()];
+        assert_eq!(
+            resolve_command_templates(&ExplicitProbe, &session, &argv),
+            ResolvedTemplates::Unresolved
+        );
+    }
+
+    #[test]
+    fn resolve_command_templates_with_a_template_loaded_names_it() {
+        let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        assert_eq!(
+            resolve_command_templates(&ExplicitProbe, &session, &[]),
+            ResolvedTemplates::Loaded(vec![RRID.to_owned()])
         );
     }
 }

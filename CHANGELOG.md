@@ -452,6 +452,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Audit records of a call made with no template loaded name the hosts added
+  with `add_host` that the call acts on (`run`, `lock`, `get`, `put`, …); they
+  had `hosts: []`, so a fleet pass's `put source=` recorded its fingerprint
+  against no host. A call that addresses no template still names none.
+  **MCP schema note:** values only — `hosts` is filled where it was empty, no
+  new field, no version bump (#783).
 - `report_section_write` and `report_issue_write` declare a type for `value`
   and accept a JSON-encoded string for an object or array target, which some
   clients send for nested values (it was refused with `invalid type: string`).

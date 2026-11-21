@@ -56,8 +56,8 @@ use std::time::{Duration, Instant};
 use mtui_config::Config;
 use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
-    Session, addresses_template, canonical_template_name, dispatch_argv, dispatch_command,
-    resolve_command_rrids,
+    ResolvedTemplates, Session, addresses_template, canonical_template_name, dispatch_argv,
+    dispatch_command, resolve_command_rrids, resolve_command_templates,
 };
 use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
@@ -255,6 +255,34 @@ impl std::fmt::Display for JobState {
     }
 }
 
+/// The template scope a call resolved to: what its audit record names and what
+/// a job records for the post-abort unlock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CallScope {
+    /// These loaded templates; none when the call addresses no template or its
+    /// scope did not resolve.
+    Templates(Vec<String>),
+    /// Nothing loaded and no template named: the call acts on the null report,
+    /// whose hosts are the ones attached while nothing is loaded.
+    NothingLoaded,
+}
+
+impl Default for CallScope {
+    fn default() -> Self {
+        Self::Templates(Vec::new())
+    }
+}
+
+impl CallScope {
+    /// The RRIDs to record; none for [`NothingLoaded`](Self::NothingLoaded).
+    pub(crate) fn rrids(&self) -> &[String] {
+        match self {
+            Self::Templates(rrids) => rrids,
+            Self::NothingLoaded => &[],
+        }
+    }
+}
+
 /// One background-job record.
 ///
 /// Shared between the spawned worker (which writes the terminal state/result)
@@ -275,13 +303,14 @@ struct Job {
     /// cancel time: the loaded set may have changed since, and the job id carries
     /// the RRID only as a `:`-mangled string.
     ///
-    /// **Empty** means the scope is unknown (the synchronous
+    /// **No RRIDs** means the scope is unknown (the synchronous
     /// [`start_job`](McpSession::start_job) cannot resolve, an argv resolving
     /// to nothing real has no scope, and a command that addresses no template
-    /// has none). The cancel path then falls back to every
-    /// loaded template — the conservative answer for a dispatch that may have
-    /// held the registry gate exclusively and locked hosts across all of them.
-    rrids: Vec<String>,
+    /// has none) or is [`CallScope::NothingLoaded`]. The cancel path then falls
+    /// back to every loaded template — the conservative answer for a dispatch
+    /// that may have held the registry gate exclusively and locked hosts across
+    /// all of them.
+    scope: CallScope,
     state: JobState,
     started: Instant,
     /// Freezes `elapsed_s` once terminal.
@@ -783,18 +812,29 @@ impl McpSession {
         self.audit.is_some() || self.otel.is_some()
     }
 
-    /// Best-effort host-name snapshot for `rrids`: the union of each loaded
-    /// template's target names, sorted. An entry busy with a concurrent
+    /// Best-effort host-name snapshot for `scope`, sorted: the union of each
+    /// loaded template's target names, or for
+    /// [`NothingLoaded`](CallScope::NothingLoaded) the null sentinel's, the
+    /// hosts attached while nothing is loaded. An entry busy with a concurrent
     /// dispatch is skipped rather than awaited, so auditing never blocks on
     /// the work it records; an unloaded template contributes nothing.
     ///
     /// Best-effort down to the session itself: empty while an exclusive
     /// dispatch holds the session, so a record write never waits on a running
     /// job. The record always carries `rrids`, which need no lock (#613).
-    pub(crate) async fn audit_hosts(&self, rrids: &[String]) -> Vec<String> {
-        if rrids.is_empty() {
-            return Vec::new();
-        }
+    pub(crate) async fn audit_hosts(&self, scope: &CallScope) -> Vec<String> {
+        let rrids = match scope {
+            CallScope::Templates(rrids) if rrids.is_empty() => return Vec::new(),
+            CallScope::Templates(rrids) => rrids,
+            CallScope::NothingLoaded => {
+                let Ok(session) = self.session.try_lock() else {
+                    return Vec::new();
+                };
+                let mut hosts = session.null_targets().names();
+                hosts.sort();
+                return hosts;
+            }
+        };
         let Ok(session) = self.session.try_lock() else {
             return Vec::new();
         };
@@ -813,22 +853,21 @@ impl McpSession {
 
     /// Template scope for a hand-written tool call carrying an optional
     /// `template` kwarg (the document/transfer families): the named
-    /// template, else the active one, else nothing. Best-effort like
-    /// [`audit_hosts`](Self::audit_hosts): empty while an exclusive dispatch
-    /// holds the session, so a record write never waits on a running job. A
-    /// named template needs no lock at all.
-    pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> Vec<String> {
+    /// template, else the active one, else — nothing loaded — the null
+    /// report. Best-effort like [`audit_hosts`](Self::audit_hosts): no scope
+    /// while an exclusive dispatch holds the session, so a record write never
+    /// waits on a running job. A named template needs no lock at all.
+    pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> CallScope {
         if let Some(rrid) = template {
-            return vec![canonical_template_name(rrid)];
+            return CallScope::Templates(vec![canonical_template_name(rrid)]);
         }
         let Ok(session) = self.session.try_lock() else {
-            return Vec::new();
+            return CallScope::default();
         };
-        session
-            .templates
-            .active_rrid()
-            .map(|rrid| vec![rrid.to_owned()])
-            .unwrap_or_default()
+        match session.templates.active_rrid() {
+            Some(rrid) => CallScope::Templates(vec![rrid.to_owned()]),
+            None => CallScope::NothingLoaded,
+        }
     }
 
     /// Best-effort terminal-state audit record for a background job. No-op
@@ -844,14 +883,14 @@ impl McpSession {
         tool: &str,
         job_id: &str,
         state: JobState,
-        rrids: &[String],
+        scope: &CallScope,
         started: Instant,
         finished: Instant,
     ) {
         if !self.auditing() {
             return;
         }
-        let hosts = self.audit_hosts(rrids).await;
+        let hosts = self.audit_hosts(scope).await;
         let outcome = if state == JobState::Done {
             crate::audit::AuditOutcome::Ok
         } else {
@@ -871,7 +910,7 @@ impl McpSession {
             "job_state": state.to_string(),
             "outcome": outcome.as_str(),
             "duration_ms": finished.saturating_duration_since(started).as_millis() as u64,
-            "rrids": rrids,
+            "rrids": scope.rrids(),
             "hosts": hosts,
         });
         // File first, seq order; warn-only on failure (already answered).
@@ -925,7 +964,7 @@ impl McpSession {
     /// Acquires the right lock(s) for a `name`/`argv` invocation, resolving
     /// exactly as the foreground dispatch does (via [`resolve_command_rrids`],
     /// gated on [`addresses_template`] exactly
-    /// like [`resolve_job_rrids`](Self::resolve_job_rrids), so the two cannot
+    /// like [`resolve_call_scope`](Self::resolve_call_scope), so the two cannot
     /// disagree):
     ///
     /// * a command addressing no template → the gate *shared* with **no**
@@ -952,7 +991,7 @@ impl McpSession {
             Some(command) if command.requires_canonical_session(argv) => None,
             Some(command) => {
                 // Session-level: no template to serialise on. Gated on the
-                // same predicate as `resolve_job_rrids`, before resolving —
+                // same predicate as `resolve_call_scope`, before resolving —
                 // `Scope::Single` alone would map to the active template's
                 // per-RRID lock here while the job path records no scope (#603).
                 if !addresses_template(command.as_ref()) {
@@ -1355,40 +1394,49 @@ impl McpSession {
         // the exclusive path it holds the canonical session mutex for its whole
         // life, so the pass's preamble would otherwise time out as `stalled`.
         drop(fut);
-        let rrids = tokio::time::timeout(
+        let scope = tokio::time::timeout(
             ABORT_UNLOCK_BUDGET / 4,
-            self.resolve_job_rrids(registry, name, argv),
+            self.resolve_call_scope(registry, name, argv),
         )
         .await
-        .ok()
-        .flatten()
         .unwrap_or_default();
-        ToolOutcome::Aborted(self.unlock_after_abort(&rrids, ABORT_UNLOCK_BUDGET).await)
+        ToolOutcome::Aborted(
+            self.unlock_after_abort(scope.rrids(), ABORT_UNLOCK_BUDGET)
+                .await,
+        )
     }
 
-    /// Resolve the target RRIDs for a backgrounded fan-out, exactly as the
-    /// foreground dispatch does (via [`resolve_command_rrids`], applying the
-    /// command's own [`Scope`](mtui_core::Scope) against the loaded set), so the
-    /// two match. `None` means resolution is not meaningful (unparseable argv,
-    /// only the Null report resolves, or the command addresses no template) and
-    /// the caller keeps the single-job path. [`command_lock`](Self::command_lock)
-    /// gates on the same [`addresses_template`]
-    /// predicate, so the two resolvers cannot disagree.
-    pub(crate) async fn resolve_job_rrids(
+    /// Resolve the template scope of a call — for a backgrounded fan-out, the
+    /// post-abort unlock and the audit record — exactly as the foreground
+    /// dispatch does (via [`resolve_command_templates`], applying the command's
+    /// own [`Scope`](mtui_core::Scope) against the loaded set), so the two
+    /// match. No RRIDs means resolution is not meaningful (unparseable argv, a
+    /// template that is not loaded, or the command addresses no template) or
+    /// only the null report resolves ([`CallScope::NothingLoaded`]); either way
+    /// the caller keeps the single-job path.
+    /// [`command_lock`](Self::command_lock) gates on the same
+    /// [`addresses_template`] predicate, so the two resolvers cannot disagree.
+    pub(crate) async fn resolve_call_scope(
         &self,
         registry: &Registry,
         name: &str,
         argv: &[String],
-    ) -> Option<Vec<String>> {
-        let command = registry.get(name)?;
+    ) -> CallScope {
+        let Some(command) = registry.get(name) else {
+            return CallScope::default();
+        };
         // Nothing to pin: the parser has no `-T`, and the empty scope makes the
         // cancel path fall back to every loaded template — where a
         // `load_template` job's hosts are.
         if !addresses_template(command.as_ref()) {
-            return None;
+            return CallScope::default();
         }
         let session = self.session.lock().await;
-        resolve_command_rrids(command.as_ref(), &session, argv)
+        match resolve_command_templates(command.as_ref(), &session, argv) {
+            ResolvedTemplates::Loaded(rrids) => CallScope::Templates(rrids),
+            ResolvedTemplates::NullReport => CallScope::NothingLoaded,
+            ResolvedTemplates::Unresolved => CallScope::default(),
+        }
     }
 
     /// Reject a spawn of `n` new jobs when it would breach the active cap.
@@ -1434,8 +1482,8 @@ impl McpSession {
     /// terminal records past the completed cap on settling. `self` is an `Arc`
     /// because the spawned task must own the session for its `'static` lifetime.
     ///
-    /// `rrids` is the caller's already-computed template scope for `argv` (see
-    /// [`Job::rrids`]), empty when it could not resolve one.
+    /// `scope` is the caller's already-computed template scope for `argv` (see
+    /// [`Job::scope`]), with no RRIDs when it could not resolve one.
     fn mint_job(
         self: &Arc<Self>,
         jobs_guard: &mut HashMap<String, Arc<StdMutex<Job>>>,
@@ -1443,13 +1491,13 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
         job_id: String,
-        rrids: Vec<String>,
+        scope: CallScope,
     ) -> String {
         let cancel = CancellationToken::new();
         let job = Arc::new(StdMutex::new(Job {
             id: job_id.clone(),
             command: name.to_owned(),
-            rrids,
+            scope,
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -1493,7 +1541,7 @@ impl McpSession {
                     Some((
                         j.state,
                         j.command.clone(),
-                        j.rrids.clone(),
+                        j.scope.clone(),
                         j.started,
                         j.finished.expect("just set"),
                     ))
@@ -1513,9 +1561,9 @@ impl McpSession {
                     None
                 }
             };
-            if let Some((state, command, rrids, started, finished)) = settled {
+            if let Some((state, command, scope, started, finished)) = settled {
                 session
-                    .audit_terminal(&command, &terminal_job_id, state, &rrids, started, finished)
+                    .audit_terminal(&command, &terminal_job_id, state, &scope, started, finished)
                     .await;
             }
             session.evict_completed();
@@ -1570,12 +1618,12 @@ impl McpSession {
     ) -> Result<String, McpCommandError> {
         // Synchronous, so it cannot resolve the template scope (that needs the
         // session lock): the job records an empty scope and a forced cancel falls
-        // back to every loaded template. See `Job::rrids`.
-        self.start_job_scoped(registry, name, argv, Vec::new())
+        // back to every loaded template. See `Job::scope`.
+        self.start_job_scoped(registry, name, argv, CallScope::default())
     }
 
     /// [`start_job`](Self::start_job) with the caller's already-resolved
-    /// template scope recorded on the job (see [`Job::rrids`]).
+    /// template scope recorded on the job (see [`Job::scope`]).
     ///
     /// # Errors
     ///
@@ -1585,13 +1633,13 @@ impl McpSession {
         registry: Arc<Registry>,
         name: &str,
         argv: Vec<String>,
-        rrids: Vec<String>,
+        scope: CallScope,
     ) -> Result<String, McpCommandError> {
         let mut jobs = self.jobs.lock().expect("jobs table poisoned");
         self.admit(&jobs, 1)?;
         let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let job_id = format!("{name}-{n}");
-        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id, rrids))
+        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id, scope))
     }
 
     /// Start `name`/`argv` in the background, fanning out one job per template.
@@ -1618,9 +1666,8 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
     ) -> Result<Vec<String>, McpCommandError> {
-        let rrids = self.resolve_job_rrids(&registry, name, &argv).await;
-        match rrids {
-            Some(rrids) if rrids.len() > 1 => {
+        match self.resolve_call_scope(&registry, name, &argv).await {
+            CallScope::Templates(rrids) if rrids.len() > 1 => {
                 let mut jobs = self.jobs.lock().expect("jobs table poisoned");
                 self.admit(&jobs, rrids.len())?;
                 Ok(rrids
@@ -1636,7 +1683,7 @@ impl McpSession {
                             name,
                             scoped_argv,
                             job_id,
-                            vec![rrid],
+                            CallScope::Templates(vec![rrid]),
                         )
                     })
                     .collect())
@@ -1644,23 +1691,19 @@ impl McpSession {
             // One real template: keep the single-job path and its stable id
             // shape, but scope argv and record the RRID so the dispatch cannot
             // drift from what the job says it targets.
-            Some(rrids) => {
-                let rrid = rrids.into_iter().next().expect("len == 1");
+            CallScope::Templates(mut rrids) if rrids.len() == 1 => {
+                let rrid = rrids.pop().expect("len == 1");
                 let scoped_argv = scope_argv(&rrid, &argv);
                 Ok(vec![self.start_job_scoped(
                     registry,
                     name,
                     scoped_argv,
-                    vec![rrid],
+                    CallScope::Templates(vec![rrid]),
                 )?])
             }
-            // Nothing real resolves: no template to pin to or record.
-            None => Ok(vec![self.start_job_scoped(
-                registry,
-                name,
-                argv,
-                Vec::new(),
-            )?]),
+            // Nothing real resolves: no template to pin to, but the scope (the
+            // null report, or none) is recorded for the terminal record.
+            scope => Ok(vec![self.start_job_scoped(registry, name, argv, scope)?]),
         }
     }
 
@@ -1809,7 +1852,7 @@ impl McpSession {
         unlock_budget: Duration,
     ) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
-        let (handle, token, command, rrids, started, finished) = {
+        let (handle, token, command, scope, started, finished) = {
             let mut j = job.lock().expect("job record poisoned");
             match j.state {
                 JobState::Running => {
@@ -1823,7 +1866,7 @@ impl McpSession {
                         j.handle.take(),
                         j.cancel.clone(),
                         j.command.clone(),
-                        j.rrids.clone(),
+                        j.scope.clone(),
                         j.started,
                         j.finished.expect("just set"),
                     )
@@ -1850,7 +1893,7 @@ impl McpSession {
                 // `JoinError::Cancelled` is expected) — and so the worker's
                 // `CommandLock` is released before the fan-out takes those holds.
                 let _ = handle.await;
-                unlocked = self.unlock_after_abort(&rrids, unlock_budget).await;
+                unlocked = self.unlock_after_abort(scope.rrids(), unlock_budget).await;
             }
             // The worker's terminal-write branch skipped its eviction (the
             // state was already `Cancelled`), so reap history here.
@@ -1863,7 +1906,7 @@ impl McpSession {
             &command,
             job_id,
             JobState::Cancelled,
-            &rrids,
+            &scope,
             started,
             finished,
         )
@@ -1881,7 +1924,7 @@ impl McpSession {
     /// Releases the operation lock a force-aborted dispatch left behind, on
     /// every template in `rrids`.
     ///
-    /// An empty `rrids` means the job recorded no scope (see [`Job::rrids`]) and
+    /// An empty `rrids` means the job recorded no scope (see [`Job::scope`]) and
     /// falls back to every loaded template, plus the null sentinel when it holds
     /// hosts. The whole pass is bounded by `budget`, **including the preamble**:
     /// a template not reached in time is reported unknown rather than waited
@@ -2389,7 +2432,7 @@ mod tests {
             Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::default(),
                 state,
                 started: base,
                 finished,
@@ -2444,7 +2487,7 @@ mod tests {
                     Arc::new(StdMutex::new(Job {
                         id: format!("t-{i}"),
                         command: "probe".to_owned(),
-                        rrids: Vec::new(),
+                        scope: CallScope::default(),
                         state: JobState::Done,
                         started: Instant::now(),
                         finished: Some(Instant::now()),
@@ -2477,7 +2520,7 @@ mod tests {
             Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::default(),
                 state: JobState::Done,
                 started: base,
                 finished: Some(finished),
@@ -2527,7 +2570,7 @@ mod tests {
                 Arc::new(StdMutex::new(Job {
                     id: "held-1".to_owned(),
                     command: "probe".to_owned(),
-                    rrids: Vec::new(),
+                    scope: CallScope::default(),
                     state: JobState::Running,
                     started: Instant::now(),
                     finished: None,
@@ -2588,7 +2631,7 @@ mod tests {
                 Arc::new(StdMutex::new(Job {
                     id: "held-2".to_owned(),
                     command: "probe".to_owned(),
-                    rrids: Vec::new(),
+                    scope: CallScope::default(),
                     state: JobState::Running,
                     started: Instant::now(),
                     finished: None,
@@ -2640,7 +2683,7 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "probe-1".to_owned(),
             command: "probe".to_owned(),
-            rrids: Vec::new(),
+            scope: CallScope::default(),
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -2811,8 +2854,8 @@ mod tests {
         let registry = register_all();
         for (name, argv) in session_level_cases() {
             assert_eq!(
-                sess.resolve_job_rrids(&registry, name, &argv).await,
-                None,
+                sess.resolve_call_scope(&registry, name, &argv).await,
+                CallScope::default(),
                 "{name}: background scope must stay empty"
             );
             let lock = sess.command_lock(&registry, name, &argv).await;
@@ -3246,7 +3289,7 @@ mod tests {
             let job = Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::default(),
                 state,
                 started: Instant::now(),
                 finished: Some(Instant::now()),
@@ -3271,7 +3314,7 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "whoami-1".to_owned(),
             command: "whoami".to_owned(),
-            rrids: Vec::new(),
+            scope: CallScope::default(),
             state: JobState::Cancelled,
             started: Instant::now(),
             finished: Some(Instant::now()),
@@ -3582,7 +3625,7 @@ mod tests {
         assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
         assert_eq!(*seen.lock().unwrap(), vec![None]);
         let jobs = sess.jobs.lock().unwrap();
-        assert!(jobs[&ids[0]].lock().unwrap().rrids.is_empty());
+        assert_eq!(jobs[&ids[0]].lock().unwrap().scope, CallScope::default());
     }
 
     /// #405 headline: a job force-aborted mid host-operation has its lock
@@ -4254,7 +4297,7 @@ mod tests {
     /// A force-aborted job that locked a host attached with **no report loaded**
     /// (#485).
     ///
-    /// The fallback scope (`Job::rrids` empty) used to resolve to
+    /// The fallback scope (`Job::scope` without RRIDs) used to resolve to
     /// `templates.rrids()` — the registry only — so the null sentinel, whose
     /// RRID is empty, was never reached and the lock it stranded survived until
     /// the session ended. The fix makes the fallback include the sentinel when
@@ -4985,7 +5028,7 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "probe-1".to_owned(),
             command: "probe".to_owned(),
-            rrids: vec!["SUSE:Maintenance:9:9".to_owned()],
+            scope: CallScope::Templates(vec!["SUSE:Maintenance:9:9".to_owned()]),
             state: JobState::Running,
             started: Instant::now(),
             finished: None,

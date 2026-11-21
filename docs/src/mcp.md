@@ -643,6 +643,10 @@ resolved to. An **`intent`** record carries the same header and the same
 arguments, and nothing that only exists afterwards. A **`terminal`** record
 carries no arguments at all.
 
+With no template loaded, a call that acts on a report, such as `run`, `lock` or
+`put`, names the hosts added with `add_host`, and its `rrids` stay empty. A call
+that addresses no template (`whoami`, the job tools) names no host.
+
 Host names on a record are **best-effort**: they are empty when the session is
 busy with an exclusive background job (a backgrounded `load_template` or
 `add_host`), because a record write never waits on the work it
