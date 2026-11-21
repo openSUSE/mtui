@@ -452,6 +452,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Audit records of a call made with no template loaded (`run`, `lock`, `get`,
+  `put`, …) name the hosts added with `add_host`; they had `hosts: []`, so a
+  fleet pass's `put source=` recorded its fingerprint against no host. A call
+  that addresses no template still names none. A call or background job that
+  waited for a `load_template` records the template it then ran on. A `get`,
+  `put` or report-document call refused before it resolves a template (several
+  loaded and none named, or the named one not loaded) and a background start
+  refused at the job cap record no template.
+  **MCP schema note:** values only — no new field, no version bump (#783).
+- A forced cancel (`job_cancel`, or a client cancelling a running tool call)
+  releases the operation locks of the templates its dispatch ran on. A job
+  started without a scope that ran on one template no longer releases locks
+  on the other templates or on the hosts added with `add_host`, and a cancelled
+  call made with nothing loaded releases the `add_host` hosts' lock, and only
+  that one, even when a template is loaded before the release runs (#783).
 - `report_section_write` and `report_issue_write` declare a type for `value`
   and accept a JSON-encoded string for an object or array target, which some
   clients send for nested values (it was refused with `invalid type: string`).

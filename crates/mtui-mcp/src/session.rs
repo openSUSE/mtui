@@ -50,14 +50,14 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
-    Session, addresses_template, canonical_template_name, dispatch_argv, dispatch_command,
-    resolve_command_rrids,
+    ResolvedTemplates, Session, addresses_template, canonical_template_name, dispatch_argv,
+    dispatch_command, resolve_command_rrids, resolve_command_templates,
 };
 use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
@@ -255,6 +255,43 @@ impl std::fmt::Display for JobState {
     }
 }
 
+/// The template scope a call resolved to: what its audit record names and what
+/// a job records for the post-abort unlock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum CallScope {
+    /// No template: the call addresses none, its scope did not resolve, or the
+    /// session was busy.
+    #[default]
+    None,
+    /// These loaded templates, never empty.
+    Templates(Vec<String>),
+    /// Nothing loaded and no template named: the call acts on the null report,
+    /// whose hosts are the ones attached while nothing is loaded.
+    NothingLoaded,
+}
+
+impl CallScope {
+    /// The RRIDs to record; none unless [`Templates`](Self::Templates).
+    pub(crate) fn rrids(&self) -> &[String] {
+        match self {
+            Self::Templates(rrids) => rrids,
+            Self::None | Self::NothingLoaded => &[],
+        }
+    }
+}
+
+/// Where a dispatch records the scope it resolved once it held its lock; left
+/// empty by one that never got that far.
+pub(crate) type ScopeSlot = OnceLock<CallScope>;
+
+/// Fills `ran_under`, when given, with `scope`; a filled slot keeps its first
+/// value.
+pub(crate) fn record_scope(ran_under: Option<&ScopeSlot>, scope: impl FnOnce() -> CallScope) {
+    if let Some(slot) = ran_under {
+        let _ = slot.set(scope());
+    }
+}
+
 /// One background-job record.
 ///
 /// Shared between the spawned worker (which writes the terminal state/result)
@@ -268,20 +305,16 @@ struct Job {
     command: String,
     /// The templates this job's dispatch resolves to, recorded at mint time.
     ///
-    /// Scopes the post-abort operation-lock release
-    /// ([`McpSession::unlock_after_abort`]) to the templates this job could have
-    /// locked hosts on, so cancelling one job never disturbs a concurrent job's
-    /// locks on another template. Recorded at mint rather than re-derived at
-    /// cancel time: the loaded set may have changed since, and the job id carries
-    /// the RRID only as a `:`-mangled string.
-    ///
-    /// **Empty** means the scope is unknown (the synchronous
-    /// [`start_job`](McpSession::start_job) cannot resolve, an argv resolving
-    /// to nothing real has no scope, and a command that addresses no template
-    /// has none). The cancel path then falls back to every
-    /// loaded template — the conservative answer for a dispatch that may have
-    /// held the registry gate exclusively and locked hosts across all of them.
-    rrids: Vec<String>,
+    /// Until the dispatch holds its lock, scopes the post-abort operation-lock
+    /// release ([`McpSession::unlock_after_abort`]) to the templates this job
+    /// could have locked hosts on, so cancelling one job never disturbs a
+    /// concurrent job's locks on another template. Recorded at mint rather than
+    /// re-derived at cancel time: the loaded set may have changed since, and
+    /// the job id carries the RRID only as a `:`-mangled string.
+    scope: CallScope,
+    /// The scope the dispatch resolved once it held its lock, which the
+    /// terminal record names and a forced cancel releases; empty until then.
+    dispatched: Arc<ScopeSlot>,
     state: JobState,
     started: Instant,
     /// Freezes `elapsed_s` once terminal.
@@ -543,6 +576,33 @@ fn scope_argv(rrid: &str, argv: &[String]) -> Vec<String> {
     scoped
 }
 
+/// The scope `name`/`argv` resolves to against `session`, applying the
+/// command's own [`Scope`](mtui_core::Scope) exactly as its dispatch does.
+fn call_scope(registry: &Registry, session: &Session, name: &str, argv: &[String]) -> CallScope {
+    match registry.get(name) {
+        Some(command) if addresses_template(command.as_ref()) => {
+            match resolve_command_templates(command.as_ref(), session, argv) {
+                ResolvedTemplates::Loaded(rrids) => CallScope::Templates(rrids),
+                ResolvedTemplates::NullReport => CallScope::NothingLoaded,
+                ResolvedTemplates::Unresolved => CallScope::None,
+            }
+        }
+        _ => CallScope::None,
+    }
+}
+
+/// The scope a job ran under, for its terminal record: the one its dispatch
+/// resolved under its lock, or none if it never got that far.
+fn ran_scope(dispatched: &ScopeSlot) -> CallScope {
+    dispatched.get().cloned().unwrap_or_default()
+}
+
+/// The scope a cancelled job's unlock covers: the one its dispatch resolved
+/// under its lock, else — it never got that far — the one it was minted with.
+fn unlock_scope(dispatched: &ScopeSlot, minted: &CallScope) -> CallScope {
+    dispatched.get().unwrap_or(minted).clone()
+}
+
 /// Process-global monotonic source of [`McpSession::id`] values, so two distinct
 /// sessions never share one (freshness independent of heap-address reuse).
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -783,52 +843,44 @@ impl McpSession {
         self.audit.is_some() || self.otel.is_some()
     }
 
-    /// Best-effort host-name snapshot for `rrids`: the union of each loaded
-    /// template's target names, sorted. An entry busy with a concurrent
+    /// Best-effort host-name snapshot for `scope`, sorted: the union of each
+    /// loaded template's target names, or for
+    /// [`NothingLoaded`](CallScope::NothingLoaded) the null sentinel's, the
+    /// hosts attached while nothing is loaded. An entry busy with a concurrent
     /// dispatch is skipped rather than awaited, so auditing never blocks on
     /// the work it records; an unloaded template contributes nothing.
     ///
     /// Best-effort down to the session itself: empty while an exclusive
     /// dispatch holds the session, so a record write never waits on a running
     /// job. The record always carries `rrids`, which need no lock (#613).
-    pub(crate) async fn audit_hosts(&self, rrids: &[String]) -> Vec<String> {
-        if rrids.is_empty() {
+    pub(crate) async fn audit_hosts(&self, scope: &CallScope) -> Vec<String> {
+        if *scope == CallScope::None {
             return Vec::new();
         }
         let Ok(session) = self.session.try_lock() else {
             return Vec::new();
         };
-        let mut hosts = std::collections::BTreeSet::new();
-        for rrid in rrids {
-            let Some(entry) = session.templates.handle(rrid) else {
-                continue;
-            };
-            let Ok(report) = entry.try_lock() else {
-                continue;
-            };
-            hosts.extend(report.base().targets.names());
+        match scope {
+            CallScope::None => Vec::new(),
+            CallScope::NothingLoaded => {
+                let mut hosts = session.null_targets().names();
+                hosts.sort();
+                hosts
+            }
+            CallScope::Templates(rrids) => {
+                let mut hosts = std::collections::BTreeSet::new();
+                for rrid in rrids {
+                    let Some(entry) = session.templates.handle(rrid) else {
+                        continue;
+                    };
+                    let Ok(report) = entry.try_lock() else {
+                        continue;
+                    };
+                    hosts.extend(report.base().targets.names());
+                }
+                hosts.into_iter().collect()
+            }
         }
-        hosts.into_iter().collect()
-    }
-
-    /// Template scope for a hand-written tool call carrying an optional
-    /// `template` kwarg (the document/transfer families): the named
-    /// template, else the active one, else nothing. Best-effort like
-    /// [`audit_hosts`](Self::audit_hosts): empty while an exclusive dispatch
-    /// holds the session, so a record write never waits on a running job. A
-    /// named template needs no lock at all.
-    pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> Vec<String> {
-        if let Some(rrid) = template {
-            return vec![canonical_template_name(rrid)];
-        }
-        let Ok(session) = self.session.try_lock() else {
-            return Vec::new();
-        };
-        session
-            .templates
-            .active_rrid()
-            .map(|rrid| vec![rrid.to_owned()])
-            .unwrap_or_default()
     }
 
     /// Best-effort terminal-state audit record for a background job. No-op
@@ -844,14 +896,14 @@ impl McpSession {
         tool: &str,
         job_id: &str,
         state: JobState,
-        rrids: &[String],
+        scope: &CallScope,
         started: Instant,
         finished: Instant,
     ) {
         if !self.auditing() {
             return;
         }
-        let hosts = self.audit_hosts(rrids).await;
+        let hosts = self.audit_hosts(scope).await;
         let outcome = if state == JobState::Done {
             crate::audit::AuditOutcome::Ok
         } else {
@@ -871,7 +923,7 @@ impl McpSession {
             "job_state": state.to_string(),
             "outcome": outcome.as_str(),
             "duration_ms": finished.saturating_duration_since(started).as_millis() as u64,
-            "rrids": rrids,
+            "rrids": scope.rrids(),
             "hosts": hosts,
         });
         // File first, seq order; warn-only on failure (already answered).
@@ -925,7 +977,7 @@ impl McpSession {
     /// Acquires the right lock(s) for a `name`/`argv` invocation, resolving
     /// exactly as the foreground dispatch does (via [`resolve_command_rrids`],
     /// gated on [`addresses_template`] exactly
-    /// like [`resolve_job_rrids`](Self::resolve_job_rrids), so the two cannot
+    /// like [`resolve_call_scope`](Self::resolve_call_scope), so the two cannot
     /// disagree):
     ///
     /// * a command addressing no template → the gate *shared* with **no**
@@ -952,7 +1004,7 @@ impl McpSession {
             Some(command) if command.requires_canonical_session(argv) => None,
             Some(command) => {
                 // Session-level: no template to serialise on. Gated on the
-                // same predicate as `resolve_job_rrids`, before resolving —
+                // same predicate as `resolve_call_scope`, before resolving —
                 // `Scope::Single` alone would map to the active template's
                 // per-RRID lock here while the job path records no scope (#603).
                 if !addresses_template(command.as_ref()) {
@@ -1115,7 +1167,7 @@ impl McpSession {
         name: &str,
         argv: &[String],
     ) -> Result<String, McpCommandError> {
-        self.run_command_cancellable(registry, name, argv, None)
+        self.run_command_cancellable(registry, name, argv, None, None)
             .await
     }
 
@@ -1127,12 +1179,17 @@ impl McpSession {
     /// foreground tool calls pass `None` and get a fresh, never-cancelled one.
     /// The token is set on the per-call fork on the scoped/shared paths, and on
     /// the canonical session (restored after) on the exclusive one.
+    ///
+    /// `ran_under`, when given, is filled with the scope the dispatch resolves
+    /// once it holds its lock, from the session it runs on and under a hold it
+    /// already takes.
     async fn run_command_cancellable(
         &self,
         registry: &Registry,
         name: &str,
         argv: &[String],
         cancel: Option<CancellationToken>,
+        ran_under: Option<&ScopeSlot>,
     ) -> Result<String, McpCommandError> {
         // Taken *before* touching the session, so same-RRID and unscoped calls
         // serialise and canonical-session commands drain in-flight per-RRID work.
@@ -1178,6 +1235,9 @@ impl McpSession {
                 // dropped), and a fork inheriting that would die at its own
                 // pre-flight check.
                 call_session.set_cancel_token(cancel.clone().unwrap_or_default());
+                record_scope(ran_under, || {
+                    call_scope(registry, &call_session, name, argv)
+                });
                 let argv_owned = argv.to_vec();
                 let mut handle = AbortOnDrop(tokio::spawn(async move {
                     dispatch_command(command.as_ref(), &mut call_session, &argv_owned).await
@@ -1203,6 +1263,7 @@ impl McpSession {
                 // Installed unconditionally rather than swapped-and-restored, for
                 // the same self-healing reason as the scoped path above.
                 session.set_cancel_token(cancel.clone().unwrap_or_default());
+                record_scope(ran_under, || call_scope(registry, &session, name, argv));
                 let result = dispatch_argv(registry, &mut session, name, argv).await;
                 // Best-effort; skipped when the worker future is dropped
                 // mid-dispatch, which is what the install above heals.
@@ -1266,9 +1327,12 @@ impl McpSession {
         argv: &[String],
         sink: Option<&dyn ProgressSink>,
         interval: Duration,
+        ran_under: Option<&ScopeSlot>,
     ) -> Result<String, McpCommandError> {
-        self.run_command_cancellable_with_progress(registry, name, argv, sink, interval, None)
-            .await
+        self.run_command_cancellable_with_progress(
+            registry, name, argv, sink, interval, None, ran_under,
+        )
+        .await
     }
 
     /// [`run_command_with_progress`](Self::run_command_with_progress) with an
@@ -1277,6 +1341,7 @@ impl McpSession {
     ///
     /// [`run_command_client_cancellable`](Self::run_command_client_cancellable)
     /// is the only caller that passes `Some`.
+    #[allow(clippy::too_many_arguments)]
     async fn run_command_cancellable_with_progress(
         &self,
         registry: &Registry,
@@ -1285,15 +1350,16 @@ impl McpSession {
         sink: Option<&dyn ProgressSink>,
         interval: Duration,
         cancel: Option<CancellationToken>,
+        ran_under: Option<&ScopeSlot>,
     ) -> Result<String, McpCommandError> {
         match sink {
             None => {
-                self.run_command_cancellable(registry, name, argv, cancel)
+                self.run_command_cancellable(registry, name, argv, cancel, ran_under)
                     .await
             }
             Some(sink) => {
                 run_with_heartbeat(
-                    self.run_command_cancellable(registry, name, argv, cancel),
+                    self.run_command_cancellable(registry, name, argv, cancel, ran_under),
                     sink,
                     name,
                     interval,
@@ -1318,11 +1384,17 @@ impl McpSession {
     /// verdict exactly as an uncancelled call would; only a forced abort yields
     /// [`ToolOutcome::Aborted`].
     ///
-    /// The post-abort scope resolution gets only a quarter of
-    /// [`ABORT_UNLOCK_BUDGET`]: it locks the session, which a concurrent
-    /// *exclusive* dispatch can hold for minutes, so a slow resolve falls back to
-    /// the empty scope (every loaded template) rather than eating the budget this
-    /// method's `job_cancel`-grade responsiveness depends on.
+    /// The post-abort unlock releases the scope the dispatch ran under, which
+    /// it records once it holds its lock. A dispatch aborted before that is
+    /// resolved afresh, with only a quarter of [`ABORT_UNLOCK_BUDGET`]: that
+    /// locks the session, which a concurrent *exclusive* dispatch can hold for
+    /// minutes, so a slow resolve falls back to no scope (every loaded
+    /// template) rather than eating the budget this method's
+    /// `job_cancel`-grade responsiveness depends on.
+    ///
+    /// `ran_under` only ever holds the scope the dispatch resolved under its
+    /// lock: an abort before that leaves it empty.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_command_client_cancellable(
         &self,
         registry: &Registry,
@@ -1331,7 +1403,11 @@ impl McpSession {
         sink: Option<&dyn ProgressSink>,
         interval: Duration,
         client_ct: &CancellationToken,
+        ran_under: Option<&ScopeSlot>,
     ) -> ToolOutcome {
+        // The unlock needs the dispatch's scope whether or not the caller asks.
+        let own = ScopeSlot::new();
+        let ran_under = ran_under.unwrap_or(&own);
         let token = CancellationToken::new();
         let mut fut = Box::pin(self.run_command_cancellable_with_progress(
             registry,
@@ -1340,6 +1416,7 @@ impl McpSession {
             sink,
             interval,
             Some(token.clone()),
+            Some(ran_under),
         ));
         tokio::select! {
             biased;
@@ -1355,40 +1432,44 @@ impl McpSession {
         // the exclusive path it holds the canonical session mutex for its whole
         // life, so the pass's preamble would otherwise time out as `stalled`.
         drop(fut);
-        let rrids = tokio::time::timeout(
-            ABORT_UNLOCK_BUDGET / 4,
-            self.resolve_job_rrids(registry, name, argv),
-        )
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-        ToolOutcome::Aborted(self.unlock_after_abort(&rrids, ABORT_UNLOCK_BUDGET).await)
+        let scope = match ran_under.get() {
+            Some(dispatched) => dispatched.clone(),
+            // For the unlock only: the call ran under no scope, and records none.
+            None => tokio::time::timeout(
+                ABORT_UNLOCK_BUDGET / 4,
+                self.resolve_call_scope(registry, name, argv),
+            )
+            .await
+            .unwrap_or_default(),
+        };
+        ToolOutcome::Aborted(self.unlock_after_abort(&scope, ABORT_UNLOCK_BUDGET).await)
     }
 
-    /// Resolve the target RRIDs for a backgrounded fan-out, exactly as the
-    /// foreground dispatch does (via [`resolve_command_rrids`], applying the
-    /// command's own [`Scope`](mtui_core::Scope) against the loaded set), so the
-    /// two match. `None` means resolution is not meaningful (unparseable argv,
-    /// only the Null report resolves, or the command addresses no template) and
-    /// the caller keeps the single-job path. [`command_lock`](Self::command_lock)
-    /// gates on the same [`addresses_template`]
-    /// predicate, so the two resolvers cannot disagree.
-    pub(crate) async fn resolve_job_rrids(
+    /// Resolve the template scope of a call — for a backgrounded fan-out and
+    /// the post-abort unlock — exactly as the foreground dispatch does (via
+    /// [`resolve_command_templates`], applying the command's own
+    /// [`Scope`](mtui_core::Scope) against the loaded set), so the two match.
+    /// Only [`CallScope::Templates`] pins a job; the caller keeps the
+    /// single-job path otherwise. [`command_lock`](Self::command_lock) gates
+    /// on the same [`addresses_template`] predicate, so the two resolvers
+    /// cannot disagree.
+    pub(crate) async fn resolve_call_scope(
         &self,
         registry: &Registry,
         name: &str,
         argv: &[String],
-    ) -> Option<Vec<String>> {
-        let command = registry.get(name)?;
-        // Nothing to pin: the parser has no `-T`, and the empty scope makes the
+    ) -> CallScope {
+        // Nothing to pin: the parser has no `-T`, and an unscoped job makes the
         // cancel path fall back to every loaded template — where a
-        // `load_template` job's hosts are.
-        if !addresses_template(command.as_ref()) {
-            return None;
+        // `load_template` job's hosts are. Checked before the session is locked.
+        if !registry
+            .get(name)
+            .is_some_and(|command| addresses_template(command.as_ref()))
+        {
+            return CallScope::None;
         }
         let session = self.session.lock().await;
-        resolve_command_rrids(command.as_ref(), &session, argv)
+        call_scope(registry, &session, name, argv)
     }
 
     /// Reject a spawn of `n` new jobs when it would breach the active cap.
@@ -1434,8 +1515,8 @@ impl McpSession {
     /// terminal records past the completed cap on settling. `self` is an `Arc`
     /// because the spawned task must own the session for its `'static` lifetime.
     ///
-    /// `rrids` is the caller's already-computed template scope for `argv` (see
-    /// [`Job::rrids`]), empty when it could not resolve one.
+    /// `scope` is the caller's already-computed template scope for `argv` (see
+    /// [`Job::scope`]), [`CallScope::None`] when it could not resolve one.
     fn mint_job(
         self: &Arc<Self>,
         jobs_guard: &mut HashMap<String, Arc<StdMutex<Job>>>,
@@ -1443,13 +1524,15 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
         job_id: String,
-        rrids: Vec<String>,
+        scope: CallScope,
     ) -> String {
         let cancel = CancellationToken::new();
+        let dispatched = Arc::new(ScopeSlot::new());
         let job = Arc::new(StdMutex::new(Job {
             id: job_id.clone(),
             command: name.to_owned(),
-            rrids,
+            scope,
+            dispatched: Arc::clone(&dispatched),
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -1468,7 +1551,7 @@ impl McpSession {
         let terminal_job_id = job_id.clone();
         let handle = tokio::spawn(async move {
             let outcome = session
-                .run_command_cancellable(&registry, &name, &argv, Some(cancel))
+                .run_command_cancellable(&registry, &name, &argv, Some(cancel), Some(&dispatched))
                 .await;
             let settled = {
                 let mut j = worker_job.lock().expect("job record poisoned");
@@ -1493,7 +1576,7 @@ impl McpSession {
                     Some((
                         j.state,
                         j.command.clone(),
-                        j.rrids.clone(),
+                        ran_scope(&j.dispatched),
                         j.started,
                         j.finished.expect("just set"),
                     ))
@@ -1513,9 +1596,9 @@ impl McpSession {
                     None
                 }
             };
-            if let Some((state, command, rrids, started, finished)) = settled {
+            if let Some((state, command, scope, started, finished)) = settled {
                 session
-                    .audit_terminal(&command, &terminal_job_id, state, &rrids, started, finished)
+                    .audit_terminal(&command, &terminal_job_id, state, &scope, started, finished)
                     .await;
             }
             session.evict_completed();
@@ -1569,13 +1652,13 @@ impl McpSession {
         argv: Vec<String>,
     ) -> Result<String, McpCommandError> {
         // Synchronous, so it cannot resolve the template scope (that needs the
-        // session lock): the job records an empty scope and a forced cancel falls
-        // back to every loaded template. See `Job::rrids`.
-        self.start_job_scoped(registry, name, argv, Vec::new())
+        // session lock): the job records no scope and a forced cancel falls
+        // back to every loaded template. See `Job::scope`.
+        self.start_job_scoped(registry, name, argv, CallScope::None)
     }
 
     /// [`start_job`](Self::start_job) with the caller's already-resolved
-    /// template scope recorded on the job (see [`Job::rrids`]).
+    /// template scope recorded on the job (see [`Job::scope`]).
     ///
     /// # Errors
     ///
@@ -1585,13 +1668,13 @@ impl McpSession {
         registry: Arc<Registry>,
         name: &str,
         argv: Vec<String>,
-        rrids: Vec<String>,
+        scope: CallScope,
     ) -> Result<String, McpCommandError> {
         let mut jobs = self.jobs.lock().expect("jobs table poisoned");
         self.admit(&jobs, 1)?;
         let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let job_id = format!("{name}-{n}");
-        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id, rrids))
+        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id, scope))
     }
 
     /// Start `name`/`argv` in the background, fanning out one job per template.
@@ -1618,9 +1701,25 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
     ) -> Result<Vec<String>, McpCommandError> {
-        let rrids = self.resolve_job_rrids(&registry, name, &argv).await;
-        match rrids {
-            Some(rrids) if rrids.len() > 1 => {
+        let scope = self.resolve_call_scope(&registry, name, &argv).await;
+        self.mint_jobs(registry, name, argv, scope)
+    }
+
+    /// [`start_jobs`](Self::start_jobs) for an already-resolved `scope`, so a
+    /// caller can record the scope the jobs were minted with.
+    ///
+    /// # Errors
+    ///
+    /// As [`start_jobs`](Self::start_jobs).
+    pub(crate) fn mint_jobs(
+        self: &Arc<Self>,
+        registry: Arc<Registry>,
+        name: &str,
+        argv: Vec<String>,
+        scope: CallScope,
+    ) -> Result<Vec<String>, McpCommandError> {
+        match scope {
+            CallScope::Templates(rrids) if rrids.len() > 1 => {
                 let mut jobs = self.jobs.lock().expect("jobs table poisoned");
                 self.admit(&jobs, rrids.len())?;
                 Ok(rrids
@@ -1636,7 +1735,7 @@ impl McpSession {
                             name,
                             scoped_argv,
                             job_id,
-                            vec![rrid],
+                            CallScope::Templates(vec![rrid]),
                         )
                     })
                     .collect())
@@ -1644,23 +1743,19 @@ impl McpSession {
             // One real template: keep the single-job path and its stable id
             // shape, but scope argv and record the RRID so the dispatch cannot
             // drift from what the job says it targets.
-            Some(rrids) => {
-                let rrid = rrids.into_iter().next().expect("len == 1");
+            CallScope::Templates(mut rrids) if rrids.len() == 1 => {
+                let rrid = rrids.pop().expect("len == 1");
                 let scoped_argv = scope_argv(&rrid, &argv);
                 Ok(vec![self.start_job_scoped(
                     registry,
                     name,
                     scoped_argv,
-                    vec![rrid],
+                    CallScope::Templates(vec![rrid]),
                 )?])
             }
-            // Nothing real resolves: no template to pin to or record.
-            None => Ok(vec![self.start_job_scoped(
-                registry,
-                name,
-                argv,
-                Vec::new(),
-            )?]),
+            // Nothing real resolves: no template to pin to, but the scope (the
+            // null report, or none) is recorded on the job.
+            scope => Ok(vec![self.start_job_scoped(registry, name, argv, scope)?]),
         }
     }
 
@@ -1809,7 +1904,7 @@ impl McpSession {
         unlock_budget: Duration,
     ) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
-        let (handle, token, command, rrids, started, finished) = {
+        let (handle, token, command, scope, dispatched, started, finished) = {
             let mut j = job.lock().expect("job record poisoned");
             match j.state {
                 JobState::Running => {
@@ -1823,7 +1918,8 @@ impl McpSession {
                         j.handle.take(),
                         j.cancel.clone(),
                         j.command.clone(),
-                        j.rrids.clone(),
+                        j.scope.clone(),
+                        Arc::clone(&j.dispatched),
                         j.started,
                         j.finished.expect("just set"),
                     )
@@ -1850,7 +1946,8 @@ impl McpSession {
                 // `JoinError::Cancelled` is expected) — and so the worker's
                 // `CommandLock` is released before the fan-out takes those holds.
                 let _ = handle.await;
-                unlocked = self.unlock_after_abort(&rrids, unlock_budget).await;
+                let ran = unlock_scope(&dispatched, &scope);
+                unlocked = self.unlock_after_abort(&ran, unlock_budget).await;
             }
             // The worker's terminal-write branch skipped its eviction (the
             // state was already `Cancelled`), so reap history here.
@@ -1863,7 +1960,7 @@ impl McpSession {
             &command,
             job_id,
             JobState::Cancelled,
-            &rrids,
+            &ran_scope(&dispatched),
             started,
             finished,
         )
@@ -1879,17 +1976,21 @@ impl McpSession {
     }
 
     /// Releases the operation lock a force-aborted dispatch left behind, on
-    /// every template in `rrids`.
-    ///
-    /// An empty `rrids` means the job recorded no scope (see [`Job::rrids`]) and
-    /// falls back to every loaded template, plus the null sentinel when it holds
-    /// hosts. The whole pass is bounded by `budget`, **including the preamble**:
-    /// a template not reached in time is reported unknown rather than waited
-    /// out, so `job_cancel` stays responsive. Within that, the sentinel is
+    /// the groups its `scope` could have locked: each of its
+    /// [`Templates`](CallScope::Templates); for
+    /// [`NothingLoaded`](CallScope::NothingLoaded) the null sentinel alone, as
+    /// the dispatch held the exclusive gate over an empty registry, so a
+    /// template loaded since is another dispatch's; for
+    /// [`None`](CallScope::None) every loaded template plus the sentinel, the
+    /// conservative answer for a dispatch that may have held the gate
+    /// exclusively and locked hosts across all of them. The sentinel joins only
+    /// when it holds hosts. The whole pass is bounded by `budget`, **including
+    /// the preamble**: a template not reached in time is reported unknown
+    /// rather than waited out, so `job_cancel` stays responsive. Within that, the sentinel is
     /// capped at one group's equal share of what the preamble left, so neither
     /// side can starve the other. Per template it does nothing but release the
     /// group's own held locks — no disconnect, no pool release, no history row.
-    async fn unlock_after_abort(&self, rrids: &[String], budget: Duration) -> AbortUnlock {
+    async fn unlock_after_abort(&self, scope: &CallScope, budget: Duration) -> AbortUnlock {
         let mut summary = AbortUnlock::default();
         // Armed before the first await: the preamble takes the canonical session
         // mutex, which an exclusive dispatch holds for its whole duration
@@ -1917,19 +2018,24 @@ impl McpSession {
             let mut session = self.session.lock().await;
             session.release_active_guard();
             let session_user = session.config.session_user.clone();
-            if rrids.is_empty() {
+            match scope {
+                // An explicit RRID scope names templates in the registry; the
+                // null sentinel is not one of them, so it stays out (a scoped
+                // dispatch could not have locked a sentinel host).
+                CallScope::Templates(rrids) => (rrids.clone(), false, session_user),
+                CallScope::NothingLoaded => {
+                    (Vec::new(), session.null_group_has_hosts(), session_user)
+                }
                 // The registry alone is not the set of connected hosts: a host
                 // attached with nothing loaded lives on the null sentinel, whose
                 // RRID is empty and so is never returned by `rrids()` (#485).
                 // Include it when it actually holds hosts, alongside the
                 // registry's RRIDs.
-                let with_null = session.null_group_has_hosts();
-                (session.templates.rrids(), with_null, session_user)
-            } else {
-                // An explicit RRID scope names templates in the registry; the
-                // null sentinel is not one of them, so it stays out (a scoped
-                // dispatch could not have locked a sentinel host).
-                (rrids.to_vec(), false, session_user)
+                CallScope::None => (
+                    session.templates.rrids(),
+                    session.null_group_has_hosts(),
+                    session_user,
+                ),
             }
         };
         let Ok((targets, with_null, session_user)) = tokio::time::timeout(budget, preamble).await
@@ -2036,6 +2142,25 @@ impl McpSession {
                 stderr: format!("no such job: {job_id}"),
                 exit_code: 1,
             })
+    }
+}
+
+#[cfg(test)]
+impl McpSession {
+    /// Waits until a writer is queued on the registry gate, which blocks every
+    /// new shared hold — so a shared probe timing out is the signal, and
+    /// nothing but the gate can block it.
+    pub(crate) async fn await_queued_writer(&self) {
+        for _ in 0..400 {
+            if tokio::time::timeout(Duration::from_millis(5), self.gate.shared())
+                .await
+                .is_err()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("no writer ever queued on the registry gate");
     }
 }
 
@@ -2389,7 +2514,8 @@ mod tests {
             Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::None,
+                dispatched: Arc::default(),
                 state,
                 started: base,
                 finished,
@@ -2444,7 +2570,8 @@ mod tests {
                     Arc::new(StdMutex::new(Job {
                         id: format!("t-{i}"),
                         command: "probe".to_owned(),
-                        rrids: Vec::new(),
+                        scope: CallScope::None,
+                        dispatched: Arc::default(),
                         state: JobState::Done,
                         started: Instant::now(),
                         finished: Some(Instant::now()),
@@ -2477,7 +2604,8 @@ mod tests {
             Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::None,
+                dispatched: Arc::default(),
                 state: JobState::Done,
                 started: base,
                 finished: Some(finished),
@@ -2527,7 +2655,8 @@ mod tests {
                 Arc::new(StdMutex::new(Job {
                     id: "held-1".to_owned(),
                     command: "probe".to_owned(),
-                    rrids: Vec::new(),
+                    scope: CallScope::None,
+                    dispatched: Arc::default(),
                     state: JobState::Running,
                     started: Instant::now(),
                     finished: None,
@@ -2588,7 +2717,8 @@ mod tests {
                 Arc::new(StdMutex::new(Job {
                     id: "held-2".to_owned(),
                     command: "probe".to_owned(),
-                    rrids: Vec::new(),
+                    scope: CallScope::None,
+                    dispatched: Arc::default(),
                     state: JobState::Running,
                     started: Instant::now(),
                     finished: None,
@@ -2640,7 +2770,8 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "probe-1".to_owned(),
             command: "probe".to_owned(),
-            rrids: Vec::new(),
+            scope: CallScope::None,
+            dispatched: Arc::default(),
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -2811,8 +2942,8 @@ mod tests {
         let registry = register_all();
         for (name, argv) in session_level_cases() {
             assert_eq!(
-                sess.resolve_job_rrids(&registry, name, &argv).await,
-                None,
+                sess.resolve_call_scope(&registry, name, &argv).await,
+                CallScope::None,
                 "{name}: background scope must stay empty"
             );
             let lock = sess.command_lock(&registry, name, &argv).await;
@@ -3246,7 +3377,8 @@ mod tests {
             let job = Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
-                rrids: Vec::new(),
+                scope: CallScope::None,
+                dispatched: Arc::default(),
                 state,
                 started: Instant::now(),
                 finished: Some(Instant::now()),
@@ -3271,7 +3403,8 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "whoami-1".to_owned(),
             command: "whoami".to_owned(),
-            rrids: Vec::new(),
+            scope: CallScope::None,
+            dispatched: Arc::default(),
             state: JobState::Cancelled,
             started: Instant::now(),
             finished: Some(Instant::now()),
@@ -3447,6 +3580,44 @@ mod tests {
         Arc::new(registry)
     }
 
+    /// A session-level probe that locks every loaded template's group and
+    /// then parks for good. It addresses no template, so its dispatch records
+    /// no scope and a forced cancel falls back to every loaded template and
+    /// the sentinel.
+    struct UnscopedLockAndPark;
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for UnscopedLockAndPark {
+        fn name(&self) -> &'static str {
+            "unscoped_lock_and_park_probe"
+        }
+        fn scope(&self) -> mtui_core::Scope {
+            mtui_core::Scope::Single
+        }
+        fn reads_resolved_report(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            session: &mut Session,
+            _args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            for rrid in session.templates.rrids() {
+                if let Some(entry) = session.templates.handle(&rrid) {
+                    entry.lock().await.base_mut().targets.lock("").await;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            Ok(())
+        }
+    }
+
+    fn registry_with_unscoped_probe() -> Arc<Registry> {
+        let mut registry = register_all();
+        registry.register(Arc::new(UnscopedLockAndPark));
+        Arc::new(registry)
+    }
+
     /// `scope_argv` pins an unscoped argv and leaves an already-scoped one
     /// alone — including `--all-templates`, which *conflicts with* `-T` and
     /// would turn the dispatch into a parse error rather than scoping it.
@@ -3582,7 +3753,7 @@ mod tests {
         assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
         assert_eq!(*seen.lock().unwrap(), vec![None]);
         let jobs = sess.jobs.lock().unwrap();
-        assert!(jobs[&ids[0]].lock().unwrap().rrids.is_empty());
+        assert_eq!(jobs[&ids[0]].lock().unwrap().scope, CallScope::None);
     }
 
     /// #405 headline: a job force-aborted mid host-operation has its lock
@@ -4254,7 +4425,7 @@ mod tests {
     /// A force-aborted job that locked a host attached with **no report loaded**
     /// (#485).
     ///
-    /// The fallback scope (`Job::rrids` empty) used to resolve to
+    /// The fallback scope (`Job::scope` without RRIDs) used to resolve to
     /// `templates.rrids()` — the registry only — so the null sentinel, whose
     /// RRID is empty, was never reached and the lock it stranded survived until
     /// the session ended. The fix makes the fallback include the sentinel when
@@ -4283,8 +4454,9 @@ mod tests {
         }
 
         let registry = registry_with_probe(LockAndPark::new(Park::Forever));
-        // `start_job` records no template scope, so the cancel falls back to
-        // "every loaded template" — which must now also mean the null sentinel.
+        // The dispatch resolves only the null report, which names no template,
+        // so the cancel falls back to "every loaded template" — which must now
+        // also mean the null sentinel.
         let job_id = sess
             .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
             .expect("start_job succeeds");
@@ -4394,11 +4566,15 @@ mod tests {
             "fixture must arm the assertion — the sentinel holds a lock before the cancel"
         );
 
-        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
-        // `start_job` records no template scope, so the fallback resolves the
-        // registry *and* the sentinel — the pass the budget has to cover.
+        // A session-level dispatch records no template scope, so the fallback
+        // resolves the registry *and* the sentinel — the pass the budget has
+        // to cover.
         let job_id = sess
-            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .start_job(
+                registry_with_unscoped_probe(),
+                "unscoped_lock_and_park_probe",
+                Vec::new(),
+            )
             .expect("start_job succeeds");
         await_locked(&alpha, "host-alpha").await;
 
@@ -4495,9 +4671,12 @@ mod tests {
         }
         load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
 
-        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
         let job_id = sess
-            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .start_job(
+                registry_with_unscoped_probe(),
+                "unscoped_lock_and_park_probe",
+                Vec::new(),
+            )
             .expect("start_job succeeds");
         await_locked(&alpha, "host-alpha").await;
 
@@ -4564,9 +4743,12 @@ mod tests {
             "fixture must arm the assertion — the sentinel holds nothing to release"
         );
 
-        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
         let job_id = sess
-            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .start_job(
+                registry_with_unscoped_probe(),
+                "unscoped_lock_and_park_probe",
+                Vec::new(),
+            )
             .expect("start_job succeeds");
         await_locked(&alpha, "host-alpha").await;
 
@@ -4621,9 +4803,12 @@ mod tests {
             "fixture must arm the assertion — the sentinel holds a lock before the cancel"
         );
 
-        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
         let job_id = sess
-            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .start_job(
+                registry_with_unscoped_probe(),
+                "unscoped_lock_and_park_probe",
+                Vec::new(),
+            )
             .expect("start_job succeeds");
         await_locked(&alpha, "host-alpha").await;
 
@@ -4644,6 +4829,140 @@ mod tests {
         assert!(
             still_locked(&null_host),
             "the reply claimed the sentinel unknown while its lock was in fact released: {msg}"
+        );
+    }
+
+    /// A job minted with no scope whose dispatch ran on a template is released
+    /// on that template alone: a sentinel lock it never took stays held.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_job_cancel_leaves_a_sentinel_lock_its_dispatch_never_took() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let alpha = MockConnection::new("host-alpha");
+        let null_host = MockConnection::new("null-host");
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+
+        let job_id = sess
+            .start_job(
+                registry_with_probe(LockAndPark::new(Park::Forever)),
+                "lock_and_park_probe",
+                Vec::new(),
+            )
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !saw_unlock(&null_host) && still_locked(&null_host),
+            "the cancel released a sentinel lock the job never took: {msg}"
+        );
+    }
+
+    /// A force-aborted nothing-loaded dispatch is released by the scope it ran
+    /// under: a load landing before the unlock resolves must neither narrow the
+    /// release to the loaded template, stranding the sentinel's lock, nor widen
+    /// it onto that template, whose held lock is not the dispatch's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_cancel_unlocks_the_scope_it_ran_under_after_a_load() {
+        use mtui_hosts::{HostsGroup, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::TargetState;
+
+        let null_host = MockConnection::new("null-host");
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(Target::with_connection(
+                "null-host",
+                TargetState::Enabled,
+                Box::new(null_host.clone()),
+            ));
+        }
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let client_ct = CancellationToken::new();
+        let call = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            let registry = Arc::clone(&registry);
+            let client_ct = client_ct.clone();
+            async move {
+                sess.run_command_client_cancellable(
+                    &registry,
+                    "lock_and_park_probe",
+                    &[],
+                    None,
+                    DEFAULT_PROGRESS_INTERVAL,
+                    &client_ct,
+                    None,
+                )
+                .await
+            }
+        });
+        // Parked on the exclusive path, holding the session mutex.
+        await_locked(&null_host, "null-host").await;
+
+        let alpha = MockConnection::new("host-alpha");
+        let mut alpha_target =
+            Target::with_connection("host-alpha", TargetState::Enabled, Box::new(alpha.clone()));
+        alpha_target.lock("").await.expect("host-alpha locked");
+        // Queued on that mutex, which is fair: the load lands once the abort
+        // drops the dispatch, before the unlock pass takes it.
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        let loader = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                let mut lock = std::pin::pin!(sess.session().lock());
+                let first =
+                    std::future::poll_fn(|cx| std::task::Poll::Ready(lock.as_mut().poll(cx))).await;
+                assert!(first.is_pending(), "the parked dispatch holds the session");
+                let _ = queued_tx.send(());
+                let mut guard = lock.await;
+                let mut report = ObsReport::new(guard.config.clone());
+                report.base_mut().rrid = Some(RequestReviewID::parse(LOCK_RRID_A).unwrap());
+                report.base_mut().targets = HostsGroup::new(vec![alpha_target], false);
+                guard.templates.add(Box::new(report));
+            }
+        });
+        queued_rx.await.expect("the loader queued");
+        client_ct.cancel();
+
+        let outcome = tokio::time::timeout(
+            CANCEL_GRACE + ABORT_UNLOCK_BUDGET + Duration::from_secs(3),
+            call,
+        )
+        .await
+        .expect("client cancel must not hang")
+        .expect("spawned task did not panic");
+        loader.await.expect("the loader ran");
+        let ToolOutcome::Aborted(unlock) = outcome else {
+            panic!("a body parked forever must be force-aborted");
+        };
+        assert!(
+            sess.session().lock().await.templates.contains(LOCK_RRID_A),
+            "the load landed"
+        );
+        assert!(
+            saw_unlock(&null_host) && !still_locked(&null_host),
+            "the sentinel's lock was stranded: {:?}",
+            unlock.clause()
+        );
+        assert!(
+            !saw_unlock(&alpha) && still_locked(&alpha),
+            "the template loaded after the abort was released: {:?}",
+            unlock.clause()
         );
     }
 
@@ -4985,7 +5304,8 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "probe-1".to_owned(),
             command: "probe".to_owned(),
-            rrids: vec!["SUSE:Maintenance:9:9".to_owned()],
+            scope: CallScope::Templates(vec!["SUSE:Maintenance:9:9".to_owned()]),
+            dispatched: Arc::default(),
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -5045,6 +5365,7 @@ mod tests {
                     None,
                     DEFAULT_PROGRESS_INTERVAL,
                     &client_ct,
+                    None,
                 )
                 .await
             }
@@ -5083,6 +5404,54 @@ mod tests {
         assert!(!still_locked(&beta), "host-beta is still locked");
     }
 
+    /// A dispatch force-aborted while still queued for its lock never ran, so
+    /// the caller's slot stays empty and its record names no template; the
+    /// unlock still releases the scope resolved afresh.
+    #[tokio::test]
+    async fn client_cancel_queued_for_the_lock_records_no_scope() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let null_host = MockConnection::new("null-host");
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+        let sess = session(Config::default());
+        sess.session().lock().await.targets_mut().add(null_target);
+        let registry = register_all();
+        // Nothing loaded, so the dispatch wants the exclusive gate this blocks.
+        let held = sess.gate.shared().await;
+
+        let client_ct = CancellationToken::new();
+        client_ct.cancel();
+        let ran_under = ScopeSlot::new();
+        let outcome = sess
+            .run_command_client_cancellable(
+                &registry,
+                "list_hosts",
+                &[],
+                None,
+                DEFAULT_PROGRESS_INTERVAL,
+                &client_ct,
+                Some(&ran_under),
+            )
+            .await;
+        drop(held);
+
+        let ToolOutcome::Aborted(unlock) = outcome else {
+            panic!("a dispatch that never got its lock must be force-aborted");
+        };
+        assert_eq!(ran_under.get(), None, "it never ran under a scope");
+        assert!(
+            saw_unlock(&null_host) && !still_locked(&null_host),
+            "the fresh scope was not released: {:?}",
+            unlock.clause()
+        );
+    }
+
     /// A body observing the seam unwinds inside [`CANCEL_GRACE`], and its **own**
     /// verdict comes back as `Completed`, not a synthetic forced-abort error.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5106,6 +5475,7 @@ mod tests {
                     None,
                     DEFAULT_PROGRESS_INTERVAL,
                     &client_ct,
+                    None,
                 )
                 .await
             }
@@ -5166,6 +5536,7 @@ mod tests {
                     None,
                     DEFAULT_PROGRESS_INTERVAL,
                     &client_ct,
+                    None,
                 )
                 .await
             }
@@ -5260,7 +5631,14 @@ mod tests {
         let sink = RecordingSink::default();
 
         let out = sess
-            .run_command_with_progress(&registry, "whoami", &[], None, Duration::from_millis(1))
+            .run_command_with_progress(
+                &registry,
+                "whoami",
+                &[],
+                None,
+                Duration::from_millis(1),
+                None,
+            )
             .await
             .expect("whoami succeeds");
         assert!(out.starts_with("User: testuser"), "got: {out:?}");
@@ -5321,6 +5699,7 @@ mod tests {
                 &[],
                 Some(&sink),
                 Duration::from_millis(50),
+                None,
             )
             .await
             .expect_err("unknown command must fail");

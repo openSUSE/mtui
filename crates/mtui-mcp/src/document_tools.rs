@@ -22,7 +22,8 @@ use crate::report_files::{
     LocalLookup, list_local, read_bytes, resolve_local, server_dirs, stream_read,
 };
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
+    CallScope, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, ScopeSlot,
+    record_scope, run_with_heartbeat,
 };
 use crate::slim::cap_output;
 use crate::tools::ToolDescriptor;
@@ -330,7 +331,19 @@ pub async fn dispatch_document_tool(
     kwargs: &Map<String, Value>,
     sink: Option<&dyn ProgressSink>,
 ) -> Result<Value, McpCommandError> {
-    let body = dispatch_document_tool_inner(session, name, kwargs);
+    dispatch_document_tool_scoped(session, name, kwargs, sink, None).await
+}
+
+/// [`dispatch_document_tool`], filling `ran_under`, when given, with the
+/// template the tool resolved under its lock.
+pub(crate) async fn dispatch_document_tool_scoped(
+    session: &McpSession,
+    name: &str,
+    kwargs: &Map<String, Value>,
+    sink: Option<&dyn ProgressSink>,
+    ran_under: Option<&ScopeSlot>,
+) -> Result<Value, McpCommandError> {
+    let body = dispatch_document_tool_inner(session, name, kwargs, ran_under);
     match sink {
         None => body.await,
         Some(sink) => run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await,
@@ -341,6 +354,7 @@ async fn dispatch_document_tool_inner(
     session: &McpSession,
     name: &str,
     kwargs: &Map<String, Value>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     if let Some(desc) = document_tool_descriptors()
         .into_iter()
@@ -357,10 +371,10 @@ async fn dispatch_document_tool_inner(
 
     let template = opt_str(kwargs, "template")?;
     let out = match name {
-        "report_sections" => report_sections(session, template).await?,
+        "report_sections" => report_sections(session, template, ran_under).await?,
         "report_section_read" => {
             let section = section_arg(kwargs)?;
-            report_section_read(session, section, template).await?
+            report_section_read(session, section, template, ran_under).await?
         }
         "report_section_write" => {
             let section = section_arg(kwargs)?;
@@ -368,30 +382,30 @@ async fn dispatch_document_tool_inner(
                 kwargs,
                 !matches!(section, Section::Verdict | Section::Comment),
             )?;
-            report_section_write(session, section, value, template).await?
+            report_section_write(session, section, value, template, ran_under).await?
         }
         "report_issue_read" => {
-            report_issue_read(session, opt_str(kwargs, "issue_id")?, template).await?
+            report_issue_read(session, opt_str(kwargs, "issue_id")?, template, ran_under).await?
         }
         "report_issue_write" => {
             let issue_id =
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
             let value = value_arg(kwargs, true)?;
-            report_issue_write(session, issue_id, value, template).await?
+            report_issue_write(session, issue_id, value, template, ran_under).await?
         }
         "report_new_issue_write" => {
             let issue_id =
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
             let title = opt_str(kwargs, "title")?.ok_or_else(|| refuse("`title` is required"))?;
             let comment = opt_str(kwargs, "comment")?;
-            report_new_issue_write(session, issue_id, title, comment, template).await?
+            report_new_issue_write(session, issue_id, title, comment, template, ran_under).await?
         }
         "report_new_issue_delete" => {
             let issue_id =
                 opt_str(kwargs, "issue_id")?.ok_or_else(|| refuse("`issue_id` is required"))?;
-            report_new_issue_delete(session, issue_id, template).await?
+            report_new_issue_delete(session, issue_id, template, ran_under).await?
         }
-        "report_files" => report_files(session, template).await?,
+        "report_files" => report_files(session, template, ran_under).await?,
         "report_file_read" => {
             let path = opt_str(kwargs, "path")?.ok_or_else(|| refuse("`path` is required"))?;
             let offset = uint_arg(kwargs, "offset")?.unwrap_or(1);
@@ -399,7 +413,7 @@ async fn dispatch_document_tool_inner(
                 return Err(refuse(format!("offset must be >= 1 (got {offset})")));
             }
             let limit = uint_arg(kwargs, "limit")?;
-            report_file_read(session, path, offset, limit, template).await?
+            report_file_read(session, path, offset, limit, template, ran_under).await?
         }
         other => return Err(refuse(format!("unknown document tool: {other}"))),
     };
@@ -469,11 +483,13 @@ fn capped(session: &McpSession, value: Value) -> Value {
 async fn read_base<R>(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
     f: impl FnOnce(&TestReportBase) -> Result<R, McpCommandError>,
 ) -> Result<R, McpCommandError> {
     let _scope = session.scoped_lock(template).await;
     let guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
+    record_scope(ran_under, || CallScope::Templates(vec![rrid.clone()]));
     guard
         .with_report(&rrid, |report| f(report.base()))
         .map_err(|access| access_refusal(access, &rrid))?
@@ -483,11 +499,13 @@ async fn read_base<R>(
 async fn write_base<R>(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
     f: impl FnOnce(&mut TestReportBase) -> Result<R, McpCommandError>,
 ) -> Result<R, McpCommandError> {
     let _scope = session.scoped_lock(template).await;
     let mut guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
+    record_scope(ran_under, || CallScope::Templates(vec![rrid.clone()]));
     guard
         .with_report_mut(&rrid, |report| f(report.base_mut()))
         .map_err(|access| access_refusal(access, &rrid))?
@@ -507,9 +525,11 @@ struct FileScope {
 async fn file_scope(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<FileScope, McpCommandError> {
     let guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
+    record_scope(ran_under, || CallScope::Templates(vec![rrid.clone()]));
     let (id, dir) = guard
         .with_report(&rrid, |report| {
             let base = report.base();
@@ -588,6 +608,7 @@ async fn blocking<T: Send + 'static>(
 async fn report_files(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     let _scope = session.scoped_lock(template).await;
     let FileScope {
@@ -595,7 +616,7 @@ async fn report_files(
         dir,
         install_logs,
         config,
-    } = file_scope(session, template).await?;
+    } = file_scope(session, template, ran_under).await?;
 
     let local = blocking(move || list_local(&dir, &install_logs)).await?;
     let (server, server_error) = match server_listing(&config, &id).await {
@@ -639,6 +660,7 @@ async fn report_file_read(
     offset: usize,
     limit: Option<usize>,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     let _scope = session.scoped_lock(template).await;
     let FileScope {
@@ -646,7 +668,7 @@ async fn report_file_read(
         dir,
         install_logs,
         config,
-    } = file_scope(session, template).await?;
+    } = file_scope(session, template, ran_under).await?;
 
     let rel = path.to_owned();
     let logs = install_logs.clone();
@@ -686,8 +708,9 @@ async fn report_file_read(
 async fn report_sections(
     session: &McpSession,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    read_base(session, template, |base| {
+    read_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let completeness = doc.completeness();
         Ok(json!({
@@ -705,8 +728,9 @@ async fn report_section_read(
     session: &McpSession,
     section: Section,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    read_base(session, template, |base| {
+    read_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let data = doc
             .section(section)
@@ -720,8 +744,9 @@ async fn report_issue_read(
     session: &McpSession,
     issue_id: Option<&str>,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    read_base(session, template, |base| {
+    read_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let issues = doc.section(Section::Issues).unwrap_or(Value::Null);
         let Some(issue_id) = issue_id else {
@@ -754,8 +779,9 @@ async fn report_section_write(
     section: Section,
     value: Value,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    write_base(session, template, |base| {
+    write_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let updated = doc.with_section(section, value).map_err(write_refusal)?;
         let size = updated
@@ -774,8 +800,9 @@ async fn report_issue_write(
     issue_id: &str,
     value: Value,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    write_base(session, template, |base| {
+    write_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let updated = doc.with_issue(issue_id, value).map_err(write_refusal)?;
         let id = updated.id.clone();
@@ -792,8 +819,9 @@ async fn report_new_issue_write(
     title: &str,
     comment: Option<&str>,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    write_base(session, template, |base| {
+    write_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let updated = doc
             .with_new_issue(issue_id, title, comment)
@@ -810,8 +838,9 @@ async fn report_new_issue_delete(
     session: &McpSession,
     issue_id: &str,
     template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    write_base(session, template, |base| {
+    write_base(session, template, ran_under, |base| {
         let doc = base.document.as_ref().ok_or_else(no_document)?;
         let updated = doc.without_new_issue(issue_id).map_err(write_refusal)?;
         let id = updated.id.clone();
