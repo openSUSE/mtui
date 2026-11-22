@@ -466,6 +466,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `list_packages` with `package` naming a package the report already lists, or
   naming the same package more than once, no longer prints its row twice per
   host (#791).
+- Bare `add_host` names each arch of a testplatform that no reference host
+  covers when the testplatform's other arches matched
+  (`testplatform "<testplatform>": no refhost for arch s390x`); such an arch was
+  left out of the reply without a line (#787).
 - Audit records of a call made with no template loaded (`run`, `lock`, `get`,
   `put`, …) name the hosts added with `add_host`; they had `hosts: []`, so a
   fleet pass's `put source=` recorded its fingerprint against no host. A call

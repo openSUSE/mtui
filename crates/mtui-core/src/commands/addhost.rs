@@ -325,6 +325,25 @@ mod tests {
         );
     }
 
+    /// An arch of a matched testplatform that the inventory has no host for is
+    /// named. aarch64, not x86_64, keeps the process-global arbiter from
+    /// arbitrating these hosts against `no_target_resolves_testplatforms`.
+    #[tokio::test]
+    async fn no_target_names_testplatform_arch_without_refhost() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let _refhosts_dir = use_path_refhosts(&mut session);
+        let tp = "base=sles(major=15,minor=5);arch=[aarch64,s390x]";
+        set_testplatforms(&mut session, &[tp]);
+        let args = matches(&AddHost, &[]);
+        AddHost.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains(&format!("testplatform \"{tp}\": no refhost for arch s390x")),
+            "{out:?}"
+        );
+        assert!(!out.contains("for arch aarch64"), "{out:?}");
+    }
+
     /// A `-t` host held by another template names its holder instead of
     /// attaching silently; with nothing else attached the call still errors.
     #[tokio::test]

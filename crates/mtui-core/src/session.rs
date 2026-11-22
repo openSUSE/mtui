@@ -239,6 +239,11 @@ pub(crate) enum Unserved {
     NoRefhost {
         tp: String,
     },
+    /// One requested arch of a testplatform whose other arches matched.
+    NoArchRefhost {
+        tp: String,
+        arch: String,
+    },
     InventoryUnavailable,
     /// Every candidate is claimed in-process; `(host, claiming RRID)`.
     Busy {
@@ -260,6 +265,9 @@ impl Unserved {
     pub(crate) fn render(&self) -> String {
         match self {
             Self::NoRefhost { tp } => format!("testplatform \"{tp}\": no matching refhost"),
+            Self::NoArchRefhost { tp, arch } => {
+                format!("testplatform \"{tp}\": no refhost for arch {arch}")
+            }
             Self::InventoryUnavailable => {
                 "refhosts inventory unavailable; no testplatform host resolved".to_owned()
             }
@@ -2162,8 +2170,9 @@ impl Session {
     /// Returns `(chosen_hosts, slot_candidates, unserved)` — this batch's
     /// `pool_claims`, the per-slot ordered candidate lists, keyed as
     /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates),
-    /// and the testplatforms and slots that yielded no host — for the caller to
-    /// write onto the active report before connecting.
+    /// and the testplatforms, testplatform arches and slots that yielded no host
+    /// (per testplatform: uncovered arches, then busy slots) — for the caller
+    /// to write onto the active report before connecting.
     ///
     /// Static (plain data, `&'static` arbiter) so the caller's connect future
     /// stays `Send`.
@@ -2192,6 +2201,19 @@ impl Session {
                 info!("autoconnect: nothing found for testplatform {tp:?}");
                 unserved.push(Unserved::NoRefhost { tp: tp.clone() });
                 continue;
+            }
+            // A pair exists only for an arch some host matched; the rest would vanish silently.
+            let covered: std::collections::HashSet<&str> =
+                pairs.iter().map(|(_, slot)| slot.2.as_str()).collect();
+            let mut uncovered: Vec<&str> = Vec::new();
+            for arch in attrs.iter().map(Attributes::arch) {
+                if !arch.is_empty() && !covered.contains(arch) && !uncovered.contains(&arch) {
+                    uncovered.push(arch);
+                    unserved.push(Unserved::NoArchRefhost {
+                        tp: tp.clone(),
+                        arch: arch.to_owned(),
+                    });
+                }
             }
             // IndexMap keeps insertion order, so grouping is O(pairs) and
             // iteration follows first-seen slot order.
@@ -3532,7 +3554,7 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,ppc64le]".to_owned()];
 
-        let (chosen, slot_candidates, _) =
+        let (chosen, slot_candidates, unserved) =
             Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
 
         assert_eq!(
@@ -3540,6 +3562,7 @@ mod tests {
             2,
             "expected one host per slot, got {chosen:?}"
         );
+        assert_eq!(unserved, Vec::new(), "every requested arch is covered");
         assert_eq!(slot_candidates.len(), 2, "two distinct slots recorded");
         let x86_slot = slot_candidates
             .values()
@@ -3619,6 +3642,97 @@ mod tests {
 
         assert!(chosen.is_empty() && slot_candidates.is_empty());
         assert_eq!(unserved, vec![Unserved::NoRefhost { tp: tps[0].clone() }]);
+    }
+
+    /// An arch of a matched testplatform that no host covers is named too.
+    #[tokio::test]
+    async fn pool_select_names_arch_without_refhost() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64")]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,s390x]".to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["x86-a".to_owned()]);
+        assert_eq!(
+            unserved,
+            vec![Unserved::NoArchRefhost {
+                tp: tps[0].clone(),
+                arch: "s390x".to_owned(),
+            }]
+        );
+    }
+
+    /// A repeated arch is reported once.
+    #[tokio::test]
+    async fn pool_select_names_repeated_uncovered_arch_once() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64")]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,s390x,s390x]".to_owned()];
+
+        let (_, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(
+            unserved,
+            vec![Unserved::NoArchRefhost {
+                tp: tps[0].clone(),
+                arch: "s390x".to_owned(),
+            }]
+        );
+    }
+
+    /// `arch=[]` requests any arch, so no arch can be left uncovered.
+    #[tokio::test]
+    async fn pool_select_any_arch_testplatform_names_no_arch() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64")]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=15,minor=5);arch=[]".to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["x86-a".to_owned()]);
+        assert_eq!(unserved, Vec::new());
+    }
+
+    /// Per testplatform, in testplatform order: its uncovered arches in
+    /// requested order, then its busy slots.
+    #[tokio::test]
+    async fn pool_select_orders_uncovered_arches_per_testplatform() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64")]);
+        let arbiter = test_arbiter();
+        let mine: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("x86-a", &other));
+        let tps = vec![
+            "base=sles(major=15,minor=5);arch=[s390x,x86_64,aarch64]".to_owned(),
+            "base=sles(major=12,minor=5);arch=[x86_64]".to_owned(),
+        ];
+
+        let (_, slot_candidates, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &mine, 0, 0, no_shuffle).await;
+
+        let slot = slot_candidates.keys().next().unwrap().clone();
+        assert_eq!(
+            unserved,
+            vec![
+                Unserved::NoArchRefhost {
+                    tp: tps[0].clone(),
+                    arch: "s390x".to_owned(),
+                },
+                Unserved::NoArchRefhost {
+                    tp: tps[0].clone(),
+                    arch: "aarch64".to_owned(),
+                },
+                Unserved::Busy {
+                    slot,
+                    holders: vec![("x86-a".to_owned(), "SUSE:Maintenance:2:2".to_owned())],
+                },
+                Unserved::NoRefhost { tp: tps[1].clone() },
+            ]
+        );
     }
 
     /// Hosts are claimed in the order their slots first appear in the
@@ -3711,6 +3825,10 @@ mod tests {
         let reasons = [
             Unserved::NoRefhost {
                 tp: "base=sles(major=15,minor=5);arch=[s390x]".to_owned(),
+            },
+            Unserved::NoArchRefhost {
+                tp: "base=sles(major=15,minor=5);arch=[x86_64,s390x]".to_owned(),
+                arch: "s390x".to_owned(),
             },
             Unserved::InventoryUnavailable,
             Unserved::Busy {
