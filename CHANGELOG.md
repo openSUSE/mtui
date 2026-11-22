@@ -469,6 +469,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `reload_products` re-seeds the tracked packages of a host whose products
+  changed, the way connecting does, so registering or removing a product
+  during validation no longer needs the host removed and added again. A
+  package the host still tracks keeps the versions already recorded for it.
+  The packages of a product it no longer carries are dropped, except one with
+  a recorded before or after version, which is kept as it was so its result
+  still reaches the report. Its output names, per re-seeded host, the packages
+  gained (`+name`), lost (`-name`) or now required at another version
+  (`~name (required <old> -> <new>)`) and those kept for their recorded checks,
+  says when the host now tracks no package of the update, and counts the newly
+  tracked packages `update` has yet to check. A host whose products did not
+  change keeps its packages as they were, as does any host when the report
+  carries no package metadata (#802).
 - `set_repo --add` no longer answers `<host>: ok` where it added nothing. For a
   host whose products match none of the update's repositories it prints
   `<host>: no repository of this update matches the host's products (…)`

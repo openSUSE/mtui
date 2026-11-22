@@ -107,8 +107,9 @@ package versions exist only in that process, so from any other session `export`
 refuses rather than write a report with no verdict. It also refuses when no
 package of the update is tracked for any selected host, for example because
 the update ships packages for none of the products installed there; running
-`update` does not change what a host tracks. `--allow-unverified` writes the
-unverified scaffold anyway.
+`update` does not change what a host tracks, but once the missing product is
+registered on the host, `reload_products` makes the host track its packages.
+`--allow-unverified` writes the unverified scaffold anyway.
 
 ## Where do OBS/Gitea credentials come from?
 

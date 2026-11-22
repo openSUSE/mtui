@@ -376,6 +376,14 @@ and nothing is written there.
   packages for none of its products), and `WARNING: no package version data
   recorded for <host>...` when the host's tracked packages were never checked
   (no `update` ran in this session).
+- `reload_products` follows `<host>: reloaded products (<base>)`, for a host
+  whose products changed, with `<host>: tracked packages: +crmsh, ~smc-tools
+  (required 1.0-1 -> 1.2-1), -foo (kept for their recorded checks: bar)` —
+  `unchanged` when nothing was gained, lost or required at a new version, and
+  `; no package of this update is tracked there now` when the host tracks none
+  — then `` <host>: N newly tracked packages were never checked;
+  run `update` before `export` ``. Until `update` checks them, `export` leaves
+  that host's verdict undecided without a warning of its own.
 - `run` prints its own verdict above its per-host output, for the same
   head-survives-`max_output_bytes` reason: `run completed on h1 (exit 0), h2
   (exit 1)` names every host it ran on with its exit code, followed by `FAILED
