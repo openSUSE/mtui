@@ -97,6 +97,12 @@ impl Attributes {
             })
             .collect()
     }
+
+    /// The queried architecture; empty means "any".
+    #[must_use]
+    pub fn arch(&self) -> &str {
+        &self.arch
+    }
 }
 
 impl std::fmt::Display for Attributes {

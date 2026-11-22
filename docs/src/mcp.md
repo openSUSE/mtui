@@ -365,9 +365,10 @@ and nothing is written there.
   the confirmation for the hosts it completed on, so they need no second run.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
-  left without a host and why: no matching refhost, every candidate claimed by
-  another RRID, no candidate connected (unreachable or claimed remotely), the
-  retry budget spent, or the refhosts inventory unavailable. The call still
+  left without a host and why: no matching refhost, an arch of the testplatform
+  no reference host covers, every candidate claimed by another RRID, no
+  candidate connected (unreachable or claimed remotely), the retry budget
+  spent, or the refhosts inventory unavailable. The call still
   returns `Ok` in that case, so these lines are the signal to check.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
