@@ -232,6 +232,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- A partial `install`, `uninstall`, `prepare` or `downgrade` still fails naming
+  the hosts it failed on, and now first prints `<verb> completed on <hosts>`
+  for the hosts it completed on, so they are not run again. So does an
+  `update` that left its patched hosts in place because a peer's patch never
+  ran, could not work out what to patch, or did not come back from its reboot
+  (#801).
 - An `update` that excluded a host but patched the others still fails naming
   the excluded host, and now first prints `update completed on <hosts>` for the
   hosts it did patch, so they are not run again (#790).

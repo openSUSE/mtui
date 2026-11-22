@@ -488,6 +488,14 @@ pub(crate) mod testkit {
         /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows return
         /// an `Err` naming host `h1`, exercising `perform::drive`'s failure path.
         fail_perform: bool,
+        /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows fail on
+        /// `h2` and complete on `h1`: an `Err` naming `h2` that carries
+        /// `completed = ["h1"]`.
+        partial_perform: bool,
+        /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows stop at
+        /// a cancellation checkpoint, the only way to reach
+        /// `map_flow_error`'s `Cancelled` arm for those ops.
+        cancel_perform: bool,
         /// `perform_install` succeeds but records one
         /// [`Diagnostic::degradation`](mtui_testreport::Diagnostic::degradation),
         /// exercising `perform::drive`'s render path for the non-`update` ops,
@@ -503,7 +511,14 @@ pub(crate) mod testkit {
     impl FakeReport {
         /// The shared verdict for the `perform_install`-family overrides.
         fn perform_verdict(&self) -> Result<(), mtui_testreport::UpdateError> {
-            if self.fail_perform {
+            if self.cancel_perform {
+                Err(mtui_testreport::UpdateError::cancelled(
+                    "stopped at a cancellation checkpoint",
+                ))
+            } else if self.partial_perform {
+                Err(mtui_testreport::UpdateError::new("RPM Error", "h2")
+                    .with_completed(vec!["h1".to_owned()]))
+            } else if self.fail_perform {
                 Err(mtui_testreport::UpdateError::new("RPM Error", "h1"))
             } else {
                 Ok(())
@@ -754,6 +769,8 @@ pub(crate) mod testkit {
         update_diagnostics: bool,
         update_degradations: bool,
         fail_perform: bool,
+        partial_perform: bool,
+        cancel_perform: bool,
         install_degradation: bool,
         set_repo_enabled: bool,
     }
@@ -786,6 +803,8 @@ pub(crate) mod testkit {
             update_diagnostics: flags.update_diagnostics,
             update_degradations: flags.update_degradations,
             fail_perform: flags.fail_perform,
+            partial_perform: flags.partial_perform,
+            cancel_perform: flags.cancel_perform,
             install_degradation: flags.install_degradation,
             set_repo_enabled: flags.set_repo_enabled,
         }));
@@ -1014,6 +1033,40 @@ pub(crate) mod testkit {
         )
     }
 
+    /// A session whose active report's `perform_install`-family flows fail on
+    /// `h2` and complete on `h1`.
+    #[must_use]
+    pub(crate) fn session_with_partial_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        // The verdict is fixed, so any other selection would claim an unselected host.
+        assert_eq!(hosts, ["h1", "h2"], "the double fails h2 and completes h1");
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                partial_perform: true,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// A session whose active report's `perform_install`-family flows stop at a
+    /// cancellation checkpoint.
+    #[must_use]
+    pub(crate) fn session_with_cancelled_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                cancel_perform: true,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
     /// A session whose active report's `perform_install` succeeds but records
     /// one degradation, exercising `perform::drive`'s render path for the
     /// non-`update` ops end-to-end.
@@ -1053,6 +1106,8 @@ pub(crate) mod testkit {
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,
+            partial_perform: false,
+            cancel_perform: false,
             install_degradation: false,
             set_repo_enabled: false,
         })
@@ -1077,6 +1132,8 @@ pub(crate) mod testkit {
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,
+            partial_perform: false,
+            cancel_perform: false,
             install_degradation: false,
             set_repo_enabled: false,
         })

@@ -359,10 +359,17 @@ and nothing is written there.
   count is of degradations only; a check's own recognised sections (the
   vendor-support notice, extra rpm output) ride in the same diagnostics and are
   routine on a healthy update, so they leave the confirmation bare. A partial
-  `update` — one that excluded a host (its products compose none of the
-  update's packages, or its test update repository failed to register) but
-  patched the rest — still fails, naming the excluded hosts, but first prints
+  run — one that failed on some hosts and completed on the rest, with nothing
+  rolled back — still fails, naming the hosts it failed on, but first prints
   the confirmation for the hosts it completed on, so they need no second run.
+  A host counts as completed only when it passed its check and, if
+  transactional, came back from its reboot with the new snapshot active. For
+  `update` that covers a host it excluded (its products compose none of the
+  update's packages, or its test update repository failed to register) and a
+  peer whose patch never ran, could not work out what to patch, or did not
+  come back from its reboot; a patch that failed its check, or a reboot that
+  did not take on a reachable host, rolls the whole group back and names no
+  host. A cancelled run names none either.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, every candidate claimed by
