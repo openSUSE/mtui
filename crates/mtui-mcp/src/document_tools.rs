@@ -378,9 +378,12 @@ async fn dispatch_document_tool_inner(
         }
         "report_section_write" => {
             let section = section_arg(kwargs)?;
+            // A pipeline-owned section takes its value as given, so the write
+            // refuses it as read-only rather than for its shape.
             let value = value_arg(
                 kwargs,
-                !matches!(section, Section::Verdict | Section::Comment),
+                section.is_tester_writable()
+                    && !matches!(section, Section::Verdict | Section::Comment),
             )?;
             report_section_write(session, section, value, template, ran_under).await?
         }
@@ -453,18 +456,32 @@ fn section_arg(kwargs: &Map<String, Value>) -> Result<Section, McpCommandError> 
 
 /// `value` is any JSON, `null` included (an unanswered `verdict`), so only its
 /// absence is refused. For a `container` target a string holding a JSON object
-/// or array is decoded, as some clients send nested values stringified.
+/// or array is decoded, as some clients send nested values stringified; any
+/// other string is refused, as no container target takes one.
 fn value_arg(kwargs: &Map<String, Value>, container: bool) -> Result<Value, McpCommandError> {
     let value = kwargs
         .get("value")
         .ok_or_else(|| refuse("`value` is required"))?;
-    if container
-        && let Value::String(text) = value
-        && let Ok(decoded @ (Value::Object(_) | Value::Array(_))) = serde_json::from_str(text)
-    {
-        return Ok(decoded);
-    }
-    Ok(value.clone())
+    let text = match value {
+        Value::String(text) if container => text,
+        _ => return Ok(value.clone()),
+    };
+    // Neither refusal quotes `text`: it can run to kilobytes.
+    let kind = match serde_json::from_str(text) {
+        Ok(decoded @ (Value::Object(_) | Value::Array(_))) => return Ok(decoded),
+        Err(e) => {
+            return Err(refuse(format!(
+                "`value` is a string that is not valid JSON: {e}"
+            )));
+        }
+        Ok(Value::String(_)) => "string",
+        Ok(Value::Number(_)) => "number",
+        Ok(Value::Bool(_)) => "boolean",
+        Ok(Value::Null) => "null",
+    };
+    Err(refuse(format!(
+        "`value` is a string holding a JSON {kind}, not an object or array"
+    )))
 }
 
 /// Bounds an over-budget result without breaking its JSON: the capped text
