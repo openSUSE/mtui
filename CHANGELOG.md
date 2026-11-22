@@ -232,6 +232,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- A connected host tracks only the packages of the update's targets whose
+  product it carries, matched the way its update repositories are; a host
+  carrying none of them tracks nothing. It tracked the packages of every target
+  sharing its base version, including another product's, which the update never
+  installs there, so `export` could mark the host FAILED. SLFO and PI updates
+  still track every package on every host (#788).
 - An `update` that excluded a host but patched the others still fails naming
   the excluded host, and now first prints `update completed on <hosts>` for the
   hosts it did patch, so they are not run again (#790).
@@ -463,6 +469,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A connected host tracks the update's packages when every target version
+  carries a suffix (`15-SP4-TERADATA` for a 15-SP4 TERADATA host, `15-SP6-LTSS`
+  for an LTSS one). It tracked none, so `export` refused the host although
+  `update` had installed the update. `export` now tells a host that tracks no
+  package of the update (`no package of this update is tracked for <host>`)
+  apart from one whose tracked packages were never checked, and sends only the
+  latter back to `update` (#788).
 - `update` no longer attempts an automatic rollback when it cannot take the
   operation lock on every host (another tester holds it, or its state cannot be
   read) — the common case with `--noprepare`, and possible when another session

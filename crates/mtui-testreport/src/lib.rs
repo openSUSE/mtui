@@ -38,7 +38,9 @@ pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{ProductParseError, gitrepoparse, parse_product, reporepoparse};
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
 pub use support::{SystemInfo, atomic_write_file, detect_system};
-pub use testreport::{HashCheck, ReportOpenQA, SlackReviewMarker, TestReport, TestReportBase};
+pub use testreport::{
+    HashCheck, HostPackages, ReportOpenQA, SlackReviewMarker, TestReport, TestReportBase,
+};
 pub use update_workflow::{Diagnostic, UpdateError};
 
 /// Crate-private parsers the detached `fuzz/` crate drives. Not API: only

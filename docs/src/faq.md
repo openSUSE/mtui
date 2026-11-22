@@ -104,8 +104,11 @@ writes the install logs to the report directory. The document stays local until
 
 A `Manual` export must run from the session that ran `update`: the before/after
 package versions exist only in that process, so from any other session `export`
-refuses rather than write a report with no verdict. `--allow-unverified` writes
-the unverified scaffold anyway.
+refuses rather than write a report with no verdict. It also refuses when no
+package of the update is tracked for any selected host, for example because
+the update ships packages for none of the products installed there; running
+`update` does not change what a host tracks. `--allow-unverified` writes the
+unverified scaffold anyway.
 
 ## Where do OBS/Gitea credentials come from?
 

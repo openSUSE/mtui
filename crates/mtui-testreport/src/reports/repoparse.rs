@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use mtui_types::{RepoUrl, SystemProduct, sanitize_url};
+use mtui_types::{RepoUrl, RepoUrlParseError, SystemProduct, sanitize_url};
 use tracing::error;
 
 use crate::products::normalize_16;
@@ -45,10 +45,15 @@ pub(crate) fn validated_url(url: String) -> Option<String> {
     match RepoUrl::parse(&url) {
         Ok(_) => Some(url),
         Err(e) => {
-            error!(url = %sanitize_url(&url), error = %e, "skipping invalid repository URL");
+            log_invalid_url(&url, &e);
             None
         }
     }
+}
+
+/// Logs a repository URL dropped for failing [`RepoUrl`] validation.
+pub(crate) fn log_invalid_url(url: &str, e: &RepoUrlParseError) {
+    error!(url = %sanitize_url(url), error = %e, "skipping invalid repository URL");
 }
 
 /// Joins a base URL and a path segment with exactly one `/` separator.

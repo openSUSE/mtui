@@ -12,11 +12,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mtui_types::report_document::{
     DocWorkflow, DocumentKind, Issues, ReportDocument, Target, TestPlatform,
 };
-use mtui_types::{RequestReviewID, SystemProduct};
+use mtui_types::{RepoUrl, RepoUrlParseError, RequestReviewID, SystemProduct};
 
 use crate::products::{normalize, normalize_16};
-use crate::reports::repoparse::validated_url;
-use crate::testreport::{SlackReviewMarker, TestReportBase};
+use crate::reports::repoparse::log_invalid_url;
+use crate::testreport::{HostPackages, SlackReviewMarker, TestReportBase, is_higher_version};
 
 /// Whether `composed`/`repositories` are populated for `doc`.
 ///
@@ -46,7 +46,7 @@ pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
 }
 
 /// Applies `doc` onto `base`, filling every field the document maps to.
-/// Downstream derivations (`update_repos_parser()`, `packages_for_map`,
+/// Downstream derivations (`update_repos_parser()`, `packages_for_host`,
 /// `register`/`normalize*`, `check_hash`, `composition()`) are untouched —
 /// this only changes what feeds them.
 pub fn apply_document(base: &mut TestReportBase, doc: &ReportDocument) {
@@ -64,6 +64,7 @@ pub fn apply_document(base: &mut TestReportBase, doc: &ReportDocument) {
     base.products = product_lines(&doc.update.products);
     base.testplatforms = testplatform_lines(&doc.install.test_platforms);
     base.packages = packages_map(doc);
+    base.host_packages = std::sync::Arc::new(host_packages(doc));
 
     if should_compose(doc) {
         base.repositories = repositories_set(&doc.install.targets);
@@ -157,7 +158,7 @@ fn testplatform_lines(platforms: &[TestPlatform]) -> Vec<String> {
 /// `version-release`. The strip matters for arches outside
 /// `RPMVersion::parse`'s own strip list.
 fn packages_map(doc: &ReportDocument) -> HashMap<String, HashMap<String, String>> {
-    let standard_key = matches!(doc.kind, DocumentKind::Slfo | DocumentKind::Pi);
+    let standard_key = product_agnostic(doc);
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
     for target in &doc.install.targets {
         let key = if standard_key {
@@ -171,6 +172,49 @@ fn packages_map(doc: &ReportDocument) -> HashMap<String, HashMap<String, String>
         }
     }
     out
+}
+
+/// Whether every host tracks one package set: SLFO/PI packages are
+/// product-agnostic.
+fn product_agnostic(doc: &ReportDocument) -> bool {
+    matches!(doc.kind, DocumentKind::Slfo | DocumentKind::Pi)
+}
+
+/// Each target with its update-repository key and URL check, the one rule
+/// [`obs_update_repos`] and [`host_packages`] share so that no host tracks a
+/// package it gets no repository for.
+fn obs_targets(
+    doc: &ReportDocument,
+) -> impl Iterator<Item = (SystemProduct, &Target, Result<RepoUrl, RepoUrlParseError>)> {
+    doc.install.targets.iter().map(|t| {
+        let product = normalize(SystemProduct::new(&t.product, &t.version, &t.arch));
+        (product, t, RepoUrl::parse(&t.repository))
+    })
+}
+
+/// The `"standard"` set for SLFO/PI, else each target's packages under its
+/// update-repository key, the higher version winning within a key.
+fn host_packages(doc: &ReportDocument) -> HostPackages {
+    if product_agnostic(doc) {
+        return HostPackages::Shared(packages_map(doc).remove("standard").unwrap_or_default());
+    }
+    let mut out: HashMap<SystemProduct, HashMap<String, String>> = HashMap::new();
+    for (product, target, url) in obs_targets(doc) {
+        if url.is_err() {
+            continue;
+        }
+        let bucket = out.entry(product).or_default();
+        for (name, version_release_arch) in &target.binaries {
+            let ver = strip_arch_suffix(version_release_arch);
+            if bucket
+                .get(name)
+                .is_none_or(|kept| is_higher_version(&ver, kept))
+            {
+                bucket.insert(name.clone(), ver);
+            }
+        }
+    }
+    HostPackages::PerProduct(out)
 }
 
 /// Strips the final dot-segment of `version-release.arch`, returning the
@@ -195,12 +239,13 @@ fn repositories_set(targets: &[Target]) -> HashSet<String> {
 /// only, never `repositories`/`composed`.
 #[must_use]
 pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> {
-    doc.install
-        .targets
-        .iter()
-        .filter_map(|t| {
-            let product = normalize(SystemProduct::new(&t.product, &t.version, &t.arch));
-            validated_url(t.repository.clone()).map(|url| (product, url))
+    obs_targets(doc)
+        .filter_map(|(product, target, url)| match url {
+            Ok(_) => Some((product, target.repository.clone())),
+            Err(e) => {
+                log_invalid_url(&target.repository, &e);
+                None
+            }
         })
         .collect()
 }
@@ -440,6 +485,74 @@ mod tests {
         assert_ne!(map["15-SP6"]["examplepkg"], "1.2.3-1.1.x86_64");
     }
 
+    // --- host_packages: keyed like obs_update_repos ---
+
+    /// The per-product map `host_packages` builds for a maintenance `d`.
+    fn packages_by_product(d: &ReportDocument) -> HashMap<SystemProduct, HashMap<String, String>> {
+        match host_packages(d) {
+            HostPackages::PerProduct(map) => map,
+            shared @ HostPackages::Shared(_) => panic!("expected per-product: {shared:?}"),
+        }
+    }
+
+    #[test]
+    fn host_packages_keys_by_the_normalized_target_product() {
+        let map = packages_by_product(&doc(MAINTENANCE_OBS));
+        let key = SystemProduct::new("SLES-LTSS", "15-SP6", "s390x");
+        assert_eq!(map.keys().collect::<Vec<_>>(), vec![&key]);
+        assert_eq!(
+            map[&key],
+            HashMap::from([
+                ("smc-tools".to_owned(), "1.8.8-150600.3.9.1".to_owned()),
+                (
+                    "smc-tools-completion".to_owned(),
+                    "1.8.8-150600.3.9.1".to_owned()
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn host_packages_matches_the_update_repo_keys() {
+        let d = doc(MAINTENANCE_ADDON);
+        let by_product: HashSet<_> = packages_by_product(&d).into_keys().collect();
+        let repos: HashSet<_> = obs_update_repos(&d).into_keys().collect();
+        assert!(!repos.is_empty());
+        assert_eq!(by_product, repos);
+    }
+
+    /// Two targets of one normalized product naming one package keep the
+    /// higher version, whichever comes first.
+    #[test]
+    fn host_packages_keeps_the_higher_version_within_a_product() {
+        let key = SystemProduct::new("SLES-LTSS", "15-SP6", "s390x");
+        for versions in [["3.6.1", "3.9.1"], ["3.9.1", "3.6.1"]] {
+            let mut d = doc(MAINTENANCE_OBS);
+            let template = d.install.targets[0].clone();
+            d.install.targets = versions
+                .iter()
+                .map(|v| {
+                    let mut t = template.clone();
+                    t.binaries =
+                        [("smc-tools".to_owned(), format!("1.8.8-150600.{v}.s390x"))].into();
+                    t
+                })
+                .collect();
+            let map = packages_by_product(&d);
+            assert_eq!(map[&key]["smc-tools"], "1.8.8-150600.3.9.1", "{versions:?}");
+        }
+    }
+
+    #[test]
+    fn host_packages_shares_the_standard_set_for_slfo_and_pi() {
+        for raw in [SLFO_GITEA, PI] {
+            let d = doc(raw);
+            let standard = packages_map(&d).remove("standard").expect("standard");
+            assert!(!standard.is_empty(), "{raw}");
+            assert_eq!(host_packages(&d), HostPackages::Shared(standard), "{raw}");
+        }
+    }
+
     #[test]
     fn strip_arch_suffix_leaves_a_dotless_string_unchanged() {
         assert_eq!(strip_arch_suffix("no-dots-here"), "no-dots-here");
@@ -466,6 +579,42 @@ mod tests {
         assert_ne!(want.name, target.product, "fixture must exercise normalize");
         let repos = obs_update_repos(&d);
         assert_eq!(repos[&want], target.repository);
+    }
+
+    /// A target whose URL `obs_update_repos` drops has no key either, so the
+    /// two maps stay keyed alike.
+    #[test]
+    fn host_packages_keys_only_the_targets_obs_update_repos_keeps() {
+        let mut d = doc(MAINTENANCE_ADDON);
+        let mut bad = d.install.targets[0].clone();
+        bad.arch = "aarch64".to_owned();
+        bad.repository = "ftp://not allowed/$(x)".to_owned();
+        d.install.targets.push(bad);
+        let by_product = packages_by_product(&d);
+        let keys: BTreeSet<_> = by_product.keys().collect();
+        assert_eq!(keys, obs_update_repos(&d).keys().collect::<BTreeSet<_>>());
+        assert!(keys.iter().all(|p| p.arch == "x86_64"), "{by_product:?}");
+    }
+
+    /// Not even a host carrying the targets' product, which no repository reaches.
+    #[test]
+    fn a_maintenance_document_whose_every_target_url_is_invalid_seeds_no_host() {
+        let mut d = doc(MAINTENANCE_ADDON);
+        for t in &mut d.install.targets {
+            t.repository = "ftp://not allowed/$(x)".to_owned();
+        }
+        assert!(obs_update_repos(&d).is_empty());
+        let host = mtui_types::System::new(
+            SystemProduct::new("SLES", "15-SP7", "x86_64"),
+            BTreeSet::from([SystemProduct::new(
+                "sle-module-live-patching",
+                "15-SP7",
+                "x86_64",
+            )]),
+            false,
+        );
+        let seeded = crate::testreport::packages_for_host(&host_packages(&d), &host);
+        assert!(seeded.is_empty(), "{seeded:?}");
     }
 
     #[test]

@@ -211,6 +211,16 @@ fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
+/// The active report's seed packages, taken before the connect loop so the
+/// connect futures borrow plain data and stay `Send`.
+struct PackageMeta(Arc<mtui_testreport::HostPackages>);
+
+impl PackageMeta {
+    fn of(base: &mtui_testreport::TestReportBase) -> Self {
+        Self(Arc::clone(&base.host_packages))
+    }
+}
+
 /// Why a single host could not be attached to its slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HostFailure {
@@ -1409,9 +1419,9 @@ impl Session {
         // future non-`Send`, which the `Command::call` bound requires.
         // Empty when no PI assignment is active.
         let lock_comment = self.metadata().base().lock_comment.clone();
-        // `product -> { name -> required-version }`, seeding each host's tracked
-        // packages right after connect(); empty makes the seeding a no-op.
-        let package_meta = self.metadata().base().packages.clone();
+        // Seeds each host's tracked packages right after connect(); empty maps
+        // make the seeding a no-op.
+        let package_meta = PackageMeta::of(self.metadata().base());
         // `None` (headless / `mtui-mcp`) leaves the timeout an immediate abort.
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
@@ -1592,7 +1602,7 @@ impl Session {
         rrid: &str,
         timeout_prompt: &Option<mtui_hosts::TimeoutPrompt>,
         lock_comment: &str,
-        package_meta: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        package_meta: &PackageMeta,
         store: Option<&Refhosts>,
         is_pool_claim: bool,
         holders: &OpLockHolders,
@@ -1628,18 +1638,19 @@ impl Session {
                 // Seed the tracked packages with their metadata `required`
                 // versions and query the current ones, so `list_packages` /
                 // `package_check` / `downgrade` see a populated list.
-                // `connect()` already parsed the system, so `get_base().version`
-                // is authoritative here.
-                let base_version = target.system().get_base().version.clone();
-                let seeded =
-                    mtui_testreport::testreport::packages_for_map(package_meta, &base_version);
+                // `connect()` already parsed the system, so its products are
+                // authoritative here.
+                let seeded = mtui_testreport::testreport::packages_for_host(
+                    &package_meta.0,
+                    target.system(),
+                );
                 if seeded.is_empty() {
                     // #396: tracking nothing means before/after version checks
                     // cannot run and export has nothing to verify — say so
                     // rather than skipping silently.
                     warn!(
-                        host = %host, base_version = %base_version,
-                        "report metadata names no packages for this host's base product; \
+                        host = %host, system = %target.system(),
+                        "report metadata names no packages for this host's products; \
                          package list not seeded — version checks cannot run"
                     );
                 } else {
@@ -1695,7 +1706,7 @@ impl Session {
                 base.owner.clone(),
                 base.slot_candidates.clone(),
                 base.lock_comment.clone(),
-                base.packages.clone(),
+                PackageMeta::of(base),
             )
         };
         let (Some(arbiter), Some(owner)) = (arbiter, owner) else {
@@ -2978,6 +2989,83 @@ mod tests {
         assert_eq!(s.metadata().workflow(), Workflow::Manual, "precondition");
         assert!(s.set_workflow(Workflow::Auto));
         assert_eq!(s.metadata().workflow(), Workflow::Auto);
+    }
+
+    /// Connect seeds a host from the report targets matching its products: a
+    /// plain-SLES base carrying the LTSS addon tracks the packages of a report
+    /// whose only target is the LTSS product.
+    #[tokio::test]
+    async fn add_named_hosts_seeds_packages_from_the_hosts_matching_products() {
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let doc: mtui_types::report_document::ReportDocument =
+            mtui_types::fixtures::MAINTENANCE_OBS.parse().unwrap();
+        let mut ingested = mtui_testreport::TestReportBase::new(s.config.clone());
+        mtui_testreport::apply_document(&mut ingested, &doc);
+        {
+            let base = s.metadata_mut().base_mut();
+            base.packages = ingested.packages;
+            base.host_packages = ingested.host_packages;
+        }
+        let product = |name: &str| {
+            format!(
+                "<product><name>{name}</name><baseversion>15</baseversion>\
+                 <patchlevel>6</patchlevel><arch>s390x</arch></product>"
+            )
+            .into_bytes()
+        };
+        s.inject_mock_connection(
+            "ltss.invalid",
+            MockConnection::new("ltss.invalid")
+                .with_listing("/etc/products.d", ["SLES.prod", "SLES-LTSS.prod"])
+                .with_link("/etc/products.d/baseproduct", "SLES.prod")
+                .with_file("/etc/products.d/SLES.prod", product("SLES"))
+                .with_file("/etc/products.d/SLES-LTSS.prod", product("SLES-LTSS")),
+        );
+
+        let refused = s.add_named_hosts(vec!["ltss.invalid".to_owned()]).await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        let target = s.targets().get("ltss.invalid").expect("attached");
+        assert_eq!(target.system().get_base().version, "15-SP6");
+        let names: Vec<&str> = target.packages().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["smc-tools", "smc-tools-completion"]);
+    }
+
+    /// A report whose version-keyed map alone is filled, even under the
+    /// product-agnostic `"standard"` key, seeds no host.
+    #[tokio::test]
+    async fn add_named_hosts_seeds_nothing_from_the_version_map_alone() {
+        use std::collections::HashMap;
+
+        let (_refhosts_dir, refhosts_config) = config_with_path_refhosts();
+        let mut s = Session::new(refhosts_config, false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        s.metadata_mut().base_mut().packages = HashMap::from([(
+            "standard".to_owned(),
+            HashMap::from([("examplepkg".to_owned(), "1.0-1.1".to_owned())]),
+        )]);
+        s.inject_mock_connection(
+            "versionmap.invalid",
+            MockConnection::new("versionmap.invalid")
+                .with_listing("/etc/products.d", ["SLES.prod"])
+                .with_link("/etc/products.d/baseproduct", "SLES.prod")
+                .with_file(
+                    "/etc/products.d/SLES.prod",
+                    b"<product><name>SLES</name><baseversion>15</baseversion>\
+                      <patchlevel>6</patchlevel><arch>x86_64</arch></product>"
+                        .to_vec(),
+                ),
+        );
+
+        let refused = s
+            .add_named_hosts(vec!["versionmap.invalid".to_owned()])
+            .await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        let target = s.targets().get("versionmap.invalid").expect("attached");
+        assert!(target.packages().is_empty(), "{:?}", target.packages());
     }
 
     /// An unreachable host fails its live connect and is skipped, not added.
