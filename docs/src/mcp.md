@@ -423,7 +423,10 @@ Replaces one tester section with `value`.
   `new_issues`, `testing` or `review`), `value` (any JSON — `null` is a legitimate value
   for an unanswered `verdict` or `comment`). Plus optional `template`. A
   string holding a JSON object or array is decoded for every section except
-  `verdict` and `comment`, whose strings are always taken literally.
+  `verdict` and `comment`, whose strings are always taken literally. Any
+  other string for those sections is refused without echoing it: one that is
+  not valid JSON names the parse error and its position (`trailing characters
+  at line 1 column 572`), and one holding a JSON scalar names its kind.
 - `update` and `install` are pipeline-owned and refused. A section the report
   lacks refuses. An `issues` write must keep exactly the same issue keys; use
   `report_issue_write` for one entry. A `new_issues` write replaces the whole

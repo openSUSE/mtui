@@ -235,6 +235,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - An `update` that excluded a host but patched the others still fails naming
   the excluded host, and now first prints `update completed on <hosts>` for the
   hosts it did patch, so they are not run again (#790).
+- `report_section_write` and `report_issue_write` refuse a string `value` for
+  an object or array target (every writable section but `verdict` and
+  `comment`, and every issue) that does not decode to one, without repeating
+  the value: a string that is not valid JSON names the parse error and its
+  position (`` `value` is a string that is not valid JSON: trailing characters
+  at line 1 column 572 ``), and one holding a JSON string, number, boolean or
+  `null` names that kind. Such a value was already refused, but the schema
+  check's refusal quoted the whole value (`invalid type: string "…"`) (#786).
 - MCP `get` and `put` work with no report loaded: they act on the hosts added
   with `add_host`, as the REPL `put` does, instead of refusing with "no report
   loaded". A fleet pass no longer needs an unrelated update loaded as a

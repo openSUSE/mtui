@@ -164,6 +164,25 @@ async fn a_pipeline_owned_section_write_is_refused() {
     assert_eq!(state(&session, RRID).await, (document, false));
 }
 
+/// A pipeline-owned section refuses as read-only whatever the value is, a
+/// string that is not JSON included.
+#[tokio::test]
+async fn a_pipeline_owned_section_refuses_a_non_json_string_as_read_only() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    for section in ["update", "install"] {
+        let msg = refusal(
+            &session,
+            "report_section_write",
+            json!({"section": section, "value": "not json"}),
+        )
+        .await;
+        assert!(msg.contains("read-only"), "{section}: {msg}");
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
 #[tokio::test]
 async fn a_section_the_report_lacks_reads_and_writes_as_a_refusal() {
     let session = loaded(Some(PI)).await;
@@ -484,7 +503,96 @@ async fn a_non_json_string_for_a_container_section_is_still_refused() {
     )
     .await;
 
-    assert!(msg.contains("invalid type: string"), "{msg}");
+    assert_eq!(
+        msg,
+        "`value` is a string that is not valid JSON: expected value at line 1 column 1"
+    );
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_string_with_a_surplus_brace_is_refused_as_invalid_json_without_echoing_it() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+    let text = "{\"regression\": {\"verdict\": \"PASSED\", \"comment\": \"zebra-canary\"}}}";
+
+    let msg = refusal(
+        &session,
+        "report_section_write",
+        json!({"section": "testing", "value": text}),
+    )
+    .await;
+
+    assert_eq!(
+        msg,
+        format!(
+            "`value` is a string that is not valid JSON: trailing characters at line 1 column {}",
+            text.len()
+        )
+    );
+    assert!(!msg.contains("zebra-canary"), "{msg}");
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_string_holding_a_json_scalar_is_refused_by_kind() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+    let object = json!({"regression": {"verdict": "PASSED", "comment": "zebra-canary"}});
+    let double_encoded = Value::String(object.to_string()).to_string();
+
+    for (text, kind) in [
+        (double_encoded.as_str(), "string"),
+        ("42", "number"),
+        ("true", "boolean"),
+        ("null", "null"),
+    ] {
+        let msg = refusal(
+            &session,
+            "report_section_write",
+            json!({"section": "testing", "value": text}),
+        )
+        .await;
+
+        assert_eq!(
+            msg,
+            format!("`value` is a string holding a JSON {kind}, not an object or array"),
+            "{text}"
+        );
+        assert!(!msg.contains("zebra-canary"), "{msg}");
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_non_json_string_for_an_issue_is_refused_as_invalid_json() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let mut issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bnc#1276308"}),
+    )
+    .await["issue"]
+        .clone();
+    issue["comment"] = json!("zebra-canary");
+    let text = format!("{issue}}}");
+    let (document, _) = state(&session, RRID).await;
+
+    let msg = refusal(
+        &session,
+        "report_issue_write",
+        json!({"issue_id": "bnc#1276308", "value": text}),
+    )
+    .await;
+
+    assert_eq!(
+        msg,
+        format!(
+            "`value` is a string that is not valid JSON: trailing characters at line 1 column {}",
+            text.len()
+        )
+    );
+    assert!(!msg.contains("zebra-canary"), "{msg}");
     assert_eq!(state(&session, RRID).await, (document, false));
 }
 
