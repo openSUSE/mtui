@@ -232,6 +232,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- An `update` that excluded a host but patched the others still fails naming
+  the excluded host, and now first prints `update completed on <hosts>` for the
+  hosts it did patch, so they are not run again (#790).
 - MCP `get` and `put` work with no report loaded: they act on the hosts added
   with `add_host`, as the REPL `put` does, instead of refusing with "no report
   loaded". A fleet pass no longer needs an unrelated update loaded as a
