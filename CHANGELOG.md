@@ -482,6 +482,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tracked packages `update` has yet to check. A host whose products did not
   change keeps its packages as they were, as does any host when the report
   carries no package metadata (#802).
+- `prepare --update` no longer reports a host as prepared when the update's
+  repositories do not reach it: a host whose products match none of them, a
+  host whose products could not be read, or every host of an update that has
+  none. Nothing was added to such a host, so its install drew only on the
+  repositories it already had. It is now left out before anything runs on it
+  (no preparer lookup, lock, repository change or install), so it can no
+  longer fail its peers' prepare with a missing preparer or another tester's
+  lock either. The other hosts are prepared as before, and the prepare fails
+  naming it: `<host>: no repository of this update matches the host's products
+  (…); nothing was installed`, `<host>: its products could not be read;
+  nothing was installed`, or `<host>: this update has no repository to add;
+  nothing was installed` (#808).
 - `update` no longer reports success on a host the update's repositories do
   not reach, where nothing was installed: a host whose products match none of
   them, a host whose products could not be read, or every host of an update

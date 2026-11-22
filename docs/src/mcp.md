@@ -346,7 +346,10 @@ and nothing is written there.
   repository to add; …` when the update has none): the patch would find
   nothing to install there and pass. Neither exclusion keeps the automatic
   rollback off a host: when a patched peer fails its check, the rollback runs
-  on the whole group.
+  on the whole group. `prepare` with `update` set fails such a host by name the
+  same way (`…; nothing was installed`), before anything runs on it, instead of
+  installing from the repositories it already had; the other hosts are
+  prepared.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a host excluded because its test update
   repository genuinely failed to register (its partial add is undone and its
