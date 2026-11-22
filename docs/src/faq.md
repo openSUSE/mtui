@@ -188,6 +188,16 @@ These exclusions cover `update`'s own steps. When a host that was patched then
 fails its check, the automatic rollback runs on the whole group, and reaches
 an excluded host as well.
 
+`prepare -u` fails such a host by name too, on any report: no test repository
+would be added to it, so its install would draw only on the repositories it
+already had. It is left out before anything runs on it (no preparer lookup,
+lock, repository change or install), so neither a missing preparer nor another
+tester's lock on it can fail its peers' prepare. The other hosts are prepared,
+and the prepare's error names it: `<host>: no repository of this update matches
+the host's products (…); nothing was installed`, `<host>: its products could
+not be read; nothing was installed`, or `<host>: this update has no repository
+to add; nothing was installed`.
+
 ## Can I run a command on only some of the connected hosts?
 
 Yes — temporarily disable the rest with `set_host_state`, then re-enable:

@@ -596,23 +596,28 @@ fn repo_add_failures(
     (blocking, degraded)
 }
 
-/// One exclusion per enabled host an add of `report`'s repositories would not
-/// reach, saying why.
+/// One refusal per enabled `in_scope` host an add of `report`'s repositories
+/// would not reach, saying why and ending with `consequence`.
 ///
 /// Known before the add: it applies the one rule `run_zypper` adds and records
 /// its outcome by ([`RepoOutcome::reach`]) to the same map and products. A report
-/// that does not expose its repositories excludes no host.
-fn repo_unreached(targets: &HostsGroup, report: &dyn SetRepo) -> Vec<UpdateError> {
+/// that does not expose its repositories refuses no host.
+fn repo_unreached(
+    targets: &HostsGroup,
+    report: &dyn SetRepo,
+    in_scope: impl Fn(&str) -> bool,
+    consequence: &str,
+) -> Vec<UpdateError> {
     let Some(repos) = report.repositories() else {
         return Vec::new();
     };
     targets
         .targets()
-        .filter(|t| t.state() == mtui_types::TargetState::Enabled)
+        .filter(|t| t.state() == mtui_types::TargetState::Enabled && in_scope(t.hostname()))
         .filter_map(|t| {
             let outcome = RepoOutcome::reach(repos, &t.system().flatten()).err()?;
             Some(UpdateError::new(
-                format!("{outcome}; it was excluded from the update"),
+                format!("{outcome}; {consequence}"),
                 t.hostname().to_owned(),
             ))
         })
@@ -1019,6 +1024,28 @@ async fn perform_prepare_classified(
         .cloned()
         .collect();
 
+    // An install there would draw only on the repositories the host already
+    // had. Known without I/O, so such a host is refused before the preparer
+    // lookup and the lock, where it would otherwise fail its peers' prepare;
+    // unlike the composition refusal, also on an empty list.
+    let refused = if testing {
+        let in_scope = |host: &str| selected.is_none_or(|s| s.contains(host));
+        repo_unreached(targets, report, in_scope, "nothing was installed")
+    } else {
+        Vec::new()
+    };
+    let narrowed: Option<BTreeSet<String>> = (!refused.is_empty()).then(|| {
+        let refused: BTreeSet<&str> = refused.iter().filter_map(|e| e.host.as_deref()).collect();
+        targets
+            .names()
+            .into_iter()
+            .filter(|host| {
+                selected.is_none_or(|s| s.contains(host)) && !refused.contains(host.as_str())
+            })
+            .collect()
+    });
+    let selected = narrowed.as_ref().or(selected);
+
     // Resolve the reboot map before locking; a missing preparer aborts early.
     let reboot = match build_reboot_map(targets, &registry, Role::Prepare, selected) {
         Ok(reboot) => reboot,
@@ -1049,6 +1076,7 @@ async fn perform_prepare_classified(
         &pkgs,
         installed_only,
         reboot,
+        refused,
         diagnostics,
     )
     .await;
@@ -1072,6 +1100,8 @@ async fn perform_prepare_classified(
 /// it arrives already scoped from [`build_reboot_map`], because the retain
 /// filter below warns a host by name *before* `dispatched` (⊆ `lists`) gets to
 /// drop it. A hold lost in the reboot gap is reported on `diagnostics`.
+/// `refused` names hosts the caller already left out of `selected`, joined to
+/// this prepare's own verdicts.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -1082,6 +1112,7 @@ async fn prepare_body(
     pkgs: &[String],
     installed_only: bool,
     reboot: BTreeMap<String, String>,
+    refused: Vec<UpdateError>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), PrepareFailure> {
     let in_scope = |host: &str| selected.is_none_or(|s| s.contains(host));
@@ -1150,7 +1181,7 @@ async fn prepare_body(
     // rule below may judge them a second time, and their failures are collected
     // apart from that scan.
     let mut accounted: BTreeSet<String> = BTreeSet::new();
-    let mut accounted_failures: Vec<UpdateError> = Vec::new();
+    let mut accounted_failures: Vec<UpdateError> = refused;
     // Kept apart from `accounted`, which also holds the `--installed` probe's
     // dead and skipped hosts: only these have no package baseline, and only
     // they are excluded from an embedded `update`.
@@ -2175,7 +2206,7 @@ pub async fn perform_update(
     // The updater finds no patch on a host the add does not reach and exits
     // 0, which the check would pass as an update that installed nothing. That
     // is known without I/O, so such a host is left out before anything runs.
-    let mut excluded = repo_unreached(targets, report);
+    let mut excluded = repo_unreached(targets, report, |_| true, "it was excluded from the update");
     let unreached: BTreeSet<String> = excluded.iter().filter_map(|e| e.host.clone()).collect();
     for e in &excluded {
         diagnostics.push(Diagnostic::degradation(e.to_string()));
@@ -10424,7 +10455,8 @@ mod tests {
         no_repository.base_mut().update_repos.clear();
 
         for report in [report_with_rrid(), no_repository] {
-            let unreached = repo_unreached(&group, &report);
+            let unreached =
+                repo_unreached(&group, &report, |_| true, "it was excluded from the update");
             let predicted: Vec<String> = unreached.iter().map(ToString::to_string).collect();
             let left_out: Vec<&str> = unreached.iter().filter_map(|e| e.host.as_deref()).collect();
             let before: Vec<usize> = handles.iter().map(|(_, h)| h.commands().len()).collect();
@@ -10513,5 +10545,254 @@ mod tests {
             h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
             "h1 must get the newpackage prepare: {h1_cmds:?}"
         );
+    }
+
+    // --- perform_prepare --update: the update's repositories do not reach ---
+
+    #[tokio::test]
+    async fn testing_prepare_refuses_a_host_no_repository_matches() {
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a host no repository of the update reached must be named");
+
+        assert_eq!(
+            err.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); nothing was installed"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "nothing may run on h2: {:?}",
+            h2_handle.commands()
+        );
+        assert_no_lock_taken(&h2_handle, "h2");
+        assert!(
+            h2_handle.file_contents(HISTORY_LOG).is_none(),
+            "nothing was installed on h2, so no row"
+        );
+
+        let h1_installs = zypper_prepares(&h1_handle);
+        assert!(
+            h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
+            "h1 must still be prepared: {:?}",
+            h1_handle.commands()
+        );
+        assert!(
+            h1_handle.file_contents(HISTORY_LOG).is_some(),
+            "h1's prepare must be recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_with_no_repository_matching_any_host_installs_nothing() {
+        let (h1, h1_handle) = sles_aarch64_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a prepare that reached no host's repositories must fail");
+
+        assert_eq!(
+            err.to_string(),
+            "prepare failed on h1, h2 (h1: no repository of this update matches the host's \
+             products (SLES-15.5.aarch64); nothing was installed; h2: no repository of this \
+             update matches the host's products (SLES-15.5.aarch64); nothing was installed)"
+        );
+        for (handle, host) in [(&h1_handle, "h1"), (&h2_handle, "h2")] {
+            assert!(
+                handle.commands().is_empty(),
+                "nothing may run on {host}: {:?}",
+                handle.commands()
+            );
+            assert_no_lock_taken(handle, host);
+            assert!(handle.file_contents(HISTORY_LOG).is_none(), "no row");
+        }
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_of_an_update_with_no_repository_installs_nothing() {
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.clear();
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a prepare that added no repository must fail");
+
+        assert_eq!(
+            err.to_string(),
+            "prepare failed on h1, h2 (h1: this update has no repository to add; nothing was \
+             installed; h2: this update has no repository to add; nothing was installed)"
+        );
+        for (handle, host) in [(&h1_handle, "h1"), (&h2_handle, "h2")] {
+            assert!(
+                handle.commands().is_empty(),
+                "nothing may run on {host}: {:?}",
+                handle.commands()
+            );
+            assert_no_lock_taken(handle, host);
+            assert!(
+                handle.file_contents(HISTORY_LOG).is_none(),
+                "no row on {host}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_skips_an_unreached_host_without_a_preparer() {
+        // A transactional host whose system was never read resolves no
+        // preparer, which fails the whole prepare when it is not left out first.
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = unparsed_transactional_target("h2");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a host whose products were never read must be named");
+
+        assert_eq!(
+            err.to_string(),
+            "h2: its products could not be read; nothing was installed"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+        assert_no_lock_taken(&h2_handle, "h2");
+        let h1_installs = zypper_prepares(&h1_handle);
+        assert!(
+            h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
+            "h1 must still be prepared: {:?}",
+            h1_handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_skips_an_unreached_host_held_by_another_tester() {
+        const FOREIGN: &[u8] = b"1700000000:alice:4242:busy";
+        let (h1, h1_handle) = sles_target("h1", "");
+        let conn = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, FOREIGN.to_vec());
+        let h2_handle = conn.clone();
+        let mut h2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        h2.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "aarch64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("the unreached host must be named, not lock out its peers");
+
+        assert_eq!(
+            err.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); nothing was installed"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+        assert_eq!(
+            h2_handle.file_contents(TARGET_LOCK_PATH).as_deref(),
+            Some(FOREIGN),
+            "h2's lock is not mtui's to touch"
+        );
+        let h1_installs = zypper_prepares(&h1_handle);
+        assert!(
+            h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
+            "h1 must still be prepared: {:?}",
+            h1_handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn default_prepare_still_installs_on_a_host_no_repository_matches() {
+        // A remove-mode prepare adds no repository, so whether the update's
+        // repositories reach a host cannot refuse it there.
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+
+        perform_prepare(
+            &mut group,
+            &report,
+            &report.get_package_list(),
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("a remove-mode prepare refuses no host for its products");
+
+        for handle in [&h1_handle, &h2_handle] {
+            let installs = zypper_prepares(handle);
+            assert!(
+                installs.len() == 1 && installs[0].ends_with(" pkg-a"),
+                "every host must be prepared: {:?}",
+                handle.commands()
+            );
+        }
     }
 }
