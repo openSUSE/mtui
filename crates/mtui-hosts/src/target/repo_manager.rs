@@ -74,7 +74,8 @@ impl RepoOp {
 /// What a [`RepoManager::run_zypper`] fan-out that did not fail did on one
 /// host — see [`Target::last_repo`](super::Target::last_repo).
 ///
-/// `Display` renders the line `set_repo` prints after the host's name.
+/// `Display` renders the line `set_repo` prints after the host's name, and the
+/// reason the update flows give for leaving out a host an add would not reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoOutcome {
     /// Every repository of the update that the host carries a product for was
@@ -89,6 +90,10 @@ pub enum RepoOutcome {
     },
     /// An add whose repository map is empty, so no repository was added.
     NoRepositories,
+    /// An add on a host none of whose products has a version or arch (its
+    /// system was never read, or its product files are missing), so no
+    /// repository could match it.
+    ProductsUnread,
 }
 
 impl std::fmt::Display for RepoOutcome {
@@ -114,24 +119,46 @@ impl std::fmt::Display for RepoOutcome {
                 )
             }
             Self::NoRepositories => f.write_str("this update has no repository to add"),
+            Self::ProductsUnread => f.write_str("its products could not be read"),
         }
     }
 }
 
 impl RepoOutcome {
-    /// Why an add of `repos` adds nothing to a host carrying `products`, or
-    /// `None` when at least one of them matches.
-    fn nothing_to_add<'a>(
-        repos: impl IntoIterator<Item = &'a SystemProduct>,
+    /// The repositories of `repos` an add registers on a host carrying
+    /// `products`.
+    ///
+    /// The one matching rule: [`RepoManager::run_zypper`] changes exactly these
+    /// repositories and records the outcome this returns, so a caller can tell
+    /// before the add which hosts it would not reach.
+    ///
+    /// # Errors
+    ///
+    /// The outcome an add records when it registers no repository there:
+    /// [`NoRepositories`](Self::NoRepositories),
+    /// [`ProductsUnread`](Self::ProductsUnread) or
+    /// [`NoMatch`](Self::NoMatch).
+    pub fn reach<'a>(
+        repos: impl IntoIterator<Item = (&'a SystemProduct, &'a String)>,
         products: &BTreeSet<SystemProduct>,
-    ) -> Option<Self> {
-        let mut repos = repos.into_iter().peekable();
-        if repos.peek().is_none() {
-            Some(Self::NoRepositories)
-        } else if repos.any(|p| products.contains(p)) {
-            None
+    ) -> Result<Vec<(&'a SystemProduct, &'a String)>, Self> {
+        let mut any = false;
+        let matched: Vec<_> = repos
+            .into_iter()
+            .inspect(|_| any = true)
+            .filter(|(product, _)| products.contains(*product))
+            .collect();
+        if !matched.is_empty() {
+            Ok(matched)
+        } else if !any {
+            Err(Self::NoRepositories)
+        } else if products
+            .iter()
+            .all(|p| p.version.is_empty() && p.arch.is_empty())
+        {
+            Err(Self::ProductsUnread)
         } else {
-            Some(Self::NoMatch {
+            Err(Self::NoMatch {
                 products: products.clone(),
             })
         }
@@ -186,7 +213,7 @@ impl std::fmt::Display for RepoFailure {
 
 /// The report-side hook a `RepoManager::set` forwards into — the injection
 /// point for `testreport.set_repo(target, operation)`, and the seam the update
-/// flow reads the report's composition through.
+/// flow reads the report's composition and repository map through.
 ///
 /// Object-safe (`&dyn SetRepo`) and `async` (the report's `set_repo` ultimately
 /// drives async `zypper` fan-out through [`RepoManager::run_zypper`]), matching
@@ -209,6 +236,16 @@ pub trait SetRepo: Send + Sync {
     /// answers `None` or an empty map; a consumer reading either must treat
     /// every package as composed for every host.
     fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+        None
+    }
+
+    /// The repository URL an add registers, per product.
+    ///
+    /// `None` by default, and a consumer must then judge no host by it. A
+    /// report whose `set_repo` adds from such a map must return it: `update`
+    /// reads it to leave out, before anything runs, a host the add would not
+    /// reach.
+    fn repositories(&self) -> Option<&HashMap<SystemProduct, String>> {
         None
     }
 }
@@ -242,9 +279,9 @@ impl<'a> RepoManager<'a> {
 
     /// Runs a fan-out `zypper` command across the target's repos.
     ///
-    /// Iterates `repos` filtered by what the
-    /// target's flattened system actually carries; for each matching
-    /// product/repo pair, `cmd` drives one of:
+    /// Iterates the `repos` [`RepoOutcome::reach`] matches to the target's
+    /// flattened system; for each matching product/repo pair, `cmd` drives one
+    /// of:
     ///
     /// * **`ar`** (add-repo, `cmd` contains `"ar"`) →
     ///   `zypper <cmd> <alias> <url> <alias>` with alias
@@ -271,10 +308,9 @@ impl<'a> RepoManager<'a> {
     ///
     /// When no repo product matches the host's flattened system (`matched == 0`)
     /// a WARNING fires listing the update's products vs the host's, and an add
-    /// records [`RepoOutcome::NoMatch`] carrying the host's products, or
-    /// [`RepoOutcome::NoRepositories`] when `repos` is empty, so the caller can
-    /// say that nothing was added — even when the refresh then fails, which its
-    /// own WARNING still reports.
+    /// records the outcome [`RepoOutcome::reach`] gives for it, so the caller
+    /// can say why nothing was added — even when the refresh then fails, which
+    /// its own WARNING still reports.
     ///
     /// Always finishes with a refresh so subsequent operations see the freshly
     /// (un)registered repos: `zypper -n ref` normally, or
@@ -309,11 +345,8 @@ impl<'a> RepoManager<'a> {
 
         // Products the host actually carries, paired with their repo URL, in the
         // deterministic order of the BTreeMap.
-        let matched_repos: Vec<(SystemProduct, String)> = repos
-            .iter()
-            .filter(|(product, _)| flattened.contains(*product))
-            .map(|(product, url)| (product.clone(), url.clone()))
-            .collect();
+        let reach = RepoOutcome::reach(repos, &flattened);
+        let matched_repos = reach.as_deref().unwrap_or_default();
 
         if matched_repos.is_empty() {
             // Unknown command still has to hit the force-unlock safeguard even
@@ -344,7 +377,7 @@ impl<'a> RepoManager<'a> {
             );
         }
 
-        for (product, url) in &matched_repos {
+        for &(product, url) in matched_repos {
             // Only the executed argument keeps the userinfo; every log line and
             // failure value below carries the masked form.
             let safe_url = sanitize_url(url);
@@ -446,7 +479,7 @@ impl<'a> RepoManager<'a> {
         // With nothing matched no repository was touched, so a failed refresh
         // (the only failure possible then) is not what the caller must hear.
         let untouched = if is_ar {
-            RepoOutcome::nothing_to_add(repos.keys(), &flattened)
+            reach.as_ref().err().cloned()
         } else {
             None
         };
@@ -790,7 +823,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_no_match_add_on_a_host_never_parsed_names_its_products_readably() {
+    async fn an_add_on_a_host_whose_products_were_never_read_says_so() {
         let mut t = Target::with_connection(
             "host1.example.com",
             TargetState::Enabled,
@@ -805,8 +838,86 @@ mod tests {
 
         assert_eq!(
             t.last_repo().unwrap().as_ref().unwrap().to_string(),
-            "no repository of this update matches the host's products (unknown)"
+            "its products could not be read"
         );
+    }
+
+    #[tokio::test]
+    async fn a_no_match_add_names_an_unread_base_product_by_name() {
+        // A dangling baseproduct link leaves the base's name only.
+        let addon = product("SLE-Module-Basesystem", "16.1");
+        let (mut t, _conn) = target_with(
+            system_of(
+                SystemProduct::new("SLES", "", ""),
+                std::slice::from_ref(&addon),
+            ),
+            false,
+        );
+        let mut repos = BTreeMap::new();
+        repos.insert(product("SLES", "16.0"), "https://other/repo".to_owned());
+
+        t.repo_manager()
+            .run_zypper("-n ar -ckn", &repos, &rrid())
+            .await;
+
+        assert_eq!(
+            t.last_repo().unwrap().as_ref().unwrap().to_string(),
+            "no repository of this update matches the host's products \
+             (SLE-Module-Basesystem-16.1.x86_64, SLES)"
+        );
+    }
+
+    /// An add registers exactly the repositories [`RepoOutcome::reach`]
+    /// returns and records the outcome it returns, so a caller judging the add
+    /// beforehand cannot disagree with it.
+    #[tokio::test]
+    async fn run_zypper_adds_what_reach_returns_and_records_its_outcome() {
+        let sles = product("SLES", "15.5");
+        let micro = product("SL-Micro", "6.0");
+        let repos: BTreeMap<SystemProduct, String> = [
+            (sles.clone(), "https://repo/sles".to_owned()),
+            (micro.clone(), "https://repo/micro".to_owned()),
+        ]
+        .into();
+        let systems = [
+            system_of(sles.clone(), &[]),
+            system_of(sles.clone(), std::slice::from_ref(&micro)),
+            system_of(SystemProduct::new("SLES", "15.5", "aarch64"), &[]),
+            system_of(SystemProduct::new("unknown", "", ""), &[]),
+        ];
+        for system in systems {
+            for map in [&repos, &BTreeMap::new()] {
+                let flattened = system.flatten();
+                let reach = RepoOutcome::reach(map, &flattened);
+                let (mut t, conn) = target_with(system.clone(), false);
+
+                t.repo_manager()
+                    .run_zypper("-n ar -ckn", map, &rrid())
+                    .await;
+
+                let added: BTreeSet<&SystemProduct> = repos
+                    .keys()
+                    .filter(|p| {
+                        let alias = issue_alias(p, &rrid());
+                        conn.commands()
+                            .iter()
+                            .any(|c| c.starts_with("zypper -n ar") && c.contains(&alias))
+                    })
+                    .collect();
+                let reached: BTreeSet<&SystemProduct> = reach
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .collect();
+                assert_eq!(added, reached, "{flattened:?} over {map:?}");
+                assert_eq!(
+                    t.last_repo(),
+                    Some(&Ok(reach.err().unwrap_or(RepoOutcome::Done))),
+                    "{flattened:?} over {map:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -157,4 +157,8 @@ impl SetRepo for ObsReport {
     fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
         Some(&self.base.composed)
     }
+
+    fn repositories(&self) -> Option<&HashMap<SystemProduct, String>> {
+        Some(&self.base.update_repos)
+    }
 }

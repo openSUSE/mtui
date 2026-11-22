@@ -172,6 +172,22 @@ of them either: it cannot contend the group's lock, have its repository
 configuration changed, or block a composing peer's patch behind its own
 unresolvable updater.
 
+`update` also leaves out a host the update's repositories do not reach, on any
+report: one whose products match none of them, one whose products could not be
+read, or every host when the update has none. The prepare of a classic
+maintenance report narrows nothing, and a host no product of which the
+metadata names keeps the full list, so neither refuses it, yet the patch would
+find nothing to install there and pass. Such a host is left out before
+anything runs on it: no prepare, lock, repository change, patch or package
+check. The update's error names it: `<host>: no repository of this update
+matches the host's products (…); it was excluded from the update`, `<host>:
+its products could not be read; it was excluded from the update`, or `<host>:
+this update has no repository to add; it was excluded from the update`.
+
+These exclusions cover `update`'s own steps. When a host that was patched then
+fails its check, the automatic rollback runs on the whole group, and reaches
+an excluded host as well.
+
 ## Can I run a command on only some of the connected hosts?
 
 Yes — temporarily disable the rest with `set_host_state`, then re-enable:
