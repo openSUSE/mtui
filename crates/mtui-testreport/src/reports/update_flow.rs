@@ -567,10 +567,10 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
 /// and hosts that stay in but degrade (`Refresh` — the repo registered, only
 /// its metadata may be stale).
 ///
-/// `Some(Ok(()))` and `None` are both benign and produce nothing: `None`
-/// covers a report with no RRID yet and every `SetRepo` test stub that never
-/// drives `run_zypper`, neither of which attempted a repo change worth
-/// judging.
+/// `Some(Ok(_))` — every `RepoOutcome` — and `None` are both
+/// benign and produce nothing: `None` covers a report with no RRID yet and
+/// every `SetRepo` test stub that never drives `run_zypper`, neither of which
+/// attempted a repo change worth judging.
 fn repo_add_failures(
     targets: &HostsGroup,
     hosts: &BTreeSet<String>,
@@ -584,7 +584,7 @@ fn repo_add_failures(
         match target.last_repo() {
             Some(Err(RepoFailure::Refresh { .. })) => degraded.push(host.clone()),
             Some(Err(err)) => blocking.push(UpdateError::new(err.to_string(), host.clone())),
-            Some(Ok(())) | None => {}
+            Some(Ok(_)) | None => {}
         }
     }
     (blocking, degraded)

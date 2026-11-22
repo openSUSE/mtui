@@ -494,10 +494,12 @@ pub(crate) mod testkit {
         /// whose test double otherwise emits no diagnostics at all.
         install_degradation: bool,
         /// [`as_set_repo`](TestReport::as_set_repo) returns `Some`, so `set_repo`
-        /// drives the empty-repo `run_zypper` refresh — the only public path
+        /// drives `run_zypper` over `set_repo_repos` — the only public path
         /// recording [`Target::last_repo`], hence the only way to exercise the
         /// per-host repo summary.
         set_repo_enabled: bool,
+        /// The repo map `set_repo` hands `run_zypper`.
+        set_repo_repos: std::collections::BTreeMap<SystemProduct, String>,
     }
 
     impl FakeReport {
@@ -513,13 +515,15 @@ pub(crate) mod testkit {
 
     #[async_trait]
     impl SetRepo for FakeReport {
-        async fn set_repo(&self, target: &mut Target, _operation: RepoOp) {
-            // With no matched repos only the trailing `zypper -n ref` runs, so
-            // `last_repo` follows the mock's scripted exit for that command.
+        async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
             let rrid = self.base.rrid.clone().expect("test rrid set");
+            let cmd = match operation {
+                RepoOp::Add => "ar",
+                RepoOp::Remove => "-n rr",
+            };
             target
                 .repo_manager()
-                .run_zypper("ar", &std::collections::BTreeMap::new(), &rrid)
+                .run_zypper(cmd, &self.set_repo_repos, &rrid)
                 .await;
         }
     }
@@ -756,6 +760,7 @@ pub(crate) mod testkit {
         fail_perform: bool,
         install_degradation: bool,
         set_repo_enabled: bool,
+        set_repo_repos: std::collections::BTreeMap<SystemProduct, String>,
     }
 
     /// The one builder behind every `session_with_*` below: buffer, display,
@@ -788,6 +793,7 @@ pub(crate) mod testkit {
             fail_perform: flags.fail_perform,
             install_degradation: flags.install_degradation,
             set_repo_enabled: flags.set_repo_enabled,
+            set_repo_repos: flags.set_repo_repos,
         }));
         // Install the active handle so direct `command.call()` tests (which
         // bypass the fan-out driver) read the report through `metadata()`.
@@ -838,16 +844,53 @@ pub(crate) mod testkit {
 
     /// Like [`session_with_targets`], but the active report can add/remove
     /// issue repos, for commands under test that require it (`set_repo`).
+    /// Every host carries [`setrepo_product`], which the update has a
+    /// repository for.
     #[must_use]
     pub(crate) fn session_with_targets_and_set_repo(
         rrid: &str,
         targets: Vec<Target>,
+    ) -> (Session, Buffer) {
+        let product = setrepo_product();
+        let targets = targets.into_iter().map(|t| carrying(t, &product)).collect();
+        session_with_setrepo(rrid, targets, &[product])
+    }
+
+    /// The product a `SetRepo`-capable fixture host carries unless the test
+    /// names its own.
+    fn setrepo_product() -> SystemProduct {
+        SystemProduct::new("SLES", "16.0", "x86_64")
+    }
+
+    /// `target` with `product` as its only installed product.
+    fn carrying(mut target: Target, product: &SystemProduct) -> Target {
+        target.set_system(
+            mtui_types::system::System::new(
+                product.clone(),
+                std::collections::BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        target
+    }
+
+    /// A `SetRepo`-capable report over `targets`, with one repository per
+    /// `repos` product.
+    fn session_with_setrepo(
+        rrid: &str,
+        targets: Vec<Target>,
+        repos: &[SystemProduct],
     ) -> (Session, Buffer) {
         session_with_fake(
             rrid,
             targets,
             FakeFlags {
                 set_repo_enabled: true,
+                set_repo_repos: repos
+                    .iter()
+                    .map(|p| (p.clone(), format!("https://repo.example/{p}")))
+                    .collect(),
                 ..Default::default()
             },
             None,
@@ -969,33 +1012,56 @@ pub(crate) mod testkit {
     }
 
     /// A `SetRepo`-capable report with one host per `(name, ok)` pair for
-    /// `set_repo`: `ok == false` scripts the trailing `zypper -n ref` refresh to
+    /// `set_repo`, each carrying [`setrepo_product`], whose repository the add
+    /// registers: `ok == false` scripts the trailing `zypper -n ref` refresh to
     /// a non-zero exit so `last_repo` records a failure.
     #[must_use]
     pub(crate) fn session_with_setrepo_outcomes(
         rrid: &str,
         hosts: &[(&str, bool)],
     ) -> (Session, Buffer) {
+        let product = setrepo_product();
         let targets: Vec<Target> = hosts
             .iter()
             .map(|&(name, ok)| {
-                let conn = MockConnection::new(name).with_default(if ok {
-                    CommandLog::new("", "", "", 0, 0)
-                } else {
-                    CommandLog::new("zypper -n ref", "", "refresh failed", 1, 0)
-                });
-                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
+                let mut conn =
+                    MockConnection::new(name).with_default(CommandLog::new("", "", "", 0, 0));
+                if !ok {
+                    conn = conn.with_response(
+                        "zypper -n ref",
+                        CommandLog::new("zypper -n ref", "", "refresh failed", 1, 0),
+                    );
+                }
+                carrying(
+                    Target::with_connection(name, TargetState::Enabled, Box::new(conn)),
+                    &product,
+                )
             })
             .collect();
-        session_with_fake(
-            rrid,
-            targets,
-            FakeFlags {
-                set_repo_enabled: true,
-                ..Default::default()
-            },
-            None,
-        )
+        session_with_setrepo(rrid, targets, &[product])
+    }
+
+    /// A `SetRepo`-capable report with one repo per `repos` product and one
+    /// host per `(name, product)` pair carrying only that product, every
+    /// command succeeding.
+    #[must_use]
+    pub(crate) fn session_with_setrepo_products(
+        rrid: &str,
+        hosts: &[(&str, SystemProduct)],
+        repos: &[SystemProduct],
+    ) -> (Session, Buffer) {
+        let targets: Vec<Target> = hosts
+            .iter()
+            .map(|&(name, ref product)| {
+                let conn =
+                    MockConnection::new(name).with_default(CommandLog::new("", "", "", 0, 0));
+                carrying(
+                    Target::with_connection(name, TargetState::Enabled, Box::new(conn)),
+                    product,
+                )
+            })
+            .collect();
+        session_with_setrepo(rrid, targets, repos)
     }
 
     /// A session whose active report's `perform_install`-family flows return
@@ -1055,6 +1121,7 @@ pub(crate) mod testkit {
             fail_perform: false,
             install_degradation: false,
             set_repo_enabled: false,
+            set_repo_repos: std::collections::BTreeMap::new(),
         })
     }
 
@@ -1079,6 +1146,7 @@ pub(crate) mod testkit {
             fail_perform: false,
             install_degradation: false,
             set_repo_enabled: false,
+            set_repo_repos: std::collections::BTreeMap::new(),
         })
     }
 

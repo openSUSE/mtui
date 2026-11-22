@@ -469,6 +469,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `set_repo --add` no longer answers `<host>: ok` where it added nothing. For a
+  host whose products match none of the update's repositories it prints
+  `<host>: no repository of this update matches the host's products (…)`
+  naming the host's products, and for an update that has no repository at all
+  `<host>: this update has no repository to add`. The command fails when no
+  selected host got a repository (#789).
 - A connected host tracks the update's packages when every target version
   carries a suffix (`15-SP4-TERADATA` for a 15-SP4 TERADATA host, `15-SP6-LTSS`
   for an LTSS one). It tracked none, so `export` refused the host although

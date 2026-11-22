@@ -71,6 +71,73 @@ impl RepoOp {
     }
 }
 
+/// What a [`RepoManager::run_zypper`] fan-out that did not fail did on one
+/// host — see [`Target::last_repo`](super::Target::last_repo).
+///
+/// `Display` renders the line `set_repo` prints after the host's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoOutcome {
+    /// Every repository of the update that the host carries a product for was
+    /// changed. Also recorded for a remove that matched nothing: there was
+    /// nothing to remove.
+    Done,
+    /// An add whose repository map names none of the host's products, so no
+    /// repository was added.
+    NoMatch {
+        /// The host's installed products.
+        products: BTreeSet<SystemProduct>,
+    },
+    /// An add whose repository map is empty, so no repository was added.
+    NoRepositories,
+}
+
+impl std::fmt::Display for RepoOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Done => f.write_str("ok"),
+            Self::NoMatch { products } => {
+                // An unparsed product has no version or arch to render.
+                let products: Vec<String> = products
+                    .iter()
+                    .map(|p| {
+                        if p.version.is_empty() && p.arch.is_empty() {
+                            p.name.clone()
+                        } else {
+                            p.to_string()
+                        }
+                    })
+                    .collect();
+                write!(
+                    f,
+                    "no repository of this update matches the host's products ({})",
+                    products.join(", ")
+                )
+            }
+            Self::NoRepositories => f.write_str("this update has no repository to add"),
+        }
+    }
+}
+
+impl RepoOutcome {
+    /// Why an add of `repos` adds nothing to a host carrying `products`, or
+    /// `None` when at least one of them matches.
+    fn nothing_to_add<'a>(
+        repos: impl IntoIterator<Item = &'a SystemProduct>,
+        products: &BTreeSet<SystemProduct>,
+    ) -> Option<Self> {
+        let mut repos = repos.into_iter().peekable();
+        if repos.peek().is_none() {
+            Some(Self::NoRepositories)
+        } else if repos.any(|p| products.contains(p)) {
+            None
+        } else {
+            Some(Self::NoMatch {
+                products: products.clone(),
+            })
+        }
+    }
+}
+
 /// Why a [`RepoManager::run_zypper`] fan-out failed on one host.
 ///
 /// [`run_zypper`](RepoManager::run_zypper) drives several `zypper` commands per
@@ -203,9 +270,11 @@ impl<'a> RepoManager<'a> {
     ///   "unknown command, bailed".)
     ///
     /// When no repo product matches the host's flattened system (`matched == 0`)
-    /// a WARNING fires listing the update's products vs the host's — reproducing
-    /// the fix for the silent-no-op bug where `set_repo --add` "succeeded" but
-    /// registered nothing against a drifted host.
+    /// a WARNING fires listing the update's products vs the host's, and an add
+    /// records [`RepoOutcome::NoMatch`] carrying the host's products, or
+    /// [`RepoOutcome::NoRepositories`] when `repos` is empty, so the caller can
+    /// say that nothing was added — even when the refresh then fails, which its
+    /// own WARNING still reports.
     ///
     /// Always finishes with a refresh so subsequent operations see the freshly
     /// (un)registered repos: `zypper -n ref` normally, or
@@ -374,7 +443,18 @@ impl<'a> RepoManager<'a> {
             });
         }
 
-        self.target.set_last_repo(failure.map_or(Ok(()), Err));
+        // With nothing matched no repository was touched, so a failed refresh
+        // (the only failure possible then) is not what the caller must hear.
+        let untouched = if is_ar {
+            RepoOutcome::nothing_to_add(repos.keys(), &flattened)
+        } else {
+            None
+        };
+        let recorded = match untouched {
+            Some(outcome) => Ok(outcome),
+            None => failure.map_or(Ok(RepoOutcome::Done), Err),
+        };
+        self.target.set_last_repo(recorded);
         true
     }
 }
@@ -680,6 +760,119 @@ mod tests {
         assert_eq!(conn.commands(), vec!["zypper -n ref".to_owned()]);
     }
 
+    #[tokio::test]
+    async fn a_no_match_add_records_no_match_with_the_hosts_products() {
+        let base = product("SLES", "16.1");
+        let addon = product("SLE-Module-Basesystem", "16.1");
+        let (mut t, _conn) =
+            target_with(system_of(base.clone(), std::slice::from_ref(&addon)), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(
+            SystemProduct::new("SLES", "16.1", "aarch64"),
+            "https://other/repo".to_owned(),
+        );
+
+        t.repo_manager()
+            .run_zypper("-n ar -ckn", &repos, &rrid())
+            .await;
+
+        assert_eq!(
+            t.last_repo(),
+            Some(&Ok(RepoOutcome::NoMatch {
+                products: BTreeSet::from([base, addon])
+            }))
+        );
+        assert_eq!(
+            t.last_repo().unwrap().as_ref().unwrap().to_string(),
+            "no repository of this update matches the host's products \
+             (SLE-Module-Basesystem-16.1.x86_64, SLES-16.1.x86_64)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_no_match_add_on_a_host_never_parsed_names_its_products_readably() {
+        let mut t = Target::with_connection(
+            "host1.example.com",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("host1.example.com")),
+        );
+        let mut repos = BTreeMap::new();
+        repos.insert(product("SLES", "16.0"), "https://other/repo".to_owned());
+
+        t.repo_manager()
+            .run_zypper("-n ar -ckn", &repos, &rrid())
+            .await;
+
+        assert_eq!(
+            t.last_repo().unwrap().as_ref().unwrap().to_string(),
+            "no repository of this update matches the host's products (unknown)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_no_match_remove_records_done() {
+        let (mut t, _conn) = target_with(system_of(product("SLES", "16.0"), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(product("opensuse", "15.4"), "https://other/repo".to_owned());
+
+        t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
+
+        assert_eq!(t.last_repo(), Some(&Ok(RepoOutcome::Done)));
+    }
+
+    #[tokio::test]
+    async fn an_add_with_no_repos_records_no_repositories() {
+        let (mut t, _conn) = target_with(system_of(product("SLES", "16.0"), &[]), false);
+
+        t.repo_manager()
+            .run_zypper("-n ar -ckn", &BTreeMap::new(), &rrid())
+            .await;
+
+        assert_eq!(t.last_repo(), Some(&Ok(RepoOutcome::NoRepositories)));
+        assert_eq!(
+            t.last_repo().unwrap().as_ref().unwrap().to_string(),
+            "this update has no repository to add"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remove_with_no_repos_records_done() {
+        let (mut t, _conn) = target_with(system_of(product("SLES", "16.0"), &[]), false);
+
+        t.repo_manager()
+            .run_zypper("-n rr", &BTreeMap::new(), &rrid())
+            .await;
+
+        assert_eq!(t.last_repo(), Some(&Ok(RepoOutcome::Done)));
+    }
+
+    #[tokio::test]
+    async fn a_no_match_add_whose_refresh_fails_still_records_no_match() {
+        use mtui_types::hostlog::CommandLog;
+
+        let conn = MockConnection::new("host1.example.com").with_response(
+            "zypper -n ref",
+            CommandLog::new("zypper -n ref", "", "", 1, 0),
+        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(product("SLES", "16.0"), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(product("opensuse", "15.4"), "https://other/repo".to_owned());
+
+        t.repo_manager()
+            .run_zypper("-n ar -ckn", &repos, &rrid())
+            .await;
+
+        // Nothing was added, so the refresh cannot have mattered to this update.
+        assert_eq!(
+            t.last_repo(),
+            Some(&Ok(RepoOutcome::NoMatch {
+                products: BTreeSet::from([product("SLES", "16.0")])
+            }))
+        );
+    }
+
     // --- run_zypper: transactional refresh routing -------------------------
 
     #[tokio::test]
@@ -761,7 +954,7 @@ mod tests {
 
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
 
-        assert_eq!(t.last_repo(), Some(&Ok(())));
+        assert_eq!(t.last_repo(), Some(&Ok(RepoOutcome::Done)));
         assert!(
             handle.commands().iter().any(|c| c == lr_cmd),
             "expected the `lr` probe to run, got {:?}",
@@ -821,7 +1014,7 @@ mod tests {
 
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
 
-        assert_eq!(t.last_repo(), Some(&Ok(())));
+        assert_eq!(t.last_repo(), Some(&Ok(RepoOutcome::Done)));
     }
 
     #[tokio::test]
