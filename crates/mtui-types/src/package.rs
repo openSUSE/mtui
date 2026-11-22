@@ -170,6 +170,11 @@ impl Package {
         Ok(())
     }
 
+    /// Sets the [`required`](Package::required) version directly.
+    pub fn set_required_version(&mut self, ver: RPMVersion) {
+        self.required = Some(ver);
+    }
+
     /// Sets the [`before`](Package::before) version directly, recording a
     /// completed check — `None` is *observed absent*, not *never checked*.
     pub fn set_before_version(&mut self, ver: Option<RPMVersion>) {

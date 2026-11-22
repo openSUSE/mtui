@@ -211,14 +211,108 @@ fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
-/// The active report's seed packages, taken before the connect loop so the
-/// connect futures borrow plain data and stay `Send`.
-struct PackageMeta(Arc<mtui_testreport::HostPackages>);
+/// The active report's seed packages, taken before a `targets_mut()` borrow so
+/// the futures that seed hosts borrow plain data and stay `Send`.
+pub(crate) struct PackageMeta(Arc<mtui_testreport::HostPackages>);
 
 impl PackageMeta {
-    fn of(base: &mtui_testreport::TestReportBase) -> Self {
+    pub(crate) fn of(base: &mtui_testreport::TestReportBase) -> Self {
         Self(Arc::clone(&base.host_packages))
     }
+
+    /// Whether the report carries no package metadata at all, as with no
+    /// report loaded.
+    pub(crate) fn is_empty(&self) -> bool {
+        match &*self.0 {
+            mtui_testreport::HostPackages::Shared(set) => set.is_empty(),
+            mtui_testreport::HostPackages::PerProduct(by_product) => by_product.is_empty(),
+        }
+    }
+
+    /// Points `target`'s tracked packages at the report targets matching its
+    /// current products and returns what changed. Their installed versions are
+    /// left to [`Target::query_versions`].
+    ///
+    /// A package `target` already tracks keeps its recorded versions and takes
+    /// the new required version when the seed carries one. A package no longer
+    /// named is dropped unless it carries a recorded check: that one stays as it
+    /// was, so a product change cannot erase the evidence `export` verifies.
+    pub(crate) fn reseed(&self, target: &mut Target) -> Reseed {
+        let seeded = mtui_testreport::testreport::packages_for_host(&self.0, target.system());
+        let mut tracked: BTreeMap<String, mtui_types::package::Package> = target
+            .packages()
+            .iter()
+            .map(|p| (p.name.clone(), p.clone()))
+            .collect();
+        let mut added = Vec::new();
+        let mut updated = Vec::new();
+        let mut packages: Vec<_> = seeded
+            .into_iter()
+            .map(|pkg| match tracked.remove(&pkg.name) {
+                Some(mut kept) => {
+                    if let Some(required) = pkg.required().cloned()
+                        && kept.required() != Some(&required)
+                    {
+                        updated.push((
+                            kept.name.clone(),
+                            kept.required().cloned(),
+                            required.clone(),
+                        ));
+                        kept.set_required_version(required);
+                    }
+                    kept
+                }
+                None => {
+                    added.push(pkg.name.clone());
+                    pkg
+                }
+            })
+            .collect();
+        let (checked, dropped): (Vec<_>, Vec<_>) = tracked
+            .into_values()
+            .partition(|p| p.before_check().is_checked() || p.after_check().is_checked());
+        let names = |pkgs: &[mtui_types::package::Package]| -> Vec<String> {
+            pkgs.iter().map(|p| p.name.clone()).collect()
+        };
+        let summary = Reseed {
+            added,
+            updated,
+            dropped: names(&dropped),
+            kept: names(&checked),
+        };
+        packages.extend(checked);
+        packages.sort_by(|a, b| a.name.cmp(&b.name));
+        if packages.is_empty() {
+            // #396: tracking nothing means before/after version checks
+            // cannot run and export has nothing to verify — say so
+            // rather than skipping silently.
+            warn!(
+                host = %target.hostname(), system = %target.system(),
+                "report metadata names no packages for this host's products; \
+                 package list not seeded — version checks cannot run"
+            );
+        }
+        target.set_packages(packages);
+        summary
+    }
+}
+
+/// What [`PackageMeta::reseed`] changed in a host's tracked packages, each
+/// list sorted by name.
+#[derive(Debug)]
+pub(crate) struct Reseed {
+    /// Newly tracked, so never checked.
+    pub(crate) added: Vec<String>,
+    /// Still tracked, with a new required version: `(name, old, new)`.
+    pub(crate) updated: Vec<(
+        String,
+        Option<mtui_types::RPMVersion>,
+        mtui_types::RPMVersion,
+    )>,
+    /// No longer tracked.
+    pub(crate) dropped: Vec<String>,
+    /// No longer named by the seed, but still tracked for their recorded checks.
+    pub(crate) kept: Vec<String>,
 }
 
 /// Why a single host could not be attached to its slot.
@@ -1635,28 +1729,10 @@ impl Session {
                 {
                     return Err((host, failure));
                 }
-                // Seed the tracked packages with their metadata `required`
-                // versions and query the current ones, so `list_packages` /
-                // `package_check` / `downgrade` see a populated list.
                 // `connect()` already parsed the system, so its products are
                 // authoritative here.
-                let seeded = mtui_testreport::testreport::packages_for_host(
-                    &package_meta.0,
-                    target.system(),
-                );
-                if seeded.is_empty() {
-                    // #396: tracking nothing means before/after version checks
-                    // cannot run and export has nothing to verify — say so
-                    // rather than skipping silently.
-                    warn!(
-                        host = %host, system = %target.system(),
-                        "report metadata names no packages for this host's products; \
-                         package list not seeded — version checks cannot run"
-                    );
-                } else {
-                    target.set_packages(seeded);
-                    target.query_versions().await;
-                }
+                package_meta.reseed(&mut target);
+                target.query_versions().await;
                 let drift = Self::verify_target_products(store, &target);
                 Ok((target, (host, drift)))
             }
