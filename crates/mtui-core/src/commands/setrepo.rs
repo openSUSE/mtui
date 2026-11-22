@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
-use mtui_hosts::RepoOp;
+use mtui_hosts::{RepoOp, RepoOutcome};
 use mtui_testreport::reports::warn_on_unlock_failures;
 
 use super::support::{add_hosts_arg, complete_fanout};
@@ -115,13 +115,21 @@ impl Command for SetRepo {
             // call never silently succeeds on a repo that failed to apply.
             let mut lines: Vec<String> = Vec::new();
             let mut failed: Vec<String> = Vec::new();
+            let mut untouched: Vec<String> = Vec::new();
+            let mut reported = 0;
             for name in selected.names() {
                 let Some(outcome) = selected.get(&name).and_then(mtui_hosts::Target::last_repo)
                 else {
                     continue;
                 };
+                reported += 1;
                 match outcome {
-                    Ok(()) => lines.push(format!("{name}: ok")),
+                    Ok(outcome) => {
+                        lines.push(format!("{name}: {outcome}"));
+                        if *outcome != RepoOutcome::Done {
+                            untouched.push(name);
+                        }
+                    }
                     Err(reason) => {
                         lines.push(format!("{name}: FAILED ({reason})"));
                         failed.push(name);
@@ -136,13 +144,19 @@ impl Command for SetRepo {
             let unlock_outcomes = selected.unlock_selected(&locked).await;
             // Report a stranded lock like prepare/update do.
             warn_on_unlock_failures("set_repo", &unlock_outcomes);
-            if failed.is_empty() {
-                Ok(())
-            } else {
+            if !failed.is_empty() {
                 Err(CommandError::Other(format!(
                     "set_repo failed on: {}",
                     failed.join(", ")
                 )))
+            } else if !untouched.is_empty() && untouched.len() == reported {
+                // Nothing was added anywhere, which must not read as success.
+                Err(CommandError::Other(format!(
+                    "set_repo added no repository to any selected host ({})",
+                    untouched.join(", ")
+                )))
+            } else {
+                Ok(())
             }
         } else {
             Err(CommandError::Other("No update loaded".to_owned()))
@@ -157,9 +171,10 @@ mod tests {
     use super::*;
     use crate::commands::testkit::{
         empty_session, log_capture, matches, session_with_hosts, session_with_setrepo_outcomes,
-        session_with_targets_and_set_repo,
+        session_with_setrepo_products, session_with_targets_and_set_repo,
     };
     use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH, Target};
+    use mtui_types::SystemProduct;
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
     use std::path::{Path, PathBuf};
@@ -255,6 +270,97 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("h1: ok"), "{out}");
         assert!(out.contains("h2: FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_host_no_repository_matches_is_named_with_its_products() {
+        let (mut session, buf) = session_with_setrepo_products(
+            "SUSE:Maintenance:1:1",
+            &[
+                ("h1", SystemProduct::new("SLES", "16.1", "aarch64")),
+                ("h2", SystemProduct::new("SLES", "16.1", "x86_64")),
+            ],
+            &[SystemProduct::new("SLES", "16.1", "aarch64")],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        SetRepo.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            buf.contents().lines().collect::<Vec<_>>(),
+            vec![
+                "h1: ok",
+                "h2: no repository of this update matches the host's products (SLES-16.1.x86_64)",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn no_repository_matching_any_host_errors() {
+        let (mut session, buf) = session_with_setrepo_products(
+            "SUSE:Maintenance:1:1",
+            &[
+                ("h1", SystemProduct::new("SLES", "16.1", "x86_64")),
+                ("h2", SystemProduct::new("SLES", "16.0", "x86_64")),
+            ],
+            &[SystemProduct::new("SLES", "16.1", "aarch64")],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        let err = SetRepo.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => assert_eq!(
+                msg,
+                "set_repo added no repository to any selected host (h1, h2)"
+            ),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert_eq!(
+            buf.contents().lines().collect::<Vec<_>>(),
+            vec![
+                "h1: no repository of this update matches the host's products (SLES-16.1.x86_64)",
+                "h2: no repository of this update matches the host's products (SLES-16.0.x86_64)",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_update_with_no_repository_adds_nothing_and_errors() {
+        let (mut session, buf) = session_with_setrepo_products(
+            "SUSE:Maintenance:1:1",
+            &[
+                ("h1", SystemProduct::new("SLES", "16.1", "x86_64")),
+                ("h2", SystemProduct::new("SLES", "16.0", "x86_64")),
+            ],
+            &[],
+        );
+        let args = matches(&SetRepo, &["-A"]);
+        let err = SetRepo.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => assert_eq!(
+                msg,
+                "set_repo added no repository to any selected host (h1, h2)"
+            ),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert_eq!(
+            buf.contents().lines().collect::<Vec<_>>(),
+            vec![
+                "h1: this update has no repository to add",
+                "h2: this update has no repository to add",
+            ]
+        );
+    }
+
+    /// A remove has nothing to report for a host no repository matches: there
+    /// was nothing of this update to remove.
+    #[tokio::test]
+    async fn a_remove_on_a_host_no_repository_matches_is_ok() {
+        let (mut session, buf) = session_with_setrepo_products(
+            "SUSE:Maintenance:1:1",
+            &[("h1", SystemProduct::new("SLES", "16.1", "x86_64"))],
+            &[SystemProduct::new("SLES", "16.1", "aarch64")],
+        );
+        let args = matches(&SetRepo, &["-R"]);
+        SetRepo.call(&mut session, &args).await.unwrap();
+        assert_eq!(buf.contents().lines().collect::<Vec<_>>(), vec!["h1: ok"]);
     }
 
     #[tokio::test]

@@ -61,7 +61,7 @@ pub use operation::{
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::parse_system;
-pub use repo_manager::{RepoFailure, RepoManager, RepoOp, SetRepo};
+pub use repo_manager::{RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo};
 pub(crate) use spinner::suspend_async;
 pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinner, suspend};
 
@@ -188,7 +188,7 @@ pub struct Target {
     /// report with no RRID yet, or one of the `SetRepo` stubs in the test tree
     /// that never drives `run_zypper` — and every consumer must treat it as
     /// benign, the same as [`last_upload`](Self::last_upload)'s `None`.
-    last_repo: Option<std::result::Result<(), RepoFailure>>,
+    last_repo: Option<std::result::Result<RepoOutcome, RepoFailure>>,
 }
 
 /// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
@@ -1340,14 +1340,15 @@ impl Target {
     /// The outcome of the last repo change fanned out via
     /// [`RepoManager::run_zypper`], or `None` when none was attempted.
     ///
-    /// Same encoding as [`last_upload`](Self::last_upload). Unlike
+    /// Same `Some`/`None` encoding as [`last_upload`](Self::last_upload), with
+    /// the `Ok` carrying a [`RepoOutcome`]. Unlike
     /// [`lasterr`](Self::lasterr) / [`lastexit`](Self::lastexit) — which report
     /// only the *last* command of the multi-command zypper run and so mask an
     /// earlier `ar`/`rr` failure behind the trailing `ref` — this aggregates the
     /// whole run into a single verdict. The `set_repo` command aggregates these
     /// across the group.
     #[must_use]
-    pub fn last_repo(&self) -> Option<&std::result::Result<(), RepoFailure>> {
+    pub fn last_repo(&self) -> Option<&std::result::Result<RepoOutcome, RepoFailure>> {
         self.last_repo.as_ref()
     }
 
@@ -1356,7 +1357,7 @@ impl Target {
     /// Called by [`RepoManager::run_zypper`] once per host after its multi-command
     /// zypper run, so [`last_repo`](Self::last_repo) reflects the whole run rather
     /// than only the trailing `ref`.
-    fn set_last_repo(&mut self, outcome: std::result::Result<(), RepoFailure>) {
+    fn set_last_repo(&mut self, outcome: std::result::Result<RepoOutcome, RepoFailure>) {
         self.last_repo = Some(outcome);
     }
 
