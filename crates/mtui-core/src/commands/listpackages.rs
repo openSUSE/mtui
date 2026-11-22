@@ -99,7 +99,11 @@ impl Command for ListPackages {
             .unwrap_or_default();
 
         let mut pkgs = session.metadata().get_package_list();
-        pkgs.extend(extra);
+        for name in extra {
+            if !pkgs.contains(&name) {
+                pkgs.push(name);
+            }
+        }
         if pkgs.is_empty() {
             return Err(CommandError::MissingPackages);
         }
@@ -371,6 +375,46 @@ mod tests {
                 .any(|l| l.contains("3.26.4-150600.4.9.1") && l.contains("not installed")),
             "installed package must never be labeled 'not installed': {out}"
         );
+    }
+
+    #[tokio::test]
+    async fn extra_naming_a_report_package_prints_one_row() {
+        use std::collections::HashMap;
+
+        use mtui_types::package::Package;
+        let (mut session, buf) = session_with_hosts(
+            "SUSE:Maintenance:44759:413589",
+            &["h1"],
+            "hplip 3.26.4-150600.4.9.1\n",
+        );
+        {
+            let base = session.metadata_mut().base_mut();
+            let mut per_product = HashMap::new();
+            per_product.insert("hplip".to_owned(), "3.26.4-150600.4.12.1".to_owned());
+            base.packages.insert("15-SP6".to_owned(), per_product);
+
+            let t = session.targets_mut().get_mut("h1").unwrap();
+            let mut pkg = Package::new("hplip");
+            pkg.set_required(Some("3.26.4-150600.4.12.1")).unwrap();
+            t.set_packages(vec![pkg]);
+        }
+        let args = matches(&ListPackages, &["-p", "hplip", "-t", "h1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let row = format!("{:30}:", "hplip");
+        let rows = out.lines().filter(|l| l.starts_with(&row)).count();
+        assert_eq!(rows, 1, "one hplip row per host: {out}");
+    }
+
+    #[tokio::test]
+    async fn repeated_extra_prints_one_row() {
+        let (mut session, buf) = session_host_no_template(&["h1"], "bash 5.1-1\n");
+        let args = matches(&ListPackages, &["-p", "bash", "-p", "bash", "-t", "h1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let row = format!("{:30}:", "bash");
+        let rows = out.lines().filter(|l| l.starts_with(&row)).count();
+        assert_eq!(rows, 1, "one bash row per host: {out}");
     }
 
     #[tokio::test]

@@ -463,6 +463,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `list_packages` with `package` naming a package the report already lists, or
+  naming the same package more than once, no longer prints its row twice per
+  host (#791).
 - Audit records of a call made with no template loaded (`run`, `lock`, `get`,
   `put`, …) name the hosts added with `add_host`; they had `hosts: []`, so a
   fleet pass's `put source=` recorded its fingerprint against no host. A call
