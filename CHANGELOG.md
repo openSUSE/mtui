@@ -461,6 +461,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- An `update` whose peer's patch never ran or could not work out what to patch
+  now reboots the transactional hosts whose patch passed, instead of leaving
+  their new snapshot staged to activate at the next reboot, and names them in
+  `update completed on`. On those failures, and when a peer did not come back
+  from its reboot, the post-update package versions of the hosts it completed
+  on are now recorded for `export`, and the degradation names the hosts it did
+  not complete on instead of saying the update did not complete at all (#809).
 - `report_section_write` and `report_issue_write` declare a type for `value`
   and accept a JSON-encoded string for an object or array target, which some
   clients send for nested values (it was refused with `invalid type: string`).

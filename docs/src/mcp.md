@@ -367,9 +367,14 @@ and nothing is written there.
   `update` that covers a host it excluded (its products compose none of the
   update's packages, or its test update repository failed to register) and a
   peer whose patch never ran, could not work out what to patch, or did not
-  come back from its reboot; a patch that failed its check, or a reboot that
-  did not take on a reachable host, rolls the whole group back and names no
-  host. A cancelled run names none either.
+  come back from its reboot. On those three failures `update` first finishes
+  the peers whose patch passed, as a successful run would: it reboots the
+  transactional ones and records the post-update package versions of every
+  host it completed on. Its degradation then names the hosts it did not
+  complete on and keeps the test update repositories configured on every host
+  it ran on. A patch that failed its check, or a reboot that did not take on a
+  reachable host, rolls the whole group back and names no host. A cancelled
+  run names none either.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, every candidate claimed by
