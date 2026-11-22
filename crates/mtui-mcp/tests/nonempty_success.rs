@@ -67,6 +67,11 @@ async fn session_with_hosts() -> (Arc<McpSession>, TempDir) {
                 .into_iter()
                 .collect(),
         );
+        // Matching the hosts' product, or the repository add reaches no host.
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            "https://example/repo".to_owned(),
+        );
         let targets: Vec<Target> = HOSTS.iter().map(|h| sles_target(h)).collect();
         report.base_mut().targets = HostsGroup::new(targets, false);
         guard.templates.add(Box::new(report));

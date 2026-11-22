@@ -338,11 +338,20 @@ and nothing is written there.
   list, so it gets the same named refusal. `update` excludes such a host from
   its patch, scopes its own lock/repository/package-check to the hosts that do
   compose it, and reports a failure naming it, instead of patching a host its
-  own prepare established no baseline on.
+  own prepare established no baseline on. On every report kind, `update` also
+  excludes by name, before anything runs on it, a host the update's
+  repositories do not reach (`no repository of this update matches the host's
+  products (…); it was excluded from the update`, `its products could not be
+  read; …` for a host whose system was never read, or `this update has no
+  repository to add; …` when the update has none): the patch would find
+  nothing to install there and pass. Neither exclusion keeps the automatic
+  rollback off a host: when a patched peer fails its check, the rollback runs
+  on the whole group.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a host excluded because its test update
   repository genuinely failed to register (its partial add is undone and its
-  lock released before the patch reaches its peers), a repository refresh that
+  lock released before the patch reaches its peers), a host excluded because
+  the update's repositories do not reach it, a repository refresh that
   may have left stale metadata on a host that still gets patched, a prepare
   host failure it continues past, a failed `--newpackage` step, a failed
   update leaving the test repositories configured, a failed automatic

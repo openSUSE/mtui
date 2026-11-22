@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use mtui_hosts::{
     Command, HostError, HostsGroup, InstallOperation, LockOutcome, Operation, OperationGroup,
-    RebootFailure, RebootFailureCause, RepoFailure, RepoOp, SetRepo, UninstallOperation,
+    RebootFailure, RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo,
+    UninstallOperation,
 };
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
@@ -106,15 +107,20 @@ pub enum UpdateFailure {
     /// broken awk), not the packages. A run mixing one of these with a `-1`
     /// host is labelled [`NotRun`](Self::NotRun).
     ProbeFailed(UpdateError),
-    /// The pre-update `prepare` refused one or more hosts because their
-    /// products compose none of the update's packages, so no package baseline
-    /// was established on them and the patch left them out. The hosts that do
-    /// compose it were patched normally; when every enabled host was refused,
-    /// nothing was dispatched at all.
+    /// The patch left out one or more hosts the update does not cover: the
+    /// pre-update `prepare` refused them because their products compose none
+    /// of the update's packages, so no package baseline was established on
+    /// them, or the update's repositories would not reach them
+    /// ([`RepoOutcome::reach`]), so the updater would find nothing to
+    /// patch there and pass. The other hosts were patched normally; when every
+    /// enabled host was left out, nothing was dispatched at all.
     ///
     /// Skips the rollback: an excluded host received no patch to undo, and the
-    /// group-wide downgrade would revert the peers that updated correctly.
-    Uncomposed(UpdateError),
+    /// group-wide downgrade would revert the peers that updated correctly. A
+    /// patched peer's [`Check`](Self::Check) or
+    /// [`RebootNotTaken`](Self::RebootNotTaken) failure outranks it, and that
+    /// rollback reaches the excluded hosts too.
+    Excluded(UpdateError),
     /// One or more hosts' test update repository genuinely failed to
     /// register (a verified `zypper ar` failure, a failed `rr`, or the
     /// unknown-cmd safeguard) after the `RepoOp::Add` fan-out. Each such host
@@ -123,7 +129,7 @@ pub enum UpdateFailure {
     /// nothing was dispatched at all.
     ///
     /// Skips the rollback for the same reason as
-    /// [`Uncomposed`](Self::Uncomposed): an excluded host received no patch,
+    /// [`Excluded`](Self::Excluded): an excluded host received no patch,
     /// and the group-wide downgrade would revert the peers that did.
     RepoAdd(UpdateError),
     /// The operation lock could not be taken on every eligible host: another
@@ -219,7 +225,7 @@ where
             error!(error = %e, "update failed: could not determine what to patch");
             Err(e)
         }
-        Err(UpdateFailure::Uncomposed(e)) => {
+        Err(UpdateFailure::Excluded(e)) => {
             error!(error = %e, "update did not run on every host");
             Err(e)
         }
@@ -588,6 +594,29 @@ fn repo_add_failures(
         }
     }
     (blocking, degraded)
+}
+
+/// One exclusion per enabled host an add of `report`'s repositories would not
+/// reach, saying why.
+///
+/// Known before the add: it applies the one rule `run_zypper` adds and records
+/// its outcome by ([`RepoOutcome::reach`]) to the same map and products. A report
+/// that does not expose its repositories excludes no host.
+fn repo_unreached(targets: &HostsGroup, report: &dyn SetRepo) -> Vec<UpdateError> {
+    let Some(repos) = report.repositories() else {
+        return Vec::new();
+    };
+    targets
+        .targets()
+        .filter(|t| t.state() == mtui_types::TargetState::Enabled)
+        .filter_map(|t| {
+            let outcome = RepoOutcome::reach(repos, &t.system().flatten()).err()?;
+            Some(UpdateError::new(
+                format!("{outcome}; it was excluded from the update"),
+                t.hostname().to_owned(),
+            ))
+        })
+        .collect()
 }
 
 /// Reads every in-scope host's [`Target::last_repo`](mtui_hosts::Target::last_repo)
@@ -2119,7 +2148,7 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 /// recognised-but-non-fatal output sections for the command layer.
 ///
 /// A run that excluded hosts but patched the rest fails with
-/// [`UpdateFailure::Uncomposed`] or [`UpdateFailure::RepoAdd`], whose error
+/// [`UpdateFailure::Excluded`] or [`UpdateFailure::RepoAdd`], whose error
 /// lists the patched hosts in [`UpdateError::completed`].
 // Grouping these into a struct would only obscure the call site.
 #[allow(clippy::too_many_arguments)]
@@ -2143,6 +2172,37 @@ pub async fn perform_update(
         )));
     }
 
+    // The updater finds no patch on a host the add does not reach and exits
+    // 0, which the check would pass as an update that installed nothing. That
+    // is known without I/O, so such a host is left out before anything runs.
+    let mut excluded = repo_unreached(targets, report);
+    let unreached: BTreeSet<String> = excluded.iter().filter_map(|e| e.host.clone()).collect();
+    for e in &excluded {
+        diagnostics.push(Diagnostic::degradation(e.to_string()));
+    }
+    if !unreached.is_empty() {
+        warn!(
+            hosts = %unreached.iter().cloned().collect::<Vec<_>>().join(", "),
+            "the update's repositories do not reach these hosts; excluding them from the update"
+        );
+        if targets
+            .targets()
+            .filter(|t| t.state() == mtui_types::TargetState::Enabled)
+            .all(|t| unreached.contains(t.hostname()))
+        {
+            return aggregate_failures("update", excluded).map_err(UpdateFailure::Excluded);
+        }
+    }
+    // `None` (the whole group) unless a host is left out, so the prepare keeps
+    // its group-wide lock in the common case.
+    let reached: Option<BTreeSet<String>> = (!unreached.is_empty()).then(|| {
+        targets
+            .names()
+            .into_iter()
+            .filter(|host| !unreached.contains(host))
+            .collect()
+    });
+
     let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
     if !noprepare {
         // Default flags (remove-repo prepare). A prepare that could not run
@@ -2152,7 +2212,7 @@ pub async fn perform_update(
         match perform_prepare_classified(
             targets,
             report,
-            None,
+            reached.as_ref(),
             packages,
             false,
             false,
@@ -2181,7 +2241,7 @@ pub async fn perform_update(
     // premise the refusal denied. It is dropped from the fan-out below and
     // named in the verdict — a skip the group's success spoke for is #396
     // itself, one layer up.
-    let mut excluded: Vec<UpdateError> = uncomposed
+    let refused: Vec<UpdateError> = uncomposed
         .iter()
         .map(|(host, products)| {
             UpdateError::new(
@@ -2194,20 +2254,21 @@ pub async fn perform_update(
         })
         .collect();
     // Host-attributed, pushed here so it reaches an MCP caller on both the
-    // success and the failure path — not only via the final `Uncomposed`
+    // success and the failure path — not only via the final `Excluded`
     // return, which a later failure could otherwise win over (#543).
-    for e in &excluded {
+    for e in &refused {
         diagnostics.push(Diagnostic::degradation(e.to_string()));
     }
+    excluded.extend(refused);
     if !uncomposed.is_empty()
         && targets
             .targets()
             .filter(|t| t.state() == mtui_types::TargetState::Enabled)
-            .all(|t| uncomposed.contains_key(t.hostname()))
+            .all(|t| uncomposed.contains_key(t.hostname()) || unreached.contains(t.hostname()))
     {
         // Nothing left to patch, and nothing locked or added yet. `excluded` is
         // non-empty here, so this is always the `Err` arm.
-        return aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed);
+        return aggregate_failures("update", excluded).map_err(UpdateFailure::Excluded);
     }
 
     // The set the rest of the flow operates on, fixed once here rather than
@@ -2224,7 +2285,7 @@ pub async fn perform_update(
     let mut eligible: BTreeSet<String> = targets
         .names()
         .into_iter()
-        .filter(|host| !uncomposed.contains_key(host))
+        .filter(|host| !uncomposed.contains_key(host) && !unreached.contains(host))
         .collect();
 
     // Resolve the updater before any fan-out: a host with no updater doer
@@ -2392,12 +2453,12 @@ pub async fn perform_update(
     targets.package_check_selected(true, &eligible).await;
 
     remove_test_repos(targets, &eligible, report, diagnostics).await;
-    // A repo-add failure outranks a composition refusal in the label; both
-    // kinds of message survive in `excluded`'s joined detail either way.
+    // A repo-add failure outranks the other exclusions in the label; every
+    // kind of message survives in `excluded`'s joined detail either way.
     let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
         UpdateFailure::RepoAdd
     } else {
-        UpdateFailure::Uncomposed
+        UpdateFailure::Excluded
     };
     // Every enabled host still eligible here was patched and passed its checks;
     // a disabled one ran nothing, yet its empty exit-0 snapshot passes them.
@@ -2924,7 +2985,7 @@ mod tests {
         // `lr` probe confirms the repo is genuinely absent (exit 3), but the
         // trailing `ref` succeeds — the exact masking `Target::last_repo`
         // exists to see through.
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo \
                       'issue-SLES:15.5:p=42:7'";
         let lr_cmd = "zypper -n lr 'issue-SLES:15.5:p=42:7'";
@@ -3892,6 +3953,10 @@ mod tests {
         )]
         .into_iter()
         .collect();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            "https://example/micro".to_owned(),
+        );
 
         let _ = perform_update(
             &mut group,
@@ -4022,7 +4087,7 @@ mod tests {
             "must not name the excluded host: {roll_call}"
         );
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "an excluded host is a failed update, not a silent skip: {res:?}"
         );
     }
@@ -4085,7 +4150,7 @@ mod tests {
             h2.commands()
         );
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "the exclusion is the verdict, not a check failure it never earned: {res:?}"
         );
     }
@@ -4130,7 +4195,7 @@ mod tests {
         .await
         .expect_err("an update that skipped a host must not report success");
 
-        let UpdateFailure::Uncomposed(e) = err else {
+        let UpdateFailure::Excluded(e) = err else {
             panic!("the exclusion is its own class, not the noisy one: {err:?}");
         };
         assert_eq!(e.host.as_deref(), Some("h2"), "err: {e:?}");
@@ -4150,7 +4215,7 @@ mod tests {
         // prepare-`HostReported` warning it rides in on must reach the
         // returned `diagnostics`, not only `tracing::warn!` — an MCP caller
         // never sees the log, and a later failure could otherwise win over the
-        // final `Uncomposed` return.
+        // final `Excluded` return.
         let (t1, _h1) = composed_host(
             "h1",
             SystemProduct::new("SL-Micro", "6.1", "x86_64"),
@@ -4231,7 +4296,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "res: {res:?}"
         );
         assert!(
@@ -4257,6 +4322,10 @@ mod tests {
         let (t1, _h1) = composed_host("h1", x86.clone(), BTreeSet::new());
         let (t2, _h2) = composed_host("h2", arm.clone(), BTreeSet::new());
         let mut report = report_with_rrid();
+        report.base_mut().update_repos.extend([
+            (x86.clone(), "https://example/micro-x86_64".to_owned()),
+            (arm.clone(), "https://example/micro-aarch64".to_owned()),
+        ]);
         report.base_mut().composed = [(x86, names(h1_pkgs)), (arm, names(h2_pkgs))]
             .into_iter()
             .collect();
@@ -4295,8 +4364,8 @@ mod tests {
             &mut Vec::new(),
         )
         .await;
-        let Err(UpdateFailure::Uncomposed(e)) = res else {
-            panic!("every host refused is Uncomposed: {res:?}");
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("every host refused is Excluded: {res:?}");
         };
         assert!(e.host.is_none(), "arms the case: no single host: {e:?}");
         assert!(e.completed().is_empty(), "{e:?}");
@@ -4313,7 +4382,7 @@ mod tests {
     async fn an_update_whose_patch_failed_its_check_completed_on_none() {
         // h2 is excluded by its failed repo add and h1's patch fails its check:
         // the rollback reverts h1, so no host is done.
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let packages = report.get_package_list();
         let group = || {
             let (h1, _, _) = sles_target_with_patch_exit("h1", &packages, 104);
@@ -4458,7 +4527,7 @@ mod tests {
         .expect_err("h2 was excluded");
 
         assert!(h3.commands().is_empty(), "{:?}", h3.commands());
-        let UpdateFailure::Uncomposed(e) = err else {
+        let UpdateFailure::Excluded(e) = err else {
             panic!("h2's exclusion is the verdict: {err:?}");
         };
         assert_eq!(e.completed(), ["h1"], "{e:?}");
@@ -4504,7 +4573,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "res: {res:?}"
         );
         (repo, logs)
@@ -4762,7 +4831,7 @@ mod tests {
             h1.commands()
         );
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "the excluded host's contention is not the group's verdict: {res:?}"
         );
         // The foreign line is still there, so nothing unlocked a host this run
@@ -4836,7 +4905,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "res: {res:?}"
         );
         // Not the op sequence: the repo fan-out runs *before* the scan, so h1
@@ -4904,7 +4973,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "the excluded host's contention is not the group's verdict: {res:?}"
         );
         assert_eq!(
@@ -4991,7 +5060,7 @@ mod tests {
             h2.commands()
         );
         assert!(
-            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            matches!(res, Err(UpdateFailure::Excluded(_))),
             "an updater the update never needed must not fail the group: {res:?}"
         );
     }
@@ -5888,7 +5957,8 @@ mod tests {
             .with_response(
                 probe,
                 CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 0, 0),
-            );
+            )
+            .with_response(SLES_REPO_ADD, CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -6517,17 +6587,10 @@ mod tests {
 
     // --- perform_update ----------------------------------------------------
 
-    /// Builds an SLES report with a loaded RRID and one metadata package.
+    /// Builds an SLES report seeded by [`seed_rrid_and_package`].
     fn report_with_rrid() -> SlReport {
         let mut report = SlReport::new(Config::default());
-        report.base_mut().rrid =
-            Some(mtui_types::RequestReviewID::parse("SUSE:Maintenance:42:7").unwrap());
-        report.base_mut().packages.insert(
-            "SLES:15".to_owned(),
-            [("pkg-a".to_owned(), "2.0-1".to_owned())]
-                .into_iter()
-                .collect(),
-        );
+        seed_rrid_and_package(&mut report);
         report
     }
 
@@ -6538,8 +6601,7 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        // noprepare=true keeps the flow to update + checks; the report's real
-        // `set_repo` no-ops with an empty `update_repos` map.
+        // noprepare=true keeps the flow to update + checks.
         let res = perform_update(
             &mut group,
             &report,
@@ -8287,7 +8349,8 @@ mod tests {
             .with_response(
                 probe,
                 CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 0, 0),
-            );
+            )
+            .with_response(SLES_REPO_ADD, CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -8398,7 +8461,18 @@ mod tests {
         // No probe override this time: `with_default`'s exit 104 applies to
         // every command including the probe, so the probe is dead and
         // `perform_downgrade` itself fails.
-        let (t, _handle) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 104, 0))
+            .with_response(SLES_REPO_ADD, CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
         let mut group = HostsGroup::new(vec![t], false);
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
@@ -8810,7 +8884,7 @@ mod tests {
             false,
         );
         let mut group = HostsGroup::new(vec![t], false);
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let mut diagnostics = Vec::new();
 
         remove_test_repos(&mut group, &names(&["h1"]), &report, &mut diagnostics).await;
@@ -9437,8 +9511,10 @@ mod tests {
     // --- report parity: PI and OBS inherit the same flows ------------------
 
     /// Seeds a report's base with a loaded RRID + one metadata package so
-    /// `perform_update_from_report` reads a real `$repa`/package list. Works for
-    /// any concrete report via its `base_mut()`.
+    /// `perform_update_from_report` reads a real `$repa`/package list, and a
+    /// test repository for each of the products the update tests' hosts carry:
+    /// `SLES 15.5 x86_64` ([`sles_target`]) and `SL-Micro 6.0 x86_64` (the
+    /// transactional ones). Works for any concrete report via its `base_mut()`.
     fn seed_rrid_and_package(report: &mut dyn TestReport) {
         report.base_mut().rrid =
             Some(mtui_types::RequestReviewID::parse("SUSE:Maintenance:42:7").unwrap());
@@ -9448,7 +9524,23 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
+        report.base_mut().update_repos.extend([
+            (
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                "https://example/repo".to_owned(),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                "https://example/micro".to_owned(),
+            ),
+        ]);
     }
+
+    /// The SL report's add of [`seed_rrid_and_package`]'s `SLES 15.5`
+    /// repository, for a host scripted to fail every other command that must
+    /// still reach the patch.
+    const SLES_REPO_ADD: &str = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' \
+                                 https://example/repo 'issue-SLES:15.5:p=42:7'";
 
     /// A cancel observed at the entry gate stops before any host work and
     /// reports a cancellation, not a failure.
@@ -9690,24 +9782,12 @@ mod tests {
         (t, handle)
     }
 
-    /// [`report_with_rrid`] plus a real `update_repos` entry for `SLES 15.5`,
-    /// so `set_repo` drives an actual `zypper ar`/`rr` instead of the no-op
-    /// empty-map path every other `perform_update` test relies on.
-    fn report_with_repo() -> SlReport {
-        let mut report = report_with_rrid();
-        report.base_mut().update_repos.insert(
-            SystemProduct::new("SLES", "15.5", "x86_64"),
-            "https://example/repo".to_owned(),
-        );
-        report
-    }
-
     #[tokio::test]
     async fn perform_update_excludes_a_host_whose_repo_add_failed() {
         let (h1, h1_handle) = sles_target("h1", "");
         let (h2, h2_handle) = sles_target_all_commands_fail("h2");
         let mut group = HostsGroup::new(vec![h1, h2], false);
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let packages = report.get_package_list();
         let mut diagnostics = Vec::new();
 
@@ -9759,7 +9839,7 @@ mod tests {
         // The documented `update --noprepare` retry: `ar` fails (already
         // exists) but the `lr` probe confirms the repo IS registered, so the
         // host must be patched normally, with no degradation.
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo 'issue-SLES:15.5:p=42:7'";
         let lr_cmd = "zypper -n lr 'issue-SLES:15.5:p=42:7'";
         let conn = MockConnection::new("h1")
@@ -9819,7 +9899,7 @@ mod tests {
         // `ar` succeeds but the trailing `ref` fails: a degradation, not an
         // exclusion (decision 4 — an unrelated broken third-party repo must
         // not cost the host its patch).
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let conn = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_response(
@@ -9885,7 +9965,7 @@ mod tests {
         let (h1, h1_handle) = sles_target_all_commands_fail("h1");
         let (h2, h2_handle) = sles_target_all_commands_fail("h2");
         let mut group = HostsGroup::new(vec![h1, h2], false);
-        let report = report_with_repo();
+        let report = report_with_rrid();
         let packages = report.get_package_list();
         let mut diagnostics = Vec::new();
 
@@ -9926,5 +10006,512 @@ mod tests {
                 "every lock must be released"
             );
         }
+    }
+
+    // --- perform_update: the update's repositories do not reach the host ---
+
+    /// [`sles_target`] on `SLES 15.5 aarch64`, which [`report_with_rrid`]'s
+    /// x86_64-only repository map does not match.
+    fn sles_aarch64_target(hostname: &str, stdout: &str) -> (Target, MockConnection) {
+        let (mut t, handle) = sles_target(hostname, stdout);
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "aarch64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle)
+    }
+
+    /// The `zypper` prepare installs `handle` received.
+    fn zypper_prepares(handle: &MockConnection) -> Vec<String> {
+        handle
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with("zypper -n in -y -l"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn perform_update_excludes_a_host_no_repository_matches() {
+        // No composition, as on a classic OBS report: only the repository map
+        // can tell that h2 draws nothing from the update.
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); it was excluded from the update"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|d| d.text.clone())
+                .collect::<Vec<_>>(),
+            vec![e.to_string()]
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "nothing may run on h2: {:?}",
+            h2_handle.commands()
+        );
+        assert_no_lock_taken(&h2_handle, "h2");
+        assert!(
+            h2_handle.file_contents(HISTORY_LOG).is_none(),
+            "h2 must get no update history row"
+        );
+
+        let h1_cmds = h1_handle.commands();
+        assert!(
+            h1_cmds
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {h1_cmds:?}"
+        );
+        assert!(
+            h1_cmds.iter().any(|c| c.contains(" rr ")),
+            "h1's test repository must be removed after its update: {h1_cmds:?}"
+        );
+        assert!(
+            h1_handle.file_contents(HISTORY_LOG).is_some(),
+            "h1's update must be recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_host_no_repository_matches_stops_before_anything_runs() {
+        let (h1, h1_handle) = sles_aarch64_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h1 and h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "update failed on h1, h2 (h1: no repository of this update matches the host's \
+             products (SLES-15.5.aarch64); it was excluded from the update; h2: no repository \
+             of this update matches the host's products (SLES-15.5.aarch64); it was excluded \
+             from the update)"
+        );
+        for (handle, host) in [(&h1_handle, "h1"), (&h2_handle, "h2")] {
+            assert!(
+                handle.commands().is_empty(),
+                "nothing may run on {host}, the prepare included: {:?}",
+                handle.commands()
+            );
+            assert_no_lock_taken(handle, host);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_update_with_no_repository_excludes_every_host() {
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.clear();
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h1 and h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "update failed on h1, h2 (h1: this update has no repository to add; it was \
+             excluded from the update; h2: this update has no repository to add; it was \
+             excluded from the update)"
+        );
+        for (handle, host) in [(&h1_handle, "h1"), (&h2_handle, "h2")] {
+            assert!(
+                handle.commands().is_empty(),
+                "nothing may run on {host}: {:?}",
+                handle.commands()
+            );
+            assert_no_lock_taken(handle, host);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_with_no_repository_matching_any_host_does_not_roll_back() {
+        // A resolvable version line, so a rollback that did run renders an
+        // `--oldpackage` command.
+        let report = report_with_rrid();
+        let (h1, h1_handle) = sles_aarch64_target("h1", "pkg-a = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![h1], false);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("a host no repository matches must not report an update");
+
+        assert_eq!(
+            err.to_string(),
+            "h1: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); it was excluded from the update"
+        );
+        assert!(
+            !h1_handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("--oldpackage")),
+            "nothing was patched, so nothing may be rolled back: {:?}",
+            h1_handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn obs_and_pi_reports_leave_out_a_host_no_repository_matches() {
+        use crate::reports::{ObsReport, PiReport};
+        let mut obs = ObsReport::new(Config::default());
+        seed_rrid_and_package(&mut obs);
+        let mut pi = PiReport::new(Config::default());
+        seed_rrid_and_package(&mut pi);
+
+        let mut got = Vec::new();
+        for report in [&obs as &(dyn TestReport + Sync), &pi] {
+            let (h1, h1_handle) = sles_aarch64_target("h1", "");
+            let mut group = HostsGroup::new(vec![h1], false);
+            let res = report
+                .perform_update(&mut group, true, false, &mut Vec::new())
+                .await;
+            got.push((res.map_err(|e| e.to_string()), h1_handle.commands()));
+        }
+
+        let excluded = "h1: no repository of this update matches the host's products \
+                        (SLES-15.5.aarch64); it was excluded from the update"
+            .to_owned();
+        assert_eq!(
+            got,
+            vec![
+                (Err(excluded.clone()), Vec::new()),
+                (Err(excluded), Vec::new())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_embedded_prepare_skips_a_host_no_repository_matches() {
+        // The composition names x86_64 only, so the prepare would keep h2's
+        // full list: only the repository map leaves h2 out.
+        let mut report = report_with_rrid();
+        report.base_mut().composed = HashMap::from([(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::from(["pkg-a".to_owned()]),
+        )]);
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); it was excluded from the update"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "h2 must get neither the prepare nor the patch: {:?}",
+            h2_handle.commands()
+        );
+        assert!(
+            h2_handle.file_contents(HISTORY_LOG).is_none(),
+            "h2 must get no prepare row"
+        );
+
+        let h1_cmds = h1_handle.commands();
+        let h1_installs = zypper_prepares(&h1_handle);
+        assert!(
+            h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
+            "h1 must still be prepared: {h1_cmds:?}"
+        );
+        assert!(
+            h1_cmds
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {h1_cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreached_host_without_an_updater_does_not_abort_its_peers() {
+        // A host whose system was never read resolves no updater, which fails
+        // the whole group's update when the host is not left out first.
+        let (h1, h1_handle) = sles_target("h1", "");
+        let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let h2_handle = conn.clone();
+        let h2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "h2: its products could not be read; it was excluded from the update"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+        assert!(
+            h1_handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {:?}",
+            h1_handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreached_host_with_a_foreign_lock_does_not_block_its_peers() {
+        const FOREIGN: &[u8] = b"1700000000:alice:4242:busy";
+        let (h1, h1_handle) = sles_target("h1", "");
+        let conn = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, FOREIGN.to_vec());
+        let h2_handle = conn.clone();
+        let mut h2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        h2.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "aarch64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h2, not a lock refusal, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); it was excluded from the update"
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+        assert_eq!(
+            h2_handle.file_contents(TARGET_LOCK_PATH).as_deref(),
+            Some(FOREIGN),
+            "h2's lock is not mtui's to touch"
+        );
+        assert!(
+            h1_handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {:?}",
+            h1_handle.commands()
+        );
+    }
+
+    /// The hosts [`repo_unreached`] leaves out are exactly those the add
+    /// registers no repository on, for the reason the add records.
+    #[tokio::test]
+    async fn repo_unreached_agrees_with_what_the_add_does() {
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let conn = MockConnection::new("h3").with_default(CommandLog::new("", "", "", 0, 0));
+        let h3_handle = conn.clone();
+        let h3 = Target::with_connection("h3", TargetState::Enabled, Box::new(conn));
+        let handles = [("h1", h1_handle), ("h2", h2_handle), ("h3", h3_handle)];
+        let mut group = HostsGroup::new(vec![h1, h2, h3], false);
+        let mut no_repository = report_with_rrid();
+        no_repository.base_mut().update_repos.clear();
+
+        for report in [report_with_rrid(), no_repository] {
+            let unreached = repo_unreached(&group, &report);
+            let predicted: Vec<String> = unreached.iter().map(ToString::to_string).collect();
+            let left_out: Vec<&str> = unreached.iter().filter_map(|e| e.host.as_deref()).collect();
+            let before: Vec<usize> = handles.iter().map(|(_, h)| h.commands().len()).collect();
+
+            group.fanout_set_repo(RepoOp::Add, &report).await;
+
+            let added_nothing: Vec<&str> = handles
+                .iter()
+                .zip(&before)
+                .filter(|((_, h), n)| {
+                    !h.commands()[**n..]
+                        .iter()
+                        .any(|c| c.starts_with("zypper -n ar"))
+                })
+                .map(|((host, _), _)| *host)
+                .collect();
+            assert_eq!(left_out, added_nothing);
+            let recorded: Vec<String> = group
+                .targets()
+                .filter_map(|t| match t.last_repo() {
+                    Some(Ok(outcome)) if *outcome != RepoOutcome::Done => Some(format!(
+                        "{}: {outcome}; it was excluded from the update",
+                        t.hostname()
+                    )),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(predicted, recorded);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_newpackage_installs_nothing_on_a_host_no_repository_matches() {
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            true,
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("expected an Excluded failure naming h2, got {res:?}");
+        };
+        assert_eq!(
+            e.to_string(),
+            "h2: no repository of this update matches the host's products \
+             (SLES-15.5.aarch64); it was excluded from the update"
+        );
+        // No "newpackage prepare after update failed": that prepare never
+        // reached h2.
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|d| d.text.clone())
+                .collect::<Vec<_>>(),
+            vec![e.to_string()]
+        );
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+
+        let h1_cmds = h1_handle.commands();
+        assert!(
+            h1_cmds
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {h1_cmds:?}"
+        );
+        let h1_installs = zypper_prepares(&h1_handle);
+        assert!(
+            h1_installs.len() == 1 && h1_installs[0].ends_with(" pkg-a"),
+            "h1 must get the newpackage prepare: {h1_cmds:?}"
+        );
     }
 }

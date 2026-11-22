@@ -482,6 +482,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tracked packages `update` has yet to check. A host whose products did not
   change keeps its packages as they were, as does any host when the report
   carries no package metadata (#802).
+- `update` no longer reports success on a host the update's repositories do
+  not reach, where nothing was installed: a host whose products match none of
+  them, a host whose products could not be read, or every host of an update
+  that has none. Such a host is left out before anything runs on it (no
+  prepare, lock, package check, repository change or patch), and the update
+  fails naming it: `<host>: no repository of this update matches the host's
+  products (…); it was excluded from the update`, `<host>: its products could
+  not be read; it was excluded from the update`, or `<host>: this update has
+  no repository to add; it was excluded from the update`. `set_repo --add`
+  names an unread host the same way (`<host>: its products could not be
+  read`). The other hosts are updated as before; if one of them then fails its
+  check, the automatic rollback still runs on every host, the excluded ones
+  included (#800).
 - `set_repo --add` no longer answers `<host>: ok` where it added nothing. For a
   host whose products match none of the update's repositories it prints
   `<host>: no repository of this update matches the host's products (…)`
