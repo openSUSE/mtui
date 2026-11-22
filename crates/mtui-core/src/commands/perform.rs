@@ -236,10 +236,14 @@ pub(super) async fn drive(
                 .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
                 .await;
             session.restore_split_targets(selected, remainder);
-            if update_result.is_ok() {
-                // Verdict before the unbounded diagnostics: `SharedBuf` keeps
-                // the head, so a trailing line is what `max_output_bytes` eats.
-                confirm_update(session, &hosts_label, &diagnostics);
+            // Verdict before the unbounded diagnostics: `SharedBuf` keeps the
+            // head, so a trailing line is what `max_output_bytes` eats.
+            match &update_result {
+                Ok(()) => confirm_update(session, &hosts_label, &diagnostics),
+                Err(e) if !e.completed().is_empty() => {
+                    confirm_update(session, &e.completed().join(", "), &diagnostics);
+                }
+                Err(_) => {}
             }
             render_diagnostics(session, &diagnostics);
             // A cancellation checkpoint surfaces as an ordinary `UpdateError`;
@@ -402,7 +406,8 @@ mod tests {
     use crate::commands::Update;
     use crate::commands::testkit::{
         matches, session_with_cancelled_update, session_with_degraded_install,
-        session_with_degraded_update, session_with_hosts, session_with_update_diagnostics,
+        session_with_degraded_update, session_with_hosts, session_with_partial_update,
+        session_with_update_diagnostics,
     };
 
     const RRID: &str = "SUSE:Maintenance:1:1";
@@ -629,5 +634,33 @@ mod tests {
             "{:?}",
             buf.contents()
         );
+    }
+
+    /// A partial update still fails for the host it excluded, but its head line
+    /// names the hosts it completed on — not the whole selection.
+    #[tokio::test]
+    async fn a_partial_update_confirms_only_the_hosts_it_completed_on() {
+        let (mut session, buf) = session_with_partial_update(RRID, &["h1", "h2"]);
+        let err = drive(&mut session, &no_args(), update_op())
+            .await
+            .expect_err("the excluded host still fails the update");
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.starts_with("h2: ")),
+            "got: {err:?}"
+        );
+        let out = buf.contents();
+        let mut lines = out.lines();
+        assert_eq!(
+            lines.next().unwrap_or_default(),
+            "update completed on h1: the patch passed its checks, with 1 degradation reported below",
+            "got: {out:?}"
+        );
+        assert!(
+            lines
+                .next()
+                .is_some_and(|l| l.starts_with("h2: ") && l.ends_with("excluded from the update")),
+            "the exclusion follows the verdict: {out:?}"
+        );
+        assert_eq!(out.matches("completed").count(), 1, "{out:?}");
     }
 }

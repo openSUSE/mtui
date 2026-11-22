@@ -755,6 +755,7 @@ async fn perform_operation_with(
             host: Some(host),
             cancelled: failure.cancelled,
             probe_failed: false,
+            completed: Vec::new(),
         })
         .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
@@ -2107,6 +2108,10 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 /// `noprepare` skips the initial prepare; `newpackage` runs a testing prepare
 /// after the update. `diagnostics` collects the update check's
 /// recognised-but-non-fatal output sections for the command layer.
+///
+/// A run that excluded hosts but patched the rest fails with
+/// [`UpdateFailure::Uncomposed`] or [`UpdateFailure::RepoAdd`], whose error
+/// lists the patched hosts in [`UpdateError::completed`].
 // Grouping these into a struct would only obscure the call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
@@ -2379,7 +2384,17 @@ pub async fn perform_update(
     } else {
         UpdateFailure::Uncomposed
     };
-    aggregate_failures("update", excluded).map_err(wrap)
+    // Every enabled host still eligible here was patched and passed its checks;
+    // a disabled one ran nothing, yet its empty exit-0 snapshot passes them.
+    let completed: Vec<String> = eligible
+        .into_iter()
+        .filter(|h| {
+            targets
+                .get(h)
+                .is_some_and(|t| t.state() == mtui_types::TargetState::Enabled)
+        })
+        .collect();
+    aggregate_failures("update", excluded).map_err(|e| wrap(e.with_completed(completed)))
 }
 
 /// Removes the test update repositories after a successful update.
@@ -4110,6 +4125,8 @@ mod tests {
             "reason: {}",
             e.reason
         );
+        // …and names the host that needs no second run.
+        assert_eq!(e.completed(), ["h1"], "err: {e:?}");
     }
 
     #[tokio::test]
@@ -4214,6 +4231,222 @@ mod tests {
             vec![RepoOp::Remove],
             "only the prepare's repo removal may have run"
         );
+    }
+
+    /// An [`SlReport`] (package list `pkg-a`) whose composition gives h1's
+    /// SL-Micro 6.1 x86_64 `h1_pkgs` and h2's aarch64 `h2_pkgs`, plus the
+    /// two-host group.
+    fn sl_micro_pair(h1_pkgs: &[&str], h2_pkgs: &[&str]) -> (SlReport, HostsGroup) {
+        let x86 = SystemProduct::new("SL-Micro", "6.1", "x86_64");
+        let arm = SystemProduct::new("SL-Micro", "6.1", "aarch64");
+        let (t1, _h1) = composed_host("h1", x86.clone(), BTreeSet::new());
+        let (t2, _h2) = composed_host("h2", arm.clone(), BTreeSet::new());
+        let mut report = report_with_rrid();
+        report.base_mut().composed = [(x86, names(h1_pkgs)), (arm, names(h2_pkgs))]
+            .into_iter()
+            .collect();
+        (report, HostsGroup::new(vec![t1, t2], false))
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_names_its_completed_hosts_through_the_report() {
+        // The command layer sees the report's `UpdateError`, not the variant,
+        // so the hosts must survive the rollback router's conversion.
+        let (report, mut group) = sl_micro_pair(&["pkg-a"], &["pkg-z"]);
+
+        let err = report
+            .perform_update(&mut group, false, false, &mut Vec::new())
+            .await
+            .expect_err("an update that excluded a host is not a success");
+
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err:?}");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_that_refused_every_host_completed_on_none() {
+        // Two refusals summarise into a host-less error, so deriving the
+        // completed hosts as "the group minus the failed host" would claim both.
+        let (report, mut group) = sl_micro_pair(&["pkg-z"], &["pkg-z"]);
+        let res = perform_update(
+            &mut group,
+            &report,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Uncomposed(e)) = res else {
+            panic!("every host refused is Uncomposed: {res:?}");
+        };
+        assert!(e.host.is_none(), "arms the case: no single host: {e:?}");
+        assert!(e.completed().is_empty(), "{e:?}");
+
+        let (report, mut group) = sl_micro_pair(&["pkg-z"], &["pkg-z"]);
+        let err = report
+            .perform_update(&mut group, false, false, &mut Vec::new())
+            .await
+            .expect_err("nothing was patched");
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_whose_patch_failed_its_check_completed_on_none() {
+        // h2 is excluded by its failed repo add and h1's patch fails its check:
+        // the rollback reverts h1, so no host is done.
+        let report = report_with_repo();
+        let packages = report.get_package_list();
+        let group = || {
+            let (h1, _, _) = sles_target_with_patch_exit("h1", &packages, 104);
+            let (h2, _) = sles_target_all_commands_fail("h2");
+            HostsGroup::new(vec![h1, h2], false)
+        };
+
+        let res = perform_update(
+            &mut group(),
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Check(e)) = res else {
+            panic!("h1's failed patch is Check: {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h1"), "{e:?}");
+        assert!(e.completed().is_empty(), "{e:?}");
+
+        let err = report
+            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .await
+            .expect_err("h1's patch failed");
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    /// [`ComposingRepo`] that also cancels the group's token on the update's
+    /// repo add, which runs after the prepare has refused its hosts.
+    struct ComposingCancellingRepo {
+        inner: ComposingRepo,
+        cancel: Box<dyn Fn() + Send + Sync>,
+    }
+
+    #[async_trait::async_trait]
+    impl SetRepo for ComposingCancellingRepo {
+        async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
+            self.inner.set_repo(target, operation).await;
+            if operation == RepoOp::Add {
+                (self.cancel)();
+            }
+        }
+
+        fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+            self.inner.composition()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_update_cancelled_before_dispatch_completed_on_none() {
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, _h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let token = group.cancel_token();
+        let repo = ComposingCancellingRepo {
+            inner: ComposingRepo::new(vec![
+                (
+                    SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                    names(&["pkg-a"]),
+                ),
+                (
+                    SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                    names(&["pkg-z"]),
+                ),
+            ]),
+            cancel: Box::new(move || token.cancel()),
+        };
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Cancelled(e)) = res else {
+            panic!("a cancel at the pre-dispatch gate is Cancelled: {res:?}");
+        };
+        // Arms the case: h2 was refused and h1 still eligible when the cancel
+        // landed, yet h1 was never patched.
+        assert_eq!(
+            repo.inner.ops_for("h1"),
+            [RepoOp::Remove, RepoOp::Add, RepoOp::Remove]
+        );
+        assert!(!was_patched(&h1), "{:?}", h1.commands());
+        assert!(e.completed().is_empty(), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_never_names_a_disabled_host_as_completed() {
+        // A disabled member's fan-outs record an empty exit-0 snapshot, which
+        // the update check passes; it must not be claimed as updated.
+        let x86 = SystemProduct::new("SL-Micro", "6.1", "x86_64");
+        let (t1, _h1) = composed_host("h1", x86.clone(), BTreeSet::new());
+        let (t2, _h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let (mut t3, h3) = composed_host("h3", x86.clone(), BTreeSet::new());
+        t3.set_state(TargetState::Disabled);
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+        let repo = ComposingRepo::new(vec![
+            (x86, names(&["pkg-a"])),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let err = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h2 was excluded");
+
+        assert!(h3.commands().is_empty(), "{:?}", h3.commands());
+        let UpdateFailure::Uncomposed(e) = err else {
+            panic!("h2's exclusion is the verdict: {err:?}");
+        };
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
     }
 
     /// One `update` over h1 (composes `pkg-a`) + h2 (composes only `pkg-z`, so
@@ -9361,6 +9594,7 @@ mod tests {
             panic!("expected a RepoAdd failure naming h2, got {res:?}");
         };
         assert_eq!(e.host.as_deref(), Some("h2"), "{e}");
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
 
         let h2_cmds = h2_handle.commands();
         assert!(

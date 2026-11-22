@@ -469,6 +469,10 @@ pub(crate) mod testkit {
         /// way to reach `map_flow_error`'s `Cancelled` arm from the command
         /// layer, since `fail_update`'s error is not `is_cancelled()`.
         cancel_update: bool,
+        /// `perform_update` excludes `h2` and completes on `h1`: an `Err` naming
+        /// `h2` that carries `completed = ["h1"]`, plus the exclusion's
+        /// degradation, as the real flow emits for a partial run.
+        partial_update: bool,
         /// `perform_update` emits both *check-section* diagnostic shapes — the
         /// routine kind a healthy update produces. **Off by default**:
         /// a clean transaction emits none, and fabricating them unconditionally
@@ -562,6 +566,16 @@ pub(crate) mod testkit {
                 Err(mtui_testreport::UpdateError::cancelled(
                     "update cancelled before the patch command",
                 ))
+            } else if self.partial_update {
+                let excluded = mtui_testreport::UpdateError::new(
+                    "this host's products (SLES-16.1.x86_64) compose none of the update's \
+                     packages; it was excluded from the update",
+                    "h2",
+                );
+                diagnostics.push(mtui_testreport::Diagnostic::degradation(
+                    excluded.to_string(),
+                ));
+                Err(excluded.with_completed(vec!["h1".to_owned()]))
             } else if self.fail_update {
                 Err(mtui_testreport::UpdateError::new(
                     "update stack locked",
@@ -736,6 +750,7 @@ pub(crate) mod testkit {
     struct FakeFlags {
         fail_update: bool,
         cancel_update: bool,
+        partial_update: bool,
         update_diagnostics: bool,
         update_degradations: bool,
         fail_perform: bool,
@@ -767,6 +782,7 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
             fail_update: flags.fail_update,
             cancel_update: flags.cancel_update,
+            partial_update: flags.partial_update,
             update_diagnostics: flags.update_diagnostics,
             update_degradations: flags.update_degradations,
             fail_perform: flags.fail_perform,
@@ -865,6 +881,22 @@ pub(crate) mod testkit {
             targets,
             FakeFlags {
                 cancel_update: true,
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// A session whose active report's `perform_update` excludes `h2` and
+    /// completes on `h1`, failing with the exclusion.
+    #[must_use]
+    pub(crate) fn session_with_partial_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                partial_update: true,
                 ..Default::default()
             },
             None,
@@ -1017,6 +1049,7 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
             fail_update: false,
             cancel_update: false,
+            partial_update: false,
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,
@@ -1040,6 +1073,7 @@ pub(crate) mod testkit {
             rrid,
             fail_update: false,
             cancel_update: false,
+            partial_update: false,
             update_diagnostics: false,
             update_degradations: false,
             fail_perform: false,

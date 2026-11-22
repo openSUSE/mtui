@@ -358,7 +358,11 @@ and nothing is written there.
   h1: the patch passed its checks, with 2 degradations reported below`. The
   count is of degradations only; a check's own recognised sections (the
   vendor-support notice, extra rpm output) ride in the same diagnostics and are
-  routine on a healthy update, so they leave the confirmation bare.
+  routine on a healthy update, so they leave the confirmation bare. A partial
+  `update` — one that excluded a host (its products compose none of the
+  update's packages, or its test update repository failed to register) but
+  patched the rest — still fails, naming the excluded hosts, but first prints
+  the confirmation for the hosts it completed on, so they need no second run.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, every candidate claimed by

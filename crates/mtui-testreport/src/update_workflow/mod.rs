@@ -65,6 +65,9 @@ pub struct UpdateError {
     /// on the `reason` string — would be the first place in the tree where
     /// control flow depended on a reason's text.
     pub(crate) probe_failed: bool,
+    /// The hosts the operation completed on despite this error, sorted. Set
+    /// only where every one of them is known to be done; empty otherwise.
+    pub(crate) completed: Vec<String>,
 }
 
 impl UpdateError {
@@ -76,6 +79,7 @@ impl UpdateError {
             host: Some(host.into()),
             cancelled: false,
             probe_failed: false,
+            completed: Vec::new(),
         }
     }
 
@@ -87,6 +91,7 @@ impl UpdateError {
             host: None,
             cancelled: true,
             probe_failed: false,
+            completed: Vec::new(),
         }
     }
 
@@ -94,6 +99,20 @@ impl UpdateError {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// Records the hosts the operation completed on despite this error.
+    #[must_use]
+    pub fn with_completed(mut self, hosts: Vec<String>) -> Self {
+        self.completed = hosts;
+        self
+    }
+
+    /// The hosts the operation completed on despite this error; see
+    /// [`with_completed`](Self::with_completed).
+    #[must_use]
+    pub fn completed(&self) -> &[String] {
+        &self.completed
     }
 
     /// Builds an [`UpdateError`] for an update that could not determine what to
@@ -115,6 +134,7 @@ impl UpdateError {
             probe_failed: false,
             reason: reason.into(),
             host: None,
+            completed: Vec::new(),
         }
     }
 }
