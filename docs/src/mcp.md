@@ -370,9 +370,12 @@ and nothing is written there.
   candidate connected (unreachable or claimed remotely), the retry budget
   spent, or the refhosts inventory unavailable. The call still
   returns `Ok` in that case, so these lines are the signal to check.
-- `export` emits `WARNING: no package version data recorded for <host>...`
-  lines in its tool output when a host has no recorded package data and its
-  install-result block was therefore left unverified in the report.
+- `export` emits one `WARNING:` line per host whose install-result block it
+  left unverified in the report: `WARNING: no package of this update is tracked
+  for <host>...` when the host tracks none (for example, the update ships
+  packages for none of its products), and `WARNING: no package version data
+  recorded for <host>...` when the host's tracked packages were never checked
+  (no `update` ran in this session).
 - `run` prints its own verdict above its per-host output, for the same
   head-survives-`max_output_bytes` reason: `run completed on h1 (exit 0), h2
   (exit 1)` names every host it ran on with its exit code, followed by `FAILED

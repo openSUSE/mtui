@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use mtui_config::options::Config;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -19,7 +20,7 @@ use mtui_datasources::oqa_search::results::OpenQAOverviewResult;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::package::Package;
-use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, UpdateSource, Workflow};
+use mtui_types::{OpenQAResults, RequestReviewID, System, SystemProduct, UpdateSource, Workflow};
 
 /// The concrete openQA state holder carried on a report.
 ///
@@ -113,11 +114,12 @@ pub struct TestReportBase {
     /// Empty when the document composes nothing (`ingest::should_compose`
     /// owns that rule).
     pub composed: HashMap<SystemProduct, BTreeSet<String>>,
-    /// Nested package map: `product -> { package name -> version }`.
-    ///
-    /// A report routinely spans multiple products, each shipping its own set
-    /// of packages and versions; [`TestReport::get_package_list`] flattens them.
+    /// `target version -> { package name -> version }`, or `"standard"` for
+    /// SLFO/PI. Products sharing a version share an entry, so hosts are seeded
+    /// from [`host_packages`](Self::host_packages) instead.
     pub packages: HashMap<String, HashMap<String, String>>,
+    /// What [`packages_for_host`] seeds each connected host with.
+    pub host_packages: Arc<HostPackages>,
     /// Parsed Request Review ID, or `None` when unset/invalid.
     pub rrid: Option<RequestReviewID>,
     /// Update rating.
@@ -194,6 +196,7 @@ impl TestReportBase {
             repositories: HashSet::new(),
             composed: HashMap::new(),
             packages: HashMap::new(),
+            host_packages: Arc::default(),
             rrid: None,
             rating: None,
             realid: None,
@@ -237,56 +240,72 @@ impl TestReportBase {
     }
 }
 
-/// Resolves seed packages from a `product -> { name -> version }` map for a
-/// host's `base_version`.
-///
-/// Uses the sole `"standard"` sub-map when that is the only key (a report
-/// shipping one product-agnostic set, e.g. SLFO metadata), else the one keyed
-/// by `base_version`; a `base_version` starting `"12"` additionally merges the
-/// `"12"` sub-map. Each `name -> version` becomes a [`Package`] with its
-/// [`required`](Package::required) set; an unparseable version is skipped
-/// (best-effort) rather than aborting the whole host.
-///
-/// Takes a *borrowed* map so the composition root (`mtui-core::session`) can
-/// resolve from a snapshot cloned before a `targets_mut()` borrow, keeping the
-/// connect future `Send`.
+/// The packages connected hosts are seeded with, chosen at ingest by
+/// document kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPackages {
+    /// SLFO/PI: one product-agnostic set every host tracks.
+    Shared(HashMap<String, String>),
+    /// Per normalized product, keyed like [`TestReportBase::update_repos`].
+    PerProduct(HashMap<SystemProduct, HashMap<String, String>>),
+}
+
+impl Default for HostPackages {
+    /// Seeds nothing: a report not built from a document tracks nothing.
+    fn default() -> Self {
+        Self::PerProduct(HashMap::new())
+    }
+}
+
+/// A host's seed packages. Where two of its products name one package, the
+/// higher version wins: zypper installs the newest its repositories offer.
 #[must_use]
-pub fn packages_for_map(
-    map: &HashMap<String, HashMap<String, String>>,
-    base_version: &str,
-) -> Vec<Package> {
-    let mut selected: HashMap<&String, &String> = HashMap::new();
-
-    if map.len() == 1 && map.contains_key("standard") {
-        for (name, ver) in &map["standard"] {
-            selected.insert(name, ver);
-        }
-    } else if let Some(per_product) = map.get(base_version) {
-        for (name, ver) in per_product {
-            selected.insert(name, ver);
-        }
-    }
-    if base_version.starts_with("12")
-        && let Some(sle12) = map.get("12")
-    {
-        for (name, ver) in sle12 {
-            selected.insert(name, ver);
-        }
-    }
-
-    let mut packages: Vec<Package> = Vec::with_capacity(selected.len());
-    for (name, ver) in selected {
-        let mut pkg = Package::new(name.clone());
-        if pkg.set_required(Some(ver)).is_err() {
-            tracing::warn!(
-                package = %name, version = %ver,
-                "unparseable required version in metadata; leaving package unseeded"
+pub fn packages_for_host(packages: &HostPackages, system: &System) -> Vec<Package> {
+    let mut selected = std::collections::BTreeMap::<&str, &str>::new();
+    match packages {
+        HostPackages::Shared(shared) => {
+            selected.extend(
+                shared
+                    .iter()
+                    .map(|(name, ver)| (name.as_str(), ver.as_str())),
             );
         }
-        packages.push(pkg);
+        HostPackages::PerProduct(by_product) => {
+            for product in system.flatten() {
+                for (name, ver) in by_product.get(&product).into_iter().flatten() {
+                    if selected
+                        .get(name.as_str())
+                        .is_none_or(|kept| is_higher_version(ver, kept))
+                    {
+                        selected.insert(name, ver);
+                    }
+                }
+            }
+        }
     }
-    packages.sort_by(|a, b| a.name.cmp(&b.name));
-    packages
+    selected
+        .into_iter()
+        .map(|(name, ver)| required_package(name, ver))
+        .collect()
+}
+
+/// Whether `candidate` is a higher RPM version than `kept`; an unparseable
+/// candidate never is.
+pub(crate) fn is_higher_version(candidate: &str, kept: &str) -> bool {
+    mtui_types::RPMVersion::parse(candidate).ok() > mtui_types::RPMVersion::parse(kept).ok()
+}
+
+/// A [`Package`] requiring `ver`; an unparseable version is logged and left
+/// unset (best-effort) rather than aborting the whole host.
+fn required_package(name: &str, ver: &str) -> Package {
+    let mut pkg = Package::new(name);
+    if pkg.set_required(Some(ver)).is_err() {
+        tracing::warn!(
+            package = %name, version = %ver,
+            "unparseable required version in metadata; leaving package unseeded"
+        );
+    }
+    pkg
 }
 
 /// The abstract test-report surface.
@@ -771,6 +790,10 @@ mod tests {
         assert_eq!(base.repository, "");
         assert!(base.repositories.is_empty());
         assert!(base.packages.is_empty());
+        assert_eq!(
+            *base.host_packages,
+            HostPackages::PerProduct(HashMap::new())
+        );
         assert!(base.rrid.is_none());
         assert!(base.rating.is_none());
         assert!(base.realid.is_none());
@@ -818,75 +841,218 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
-    fn base_with_packages(entries: &[(&str, &str, &str)]) -> TestReportBase {
+    // --- packages_for_host ---
+
+    /// `RPMVersion::parse` rejects only an empty string, which never outranks a
+    /// version and is always outranked by one.
+    #[test]
+    fn is_higher_version_ranks_any_version_above_an_unparseable_one() {
+        assert!(is_higher_version("1.0-1", ""));
+        assert!(!is_higher_version("", "1.0-1"));
+    }
+
+    type TargetSpec<'a> = (&'a str, &'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// The package maps of a document ingested from `raw`.
+    fn ingested(raw: &str) -> TestReportBase {
+        let doc: mtui_types::report_document::ReportDocument = raw.parse().expect("fixture parses");
         let mut base = TestReportBase::new(config());
-        for (product, name, ver) in entries {
-            base.packages
-                .entry((*product).to_owned())
-                .or_default()
-                .insert((*name).to_owned(), (*ver).to_owned());
-        }
+        crate::ingest::apply_document(&mut base, &doc);
         base
     }
 
-    #[test]
-    fn packages_for_selects_by_base_version_and_sets_required() {
-        // Metadata keyed by "15-SP6", i.e. the parse_product version string.
-        let base = base_with_packages(&[
-            ("15-SP6", "hplip", "3.26.4-150600.4.12.1"),
-            ("15-SP6", "hplip-devel", "3.26.4-150600.4.12.1"),
-            (
-                "15-SP5",
-                "release-notes-sles",
-                "15.5.20260709-150500.3.35.1",
-            ),
-        ]);
-        let pkgs = packages_for_map(&base.packages, "15-SP6");
-        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["hplip", "hplip-devel"]);
-        for p in &pkgs {
-            assert_eq!(
-                p.required().map(ToString::to_string),
-                Some("3.26.4-150600.4.12.1".to_owned()),
-                "required must be set for {}",
-                p.name
-            );
-        }
+    /// `MAINTENANCE_OBS` with its targets replaced by `(product, version, arch,
+    /// [(name, version-release)])` rows, then ingested.
+    fn ingested_with_targets(targets: &[TargetSpec<'_>]) -> TestReportBase {
+        let mut doc: mtui_types::report_document::ReportDocument =
+            mtui_types::fixtures::MAINTENANCE_OBS.parse().unwrap();
+        let template = doc.install.targets[0].clone();
+        doc.install.targets = targets
+            .iter()
+            .map(|(product, version, arch, binaries)| {
+                let mut t = template.clone();
+                t.product = (*product).to_owned();
+                t.version = (*version).to_owned();
+                t.arch = (*arch).to_owned();
+                t.binaries = binaries
+                    .iter()
+                    .map(|(name, ver)| ((*name).to_owned(), format!("{ver}.{arch}")))
+                    .collect();
+                t
+            })
+            .collect();
+        let mut base = TestReportBase::new(config());
+        crate::ingest::apply_document(&mut base, &doc);
+        base
     }
 
+    fn host(base: (&str, &str, &str), addons: &[(&str, &str, &str)]) -> System {
+        System::new(
+            SystemProduct::new(base.0, base.1, base.2),
+            addons
+                .iter()
+                .map(|(n, v, a)| SystemProduct::new(*n, *v, *a))
+                .collect(),
+            false,
+        )
+    }
+
+    /// `(name, required)` of what `packages_for_host` seeds `system` with.
+    fn seeded(base: &TestReportBase, system: &System) -> Vec<(String, Option<String>)> {
+        packages_for_host(&base.host_packages, system)
+            .iter()
+            .map(|p| (p.name.clone(), p.required().map(ToString::to_string)))
+            .collect()
+    }
+
+    fn want(rows: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
+        rows.iter()
+            .map(|(n, v)| ((*n).to_owned(), Some((*v).to_owned())))
+            .collect()
+    }
+
+    /// A report whose only target is an LTSS one still seeds the plain-SLES
+    /// base host that carries the LTSS addon.
     #[test]
-    fn packages_for_standard_only_map_used_regardless_of_base_version() {
-        let base = base_with_packages(&[("standard", "patch", "2.7.6-999999_stage.1.1")]);
-        let pkgs = packages_for_map(&base.packages, "16.0");
-        assert_eq!(pkgs.len(), 1);
-        assert_eq!(pkgs[0].name, "patch");
+    fn packages_for_host_seeds_a_base_host_from_its_ltss_addon() {
+        let base = ingested(mtui_types::fixtures::MAINTENANCE_OBS);
+        let system = host(
+            ("SLES", "15-SP6", "s390x"),
+            &[("SLES-LTSS", "15-SP6", "s390x")],
+        );
         assert_eq!(
-            pkgs[0].required().map(ToString::to_string),
-            Some("2.7.6-999999_stage.1.1".to_owned())
+            seeded(&base, &system),
+            want(&[
+                ("smc-tools", "1.8.8-150600.3.9.1"),
+                ("smc-tools-completion", "1.8.8-150600.3.9.1"),
+            ])
+        );
+    }
+
+    /// A TERADATA host gets only the TERADATA target's packages, not those of
+    /// another product that shares its base version.
+    #[test]
+    fn packages_for_host_seeds_only_the_matching_products_targets() {
+        let base = ingested_with_targets(&[
+            (
+                "SLE-Product-SLES",
+                "15-SP4-TERADATA",
+                "x86_64",
+                &[("stunnel", "5.62-150200.3.19.1")],
+            ),
+            (
+                "SLE-Product-SLES_SAP",
+                "15-SP4",
+                "x86_64",
+                &[("smc-tools", "1.8.8-150600.3.9.1")],
+            ),
+        ]);
+        let system = host(("SLES_TERADATA", "15-SP4", "x86_64"), &[]);
+        assert_eq!(
+            seeded(&base, &system),
+            want(&[("stunnel", "5.62-150200.3.19.1")])
         );
     }
 
     #[test]
-    fn packages_for_merges_sle12_special_case() {
-        let base = base_with_packages(&[("12-SP5", "bash", "5.0-1"), ("12", "glibc", "2.31-1")]);
-        let pkgs = packages_for_map(&base.packages, "12-SP5");
-        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["bash", "glibc"]);
+    fn packages_for_host_skips_a_target_of_another_arch() {
+        let base = ingested_with_targets(&[
+            (
+                "SLE-Product-SLES",
+                "15-SP6-LTSS",
+                "s390x",
+                &[
+                    ("smc-tools", "1.8.8-150600.3.9.1"),
+                    ("smc-tools-completion", "1.8.8-150600.3.9.1"),
+                ],
+            ),
+            (
+                "SLE-Product-SLES",
+                "15-SP6-LTSS",
+                "x86_64",
+                &[("smc-tools", "1.8.8-150600.3.9.1")],
+            ),
+        ]);
+        let system = host(
+            ("SLES", "15-SP6", "x86_64"),
+            &[("SLES-LTSS", "15-SP6", "x86_64")],
+        );
+        assert_eq!(
+            seeded(&base, &system),
+            want(&[("smc-tools", "1.8.8-150600.3.9.1")])
+        );
+    }
+
+    /// Each package keeps the higher required version of the two products
+    /// naming it, whichever of them sorts first.
+    #[test]
+    fn packages_for_host_keeps_the_higher_version_two_products_name() {
+        let base = ingested_with_targets(&[
+            (
+                "SLE-Product-SLES",
+                "15-SP6",
+                "s390x",
+                &[
+                    ("smc-tools", "1.8.8-150600.3.6.1"),
+                    ("smc-tools-completion", "1.8.8-150600.3.9.1"),
+                ],
+            ),
+            (
+                "SLE-Product-SLES",
+                "15-SP6-LTSS",
+                "s390x",
+                &[
+                    ("smc-tools", "1.8.8-150600.3.9.1"),
+                    ("smc-tools-completion", "1.8.8-150600.3.6.1"),
+                ],
+            ),
+        ]);
+        let system = host(
+            ("SLES", "15-SP6", "s390x"),
+            &[("SLES-LTSS", "15-SP6", "s390x")],
+        );
+        assert_eq!(
+            seeded(&base, &system),
+            want(&[
+                ("smc-tools", "1.8.8-150600.3.9.1"),
+                ("smc-tools-completion", "1.8.8-150600.3.9.1"),
+            ])
+        );
+    }
+
+    /// A host none of whose products a target names tracks nothing, even when
+    /// its base version matches a target's: the update adds no repository there.
+    #[test]
+    fn packages_for_host_seeds_nothing_on_a_host_matching_no_product() {
+        let base = ingested(mtui_types::fixtures::MAXIMAL);
+        let system = host(("SLES_SAP", "15-SP6", "x86_64"), &[]);
+        assert_eq!(seeded(&base, &system), want(&[]));
+    }
+
+    /// A SLE 12 module target (`SLE-Module-Public-Cloud 12`) seeds a 12-SP5 host
+    /// through the module's own `.prod` version, `12`; a 12-SP5 host without the
+    /// module tracks nothing.
+    #[test]
+    fn packages_for_host_seeds_a_sle12_host_only_through_its_module() {
+        let base = ingested(mtui_types::fixtures::MAINTENANCE_OPENQA_L3);
+        let with_module = host(
+            ("SLES", "12-SP5", "x86_64"),
+            &[("sle-module-public-cloud", "12", "x86_64")],
+        );
+        assert_eq!(
+            seeded(&base, &with_module),
+            want(&[("google-guest-agent", "20260903.01-1.73.1")])
+        );
+        let without = host(("SLES", "12-SP5", "x86_64"), &[]);
+        assert_eq!(seeded(&base, &without), want(&[]));
     }
 
     #[test]
-    fn packages_for_returns_empty_when_no_submap_matches() {
-        let base = base_with_packages(&[("15-SP6", "hplip", "3.26.4-1")]);
-        assert!(packages_for_map(&base.packages, "15-SP5").is_empty());
-    }
-
-    #[test]
-    fn packages_for_skips_unparseable_version() {
-        let base = base_with_packages(&[("15-SP6", "goodpkg", "1.0-1"), ("15-SP6", "badpkg", "")]);
-        let pkgs = packages_for_map(&base.packages, "15-SP6");
-        // `parse_opt` reads "" as None, so badpkg survives — just unseeded.
-        let good = pkgs.iter().find(|p| p.name == "goodpkg").unwrap();
-        assert!(good.required().is_some());
+    fn packages_for_host_seeds_the_shared_set_for_a_product_increment() {
+        let base = ingested(mtui_types::fixtures::PI);
+        assert!(matches!(*base.host_packages, HostPackages::Shared(_)));
+        let system = host(("SLES", "16.0", "x86_64"), &[]);
+        assert_eq!(seeded(&base, &system), want(&[("examplepkg", "1.0-1.1")]));
     }
 
     /// A minimal report with a fixed id, so the trait-default metadata helpers

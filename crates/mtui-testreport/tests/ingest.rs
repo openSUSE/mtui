@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
 use mtui_testreport::testreport::TestReportBase;
-use mtui_testreport::{ObsReport, SlReport, TestReport, apply_document};
+use mtui_testreport::{HostPackages, ObsReport, SlReport, TestReport, apply_document};
 use mtui_types::enums::RequestKind;
 use mtui_types::report_document::ReportDocument;
 
@@ -113,6 +113,20 @@ fn projection(base: &TestReportBase) -> String {
             .map(|(k, v)| (k, sorted(v.iter().collect::<Vec<_>>()))),
     );
     line("packages", format!("{packages:?}"));
+    let host_packages = match &*base.host_packages {
+        HostPackages::Shared(set) => {
+            format!("Shared({:?})", sorted(set.iter().collect::<Vec<_>>()))
+        }
+        HostPackages::PerProduct(by_product) => format!(
+            "PerProduct({:?})",
+            sorted(
+                by_product
+                    .iter()
+                    .map(|(k, v)| (format!("{k:?}"), sorted(v.iter().collect::<Vec<_>>())))
+            )
+        ),
+    };
+    line("host_packages", host_packages);
     let composed: Vec<_> = sorted(
         base.composed
             .iter()

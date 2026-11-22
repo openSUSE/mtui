@@ -44,8 +44,9 @@ use crate::session::Session;
 /// and says so.
 ///
 /// A `Manual` export refuses to write at all when *no* selected host has
-/// recorded package versions — the signal that this session never ran `update`
-/// (#526); `--allow-unverified` writes the scaffold anyway.
+/// recorded package versions — because this session never ran `update`
+/// (#526), or because no package of the update is tracked for the host;
+/// `--allow-unverified` writes the scaffold anyway.
 ///
 /// Also refuses on a template that loaded with a stale Gitea hash
 /// (`load_template --force-continue`) unless `--allow-stale` is given —
@@ -183,35 +184,71 @@ fn verified_manual_hosts(
     let hosts = select_names(session.targets(), args, false)
         .map_err(|e| CommandError::Other(e.to_string()))?;
     let results = manual_hosts(session, &hosts);
-    let unverified: Vec<&str> = results
+    let unverified: Vec<(&ManualHost, Unverified)> = results
         .iter()
-        .filter(|h| is_unverified(h))
-        .map(|h| h.hostname.as_str())
+        .filter_map(|h| why_unverified(h).map(|why| (h, why)))
         .collect();
-    // #526: *every* selected host unverified is the "this session never
-    // ran `update`" signal — refuse before any write, since a
-    // plausible-but-verdictless testreport is worse than none. A
-    // partially verified fleet (a host added after the update) still
-    // writes with the per-host warning below.
+    // #526: *every* selected host unverified leaves no verdict to write —
+    // refuse before any write, since a plausible-but-verdictless testreport
+    // is worse than none. A partially verified fleet (a host added after the
+    // update) still writes with the per-host warning below.
     if !unverified.is_empty() && unverified.len() == results.len() && !allow_unverified {
-        return Err(CommandError::Other(format!(
-            "no package version data recorded for any selected host ({}); run \
-             `update` in this session before exporting, or pass \
-             --allow-unverified to write the unverified scaffold",
-            unverified.join(", ")
-        )));
+        return Err(CommandError::Other(unverified_refusal(&unverified)));
     }
     // #396/#437: a host with no recorded package data — or seeded
     // packages the version query never answered for — keeps the
     // scaffold's unverified lines. Say so where the operator/MCP client
     // sees it, not only in the log.
-    for host in &unverified {
-        session.display.println(&format!(
-            "WARNING: no package version data recorded for {host}; its install \
-             result was left unverified"
-        ));
+    for (host, why) in &unverified {
+        let name = &host.hostname;
+        let line = match why {
+            Unverified::Untracked => format!(
+                "WARNING: no package of this update is tracked for {name}, so no version \
+                 was checked there; its install result was left unverified"
+            ),
+            Unverified::Unchecked => format!(
+                "WARNING: no package version data recorded for {name}; its install \
+                 result was left unverified"
+            ),
+        };
+        session.display.println(&line);
     }
     Ok((hosts, results))
+}
+
+/// The refusal for a selection with no verifiable host. Only a host whose
+/// tracked packages went unchecked is sent back to `update`: one tracking no
+/// package of the update has nothing `update` could record.
+fn unverified_refusal(unverified: &[(&ManualHost, Unverified)]) -> String {
+    const OPT_OUT: &str = "pass --allow-unverified to write the unverified scaffold";
+    let names = |kind: Unverified| -> Vec<&str> {
+        unverified
+            .iter()
+            .filter(|(_, why)| *why == kind)
+            .map(|(h, _)| h.hostname.as_str())
+            .collect()
+    };
+    let (untracked, unchecked) = (names(Unverified::Untracked), names(Unverified::Unchecked));
+    match (untracked.is_empty(), unchecked.is_empty()) {
+        (true, _) => format!(
+            "no package version data recorded for any selected host ({}); run `update` in \
+             this session before exporting, or {OPT_OUT}",
+            unchecked.join(", ")
+        ),
+        (false, true) => format!(
+            "no package of this update is tracked for any selected host ({}), so there is \
+             nothing to verify and `update` would not change that; add a host carrying a \
+             product the update ships packages for, if any, or {OPT_OUT}",
+            untracked.join(", ")
+        ),
+        (false, false) => format!(
+            "no selected host has package version data to verify: no package of this \
+             update is tracked for {}, and no package version data is recorded for {} \
+             (run `update` in this session before exporting); {OPT_OUT}",
+            untracked.join(", "),
+            unchecked.join(", ")
+        ),
+    }
 }
 
 /// Whether the report holds openQA data a host-less export can write: install
@@ -330,19 +367,31 @@ fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
         .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
 }
 
-/// Whether the exporter has nothing to verify this host's install result
-/// against: not one tracked package the update flow checked on either side
-/// (#396/#437) — vacuously true, and deliberately so, for a host with no
-/// tracked packages at all. Either side alone can carry the verdict, so both
-/// are required: a standalone `downgrade` rotates a checked `after` in with
-/// `before` still `NotChecked`. `current` is not consulted — `add_host` fills
-/// it on connect, so it would make a session that never ran `update` look
-/// verified.
-fn is_unverified(host: &ManualHost) -> bool {
-    host.packages.iter().all(|p| {
-        *p.before_check() == VersionCheck::NotChecked
-            && *p.after_check() == VersionCheck::NotChecked
-    })
+/// Why the exporter has nothing to verify a host's install result against.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unverified {
+    /// It tracks no package of the update.
+    Untracked,
+    /// The update flow checked none of its tracked packages on either side.
+    Unchecked,
+}
+
+/// Why `host` is unverified, or `None` when one tracked package was checked
+/// on either side (#396/#437). Either side alone carries the verdict: a
+/// standalone `downgrade` rotates a checked `after` in with `before` still
+/// `NotChecked`. `current` is not consulted — `add_host` fills it on connect,
+/// so it would make a session that never ran `update` look verified.
+fn why_unverified(host: &ManualHost) -> Option<Unverified> {
+    if host.packages.is_empty() {
+        return Some(Unverified::Untracked);
+    }
+    host.packages
+        .iter()
+        .all(|p| {
+            *p.before_check() == VersionCheck::NotChecked
+                && *p.after_check() == VersionCheck::NotChecked
+        })
+        .then_some(Unverified::Unchecked)
 }
 
 /// Delegates to [`mtui_testreport::author_export`] (the pure authoring
@@ -642,12 +691,14 @@ mod tests {
         assert!(session.metadata().base().document_dirty);
     }
 
-    /// #526: no host has package data at all — the whole selection is
+    /// #526: no host tracks a package at all — the whole selection is
     /// unverified, so `export` must refuse and leave the document untouched,
-    /// naming *every* unverified host (the issue plan's wording).
+    /// naming *every* unverified host. Running `update` cannot help a host that
+    /// tracks nothing, so the refusal must not send the caller there.
     /// Mutations caught: dropping the refusal (back to warn-and-write) makes the
     /// `Err` assertion fail; writing first and erroring after makes the
-    /// untouched-document assertions fail; naming only the first host drops `h2`.
+    /// untouched-document assertions fail; naming only the first host drops `h2`;
+    /// giving untracked hosts the unchecked wording changes the message.
     #[tokio::test]
     async fn manual_errors_on_unverified_hosts_without_writing() {
         let (mut session, _buf, dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
@@ -659,12 +710,14 @@ mod tests {
         let CommandError::Other(msg) = err else {
             panic!("expected Other");
         };
-        assert!(msg.contains("h1"), "{msg}");
-        assert!(
-            msg.contains("h2"),
-            "every unverified host must be named: {msg}"
+        assert_eq!(
+            msg,
+            "no package of this update is tracked for any selected host (h1, h2), so \
+             there is nothing to verify and `update` would not change that; add a host \
+             carrying a product the update ships packages for, if any, or pass \
+             --allow-unverified to write the unverified scaffold"
         );
-        assert!(msg.contains("update"), "{msg}");
+        assert!(!msg.contains("run `update`"), "{msg}");
         let base = session.metadata().base();
         assert_eq!(
             base.document, before,
@@ -691,10 +744,41 @@ mod tests {
         let CommandError::Other(msg) = err else {
             panic!("expected Other");
         };
-        assert!(msg.contains("h1"), "{msg}");
+        assert_eq!(
+            msg,
+            "no package version data recorded for any selected host (h1); run \
+             `update` in this session before exporting, or pass --allow-unverified \
+             to write the unverified scaffold"
+        );
         let base = session.metadata().base();
         assert_eq!(base.document, before, "no partial write");
         assert!(!base.document_dirty);
+    }
+
+    /// A selection mixing a host that tracks nothing with one whose tracked
+    /// packages went unchecked names each with its own remedy: only the second
+    /// is sent back to `update`.
+    #[tokio::test]
+    async fn manual_errors_on_untracked_and_unchecked_hosts_naming_each_remedy() {
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        let t = session.targets_mut().get_mut("h2").expect("host present");
+        t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+        let before = session.metadata().base().document.clone();
+
+        let args = matches(&Export, &[]);
+        let err = Export.call(&mut session, &args).await.unwrap_err();
+
+        let CommandError::Other(msg) = err else {
+            panic!("expected Other");
+        };
+        assert_eq!(
+            msg,
+            "no selected host has package version data to verify: no package of this \
+             update is tracked for h1, and no package version data is recorded for h2 \
+             (run `update` in this session before exporting); pass --allow-unverified to \
+             write the unverified scaffold"
+        );
+        assert_eq!(session.metadata().base().document, before);
     }
 
     /// #526: the predicate is **every** selected host, not **any**. One verified
@@ -712,17 +796,48 @@ mod tests {
 
         let out = buf.contents();
         assert!(
-            out.contains("WARNING: no package version data recorded for h2"),
+            out.contains("WARNING: no package of this update is tracked for h2"),
             "{out}"
         );
         assert!(
-            !out.contains("recorded for h1"),
+            out.lines()
+                .filter(|l| l.starts_with("WARNING"))
+                .all(|l| !l.contains("h1")),
             "the verified host must not be warned about: {out}"
         );
         assert!(session.metadata().base().document_dirty);
     }
 
-    /// #526: `is_unverified` is per-host, not per-package — one checked package
+    /// Each unverified host of a written export gets the warning of its own
+    /// kind: tracking nothing, or tracked packages never checked.
+    #[tokio::test]
+    async fn manual_warns_untracked_and_unchecked_hosts_apart() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1", "h2", "h3"]).await;
+        record_versions(&mut session, "h1");
+        let t = session.targets_mut().get_mut("h3").expect("host present");
+        t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+
+        let args = matches(&Export, &[]);
+        Export.call(&mut session, &args).await.expect("must write");
+
+        let warnings: Vec<String> = buf
+            .contents()
+            .lines()
+            .filter(|l| l.starts_with("WARNING"))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            warnings,
+            [
+                "WARNING: no package of this update is tracked for h2, so no version was \
+                 checked there; its install result was left unverified",
+                "WARNING: no package version data recorded for h3; its install result was \
+                 left unverified",
+            ]
+        );
+    }
+
+    /// #526: `why_unverified` is per-host, not per-package — one checked package
     /// verifies the host. `bash` is unchecked on both sides; `bash-doc` carries
     /// only an `after` (the shape a standalone `downgrade` leaves behind, since
     /// it rotates `after <- current` over a never-checked `before`).
@@ -741,7 +856,7 @@ mod tests {
         Export.call(&mut session, &args).await.expect("must write");
 
         assert!(
-            !buf.contents().contains("WARNING: no package version data"),
+            !buf.contents().contains("WARNING: no package"),
             "{}",
             buf.contents()
         );
@@ -811,7 +926,7 @@ mod tests {
         Export.call(&mut session, &args).await.unwrap();
 
         assert!(
-            !buf.contents().contains("WARNING: no package version data"),
+            !buf.contents().contains("WARNING: no package"),
             "{}",
             buf.contents()
         );
