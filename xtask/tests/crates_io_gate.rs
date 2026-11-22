@@ -84,6 +84,34 @@ fn a_garbage_tag_does_not_publish() {
     assert!(!publishes("26.3", &["26.3.x"]));
 }
 
+/// The workflow pipes `git for-each-ref` into the gate under `pipefail`, so a
+/// gate that answers before reading its input kills the writer with SIGPIPE
+/// and fails the step. More input than a pipe buffer holds makes that a
+/// certain broken pipe here rather than a race.
+#[test]
+fn an_early_answer_still_reads_all_branches() {
+    let many: Vec<String> = (0..20_000).map(|i| format!("1.{i}.x")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    for tag in ["v26.3.6", "26.3.6-rc1", "26.4.0"] {
+        assert!(!publishes(tag, &many), "{tag}");
+    }
+}
+
+/// Draining stdin must not cost the answer when there is no stdin to drain.
+#[test]
+fn an_early_answer_with_stdin_closed_still_answers() {
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(format!("bash '{}' v26.3.6 <&-", script().display()))
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("publish=false"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn non_release_branches_are_ignored() {
     assert!(publishes(

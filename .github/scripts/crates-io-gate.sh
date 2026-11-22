@@ -17,6 +17,9 @@ set -euo pipefail
 tag="${1:?usage: crates-io-gate.sh <tag> < branches}"
 
 emit() {
+	# Read what is left of stdin first: a writer still piping branches in
+	# would otherwise die of SIGPIPE and fail a `pipefail` caller.
+	[ -t 0 ] || cat >/dev/null 2>&1 || true
 	printf 'publish=%s\nbranch=%s\nreason=%s\n' "$1" "$2" "$3"
 	exit 0
 }
