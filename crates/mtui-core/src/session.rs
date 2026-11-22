@@ -3822,11 +3822,34 @@ mod tests {
         drop(listeners);
     }
 
-    /// An unused local address: bound to learn a free port, then released, so a
-    /// connect is refused at once.
+    /// `n` distinct unused local addresses: bound together to learn free ports,
+    /// then released, so a connect is refused at once. The next `bind(0)` may
+    /// be handed a released port, so take these after the test's listeners.
+    fn closed_addrs(n: usize) -> Vec<String> {
+        let held: Vec<std::net::TcpListener> = (0..n)
+            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("bind"))
+            .collect();
+        held.iter().map(listener_addr).collect()
+    }
+
     fn closed_addr() -> String {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+        closed_addrs(1).remove(0)
+    }
+
+    /// A slot naming one address twice would let the backup walk skip a
+    /// sibling as the primary it already tried.
+    #[test]
+    #[should_panic(expected = "repeated candidate")]
+    fn wire_pool_refuses_a_repeated_candidate() {
+        let (_refhosts_dir, mut s, arbiter, owner, _) = pool_session(1, 0);
+        let addr = closed_addr();
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[addr.clone(), addr])],
+            &[],
+        );
     }
 
     fn listener_addr(l: &std::net::TcpListener) -> String {
@@ -3856,6 +3879,12 @@ mod tests {
         base.arbiter = Some(arbiter);
         base.owner = Some(owner.clone());
         for (slot, cands) in slots {
+            let distinct: std::collections::HashSet<&String> = cands.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                cands.len(),
+                "slot {slot} has a repeated candidate: {cands:?}"
+            );
             base.slot_candidates
                 .insert((*slot).to_owned(), cands.to_vec());
         }
@@ -3951,9 +3980,9 @@ mod tests {
         let mut s = Session::new(config, false);
         let rrid = "SUSE:Maintenance:1:1";
         seed_active_report(&mut s, rrid, &[], &[]);
-        let primary = closed_addr();
         let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let sibling_addr = listener_addr(&sibling);
+        let primary = closed_addr();
         let arbiter = test_arbiter();
         let owner: Owner = ("reg".to_owned(), rrid.to_owned());
         wire_pool(
@@ -4032,8 +4061,8 @@ mod tests {
             s.config.refhosts_path.is_file(),
             "pool_session must keep the refhosts fixture alive"
         );
-        let primary = closed_addr();
         let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let primary = closed_addr();
         wire_pool(
             &mut s,
             arbiter,
@@ -4068,8 +4097,8 @@ mod tests {
     #[tokio::test]
     async fn failed_primary_claim_is_released_when_slot_is_already_served() {
         let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
-        let primary = closed_addr();
         let spare = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let primary = closed_addr();
         wire_pool(
             &mut s,
             arbiter,
@@ -4102,8 +4131,8 @@ mod tests {
     #[tokio::test]
     async fn named_slot_candidate_failure_does_not_back_up() {
         let (_refhosts_dir, mut s, arbiter, owner, _) = pool_session(1, 0);
-        let named = closed_addr();
         let sibling = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let named = closed_addr();
         wire_pool(
             &mut s,
             arbiter,
@@ -4122,12 +4151,12 @@ mod tests {
     #[tokio::test]
     async fn budget_cut_inside_a_slots_sibling_walk_is_budget_spent() {
         let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
-        let primary = closed_addr();
         // Black holes: each sibling costs a full `connect_timeout`, so the
         // fifth cannot start inside the 4s budget.
         let holes: Vec<std::net::TcpListener> = (0..5)
             .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("bind"))
             .collect();
+        let primary = closed_addr();
         let mut cands = vec![primary.clone()];
         cands.extend(holes.iter().map(listener_addr));
         wire_pool(&mut s, arbiter, &owner, &[("slot", &cands)], &[&primary]);
@@ -4193,7 +4222,11 @@ mod tests {
     async fn unserved_slots_are_reported_in_sorted_order() {
         let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
         let names: Vec<String> = (0..8).map(|i| format!("slot-{i}")).collect();
-        let cands: Vec<[String; 2]> = (0..8).map(|_| [closed_addr(), closed_addr()]).collect();
+        let addrs = closed_addrs(16);
+        let cands: Vec<[String; 2]> = addrs
+            .chunks(2)
+            .map(|pair| [pair[0].clone(), pair[1].clone()])
+            .collect();
         let slots: Vec<(&str, &[String])> = names
             .iter()
             .zip(&cands)
