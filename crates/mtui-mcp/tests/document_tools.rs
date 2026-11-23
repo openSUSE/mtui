@@ -228,7 +228,7 @@ async fn sections_report_completeness_with_a_pointer_per_null_leaf() {
 }
 
 /// One valid call per document tool.
-fn every_tool_call() -> [(&'static str, Value); 9] {
+fn every_tool_call() -> [(&'static str, Value); 10] {
     [
         ("report_sections", json!({})),
         ("report_section_read", json!({"section": "verdict"})),
@@ -236,6 +236,7 @@ fn every_tool_call() -> [(&'static str, Value); 9] {
             "report_section_write",
             json!({"section": "verdict", "value": null}),
         ),
+        ("report_section_clear", json!({"section": "verdict"})),
         ("report_issue_read", json!({})),
         (
             "report_issue_write",
@@ -422,6 +423,135 @@ async fn an_unanswered_value_can_be_written_as_null() {
     )
     .await;
     assert_eq!(read["data"], Value::Null);
+}
+
+async fn unfilled(session: &McpSession) -> Vec<String> {
+    call(session, "report_sections", json!({})).await["unfilled"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_scalar_section_is_cleared_back_to_unanswered() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    for (section, value) in [("verdict", "PASSED"), ("comment", "all green")] {
+        call(
+            &session,
+            "report_section_write",
+            json!({"section": section, "value": value}),
+        )
+        .await;
+    }
+    let filled = unfilled(&session).await;
+    assert!(
+        !filled.iter().any(|p| p == "/verdict" || p == "/comment"),
+        "{filled:?}"
+    );
+
+    for section in ["verdict", "comment"] {
+        let cleared = call(
+            &session,
+            "report_section_clear",
+            json!({"section": section}),
+        )
+        .await;
+        assert_eq!(cleared["section"], section);
+        assert_eq!(cleared["dirty"], true);
+        let read = call(&session, "report_section_read", json!({"section": section})).await;
+        assert_eq!(read["data"], Value::Null, "{section}");
+    }
+
+    let pointers = unfilled(&session).await;
+    assert!(pointers.contains(&"/verdict".to_owned()), "{pointers:?}");
+    assert!(pointers.contains(&"/comment".to_owned()), "{pointers:?}");
+}
+
+#[tokio::test]
+async fn clearing_a_section_that_cannot_be_unanswered_is_refused() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    for section in [
+        "people",
+        "update",
+        "install",
+        "issues",
+        "new_issues",
+        "testing",
+        "review",
+    ] {
+        let msg = refusal(
+            &session,
+            "report_section_clear",
+            json!({"section": section}),
+        )
+        .await;
+        assert_eq!(
+            msg,
+            format!(
+                "section {section} cannot be cleared: only verdict and comment can be unanswered"
+            )
+        );
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+/// Clearing has its own tool, so `report_section_write` keeps taking a scalar
+/// section's string literally and only a JSON `null` as unanswered.
+#[tokio::test]
+async fn a_scalar_section_write_still_takes_its_strings_literally() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let write = |section: &str, value: Value| json!({"section": section, "value": value});
+    let read = |section: &str| json!({"section": section});
+
+    call(
+        &session,
+        "report_section_write",
+        write("verdict", json!("PASSED")),
+    )
+    .await;
+    let msg = refusal(
+        &session,
+        "report_section_write",
+        write("verdict", json!("null")),
+    )
+    .await;
+    assert_eq!(
+        msg,
+        "value does not fit the report schema: /verdict: unknown variant `null`, expected `PASSED` or `FAILED`"
+    );
+    let verdict = call(&session, "report_section_read", read("verdict")).await;
+    assert_eq!(verdict["data"], "PASSED");
+
+    for text in ["null", ""] {
+        call(
+            &session,
+            "report_section_write",
+            write("comment", json!(text)),
+        )
+        .await;
+        let comment = call(&session, "report_section_read", read("comment")).await;
+        assert_eq!(comment["data"], text);
+        let pointers = unfilled(&session).await;
+        assert!(
+            !pointers.contains(&"/comment".to_owned()),
+            "{text:?}: {pointers:?}"
+        );
+    }
+
+    for section in ["verdict", "comment"] {
+        call(
+            &session,
+            "report_section_write",
+            write(section, Value::Null),
+        )
+        .await;
+        let back = call(&session, "report_section_read", read(section)).await;
+        assert_eq!(back["data"], Value::Null, "{section}");
+    }
 }
 
 #[tokio::test]
@@ -621,6 +751,17 @@ async fn bad_arguments_are_refused() {
     )
     .await;
     assert!(msg.contains("`value` is required"), "{msg}");
+
+    let msg = refusal(
+        &session,
+        "report_section_clear",
+        json!({"section": "verdict", "value": null}),
+    )
+    .await;
+    assert_eq!(msg, "unknown argument(s): value");
+
+    let msg = refusal(&session, "report_section_clear", json!({})).await;
+    assert!(msg.contains("`section` is required"), "{msg}");
 
     let msg = refusal(&session, "report_issue_write", json!({"value": {}})).await;
     assert!(msg.contains("`issue_id` is required"), "{msg}");

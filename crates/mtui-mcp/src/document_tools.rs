@@ -167,6 +167,30 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         read_only: false,
     };
 
+    let nullable: Vec<Section> = Section::ALL
+        .into_iter()
+        .filter(|s| s.is_nullable())
+        .collect();
+    let section_clear = ToolDescriptor {
+        name: "report_section_clear".to_owned(),
+        description: format!(
+            "Set `verdict` or `comment` back to unanswered (null), so report_sections lists it \
+             as unfilled again; any other section is refused. Applied to local state only; \
+             `commit` uploads it. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "section",
+                    section_prop(nullable, "Section to set back to unanswered."),
+                ),
+                ("template", template_prop()),
+            ],
+            &["section"],
+        ),
+        read_only: false,
+    };
+
     let issue_read = ToolDescriptor {
         name: "report_issue_read".to_owned(),
         description: format!(
@@ -311,6 +335,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         sections,
         section_read,
         section_write,
+        section_clear,
         issue_read,
         issue_write,
         new_issue_write,
@@ -386,6 +411,15 @@ async fn dispatch_document_tool_inner(
                     && !matches!(section, Section::Verdict | Section::Comment),
             )?;
             report_section_write(session, section, value, template, ran_under).await?
+        }
+        "report_section_clear" => {
+            let section = section_arg(kwargs)?;
+            if !section.is_nullable() {
+                return Err(refuse(format!(
+                    "section {section} cannot be cleared: only verdict and comment can be unanswered"
+                )));
+            }
+            report_section_write(session, section, Value::Null, template, ran_under).await?
         }
         "report_issue_read" => {
             report_issue_read(session, opt_str(kwargs, "issue_id")?, template, ran_under).await?

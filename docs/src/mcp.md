@@ -429,7 +429,7 @@ and nothing is written there.
 
 ## Report document tools
 
-Nine hand-written tools work on the loaded report as a **document**: seven read
+Ten hand-written tools work on the loaded report as a **document**: eight read
 and edit it as named sections and issues rather than lines of text, and two list
 and read its files. Each accepts an optional
 **`template="<RRID>"`** selecting which loaded template to act on; with more than
@@ -462,13 +462,18 @@ the report.
 Replaces one tester section with `value`.
 
 - Parameters (required): `section` (`verdict`, `comment`, `people`, `issues`,
-  `new_issues`, `testing` or `review`), `value` (any JSON — `null` is a legitimate value
-  for an unanswered `verdict` or `comment`). Plus optional `template`. A
+  `new_issues`, `testing` or `review`), `value` (declared as an object, array
+  or string). Plus optional `template`. A
   string holding a JSON object or array is decoded for every section except
   `verdict` and `comment`, whose strings are always taken literally. Any
   other string for those sections is refused without echoing it: one that is
   not valid JSON names the parse error and its position (`trailing characters
   at line 1 column 572`), and one holding a JSON scalar names its kind.
+- No string sets `verdict` or `comment` back to unanswered: `"null"` is not a
+  verdict and is refused, and `"null"` or `""` is stored as the comment's
+  text. Use `report_section_clear` for that. A JSON `null` `value` is still
+  accepted for these two, but the declared schema has no null arm, so a client
+  that builds its call from the schema cannot send one.
 - `update` and `install` are pipeline-owned and refused. A section the report
   lacks refuses. An `issues` write must keep exactly the same issue keys; use
   `report_issue_write` for one entry. A `new_issues` write replaces the whole
@@ -483,6 +488,20 @@ Replaces one tester section with `value`.
 - A write changes local state only and marks the report dirty; `commit`
   uploads it. A later `export` overwrites `testing.install`, `testing.openqa`
   and `people.testers`.
+- Returns `{ "id", "section", "dirty": true, "size" }`.
+
+### `report_section_clear`
+
+Sets `verdict` or `comment` back to unanswered (`null`), so `report_sections`
+lists it in `unfilled` again.
+
+- Parameters (required): `section` (`verdict` or `comment`). Plus optional
+  `template`. It takes no `value`.
+- Any other section is refused, as none of them can be unanswered as a whole.
+  A `null` inside one, such as `testing.regression.verdict`, is written with
+  `report_section_write`.
+- Applied to local state like `report_section_write`: it marks the report
+  dirty, and `commit` uploads it.
 - Returns `{ "id", "section", "dirty": true, "size" }`.
 
 ### `report_issue_read` (read-only)
