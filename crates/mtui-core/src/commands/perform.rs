@@ -71,12 +71,14 @@ pub(super) enum PerformOp {
     Update { noprepare: bool, newpackage: bool },
 }
 
-/// The success confirmation shared by every non-`update` [`drive`] op, so no
-/// successful dispatch is an empty MCP result. Qualified with the degradation
-/// count like [`confirm_update`]: the verdict prints above the diagnostics
-/// (the head is what survives `mcp_max_output_bytes`), so an unqualified head
-/// line would read as a clean success to a truncated or skim-read result.
-/// Only degradations count; routine check sections never qualify the verdict.
+/// The confirmation shared by every non-`update` [`drive`] op for the hosts
+/// [`confirmed_hosts`] names, so no successful dispatch is an empty MCP result
+/// and a partial one does not read as a total failure. Qualified with the
+/// degradation count like [`confirm_update`]: the verdict prints above the
+/// diagnostics (the head is what survives `mcp_max_output_bytes`), so an
+/// unqualified head line would read as a clean success to a truncated or
+/// skim-read result. Only degradations count; routine check sections never
+/// qualify the verdict.
 fn confirm(session: &mut Session, verb: &str, hosts_label: &str, diagnostics: &[Diagnostic]) {
     let n = degradation_count(diagnostics);
     if n == 0 {
@@ -89,6 +91,16 @@ fn confirm(session: &mut Session, verb: &str, hosts_label: &str, diagnostics: &[
     session.display.println(&format!(
         "{verb} completed on {hosts_label}, with {n} degradation{plural} reported below"
     ));
+}
+
+/// The hosts a confirmation names: the whole selection on success, the hosts
+/// the flow completed on beside a failure, or `None` when it completed on none.
+fn confirmed_hosts(outcome: &Result<(), UpdateError>, hosts_label: &str) -> Option<String> {
+    match outcome {
+        Ok(()) => Some(hosts_label.to_owned()),
+        Err(e) if !e.completed().is_empty() => Some(e.completed().join(", ")),
+        Err(_) => None,
+    }
 }
 
 fn degradation_count(diagnostics: &[Diagnostic]) -> usize {
@@ -184,20 +196,18 @@ pub(super) async fn drive(
     let mut diagnostics = Vec::new();
     // The flow's `Err` message already names the failed host(s)/reason. Success
     // is confirmed to the display so an MCP call is never a silent "success".
-    let (verb, outcome): (&str, Result<(), CommandError>) = match &op {
+    let (verb, outcome): (&str, Result<(), UpdateError>) = match &op {
         PerformOp::Install(pkgs) => (
             "install",
             report
                 .perform_install(&mut selected, pkgs, &mut diagnostics)
-                .await
-                .map_err(|e| map_flow_error(&e)),
+                .await,
         ),
         PerformOp::Uninstall(pkgs) => (
             "uninstall",
             report
                 .perform_uninstall(&mut selected, pkgs, &mut diagnostics)
-                .await
-                .map_err(|e| map_flow_error(&e)),
+                .await,
         ),
         PerformOp::Prepare {
             packages,
@@ -215,15 +225,13 @@ pub(super) async fn drive(
                     *installed_only,
                     &mut diagnostics,
                 )
-                .await
-                .map_err(|e| map_flow_error(&e)),
+                .await,
         ),
         PerformOp::Downgrade(pkgs) => (
             "downgrade",
             report
                 .perform_downgrade(&mut selected, pkgs, &mut diagnostics)
-                .await
-                .map_err(|e| map_flow_error(&e)),
+                .await,
         ),
         PerformOp::Update {
             noprepare,
@@ -238,12 +246,8 @@ pub(super) async fn drive(
             session.restore_split_targets(selected, remainder);
             // Verdict before the unbounded diagnostics: `SharedBuf` keeps the
             // head, so a trailing line is what `max_output_bytes` eats.
-            match &update_result {
-                Ok(()) => confirm_update(session, &hosts_label, &diagnostics),
-                Err(e) if !e.completed().is_empty() => {
-                    confirm_update(session, &e.completed().join(", "), &diagnostics);
-                }
-                Err(_) => {}
+            if let Some(hosts) = confirmed_hosts(&update_result, &hosts_label) {
+                confirm_update(session, &hosts, &diagnostics);
             }
             render_diagnostics(session, &diagnostics);
             // A cancellation checkpoint surfaces as an ordinary `UpdateError`;
@@ -254,11 +258,11 @@ pub(super) async fn drive(
     };
 
     session.restore_split_targets(selected, remainder);
-    if outcome.is_ok() {
-        confirm(session, verb, &hosts_label, &diagnostics);
+    if let Some(hosts) = confirmed_hosts(&outcome, &hosts_label) {
+        confirm(session, verb, &hosts, &diagnostics);
     }
     render_diagnostics(session, &diagnostics);
-    outcome?;
+    outcome.map_err(|e| map_flow_error(&e))?;
     Ok(())
 }
 
@@ -405,9 +409,9 @@ mod tests {
 
     use crate::commands::Update;
     use crate::commands::testkit::{
-        matches, session_with_cancelled_update, session_with_degraded_install,
-        session_with_degraded_update, session_with_hosts, session_with_partial_update,
-        session_with_update_diagnostics,
+        matches, session_with_cancelled_perform, session_with_cancelled_update,
+        session_with_degraded_install, session_with_degraded_update, session_with_hosts,
+        session_with_partial_perform, session_with_partial_update, session_with_update_diagnostics,
     };
 
     const RRID: &str = "SUSE:Maintenance:1:1";
@@ -662,5 +666,74 @@ mod tests {
             "the exclusion follows the verdict: {out:?}"
         );
         assert_eq!(out.matches("completed").count(), 1, "{out:?}");
+    }
+
+    /// A cancel of the other ops surfaces as `Cancelled` and claims no host.
+    #[tokio::test]
+    async fn every_cancelled_op_claims_nothing() {
+        let pkg = || vec!["pkg".to_owned()];
+        for (verb, op) in [
+            ("install", PerformOp::Install(pkg())),
+            ("uninstall", PerformOp::Uninstall(pkg())),
+            (
+                "prepare",
+                PerformOp::Prepare {
+                    packages: pkg(),
+                    force: false,
+                    testing: false,
+                    installed_only: false,
+                },
+            ),
+            ("downgrade", PerformOp::Downgrade(pkg())),
+        ] {
+            let (mut session, buf) = session_with_cancelled_perform(RRID, &["h1", "h2"]);
+            let err = drive(&mut session, &no_args(), op)
+                .await
+                .expect_err("a cancelled op must not report success");
+            assert!(matches!(err, CommandError::Cancelled(_)), "{verb}: {err:?}");
+            assert!(
+                !buf.contents().contains("completed"),
+                "{verb}: {:?}",
+                buf.contents()
+            );
+        }
+    }
+
+    /// The other ops' partial runs keep the failure for the host that failed,
+    /// but their head line names only the hosts they completed on.
+    #[tokio::test]
+    async fn every_partial_op_confirms_only_the_hosts_it_completed_on() {
+        let pkg = || vec!["pkg".to_owned()];
+        for (verb, op) in [
+            ("install", PerformOp::Install(pkg())),
+            ("uninstall", PerformOp::Uninstall(pkg())),
+            (
+                "prepare",
+                PerformOp::Prepare {
+                    packages: pkg(),
+                    force: false,
+                    testing: false,
+                    installed_only: false,
+                },
+            ),
+            ("downgrade", PerformOp::Downgrade(pkg())),
+        ] {
+            let (mut session, buf) = session_with_partial_perform(RRID);
+            let err = drive(&mut session, &no_args(), op)
+                .await
+                .expect_err("the host that failed still fails the run");
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.starts_with("h2: ")),
+                "{verb}: {err:?}"
+            );
+            let out = buf.contents();
+            assert_eq!(
+                out.lines().next().unwrap_or_default(),
+                format!("{verb} completed on h1"),
+                "{out:?}"
+            );
+            assert!(!out.contains("h2"), "{verb} never claims h2: {out:?}");
+            assert_eq!(out.matches("completed").count(), 1, "{out:?}");
+        }
     }
 }

@@ -232,6 +232,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- A partial `install`, `uninstall`, `prepare` or `downgrade` still fails naming
+  the hosts it failed on, and now first prints `<verb> completed on <hosts>`
+  for the hosts it completed on, so they are not run again. So does an
+  `update` that left its patched hosts in place because a peer's patch never
+  ran, could not work out what to patch, or did not come back from its reboot
+  (#801).
 - A connected host tracks only the packages of the update's targets whose
   product it carries, matched the way its update repositories are; a host
   carrying none of them tracks nothing. It tracked the packages of every target
@@ -507,6 +513,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   read`). The other hosts are updated as before; if one of them then fails its
   check, the automatic rollback still runs on every host, the excluded ones
   included (#800).
+- An `update` whose peer's patch never ran or could not work out what to patch
+  now reboots the transactional hosts whose patch passed, instead of leaving
+  their new snapshot staged to activate at the next reboot, and names them in
+  `update completed on`; beside a peer that could not work out what to patch,
+  such a reboot that does not take rolls the group back, as it does when every
+  patch passed. On those failures, and when a peer did not come back from its
+  reboot, the hosts it completed on now get the `--newpackage` step, their
+  post-update package versions recorded for `export`, and their test update
+  repositories removed. The degradation names the hosts it did not complete
+  on, which keep theirs, instead of saying the update did not complete at all,
+  and a rolled-back update no longer says its test repositories are left in
+  place (#809).
 - `set_repo --add` no longer answers `<host>: ok` where it added nothing. For a
   host whose products match none of the update's repositories it prints
   `<host>: no repository of this update matches the host's products (…)`
