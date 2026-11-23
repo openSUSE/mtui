@@ -197,7 +197,9 @@ tester's lock on it can fail its peers' prepare. The other hosts are prepared,
 and the prepare's error names it: `<host>: no repository of this update matches
 the host's products (…); nothing was installed`, `<host>: its products could
 not be read; nothing was installed`, or `<host>: this update has no repository
-to add; nothing was installed`.
+to add; nothing was installed`. It is named even when a peer stops the prepare
+first (a missing preparer, another tester's lock, a failed repository add), in
+one `prepare failed on <hosts> (…)` summary with the error that stopped it.
 
 ## Can I run a command on only some of the connected hosts?
 
