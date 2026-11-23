@@ -343,6 +343,59 @@ fn missing_key_file_raises() {
     assert!(err.to_string().contains("does not exist"), "{err}");
 }
 
+/// The section's `user` answers without a signing key: no `sshkey`, a keyring
+/// manager and a missing key file each still yield it, while
+/// `read_credentials` keeps refusing all three.
+#[test]
+#[serial(osc_config_env)]
+fn read_user_needs_no_signing_key() {
+    let guard = EnvGuard::new();
+    let dir = TempDir::new().unwrap();
+    let absent = dir.path().join("absent");
+    for body in [
+        format!("[{API}]\nuser = bob\n"),
+        format!(
+            "[{API}]\nuser = bob\n\
+             credentials_mgr_class = osc.credentials.KeyringCredentialsManager\n"
+        ),
+        format!("[{API}]\nuser = bob\nsshkey = {}\n", absent.display()),
+    ] {
+        write_oscrc(&guard, dir.path(), &body, None);
+        assert_eq!(oscrc::read_user(API).unwrap(), "bob", "{body}");
+        assert!(read().is_err(), "signing still needs a usable key: {body}");
+    }
+}
+
+/// Each fault has its own path-free `fault()` text.
+#[test]
+#[serial(osc_config_env)]
+fn read_user_faults_are_told_apart() {
+    let guard = EnvGuard::new();
+    let dir = TempDir::new().unwrap();
+    guard.set_osc_config(&dir.path().join("nope"));
+    let mut faults = Vec::new();
+    for body in [
+        None,
+        Some("not = ini = at = all\n[unclosed\n".to_owned()),
+        Some("[https://api.opensuse.org]\nuser = bob\n".to_owned()),
+        Some(format!("[{API}]\nsshkey = SHA256:abc\n")),
+    ] {
+        if let Some(body) = &body {
+            write_oscrc(&guard, dir.path(), body, None);
+        }
+        faults.push(oscrc::read_user(API).unwrap_err().fault());
+    }
+    assert_eq!(
+        faults,
+        [
+            "no oscrc file",
+            "the oscrc does not parse",
+            "no oscrc section for it",
+            "no user in its oscrc section",
+        ]
+    );
+}
+
 #[test]
 #[serial(osc_config_env)]
 fn unparsable_oscrc_raises() {

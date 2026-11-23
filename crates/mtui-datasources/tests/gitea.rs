@@ -10,7 +10,7 @@
 //! plus a mounted POST.
 
 use super::log_capture::capture_logs;
-use mtui_datasources::gitea::{Gitea, assign_marker};
+use mtui_datasources::gitea::{Gitea, assign_marker, token_login};
 use mtui_datasources::{GiteaError, HttpClient, VerifyPolicy};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -738,6 +738,94 @@ async fn explicit_user_skips_token_owner_lookup() {
     assert_eq!(posts.len(), 1);
     let body = String::from_utf8_lossy(&posts[0].body);
     assert!(body.contains("assigned to user: carol"), "{body}");
+}
+
+// --- token_login: the account lookup without a PR ---
+
+fn plain_http() -> HttpClient {
+    HttpClient::new(VerifyPolicy::Default(true)).expect("client builds")
+}
+
+/// The login comes from `GET /api/v1/user` under the trusted base (a
+/// trailing slash on it included), with the token in the header.
+#[tokio::test]
+async fn token_login_reads_the_token_owner() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .and(header("Authorization", "token tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "gitea_bot" })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let base = format!("{}/", server.uri());
+    let login = token_login(plain_http(), "tok", &base).await.unwrap();
+    assert_eq!(login, "gitea_bot");
+}
+
+/// A failed lookup is an error naming the URL and status; neither the error
+/// nor the log carries the token.
+#[tokio::test]
+async fn token_login_failure_names_the_call_but_not_the_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut err = String::new();
+    let logs = capture_logs(|| async {
+        let e = token_login(plain_http(), "s3cr3t-token", &server.uri())
+            .await
+            .unwrap_err();
+        assert!(matches!(e, GiteaError::FailedCall(_)), "{e}");
+        err = e.to_string();
+    })
+    .await;
+    assert!(err.contains(USER_PATH) && err.contains("500"), "{err}");
+    assert!(!err.contains("s3cr3t-token"), "{err}");
+    assert!(logs.contains(USER_PATH), "the failure is logged: {logs}");
+    assert!(!logs.contains("s3cr3t-token"), "{logs}");
+}
+
+/// A reply naming no login is an error, not an empty name to filter on.
+#[tokio::test]
+async fn token_login_refuses_a_reply_without_a_login() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "" })))
+        .mount(&server)
+        .await;
+
+    let err = token_login(plain_http(), "tok", &server.uri())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, GiteaError::FailedCall(_)), "{err}");
+}
+
+/// Without a token nothing is sent; an untrusted base is refused before send.
+#[tokio::test]
+async fn token_login_sends_nothing_without_a_token_or_to_an_untrusted_base() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "x" })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let err = token_login(plain_http(), "", &server.uri())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, GiteaError::MissingToken), "{err}");
+    let plaintext = server.uri().replace("127.0.0.1", "gitea.example.invalid");
+    let err = token_login(plain_http(), "tok", &plaintext)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, GiteaError::UntrustedOrigin(_)), "{err}");
 }
 
 /// The origin guard refuses a credentialed PR URL *before* any request is sent,

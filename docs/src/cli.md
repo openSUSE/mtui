@@ -734,7 +734,7 @@ Options:
           filter to updates assigned to this user (any qam group)
 
       --mine
-          filter to updates assigned to the current session user
+          filter to updates assigned to your oscrc login for [obs] api_url and, with a [gitea] token, its Gitea login
 
       --all-assignees
           show every update regardless of assignee, overriding the unassigned default

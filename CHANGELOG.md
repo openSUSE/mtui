@@ -239,6 +239,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `updates --mine` asks for the logins assignments are recorded under: the
+  `user` of the oscrc section for `[obs] api_url`, which needs no signing key,
+  and, with `[gitea] token` set, that token's Gitea login, merging the two like
+  `-G`. It asked for the local session user (`[mtui] user`, else `$USER`), so
+  a tester whose local login differs got "No updates in the queue". When one
+  login source fails, such as an oscrc without that section, a `note:` line
+  names the source and the fault and the other login is listed alone; under
+  `--json` that fails the call, and with neither login it fails. The empty
+  answer of `--mine` and `--assignee` names the logins it asked for:
+  `No updates assigned to <login> in the queue`. **MCP schema note:** the
+  `updates` `mine` description only (#819).
 - A partial `install`, `uninstall`, `prepare` or `downgrade` still fails naming
   the hosts it failed on, and now first prints `<verb> completed on <hosts>`
   for the hosts it completed on, so they are not run again. So does an

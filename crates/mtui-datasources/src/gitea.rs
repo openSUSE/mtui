@@ -448,6 +448,19 @@ impl Gitea {
         Ok((status.as_u16(), bytes.to_vec()))
     }
 
+    /// The login of the account that owns the token (`GET .../api/v1/user`).
+    async fn fetch_token_login(&self) -> Result<String, GiteaError> {
+        let url = format!("{}/user", self.api_base);
+        let data = self.request(Method::GET, &url, None).await?;
+        data.get("login")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                GiteaError::FailedCall(format!("GET - {} named no login", sanitize_url(&url)))
+            })
+    }
+
     /// Resolve the acting user for a write operation.
     ///
     /// Returns `other` verbatim when supplied, else the token owner's login
@@ -463,22 +476,14 @@ impl Gitea {
         }
         self.resolved_user
             .get_or_init(|| async {
-                let url = format!("{}/user", self.api_base);
-                match self.request(Method::GET, &url, None).await {
-                    Ok(data) => data
-                        .get("login")
-                        .and_then(serde_json::Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map_or_else(|| self.session_user.clone(), str::to_string),
-                    Err(_) => {
-                        tracing::warn!(
-                            "Could not resolve the Gitea user from the token; \
-                             falling back to session user {:?}",
-                            self.session_user
-                        );
-                        self.session_user.clone()
-                    }
-                }
+                self.fetch_token_login().await.unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "Could not resolve the Gitea user from the token; \
+                         falling back to session user {:?}",
+                        self.session_user
+                    );
+                    self.session_user.clone()
+                })
             })
             .await
             .clone()
@@ -786,6 +791,36 @@ impl Gitea {
             .map(str::to_string)
             .ok_or_else(|| GiteaError::FailedCall(format!("{} - missing head.sha", self.pr)))
     }
+}
+
+/// The login of the Gitea account that owns `token`, which is the name its
+/// assignment markers record: one `GET <gitea_url>/api/v1/user`, sent only to
+/// the trusted `gitea_url` origin.
+///
+/// # Errors
+///
+/// [`GiteaError::MissingToken`] for an empty token (nothing is sent),
+/// [`GiteaError::UntrustedOrigin`] for an unusable `gitea_url`, and
+/// [`GiteaError::FailedCall`] when the lookup fails or names no login.
+pub async fn token_login(
+    http: HttpClient,
+    token: &str,
+    gitea_url: &str,
+) -> Result<String, GiteaError> {
+    if token.is_empty() {
+        return Err(GiteaError::MissingToken);
+    }
+    let user_api = format!("{}/api/v1/user", gitea_url.trim_end_matches('/'));
+    // Names no PR, so it never leaves this function: only the lookup runs.
+    let account = Gitea::with_client(
+        http,
+        token.to_owned(),
+        String::new(),
+        &user_api,
+        gitea_url,
+        None,
+    )?;
+    account.fetch_token_login().await
 }
 
 #[cfg(test)]

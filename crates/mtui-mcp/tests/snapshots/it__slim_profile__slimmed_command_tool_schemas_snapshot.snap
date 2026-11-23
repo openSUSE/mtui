@@ -1697,7 +1697,7 @@ expression: pretty
         },
         "mine": {
           "default": false,
-          "description": "filter to updates assigned to the current session user",
+          "description": "filter to updates assigned to your oscrc login for [obs] api_url and, with a [gitea] token, its Gitea login",
           "type": "boolean"
         },
         "offset": {

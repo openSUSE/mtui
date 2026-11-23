@@ -320,11 +320,22 @@ testing**. Widen or filter it:
 ```
 updates --review-group qam-sle --limit 5
 updates -G qam-sle -G qam-teradata                           # groups OR together
-updates --mine                # updates assigned to you
+updates --mine                # assigned to your oscrc or Gitea login
 updates --status all          # every status and assignee
 updates -F Rating -F 'Assigned Roles' -F 'Unassigned Roles'  # osc-qam field names
 updates --json                # the raw TeReGen rows, for scripting
 ```
+
+`--mine` asks for the logins your review actions are recorded under: the
+`user` of the oscrc section for `[obs] api_url` (read even when the section
+has no usable `sshkey`, so a password or keyring oscrc works) and, with
+`[gitea] token` set, that token's Gitea login. It never asks for the local
+session user (`[mtui] user`), so a Gitea assignment recorded under that name,
+which `assign` falls back to when it cannot resolve the token's owner, needs
+`--assignee`. When one of the two sources fails, a `note:` line names that source and why,
+and the other login is listed alone; under `--json` that fails the call
+instead, and with neither login there is nothing to list. An empty answer
+names the logins it asked for.
 
 `-F` accepts the field names `osc qam list -F` uses — case-insensitively, with
 spaces, hyphens and underscores treated as equivalent: `ReviewRequestID`,
