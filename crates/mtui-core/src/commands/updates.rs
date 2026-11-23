@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
 use futures::stream::{self, StreamExt};
 use mtui_config::Config;
-use mtui_datasources::obs::Osc;
+use mtui_datasources::gitea::token_login;
 use mtui_datasources::obs::models::ObsComment;
-use mtui_datasources::obs::qam;
-use mtui_datasources::{HttpClient, UpdatesQuery};
+use mtui_datasources::obs::{Osc, oscrc, qam};
+use mtui_datasources::{GiteaError, HttpClient, UpdatesQuery, sanitize_url};
 use mtui_types::{RequestKind, RequestReviewID};
 use serde_json::Value;
 
@@ -65,7 +65,8 @@ const STATUS_ALL: &str = "all";
 /// are **in testing**. `--assignee`/`--mine`/`--all-assignees` pick another
 /// assignment view (dropping the unassigned default); `--status all` widens to
 /// every status. Session-global, so [`Scope::Single`] rather than a per-template
-/// fan-out — though it may issue one TeReGen query per `--review-group`.
+/// fan-out — though it may issue one TeReGen query per `--review-group` and
+/// `--mine` login.
 pub struct Updates;
 
 #[async_trait]
@@ -166,7 +167,10 @@ impl Command for Updates {
             Arg::new("mine")
                 .long("mine")
                 .action(ArgAction::SetTrue)
-                .help("filter to updates assigned to the current session user"),
+                .help(
+                    "filter to updates assigned to your oscrc login for [obs] api_url \
+                     and, with a [gitea] token, its Gitea login",
+                ),
         )
         .arg(
             Arg::new("all_assignees")
@@ -249,13 +253,37 @@ impl Command for Updates {
             .unwrap_or_else(|| "testing".to_owned());
         let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
         let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
-        let mine = args.get_flag("mine");
         let all_assignees = args.get_flag("all_assignees");
 
-        let assignee = if mine {
-            Some(session.config.session_user.clone())
+        let (assignees, note) = if args.get_flag("mine") {
+            // oscrc errors name local files, so headlessly only the fault.
+            let principal = oscrc::read_user(&session.config.obs_api_url).map_err(|e| {
+                if session.is_repl {
+                    e.to_string()
+                } else {
+                    e.fault().to_owned()
+                }
+            });
+            let gitea = if session.config.gitea_token.is_empty() {
+                None
+            } else {
+                let token = session.config.gitea_token.clone();
+                let gitea_url = session.config.gitea_url.clone();
+                Some(match session.http_client() {
+                    Ok(http) => token_login(http, &token, &gitea_url).await,
+                    Err(e) => Err(e.into()),
+                })
+            };
+            let mine = mine_logins(&session.config.obs_api_url, principal, gitea)?;
+            if as_json && let Some(note) = &mine.note {
+                return Err(CommandError::Other(format!(
+                    "{note}; --json cannot carry that note, so pass --assignee <login> instead"
+                )));
+            }
+            (mine.logins, mine.note)
         } else {
-            args.get_one::<String>("assignee").cloned()
+            let assignee = args.get_one::<String>("assignee").cloned();
+            (assignee.into_iter().collect::<Vec<_>>(), None)
         };
 
         // '--status all' widens by sending no status filter at all.
@@ -264,10 +292,10 @@ impl Command for Updates {
 
         // Default view is the unassigned pickup queue; --assignee/--mine and
         // --all-assignees/--status all opt out of that filter.
-        let chose_other_view = assignee.is_some() || all_assignees;
+        let chose_other_view = !assignees.is_empty() || all_assignees;
         let unassigned = !chose_other_view && !status_all;
         // Show the assignee column whenever assignment is part of the view.
-        let want_assignment = assignee.is_some() || unassigned || all_assignees;
+        let want_assignment = !assignees.is_empty() || unassigned || all_assignees;
 
         // Without `with_assignment` TeReGen omits assignee/assignees on SLFO
         // rows, so an assignment-derived field would render a false
@@ -302,28 +330,31 @@ impl Command for Updates {
             }
         }
 
-        // One query per group (none = one ungrouped query): TeReGen has no OR
-        // semantics for a repeated `review_group` param (the last wins), and the
-        // filter cannot be replicated client-side — the server matches SLFO rows
-        // against a group without serialising `review_groups` on them.
+        // One query per group and assignee (none = one unfiltered query):
+        // TeReGen has no OR semantics for a repeated `review_group` param (the
+        // last wins), and the filter cannot be replicated client-side — the
+        // server matches SLFO rows against a group without serialising
+        // `review_groups` on them.
         let groups: Vec<Option<&str>> = if review_groups.is_empty() {
             vec![None]
         } else {
             review_groups.iter().map(|g| Some(g.as_str())).collect()
         };
-        let multi = groups.len() > 1;
+        let assignee_filters: Vec<Option<&str>> = if assignees.is_empty() {
+            vec![None]
+        } else {
+            assignees.iter().map(|a| Some(a.as_str())).collect()
+        };
+        let status_filter = status.as_deref();
         let queries: Vec<UpdatesQuery<'_>> = groups
             .iter()
-            .map(|g| {
-                query_for(
-                    *g,
-                    status.as_deref(),
-                    assignee.as_deref(),
-                    unassigned,
-                    want_assignment,
-                )
+            .flat_map(|g| {
+                assignee_filters
+                    .iter()
+                    .map(move |a| query_for(*g, status_filter, *a, unassigned, want_assignment))
             })
             .collect();
+        let multi = queries.len() > 1;
         // Bounded so a scripted thirty-`-G` call does not open thirty
         // connections; `buffered` keeps batches in `-G` order. Materialised
         // eagerly: a lazy `map` closure trips a higher-ranked-lifetime limit.
@@ -345,8 +376,9 @@ impl Command for Updates {
                 CommandError::Other("Update queue query returned a malformed response".to_owned())
             })?;
             for row in batch {
-                // A row can sit in several groups. One without an id is kept,
-                // never silently dropped. A single query cannot repeat a row.
+                // A row can sit in several groups, or under both `--mine`
+                // logins. One without an id is kept, never silently dropped.
+                // A single query cannot repeat a row.
                 let fresh = !multi
                     || match row.get("id").and_then(Value::as_str) {
                         Some(id) => seen.insert(id.to_owned()),
@@ -369,13 +401,22 @@ impl Command for Updates {
             });
         }
 
+        if let Some(note) = &note {
+            session.display.println(&format!("note: {note}"));
+        }
         if rows.is_empty() {
             // Keep --json output parseable even for an empty queue.
-            session.display.println(if as_json {
-                "[]"
+            let empty = if as_json {
+                "[]".to_owned()
+            } else if assignees.is_empty() {
+                "No updates in the queue".to_owned()
             } else {
-                "No updates in the queue"
-            });
+                format!(
+                    "No updates assigned to {} in the queue",
+                    assignees.join(" or ")
+                )
+            };
+            session.display.println(&empty);
             return Ok(());
         }
 
@@ -475,6 +516,64 @@ impl Command for Updates {
             session.display.println(&notice);
         }
         Ok(())
+    }
+}
+
+/// The logins `--mine` asks about, and a note naming the login source that
+/// failed, if any.
+struct MineLogins {
+    logins: Vec<String>,
+    note: Option<String>,
+}
+
+/// `--mine` asks about the logins assignments are recorded under: the oscrc
+/// `user` for `obs_api_url` (`principal`), which OBS review actions record,
+/// and the Gitea token owner's login (`gitea`, `None` without a token), which
+/// Gitea markers record. Either alone still answers for the updates recorded
+/// under it, so a failed one becomes a note; with neither there is nobody to
+/// ask about.
+fn mine_logins(
+    obs_api_url: &str,
+    principal: Result<String, String>,
+    gitea: Option<Result<String, GiteaError>>,
+) -> Result<MineLogins, CommandError> {
+    let no_principal = |reason: String| {
+        format!(
+            "the OBS login (the oscrc user for [{}]) could not be read: {reason}",
+            sanitize_url(obs_api_url)
+        )
+    };
+    let no_gitea = |e: GiteaError| {
+        format!("the Gitea login (the [gitea] token's owner) could not be resolved: {e}")
+    };
+    let only = |login: String, why: String| MineLogins {
+        note: Some(format!("{why}; listing only updates assigned to {login}")),
+        logins: vec![login],
+    };
+    match (principal, gitea) {
+        (Ok(principal), None) => Ok(MineLogins {
+            logins: vec![principal],
+            note: None,
+        }),
+        (Ok(principal), Some(Ok(login))) => {
+            let mut logins = vec![principal];
+            if !logins.contains(&login) {
+                logins.push(login);
+            }
+            Ok(MineLogins { logins, note: None })
+        }
+        (Ok(principal), Some(Err(e))) => Ok(only(principal, no_gitea(e))),
+        (Err(reason), Some(Ok(login))) => Ok(only(login, no_principal(reason))),
+        (Err(reason), None) => Err(CommandError::Other(format!(
+            "--mine has no login to ask about: {}, and no [gitea] token is set; \
+             fix the oscrc or pass --assignee <login>",
+            no_principal(reason)
+        ))),
+        (Err(reason), Some(Err(e))) => Err(CommandError::Other(format!(
+            "--mine has no login to ask about: {}, and {}; pass --assignee <login>",
+            no_principal(reason),
+            no_gitea(e)
+        ))),
     }
 }
 
@@ -1104,7 +1203,7 @@ mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches};
     use mtui_config::Config;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -1315,30 +1414,426 @@ mod tests {
         assert!(buf.contents().contains("No updates in the queue"));
     }
 
-    #[tokio::test]
-    async fn mine_uses_session_user_and_limits_rows() {
-        let server = MockServer::start().await;
+    // ------------------------------------------------------------ --mine
+
+    /// The OBS API whose oscrc section `--mine` reads.
+    const MINE_OBS_API: &str = "https://api.example.invalid";
+    /// The oscrc `user` for [`MINE_OBS_API`].
+    const PRINCIPAL: &str = "qamuser";
+    /// The local session user, which `--mine` must never ask about.
+    const LOCAL_USER: &str = "localuser";
+    const GITEA_TOKEN: &str = "s3cr3t-gitea-token";
+
+    /// Points `$OSC_CONFIG` at an oscrc holding `body`. Only valid inside
+    /// `#[serial(osc_config_env)]`.
+    fn oscrc_with(dir: &tempfile::TempDir, body: &str) -> crate::commands::testkit::NoOscrc {
+        let oscrc = dir.path().join("oscrc");
+        std::fs::write(&oscrc, body).unwrap();
+        crate::commands::testkit::NoOscrc::set_to(&oscrc)
+    }
+
+    /// An oscrc naming [`PRINCIPAL`] for [`MINE_OBS_API`], with a signing key.
+    fn principal_oscrc(dir: &tempfile::TempDir) -> crate::commands::testkit::NoOscrc {
+        oscrc_with(
+            dir,
+            &format!("[{MINE_OBS_API}]\nuser = {PRINCIPAL}\nsshkey = SHA256:abc123\n"),
+        )
+    }
+
+    /// A session whose TeReGen and Gitea are both `server`, with a Gitea token
+    /// only when `gitea` is set.
+    fn mine_session(
+        server: &MockServer,
+        gitea: bool,
+    ) -> (Session, crate::commands::testkit::Buffer) {
+        let (mut session, buf) = teregen_session(server);
+        session.config.obs_api_url = MINE_OBS_API.to_owned();
+        session.config.session_user = LOCAL_USER.to_owned();
+        session.config.gitea_url = server.uri();
+        if gitea {
+            session.config.gitea_token = GITEA_TOKEN.to_owned();
+        }
+        (session, buf)
+    }
+
+    /// `GET /api/v1/user` answering `login` to [`GITEA_TOKEN`] alone, once.
+    async fn mount_gitea_login(server: &MockServer, login: &str) {
+        Mock::given(method("GET"))
+            .and(path("/api/v1/user"))
+            .and(header("Authorization", format!("token {GITEA_TOKEN}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"login": login})),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    /// The queue for `assignee`, asked for `times` times.
+    async fn mount_assigned(
+        server: &MockServer,
+        assignee: &str,
+        rows: serde_json::Value,
+        times: u64,
+    ) {
         Mock::given(method("GET"))
             .and(path("/updates"))
-            .and(query_param("assignee", "tester"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
-                {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "a", "assignee": "tester"},
-                {"priority": 2, "status": "testing", "kind": "Maintenance", "id": "b", "assignee": "tester"},
-            ]})))
-            .mount(&server)
+            .and(query_param("assignee", assignee))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": rows
+            })))
+            .expect(times)
+            .mount(server)
             .await;
+    }
 
-        let (mut session, buf) = empty_session();
-        let mut config = Config::default();
-        config.teregen_api = server.uri();
-        config.session_user = "tester".to_owned();
-        session.config = config;
+    fn assigned_row(id: &str, priority: i64, assignee: &str) -> serde_json::Value {
+        serde_json::json!({
+            "priority": priority, "status": "testing", "kind": "Maintenance",
+            "id": id, "assignee": assignee
+        })
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_uses_the_oscrc_principal_and_limits_rows() {
+        let server = MockServer::start().await;
+        let rows = serde_json::json!([
+            assigned_row("a", 1, PRINCIPAL),
+            assigned_row("b", 2, PRINCIPAL),
+        ]);
+        mount_assigned(&server, PRINCIPAL, rows, 1).await;
+        mount_assigned(&server, LOCAL_USER, serde_json::json!([]), 0).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, false);
 
         let args = matches(&Updates, &["--mine", "--limit", "1"]);
         Updates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
         assert!(out.contains("Update queue (1):"), "{out}");
-        assert!(out.contains("assignee=tester"), "{out}");
+        assert!(out.contains(&format!("assignee={PRINCIPAL}")), "{out}");
+        assert!(!out.contains("note:"), "{out}");
+    }
+
+    /// Assignments are recorded under the oscrc `user` whether or not this
+    /// machine can sign as it: no `sshkey` (a password or keyring oscrc) and
+    /// a missing key file both still yield the login.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_reads_the_oscrc_user_without_a_signing_key() {
+        for body in [
+            format!("[{MINE_OBS_API}]\nuser = {PRINCIPAL}\n"),
+            format!(
+                "[{MINE_OBS_API}]\nuser = {PRINCIPAL}\n\
+                 credentials_mgr_class = osc.credentials.KeyringCredentialsManager\n"
+            ),
+            format!("[{MINE_OBS_API}]\nuser = {PRINCIPAL}\nsshkey = /nonexistent/id_missing\n"),
+        ] {
+            let server = MockServer::start().await;
+            let rows = serde_json::json!([assigned_row("a", 1, PRINCIPAL)]);
+            mount_assigned(&server, PRINCIPAL, rows, 1).await;
+            let dir = tempfile::TempDir::new().unwrap();
+            let _oscrc = oscrc_with(&dir, &body);
+            let (mut session, buf) = mine_session(&server, false);
+
+            let args = matches(&Updates, &["--mine"]);
+            let result = Updates.call(&mut session, &args).await;
+            assert!(result.is_ok(), "{body}: {result:?}");
+            let out = buf.contents();
+            assert!(out.contains("Update queue (1):"), "{body}: {out}");
+            assert!(!out.contains("note:"), "{body}: {out}");
+        }
+    }
+
+    /// Headlessly the refusal tells the three oscrc faults apart without
+    /// naming the oscrc file.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_names_the_oscrc_fault_without_a_path() {
+        let server = MockServer::start().await;
+        let other = format!("[https://other.example.invalid]\nuser = {PRINCIPAL}\n");
+        let no_user = format!("[{MINE_OBS_API}]\nsshkey = SHA256:abc123\n");
+        for (body, fault) in [
+            (None, "no oscrc file"),
+            (Some(other), "no oscrc section for it"),
+            (Some(no_user), "no user in its oscrc section"),
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let _oscrc = match &body {
+                Some(body) => oscrc_with(&dir, body),
+                None => crate::commands::testkit::NoOscrc::set(),
+            };
+            let (mut session, _buf) = mine_session(&server, false);
+
+            let args = matches(&Updates, &["--mine"]);
+            let msg = Updates
+                .call(&mut session, &args)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(msg.contains(&format!(": {fault},")), "{msg}");
+            assert!(msg.contains("the OBS login"), "{msg}");
+            let tmp = dir.path().display().to_string();
+            assert!(!msg.contains(&tmp), "headless leaks a path: {msg}");
+            assert!(
+                !msg.contains("/nonexistent"),
+                "headless leaks a path: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_merges_the_gitea_login_rows_once_each_by_priority() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, "giteauser").await;
+        let obs_rows = serde_json::json!([
+            assigned_row("row-both", 5, PRINCIPAL),
+            assigned_row("row-obs", 1, PRINCIPAL),
+        ]);
+        mount_assigned(&server, PRINCIPAL, obs_rows, 1).await;
+        let gitea_rows = serde_json::json!([
+            assigned_row("row-both", 5, PRINCIPAL),
+            assigned_row("row-gitea", 3, "giteauser"),
+        ]);
+        mount_assigned(&server, "giteauser", gitea_rows, 1).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Update queue (3):"), "{out}");
+        assert_eq!(out.matches("row-both").count(), 1, "{out}");
+        let (both, gitea, obs) = (
+            out.find("row-both").unwrap(),
+            out.find("row-gitea").unwrap(),
+            out.find("row-obs").unwrap(),
+        );
+        assert!(both < gitea && gitea < obs, "order wrong: {out}");
+        assert!(!out.contains(GITEA_TOKEN), "{out}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_asks_once_when_the_gitea_login_is_the_principal() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, PRINCIPAL).await;
+        let rows = serde_json::json!([assigned_row("a", 1, PRINCIPAL)]);
+        mount_assigned(&server, PRINCIPAL, rows, 1).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Update queue (1):"), "{out}");
+        // wiremock verifies the single queue query on drop.
+    }
+
+    #[tokio::test]
+    async fn empty_assignee_answer_names_the_login() {
+        let server = MockServer::start().await;
+        mount_assigned(&server, "bob", serde_json::json!([]), 1).await;
+        let (mut session, buf) = teregen_session(&server);
+
+        let args = matches(&Updates, &["--assignee", "bob"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            buf.contents().trim_end(),
+            "No updates assigned to bob in the queue"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn empty_mine_answer_names_both_logins() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, "giteauser").await;
+        mount_assigned(&server, PRINCIPAL, serde_json::json!([]), 1).await;
+        mount_assigned(&server, "giteauser", serde_json::json!([]), 1).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            buf.contents().trim_end(),
+            format!("No updates assigned to {PRINCIPAL} or giteauser in the queue")
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn empty_mine_json_stays_an_empty_array() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, "giteauser").await;
+        mount_assigned(&server, PRINCIPAL, serde_json::json!([]), 1).await;
+        mount_assigned(&server, "giteauser", serde_json::json!([]), 1).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine", "--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert_eq!(buf.contents(), "[]\n");
+    }
+
+    /// Headless, the refusal names the OBS api but no local path, and no
+    /// queue is asked for any stand-in login.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_refuses_an_unreadable_oscrc_without_a_gitea_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": []
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let _oscrc = crate::commands::testkit::NoOscrc::set();
+        let (mut session, buf) = mine_session(&server, false);
+
+        let args = matches(&Updates, &["--mine"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("the OBS login"), "{msg}");
+        assert!(msg.contains(MINE_OBS_API), "{msg}");
+        assert!(msg.contains("no oscrc file"), "{msg}");
+        assert!(msg.contains("no [gitea] token"), "{msg}");
+        assert!(msg.contains("--assignee"), "{msg}");
+        assert!(
+            !msg.contains("/nonexistent"),
+            "headless leaks a path: {msg}"
+        );
+        assert!(!msg.contains(LOCAL_USER), "{msg}");
+        assert_eq!(buf.contents(), "", "nothing listed");
+    }
+
+    /// At the REPL the oscrc reason (which names local files) is shown.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_at_the_repl_names_the_oscrc_reason() {
+        let server = MockServer::start().await;
+        let _oscrc = crate::commands::testkit::NoOscrc::set();
+        let (mut session, _buf) = mine_session(&server, false);
+        session.is_repl = true;
+
+        let args = matches(&Updates, &["--mine"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("/nonexistent/oscrc-for-tests"), "{msg}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_lists_the_gitea_login_alone_with_a_note_without_an_oscrc() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, "giteauser").await;
+        let rows = serde_json::json!([assigned_row("row-gitea", 3, "giteauser")]);
+        mount_assigned(&server, "giteauser", rows, 1).await;
+        let _oscrc = crate::commands::testkit::NoOscrc::set();
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let note = out.lines().next().unwrap_or_default();
+        assert!(note.starts_with("note: the OBS login "), "{out}");
+        assert!(note.contains(MINE_OBS_API), "{out}");
+        assert!(note.contains("could not be read: no oscrc file"), "{out}");
+        assert!(note.contains("only updates assigned to giteauser"), "{out}");
+        assert!(
+            !note.contains("/nonexistent"),
+            "headless leaks a path: {out}"
+        );
+        assert!(out.contains("Update queue (1):"), "{out}");
+        assert!(out.contains("row-gitea"), "{out}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_notes_a_failing_gitea_lookup_and_lists_the_principal() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/user"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        mount_assigned(&server, PRINCIPAL, serde_json::json!([]), 1).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let mut lines = out.lines();
+        let note = lines.next().unwrap_or_default();
+        assert!(note.starts_with("note: the Gitea login "), "{out}");
+        assert!(note.contains("500"), "the reason is kept: {out}");
+        assert!(
+            note.contains(&format!("only updates assigned to {PRINCIPAL}")),
+            "{out}"
+        );
+        assert_eq!(
+            lines.next(),
+            Some(format!("No updates assigned to {PRINCIPAL} in the queue").as_str()),
+            "{out}"
+        );
+        assert!(!out.contains(GITEA_TOKEN), "{out}");
+    }
+
+    /// `--json` cannot carry a note, so a login it could not resolve fails
+    /// the call instead of vanishing from a valid-looking array.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_json_refuses_a_partial_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/user"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        mount_assigned(&server, PRINCIPAL, serde_json::json!([]), 0).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine", "--json"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Gitea"), "{msg}");
+        assert!(msg.contains("--assignee"), "{msg}");
+        assert_eq!(buf.contents(), "", "no JSON printed");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_fails_when_neither_login_resolves() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/user"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let _oscrc = crate::commands::testkit::NoOscrc::set();
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("oscrc"), "{msg}");
+        assert!(msg.contains("Gitea"), "{msg}");
+        assert!(!msg.contains(GITEA_TOKEN), "{msg}");
+        assert_eq!(buf.contents(), "", "nothing listed");
     }
 
     // ------------------------------------------------ repeatable review-group

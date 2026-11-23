@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use ini::Ini;
+use thiserror::Error;
 use tracing::warn;
 
 use super::errors::ObsError;
@@ -186,6 +187,142 @@ fn warn_loose_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn warn_loose_permissions(_path: &Path) {}
 
+/// Why the oscrc yields no `user` for an apiurl. The messages name the oscrc
+/// file; [`OscrcError::fault`] says which step failed without naming it.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum OscrcError {
+    /// No oscrc where `osc` would look.
+    #[error(
+        "osc config file not found: {}; create an oscrc with a [{apiurl}] \
+         section (e.g. run 'osc -A {apiurl} whoami' once)",
+        path.display()
+    )]
+    NotFound {
+        /// Where the oscrc was looked for.
+        path: PathBuf,
+        /// The apiurl whose section was wanted.
+        apiurl: String,
+    },
+    /// The oscrc is not valid INI.
+    #[error("could not parse oscrc {}", path.display())]
+    Unparseable {
+        /// The oscrc that failed to parse.
+        path: PathBuf,
+    },
+    /// No section header equals the apiurl.
+    #[error(
+        "oscrc {} has no [{apiurl}] section; the native OBS backend reads \
+         credentials from the section whose header equals the apiurl",
+        path.display()
+    )]
+    NoSection {
+        /// The oscrc that was read.
+        path: PathBuf,
+        /// The apiurl whose section was wanted.
+        apiurl: String,
+    },
+    /// The section has no `user`.
+    #[error("oscrc [{apiurl}] has no 'user'")]
+    NoUser {
+        /// The apiurl whose section lacks a `user`.
+        apiurl: String,
+    },
+}
+
+impl OscrcError {
+    /// Which step failed, naming no local file, for output that must not
+    /// carry a path.
+    #[must_use]
+    pub fn fault(&self) -> &'static str {
+        match self {
+            Self::NotFound { .. } => "no oscrc file",
+            Self::Unparseable { .. } => "the oscrc does not parse",
+            Self::NoSection { .. } => "no oscrc section for it",
+            Self::NoUser { .. } => "no user in its oscrc section",
+        }
+    }
+}
+
+impl From<OscrcError> for ObsError {
+    fn from(e: OscrcError) -> Self {
+        Self::Config(e.to_string())
+    }
+}
+
+/// The parsed oscrc, the section matching an apiurl, and that section's
+/// `user`: what both [`read_user`] and [`read_credentials`] need.
+struct UserSection {
+    path: PathBuf,
+    ini: Ini,
+    section: String,
+    user: String,
+}
+
+fn user_section(apiurl: &str) -> Result<UserSection, OscrcError> {
+    let path = default_conffile();
+
+    if !path.is_file() {
+        return Err(OscrcError::NotFound {
+            path,
+            apiurl: apiurl.to_owned(),
+        });
+    }
+
+    warn_loose_permissions(&path);
+
+    // Never interpolate the parser error: rust-ini's message carries no source
+    // content today, but a fixed message keeps the secret-leak guarantee
+    // independent of the parser.
+    let Ok(ini) = Ini::load_from_file(&path) else {
+        return Err(OscrcError::Unparseable { path });
+    };
+
+    // osc normalises trailing path slashes when matching apiurl sections
+    // (sanitize_apiurl), so [https://api.suse.de/] matches api.suse.de too.
+    let wanted = apiurl.trim_end_matches('/');
+    let section = ini
+        .sections()
+        .flatten()
+        .find(|name| name.trim_end_matches('/') == wanted)
+        .map(str::to_owned);
+    let Some(section) = section else {
+        return Err(OscrcError::NoSection {
+            path,
+            apiurl: apiurl.to_owned(),
+        });
+    };
+
+    let user = ini
+        .get_from(Some(section.as_str()), "user")
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if user.is_empty() {
+        return Err(OscrcError::NoUser {
+            apiurl: apiurl.to_owned(),
+        });
+    }
+    Ok(UserSection {
+        path,
+        ini,
+        section,
+        user,
+    })
+}
+
+/// The oscrc `user` for `apiurl`, which is the login OBS records this
+/// account's review actions under. Unlike [`read_credentials`] it needs no
+/// signing key, so a password, keyring or key-less oscrc still answers.
+///
+/// # Errors
+///
+/// [`OscrcError`] when there is no oscrc, it does not parse, or it has no
+/// section or `user` for `apiurl`.
+pub fn read_user(apiurl: &str) -> Result<String, OscrcError> {
+    user_section(apiurl).map(|found| found.user)
+}
+
 /// Read SSH-signature credentials for `apiurl` from oscrc.
 ///
 /// `apiurl` is the OBS API URL whose oscrc section to read (its section header
@@ -198,39 +335,12 @@ fn warn_loose_permissions(_path: &Path) {}
 /// key file — naming the real failing file/section. Never prompts, never leaks
 /// the offending source line.
 pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
-    let path = default_conffile();
-
-    if !path.is_file() {
-        return Err(ObsError::Config(format!(
-            "osc config file not found: {}; create an oscrc with a [{apiurl}] \
-             section (e.g. run 'osc -A {apiurl} whoami' once)",
-            path.display()
-        )));
-    }
-
-    warn_loose_permissions(&path);
-
-    // Never interpolate the parser error: rust-ini's message carries no source
-    // content today, but a fixed message keeps the secret-leak guarantee
-    // independent of the parser.
-    let ini = Ini::load_from_file(&path)
-        .map_err(|_| ObsError::Config(format!("could not parse oscrc {}", path.display())))?;
-
-    // osc normalises trailing path slashes when matching apiurl sections
-    // (sanitize_apiurl), so [https://api.suse.de/] matches api.suse.de too.
-    let wanted = apiurl.trim_end_matches('/');
-    let section_name = ini
-        .sections()
-        .flatten()
-        .find(|name| name.trim_end_matches('/') == wanted)
-        .map(str::to_owned);
-    let Some(section_name) = section_name else {
-        return Err(ObsError::Config(format!(
-            "oscrc {} has no [{apiurl}] section; the native OBS backend reads \
-             credentials from the section whose header equals the apiurl",
-            path.display()
-        )));
-    };
+    let UserSection {
+        path,
+        ini,
+        section: section_name,
+        user,
+    } = user_section(apiurl)?;
 
     // `sshkey` inherits from [general] when the host section omits it, matching
     // osc's FromParent resolution; `user` and `credentials_mgr_class` do not
@@ -248,14 +358,6 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
             .trim()
             .to_owned()
     };
-
-    let user = ini
-        .get_from(Some(section_name.as_str()), "user")
-        .unwrap_or("")
-        .trim();
-    if user.is_empty() {
-        return Err(ObsError::Config(format!("oscrc [{apiurl}] has no 'user'")));
-    }
 
     // Resolve the ssh key FIRST and ignore `credentials_mgr_class` when one is
     // configured: osc disables its password path for the transient manager and
@@ -300,7 +402,7 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
 
     Ok(ObsCredentials {
         apiurl: apiurl.to_owned(),
-        user: user.to_owned(),
+        user,
         source: path.display().to_string(),
         sshkey_path: key_path,
         sshkey_fingerprint: fingerprint,
