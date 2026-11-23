@@ -414,6 +414,12 @@ fn host_key(target: &mtui_hosts::Target) -> Option<(String, bool)> {
 /// `(release, transactional)` key are always spelled out, so the message never
 /// asks the operator to infer the key.
 fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
+    format!("{} ({})", target.hostname(), unresolved_key(target))
+}
+
+/// [`unresolved_host_label`] without the host: `Product version,
+/// transactional|non-transactional`.
+fn unresolved_key(target: &mtui_hosts::Target) -> String {
     let base = target.system().get_base();
     let product = if base.name.is_empty() || base.name == "unknown" {
         "unrecognised product".to_owned()
@@ -427,7 +433,7 @@ fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
     } else {
         "non-transactional"
     };
-    format!("{} ({product}, {mode})", target.hostname())
+    format!("{product}, {mode}")
 }
 
 /// Resolves one host's [`ActionCommands`] for `role`, or logs and returns
@@ -458,12 +464,12 @@ fn resolve_doer(
 /// the operator is told: an out-of-scope host left in the map draws that
 /// filter's "skipping reboot" WARN, naming a host the caller had already
 /// reported as excluded from this run.
-fn build_reboot_map(
-    targets: &HostsGroup,
+fn build_reboot_map<'t>(
+    targets: &'t HostsGroup,
     registry: &WorkflowRegistry,
     role: Role,
     selected: Option<&BTreeSet<String>>,
-) -> Result<BTreeMap<String, String>, Vec<String>> {
+) -> Result<BTreeMap<String, String>, Vec<&'t mtui_hosts::Target>> {
     let mut reboot = BTreeMap::new();
     let mut unresolved = Vec::new();
     for target in targets.targets() {
@@ -476,11 +482,11 @@ fn build_reboot_map(
         let Some((release, transactional)) = host_key(target) else {
             // No parsed system: the host cannot be prepared or downgraded,
             // so name it now rather than failing it key-less downstream.
-            unresolved.push(unresolved_host_label(target));
+            unresolved.push(target);
             continue;
         };
         let Some(doer) = resolve_doer(registry, role, &release, transactional) else {
-            unresolved.push(unresolved_host_label(target));
+            unresolved.push(target);
             continue;
         };
         if let Ok(Some(reboot_cmd)) = doer.render_reboot() {
@@ -1136,9 +1142,27 @@ async fn perform_prepare_classified(
     let reboot = match build_reboot_map(targets, &registry, Role::Prepare, selected) {
         Ok(reboot) => reboot,
         Err(unresolved) => {
-            return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
-                format!("missing preparer: {}", unresolved.join("; ")),
-            )));
+            // Beside a refusal, one failure per host, so the summary's header
+            // names each and no host's clause runs into another's.
+            let stopped = if refused.is_empty() {
+                let labels: Vec<String> =
+                    unresolved.into_iter().map(unresolved_host_label).collect();
+                vec![UpdateError::reason_only(format!(
+                    "missing preparer: {}",
+                    labels.join("; ")
+                ))]
+            } else {
+                unresolved
+                    .into_iter()
+                    .map(|t| {
+                        UpdateError::new(
+                            format!("missing preparer ({})", unresolved_key(t)),
+                            t.hostname(),
+                        )
+                    })
+                    .collect()
+            };
+            return and_refused(stopped, refused).map_err(PrepareFailure::DidNotRun);
         }
     };
 
@@ -1147,9 +1171,8 @@ async fn perform_prepare_classified(
         None => targets.update_lock().await,
     };
     if let Err(e) = locked {
-        return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
-            e.to_string(),
-        )));
+        let stopped = vec![UpdateError::reason_only(e.to_string())];
+        return and_refused(stopped, refused).map_err(PrepareFailure::DidNotRun);
     }
 
     // try/finally: the body runs, then we always unlock.
@@ -1176,6 +1199,17 @@ async fn perform_prepare_classified(
     result
 }
 
+/// `stopped`, the failures that ended a prepare before its verdict, followed
+/// by the refusals that verdict would have named, so a refused host is named
+/// whatever stopped the prepare, and in the error alone, as on the normal path.
+///
+/// Any refusal makes the result [`aggregate_failures`]' summary,
+/// `prepare failed on <hosts> (<detail>)`, which carries no `host` even when a
+/// single host failed beside it.
+fn and_refused(stopped: Vec<UpdateError>, refused: Vec<UpdateError>) -> Result<(), UpdateError> {
+    aggregate_failures("prepare", stopped.into_iter().chain(refused).collect())
+}
+
 /// The locked body of [`perform_prepare`], factored out so the caller's
 /// `unlock()` runs unconditionally.
 ///
@@ -1187,7 +1221,7 @@ async fn perform_prepare_classified(
 /// filter below warns a host by name *before* `dispatched` (⊆ `lists`) gets to
 /// drop it. A hold lost in the reboot gap is reported on `diagnostics`.
 /// `refused` names hosts the caller already left out of `selected`, joined to
-/// this prepare's own verdicts.
+/// this prepare's own verdicts, or to the failures that stop it early.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -1224,7 +1258,7 @@ async fn prepare_body(
                 "failed to prepare host; stopping"
             );
         }
-        return aggregate_failures("prepare", repo_failures).map_err(PrepareFailure::DidNotRun);
+        return and_refused(repo_failures, refused).map_err(PrepareFailure::DidNotRun);
     }
 
     // Hosts a prepare command reached, and hosts a package failed on. Both are
@@ -1807,9 +1841,10 @@ pub async fn perform_downgrade(
     let reboot = match build_reboot_map(targets, &registry, Role::Downgrade, None) {
         Ok(reboot) => reboot,
         Err(unresolved) => {
+            let labels: Vec<String> = unresolved.into_iter().map(unresolved_host_label).collect();
             return Err(UpdateError::reason_only(format!(
                 "missing downgrader: {}",
-                unresolved.join("; ")
+                labels.join("; ")
             )));
         }
     };
@@ -12194,5 +12229,176 @@ mod tests {
                 handle.commands()
             );
         }
+    }
+
+    // --- perform_prepare --update: a refusal survives an early stop --------
+
+    /// The refusal [`sles_aarch64_target`] gets from a `prepare -u` over
+    /// [`report_with_rrid`].
+    const H2_REFUSED: &str = "h2: no repository of this update matches the host's products \
+                              (SLES-15.5.aarch64); nothing was installed";
+
+    /// How many times `err` and `diagnostics` together name the refusal.
+    fn times_refused(err: &UpdateError, diagnostics: &[Diagnostic]) -> usize {
+        std::iter::once(err.to_string())
+            .chain(diagnostics.iter().map(|d| d.text.clone()))
+            .map(|text| text.matches("no repository of this update matches").count())
+            .sum()
+    }
+
+    /// A `prepare -u` over `group` and [`report_with_rrid`] plus `extra` repos.
+    async fn testing_prepare(
+        group: &mut HostsGroup,
+        extra: &[SystemProduct],
+    ) -> (UpdateError, Vec<Diagnostic>) {
+        let mut report = report_with_rrid();
+        for product in extra {
+            report
+                .base_mut()
+                .update_repos
+                .insert(product.clone(), format!("https://example/{product}"));
+        }
+        let mut diagnostics = Vec::new();
+        let err = perform_prepare(
+            group,
+            &report,
+            &report.get_package_list(),
+            false,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await
+        .expect_err("a refused host fails the prepare");
+        (err, diagnostics)
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_names_a_refused_host_once() {
+        let (h1, _) = sles_target("h1", "");
+        let (h2, _) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+
+        let (err, diagnostics) = testing_prepare(&mut group, &[]).await;
+
+        assert_eq!(err.to_string(), H2_REFUSED);
+        assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
+    }
+
+    /// A transactional `gentoo 1` host: no preparer covers its release, and
+    /// [`testing_prepare`] gets a repository for it so it is not refused.
+    fn gentoo_target(hostname: &str) -> Target {
+        let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        t
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_names_a_refused_host_when_a_peer_has_no_preparer() {
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![gentoo_target("h1"), h2], false);
+
+        let (err, diagnostics) =
+            testing_prepare(&mut group, &[SystemProduct::new("gentoo", "1", "x86_64")]).await;
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "prepare failed on h1, h2 (h1: missing preparer (gentoo 1, transactional); \
+                 {H2_REFUSED})"
+            )
+        );
+        assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+    }
+
+    /// Two hosts without a preparer and a refused one: each clause starts with
+    /// its own host, so none of them reads as part of another's.
+    #[tokio::test]
+    async fn testing_prepare_names_every_host_when_two_peers_have_no_preparer() {
+        let (h2, _) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![gentoo_target("h1"), h2, gentoo_target("h3")], false);
+
+        let (err, diagnostics) =
+            testing_prepare(&mut group, &[SystemProduct::new("gentoo", "1", "x86_64")]).await;
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "prepare failed on h1, h2, h3 (h1: missing preparer (gentoo 1, transactional); \
+                 h3: missing preparer (gentoo 1, transactional); {H2_REFUSED})"
+            )
+        );
+        assert_eq!(err.host, None, "a summary carries no host");
+        assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_names_a_refused_host_when_a_peer_is_locked() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut h1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        h1.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+
+        let (err, diagnostics) = testing_prepare(&mut group, &[]).await;
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "prepare failed on h2 (Hosts locked: h1: held by alice since Tuesday, \
+                 14.11.2023 22:13 UTC; {H2_REFUSED})"
+            )
+        );
+        assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_names_a_refused_host_when_a_peers_repository_add_fails() {
+        let (h1, _) = sles_target_all_commands_fail("h1");
+        let (h2, h2_handle) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+
+        let (err, diagnostics) = testing_prepare(&mut group, &[]).await;
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "prepare failed on h1, h2 (h1: adding repo issue-SLES:15.5:p=42:7 failed; \
+                 {H2_REFUSED})"
+            )
+        );
+        assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
+        assert!(
+            h2_handle.commands().is_empty(),
+            "{:?}",
+            h2_handle.commands()
+        );
     }
 }

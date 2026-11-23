@@ -349,7 +349,9 @@ and nothing is written there.
   on the whole group. `prepare` with `update` set fails such a host by name the
   same way (`…; nothing was installed`), before anything runs on it, instead of
   installing from the repositories it already had; the other hosts are
-  prepared.
+  prepared. The refusal is in the tool's error, once, also when a peer stops
+  the prepare before its verdict: then one `prepare failed on <hosts> (…)`
+  summary carries both.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a host excluded because its test update
   repository genuinely failed to register (its partial add is undone and its

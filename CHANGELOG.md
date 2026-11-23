@@ -482,6 +482,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `prepare --update` names a host it refused because the update's
+  repositories do not reach it even when a peer stops the prepare first: a
+  peer's missing preparer, another tester's lock on a peer, or a peer's failed
+  repository add. The refusal was dropped then, and surfaced only on the next
+  run, after the peer's problem was fixed. It now shares one `prepare failed on
+  <hosts> (…)` summary with the error that stopped the prepare, for example
+  `prepare failed on h1, h2 (h1: missing preparer (…); h2: no repository of
+  this update matches the host's products (…); nothing was installed)` (#818).
 - `export -t <host>` rewrites the install checks of the selected hosts only
   and keeps every other row of `testing.install.checks`, the row of a host no
   longer connected included. It used to replace them all with the selected
