@@ -475,6 +475,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A cancelled `reload_products` (MCP `job_cancel`, or Ctrl-C in the REPL)
+  stops at the next host instead of reloading every remaining host first, also
+  on hosts added with no template loaded; a host whose reload is in flight
+  still finishes or times out. The command fails as cancelled, naming the hosts
+  it reloaded and those it did not reach, unless a host had already failed,
+  which it still reports first (#816).
 - `reload_products` re-seeds the tracked packages of a host whose products
   changed, the way connecting does, so registering or removing a product
   during validation no longer needs the host removed and added again. A

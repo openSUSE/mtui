@@ -19,8 +19,11 @@ use crate::session::{PackageMeta, Reseed, Session};
 /// exhausts its own
 /// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget, keeps its
 /// previous system and the pass continues — but the command then fails naming
-/// those hosts. `-t/--target`-only, hence [`Scope::Active`]:
-/// the active template's host set, not once per loaded template.
+/// those hosts. A cancel stops the pass at the next host boundary, never mid-host:
+/// the command is then [`CommandError::Cancelled`], naming the hosts it reloaded
+/// and those it did not reach, unless a host failure collected first outranks it.
+/// `-t/--target`-only, hence [`Scope::Active`]: the active template's host set,
+/// not once per loaded template.
 pub struct ReloadProducts;
 
 #[async_trait]
@@ -57,11 +60,17 @@ impl Command for ReloadProducts {
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
         let mut lines: Vec<String> = Vec::new();
         let mut failed: Vec<&str> = Vec::new();
+        let mut reloaded: Vec<&str> = Vec::new();
+        let mut unreached: &[String] = &[];
         let budget = host_op_budget();
         let secs = budget.as_secs();
         // Per host, not one budget for the whole serial pass: a host that
         // exhausts its own is abandoned and the pass moves on.
-        for name in &hosts {
+        for (i, name) in hosts.iter().enumerate() {
+            if targets.cancel_requested() {
+                unreached = &hosts[i..];
+                break;
+            }
             if let Some(t) = targets.get_mut(name) {
                 let before = t.system().clone();
                 match tokio::time::timeout(budget, t.reload_system()).await {
@@ -80,6 +89,7 @@ impl Command for ReloadProducts {
                 tracing::info!(host = %name, "reloaded products");
                 let product = t.system().get_base().name.clone();
                 lines.push(format!("{name}: reloaded products ({product})"));
+                reloaded.push(name);
                 // With no package metadata there is nothing to seed from.
                 if *t.system() == before || package_meta.is_empty() {
                     continue;
@@ -102,13 +112,27 @@ impl Command for ReloadProducts {
         for line in &lines {
             session.display.println(line);
         }
-        if failed.is_empty() {
-            return Ok(());
+        let unreached = (!unreached.is_empty()).then(|| unreached.join(", "));
+        if !failed.is_empty() {
+            let failed = failed.join(", ");
+            return Err(CommandError::Other(match &unreached {
+                Some(rest) => {
+                    format!("reload_products failed on: {failed}; cancelled, not reached: {rest}")
+                }
+                None => format!("reload_products failed on: {failed}"),
+            }));
         }
-        Err(CommandError::Other(format!(
-            "reload_products failed on: {}",
-            failed.join(", ")
-        )))
+        if let Some(rest) = unreached {
+            let done = if reloaded.is_empty() {
+                "nothing reloaded".to_owned()
+            } else {
+                format!("reloaded {}", reloaded.join(", "))
+            };
+            return Err(CommandError::Cancelled(format!(
+                "{done}; not reached: {rest}"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -231,6 +255,181 @@ mod tests {
         let out = buf.contents();
         assert!(!out.contains("h1: reloaded products"), "{out}");
         assert!(out.contains("h1: reload failed"), "{out}");
+    }
+
+    /// A SLES 15-SP5 host whose products parse cleanly.
+    fn sles_15_sp5(host: &str) -> MockConnection {
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+        MockConnection::new(host)
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec())
+    }
+
+    /// Adds each `(name, conn)` to the active report as an enabled host.
+    fn add_hosts<const N: usize>(session: &mut Session, hosts: [(&str, MockConnection); N]) {
+        for (name, conn) in hosts {
+            let t = Target::with_connection(name, TargetState::Enabled, Box::new(conn));
+            session.targets_mut().add(t);
+        }
+    }
+
+    /// A cancel landing while the first host reloads stops the pass at the next
+    /// host boundary: the second host is never touched, the first is reported,
+    /// and the command is cancelled rather than failed.
+    #[tokio::test]
+    async fn a_cancel_during_a_host_stops_the_pass_before_the_next() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let first = sles_15_sp5("a-first").with_cancel_on_sftp_session(session.cancel_token());
+        let second = sles_15_sp5("b-second");
+        add_hosts(
+            &mut session,
+            [("a-first", first), ("b-second", second.clone())],
+        );
+
+        let args = matches(&ReloadProducts, &["-t", "a-first", "-t", "b-second"]);
+        let err = ReloadProducts.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Cancelled(m) if m == "reloaded a-first; not reached: b-second"),
+            "{err:?}"
+        );
+        assert!(
+            buf.contents().contains("a-first: reloaded products (SLES)"),
+            "{}",
+            buf.contents()
+        );
+        assert!(second.sftp_ops().is_empty(), "{:?}", second.sftp_ops());
+        assert!(second.commands().is_empty(), "{:?}", second.commands());
+    }
+
+    /// A cancel landing during the last host stops nothing, so the pass still
+    /// succeeds: the verdict is the loop's own, not the session token's.
+    #[tokio::test]
+    async fn a_cancel_during_the_last_host_leaves_a_completed_pass_ok() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let last = sles_15_sp5("z-last").with_cancel_on_sftp_session(session.cancel_token());
+        add_hosts(
+            &mut session,
+            [("a-first", sles_15_sp5("a-first")), ("z-last", last)],
+        );
+
+        let args = matches(&ReloadProducts, &["-t", "a-first", "-t", "z-last"]);
+        ReloadProducts.call(&mut session, &args).await.unwrap();
+
+        assert!(session.cancel_requested());
+        let out = buf.contents();
+        assert!(out.contains("a-first: reloaded products (SLES)"), "{out}");
+        assert!(out.contains("z-last: reloaded products (SLES)"), "{out}");
+    }
+
+    /// With no template loaded the hosts sit in the null report's group, and a
+    /// cancel still stops the pass there. Dispatched through `run`, whose
+    /// activation is what hands the group the session's token.
+    #[tokio::test]
+    async fn a_cancel_stops_the_pass_with_no_template_loaded() {
+        let (mut session, _buf) = crate::commands::testkit::empty_session();
+        let first = sles_15_sp5("a-first").with_cancel_on_sftp_session(session.cancel_token());
+        let second = sles_15_sp5("b-second");
+        add_hosts(
+            &mut session,
+            [("a-first", first), ("b-second", second.clone())],
+        );
+
+        let args = matches(&ReloadProducts, &["-t", "a-first", "-t", "b-second"]);
+        let err = ReloadProducts.run(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Cancelled(m) if m == "reloaded a-first; not reached: b-second"),
+            "{err:?}"
+        );
+        assert!(second.sftp_ops().is_empty(), "{:?}", second.sftp_ops());
+    }
+
+    /// A later dispatch with a fresh session token, as the REPL and the MCP job
+    /// layer install one per dispatch, reloads every host: the null group takes
+    /// the session's current token each time, never an earlier, cancelled one.
+    #[tokio::test]
+    async fn a_fresh_token_lets_a_later_dispatch_reload_with_no_template_loaded() {
+        let (mut session, buf) = crate::commands::testkit::empty_session();
+        let first = sles_15_sp5("a-first").with_cancel_on_sftp_session(session.cancel_token());
+        let second = sles_15_sp5("b-second");
+        add_hosts(
+            &mut session,
+            [("a-first", first), ("b-second", second.clone())],
+        );
+        let args = matches(&ReloadProducts, &["-t", "a-first", "-t", "b-second"]);
+        let err = ReloadProducts.run(&mut session, &args).await.unwrap_err();
+        assert!(matches!(&err, CommandError::Cancelled(_)), "{err:?}");
+        assert!(second.sftp_ops().is_empty(), "{:?}", second.sftp_ops());
+
+        session.set_cancel_token(tokio_util::sync::CancellationToken::new());
+        ReloadProducts.run(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert_eq!(
+            out.matches("a-first: reloaded products (SLES)").count(),
+            2,
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("b-second: reloaded products (SLES)").count(),
+            1,
+            "{out}"
+        );
+    }
+
+    /// A cancel already requested when the pass starts reloads nothing, and the
+    /// reply says so.
+    #[tokio::test]
+    async fn a_cancel_before_the_first_host_reloads_nothing() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let first = sles_15_sp5("a-first");
+        add_hosts(
+            &mut session,
+            [
+                ("a-first", first.clone()),
+                ("b-second", sles_15_sp5("b-second")),
+            ],
+        );
+        session.cancel_token().cancel();
+
+        let args = matches(&ReloadProducts, &["-t", "a-first", "-t", "b-second"]);
+        let err = ReloadProducts.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Cancelled(m)
+                if m == "nothing reloaded; not reached: a-first, b-second"),
+            "{err:?}"
+        );
+        assert!(first.sftp_ops().is_empty(), "{:?}", first.sftp_ops());
+    }
+
+    /// A host failure collected before the cancel outranks it: the command fails
+    /// naming that host, and says which hosts the cancel kept it from reaching.
+    #[tokio::test]
+    async fn a_failure_collected_before_a_cancel_outranks_it() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let second = sles_15_sp5("b-second");
+        let broken = MockConnection::new("a-broken")
+            .with_listing("/etc/products.d", ["SLES.prod", "sle-ha.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_open_error("/etc/products.d/sle-ha.prod")
+            .with_cancel_on_sftp_session(session.cancel_token());
+        add_hosts(
+            &mut session,
+            [("a-broken", broken), ("b-second", second.clone())],
+        );
+
+        let args = matches(&ReloadProducts, &["-t", "a-broken", "-t", "b-second"]);
+        let err = ReloadProducts.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m == "reload_products failed on: a-broken; cancelled, not reached: b-second"),
+            "{err:?}"
+        );
+        assert!(second.sftp_ops().is_empty(), "{:?}", second.sftp_ops());
     }
 
     #[tokio::test]
