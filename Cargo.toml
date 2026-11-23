@@ -282,7 +282,9 @@ sandogasa-rpmvercmp = "0.28"
 scraper = "0.29"
 # ser/de + config
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: an out-of-range literal in an open `extra` object must parse
+# to the same f64 after it is re-serialised.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # RFC-6901-pointer-bearing deserialize errors for the typed report document
 # (mtui-types::report_document): a missing required key becomes a typed error
 # naming the same pointer vocabulary teregen's `422 {pointers[]}` speaks.

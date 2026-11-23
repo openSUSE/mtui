@@ -13,7 +13,10 @@ found.
 Every seed is copied from an existing in-tree test fixture, so no product name,
 version or identifier here is invented. The `report_doc/unknown_key_*` seeds
 are `slfo_gitea.json` plus the one unknown key its regression test adds
-(`an_unknown_key_only_a_value_parse_rejects_is_not_a_panic`). To start a local
+(`an_unknown_key_only_a_value_parse_rejects_is_not_a_panic`).
+`report_doc/extra_number_beyond_f64.json` is `maintenance_openqa_l3.json` plus
+the open `testing.zz` object its regression test adds
+(`a_number_beyond_f64_exactness_in_an_open_object_survives_a_round_trip`). To start a local
 run warm:
 
 ```sh
