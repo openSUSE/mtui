@@ -573,6 +573,13 @@ pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
     hosts_arg(args).is_some_and(|v| !v.is_empty())
 }
 
+/// Whether `-t` selects particular hosts: omitted, or the deprecated `all`,
+/// it means every host.
+#[must_use]
+pub(crate) fn selects_hosts(args: &ArgMatches) -> bool {
+    hosts_arg(args).is_some_and(|hosts| !hosts.is_empty() && !hosts.iter().any(|h| h == "all"))
+}
+
 /// Resolves the hostnames a host-phase command acts on, **without** consuming
 /// the group.
 ///
@@ -604,7 +611,7 @@ pub fn select_names(
     };
 
     match hosts_arg(args) {
-        Some(hosts) if !hosts.is_empty() && !hosts.iter().any(|h| h == "all") => {
+        Some(hosts) if selects_hosts(args) => {
             for name in &hosts {
                 if !group.contains(name) {
                     return Err(mtui_hosts::HostError::NotConnected { host: name.clone() });
@@ -947,6 +954,14 @@ mod tests {
     fn named_hosts_reflects_flag() {
         assert!(!named_hosts(&parse(&[])));
         assert!(named_hosts(&parse(&["-t", "a"])));
+    }
+
+    #[test]
+    fn selects_hosts_excludes_the_all_sentinel() {
+        assert!(!selects_hosts(&parse(&[])));
+        assert!(!selects_hosts(&parse(&["-t", "all"])));
+        assert!(!selects_hosts(&parse(&["-t", "a", "-t", "all"])));
+        assert!(selects_hosts(&parse(&["-t", "a"])));
     }
 
     #[test]

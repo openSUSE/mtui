@@ -12,9 +12,22 @@ pub mod overview;
 use std::collections::BTreeMap;
 
 use mtui_types::report_document::{
-    Openqa, OpenqaInstall, Regression, ReportDocument, Req, TesterEntry, TestingInstall,
+    InstallCheck, Openqa, OpenqaInstall, Regression, ReportDocument, Req, TesterEntry,
+    TestingInstall,
 };
 use serde_json::Value;
+
+/// Which hosts an export's install checks cover, which decides what becomes
+/// of the rows the document already holds for other hosts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksScope {
+    /// Every connected host: the checks replace the document's rows, so the
+    /// row of a host no longer connected is dropped.
+    Group,
+    /// A host selection: each check replaces its own host's rows and every
+    /// other row is kept, ordered by host.
+    Selection,
+}
 
 /// Composes the typed subtrees `manual`/`auto`/`kernel`/`overview` build onto
 /// an already-loaded [`ReportDocument`], plus the append-only
@@ -28,23 +41,29 @@ use serde_json::Value;
 ///
 /// `testing.install` and `testing.regression` merge into what the document
 /// already holds rather than replacing it: the tester's verdicts and
-/// comments survive, the install checks are replaced wholesale, and the
-/// kernel matrix is spliced into the regression comment as a marked block.
+/// comments survive, the install checks replace the document's as their
+/// [`ChecksScope`] says (wholesale for the group, by host for a selection),
+/// and the kernel matrix is spliced into the regression comment as a marked
+/// block.
 ///
 /// Returns the top-level pointers actually touched, so a caller can report
 /// what changed — `people.testers` is only included when a tester was
 /// actually pushed, not on a duplicate.
 pub fn author_document(
     document: &mut ReportDocument,
-    install: Option<TestingInstall>,
+    install: Option<(TestingInstall, ChecksScope)>,
     openqa_install: Option<OpenqaInstall>,
     regression: Option<Regression>,
     openqa_extra: BTreeMap<String, Value>,
     tester: Option<TesterEntry>,
 ) -> Vec<&'static str> {
     let mut touched = Vec::new();
-    if let Some(install) = install {
-        document.testing.install = Some(merge_install(document.testing.install.take(), install));
+    if let Some((install, scope)) = install {
+        document.testing.install = Some(merge_install(
+            document.testing.install.take(),
+            install,
+            scope,
+        ));
         touched.push("testing.install");
     }
     if openqa_install.is_some() || !openqa_extra.is_empty() {
@@ -71,15 +90,41 @@ pub fn author_document(
     touched
 }
 
-fn merge_install(existing: Option<TestingInstall>, new: TestingInstall) -> TestingInstall {
-    match existing {
-        Some(old) => TestingInstall {
-            verdict: old.verdict,
-            checks: new.checks,
-            comment: old.comment,
-        },
-        None => new,
+fn merge_install(
+    existing: Option<TestingInstall>,
+    new: TestingInstall,
+    scope: ChecksScope,
+) -> TestingInstall {
+    let (verdict, comment, old_checks) = match existing {
+        Some(old) => (old.verdict, old.comment, old.checks),
+        None => (new.verdict, new.comment, Vec::new()),
+    };
+    let checks = match scope {
+        ChecksScope::Group => new.checks,
+        ChecksScope::Selection => merge_by_host(old_checks, new.checks),
+    };
+    TestingInstall {
+        verdict,
+        checks,
+        comment,
     }
+}
+
+/// `old` with every row of a host `new` covers replaced by `new`'s rows.
+fn merge_by_host(old: Vec<InstallCheck>, new: Vec<InstallCheck>) -> Vec<InstallCheck> {
+    // A host named twice in the selection keeps one row, the last.
+    let mut fresh: Vec<InstallCheck> = Vec::with_capacity(new.len());
+    for row in new {
+        fresh.retain(|f| f.refhost != row.refhost);
+        fresh.push(row);
+    }
+    let mut checks: Vec<InstallCheck> = old
+        .into_iter()
+        .filter(|o| !fresh.iter().any(|n| n.refhost == o.refhost))
+        .collect();
+    checks.extend(fresh);
+    checks.sort_by(|a, b| a.refhost.cmp(&b.refhost));
+    checks
 }
 
 fn merge_regression(existing: Option<Regression>, new: Regression) -> Regression {
@@ -200,7 +245,7 @@ mod tests {
     ) {
         author_document(
             doc,
-            Some(install),
+            Some((install, ChecksScope::Group)),
             None,
             Some(regression),
             BTreeMap::new(),
@@ -222,7 +267,7 @@ mod tests {
         let mut doc = empty_document();
         let touched = author_document(
             &mut doc,
-            Some(install_checks()),
+            Some((install_checks(), ChecksScope::Group)),
             None,
             None,
             BTreeMap::new(),
@@ -325,6 +370,127 @@ mod tests {
         );
     }
 
+    /// The checks of a selection authored onto `doc`, as `(refhost, verdict)`.
+    fn author_selection(
+        doc: &mut ReportDocument,
+        checks: Vec<InstallCheck>,
+    ) -> Vec<(String, Option<Verdict>)> {
+        let new = TestingInstall {
+            verdict: Req(None),
+            checks,
+            comment: Req(None),
+        };
+        author_document(
+            doc,
+            Some((new, ChecksScope::Selection)),
+            None,
+            None,
+            BTreeMap::new(),
+            None,
+        );
+        let install = doc.testing.install.as_ref().expect("install authored");
+        install
+            .checks
+            .iter()
+            .map(|c| (c.refhost.clone(), *c.verdict))
+            .collect()
+    }
+
+    /// A selection replaces every row of a host it covers, a duplicate
+    /// included, and keeps the rows of the hosts it does not, with the
+    /// tester's verdict and comment.
+    #[test]
+    fn a_selection_replaces_its_hosts_rows_and_keeps_the_others() {
+        let mut doc = empty_document();
+        doc.testing.install = Some(TestingInstall {
+            verdict: Req(Some(Verdict::Passed)),
+            checks: vec![
+                check("h1", Some(Verdict::Passed)),
+                check("h2", Some(Verdict::Passed)),
+                check("h2", None),
+            ],
+            comment: Req(Some("all fine".to_owned())),
+        });
+
+        let rows = author_selection(&mut doc, vec![check("h2", Some(Verdict::Failed))]);
+
+        assert_eq!(
+            rows,
+            [
+                ("h1".to_owned(), Some(Verdict::Passed)),
+                ("h2".to_owned(), Some(Verdict::Failed)),
+            ]
+        );
+        let install = doc.testing.install.unwrap();
+        assert_eq!(*install.verdict, Some(Verdict::Passed));
+        assert_eq!(install.comment.into_inner(), Some("all fine".to_owned()));
+    }
+
+    /// A selection naming one host twice (`-t h2 -t h2`) still writes one row
+    /// for it: the last one.
+    #[test]
+    fn a_selection_naming_a_host_twice_writes_one_row_for_it() {
+        let mut doc = empty_document();
+        doc.testing.install = Some(TestingInstall {
+            verdict: Req(Some(Verdict::Passed)),
+            checks: vec![check("h1", Some(Verdict::Passed))],
+            comment: Req(None),
+        });
+
+        let rows = author_selection(
+            &mut doc,
+            vec![check("h2", None), check("h2", Some(Verdict::Failed))],
+        );
+
+        assert_eq!(
+            rows,
+            [
+                ("h1".to_owned(), Some(Verdict::Passed)),
+                ("h2".to_owned(), Some(Verdict::Failed)),
+            ]
+        );
+    }
+
+    /// A host the document holds no row for is added among the kept rows, in
+    /// host order whatever order either side came in.
+    #[test]
+    fn a_selection_adds_a_new_host_in_host_order() {
+        let mut doc = empty_document();
+        doc.testing.install = Some(TestingInstall {
+            verdict: Req(None),
+            checks: vec![
+                check("h4", Some(Verdict::Passed)),
+                check("h1", Some(Verdict::Passed)),
+            ],
+            comment: Req(None),
+        });
+
+        let rows = author_selection(
+            &mut doc,
+            vec![check("h3", Some(Verdict::Failed)), check("h2", None)],
+        );
+
+        assert_eq!(
+            rows,
+            [
+                ("h1".to_owned(), Some(Verdict::Passed)),
+                ("h2".to_owned(), None),
+                ("h3".to_owned(), Some(Verdict::Failed)),
+                ("h4".to_owned(), Some(Verdict::Passed)),
+            ]
+        );
+    }
+
+    /// With no `testing.install` yet a selection's rows are ordered by host too.
+    #[test]
+    fn a_first_selection_orders_its_rows_by_host() {
+        let mut doc = empty_document();
+
+        let rows = author_selection(&mut doc, vec![check("h2", None), check("h1", None)]);
+
+        assert_eq!(rows, [("h1".to_owned(), None), ("h2".to_owned(), None)]);
+    }
+
     #[test]
     fn the_testers_regression_verdict_and_text_survive_authoring() {
         let mut doc = empty_document();
@@ -425,7 +591,7 @@ mod tests {
         for doc in [&mut once, &mut twice] {
             author_document(
                 doc,
-                Some(install_checks()),
+                Some((install_checks(), ChecksScope::Group)),
                 Some(openqa_install()),
                 Some(regression()),
                 extra.clone(),
@@ -434,7 +600,7 @@ mod tests {
         }
         author_document(
             &mut twice,
-            Some(install_checks()),
+            Some((install_checks(), ChecksScope::Group)),
             Some(openqa_install()),
             Some(regression()),
             extra,
@@ -457,7 +623,7 @@ mod tests {
         doc.comment = Req(Some("hand-typed".to_owned()));
         author_document(
             &mut doc,
-            Some(install_checks()),
+            Some((install_checks(), ChecksScope::Group)),
             Some(openqa_install()),
             Some(regression()),
             BTreeMap::new(),

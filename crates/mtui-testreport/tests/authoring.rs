@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use boon::{Compiler, Draft, SchemaIndex, Schemas};
-use mtui_testreport::authoring::author_document;
+use mtui_testreport::authoring::{ChecksScope, author_document};
 use mtui_testreport::{ManualHost, install_from_hosts};
 use mtui_types::hostlog::HostLog;
 use mtui_types::package::Package;
@@ -62,7 +62,14 @@ fn host_for(document: &ReportDocument) -> ManualHost {
 fn author_install_onto(document: &mut ReportDocument) {
     let host = host_for(document);
     let install = install_from_hosts(&[host], &document.install);
-    author_document(document, Some(install), None, None, BTreeMap::new(), None);
+    author_document(
+        document,
+        Some((install, ChecksScope::Group)),
+        None,
+        None,
+        BTreeMap::new(),
+        None,
+    );
 }
 
 /// Authoring onto a real fetched document leaves `update`, `install`

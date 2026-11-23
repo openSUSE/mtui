@@ -92,8 +92,9 @@ A save marks the document as edited but not uploaded — `commit` uploads it, an
 looks at the server's copy: in the REPL it asks before discarding tester content found
 there or in the loaded document, and over MCP it refuses. `export` keeps the verdicts
 and comments you entered under `testing.install` and `testing.regression`; it rewrites
-only the install checks and the kernel results block inside the regression comment. The
-editor needs a terminal on both stdin and stdout.
+only the install checks (with `-t`, only the selected hosts' rows) and the kernel results
+block inside the regression comment. The editor needs a terminal on both stdin and
+stdout.
 
 ## How do I export results into the testreport?
 
@@ -212,9 +213,14 @@ set_host_state enabled   # re-enable all
 
 ## Can I export the update log from a specific refhost?
 
-Yes: `export -t <host>`. By default `export` writes the collected data for every
-host in the list — including disabled ones — so to keep a temporarily-added host
-out of the report, `remove_host -t <host>` before exporting.
+Yes: `export -t <host>`. It rewrites that host's install check and keeps the
+rows of every other host already in `testing.install.checks`, a host no longer
+connected included, so a host tested after the others were exported can be
+added on its own; the answer names the hosts whose rows it kept. By default
+`export` writes the collected data for every host in the list — including
+disabled ones — and drops the row of a host no longer connected (the answer
+names it), so to keep a temporarily-added host out of the report,
+`remove_host -t <host>` before exporting.
 
 ## Why doesn't `put *.rpm` upload anything?
 
