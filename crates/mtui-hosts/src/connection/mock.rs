@@ -153,6 +153,8 @@ pub struct MockConnection {
     sftp_sessions: Arc<Mutex<usize>>,
     /// See [`with_sftp_session_delay`](Self::with_sftp_session_delay).
     sftp_session_delay: std::time::Duration,
+    /// See [`with_cancel_on_sftp_session`](Self::with_cancel_on_sftp_session).
+    cancel_on_sftp_session: Option<tokio_util::sync::CancellationToken>,
     /// Canned directory listings keyed by remote path (for `sftp_listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
@@ -232,6 +234,7 @@ impl MockConnection {
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
             sftp_sessions: Arc::new(Mutex::new(0)),
             sftp_session_delay: std::time::Duration::ZERO,
+            cancel_on_sftp_session: None,
             listings: HashMap::new(),
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
@@ -394,6 +397,17 @@ impl MockConnection {
     #[must_use]
     pub fn with_sftp_session_delay(mut self, delay: std::time::Duration) -> Self {
         self.sftp_session_delay = delay;
+        self
+    }
+
+    /// Cancels `token` whenever an SFTP session opens: a cancel that lands while
+    /// this host's work is in flight, with no timing involved.
+    #[must_use]
+    pub fn with_cancel_on_sftp_session(
+        mut self,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        self.cancel_on_sftp_session = Some(token);
         self
     }
 
@@ -1195,6 +1209,9 @@ impl Connection for MockConnection {
             tokio::time::sleep(self.sftp_session_delay).await;
         }
         *self.sftp_sessions.lock().expect("mock sftp sessions lock") += 1;
+        if let Some(token) = &self.cancel_on_sftp_session {
+            token.cancel();
+        }
         // The handle shares scripted state via `Arc`, so batched reads record
         // into the same op log under the same scripting as the per-op methods.
         Ok(Box::new(MockSftpSession { conn: self.clone() }))

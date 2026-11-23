@@ -839,6 +839,12 @@ impl Session {
             .base_mut()
             .targets
             .set_op_lock_holders(self.op_lock_holders.clone());
+        // Hosts added with no template loaded live here, and their commands
+        // check the same seam.
+        self.null
+            .base_mut()
+            .targets
+            .set_cancel_token(self.cancel.clone());
         if rrid.is_empty() {
             self.templates.set_active_none();
             return Activation::Empty;

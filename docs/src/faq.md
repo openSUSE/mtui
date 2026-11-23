@@ -254,6 +254,9 @@ checkpoints are:
   and stops without installing anything; `downgrade` on non-transactional hosts
   checks between packages. A transactional (SL-Micro) `downgrade` applies in one
   transaction, so it finishes first like the commands below.
+- `reload_products` checks before each host; a host already reloading finishes
+  or times out first, and the reply names the hosts it reloaded and those it
+  did not reach.
 - A command applying to several loaded templates stops at the next template
   boundary, and reports how many it got through.
 - `install`, `uninstall`, `run`, and `reboot` finish the host operation already
