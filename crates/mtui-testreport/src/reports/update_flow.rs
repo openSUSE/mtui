@@ -126,6 +126,11 @@ pub enum UpdateFailure {
     /// [`Uncomposed`](Self::Uncomposed): an excluded host received no patch,
     /// and the group-wide downgrade would revert the peers that did.
     RepoAdd(UpdateError),
+    /// The operation lock could not be taken on every eligible host: another
+    /// owner holds it, its state was unreadable, or the lockfile could not be
+    /// written. The locks that were taken are already released, no repository
+    /// was added and no patch dispatched, so there is nothing to roll back.
+    LockFailed(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -220,6 +225,10 @@ where
         }
         Err(UpdateFailure::RepoAdd(e)) => {
             error!(error = %e, "update did not run on every host: test repository add failed");
+            Err(e)
+        }
+        Err(UpdateFailure::LockFailed(e)) => {
+            error!(error = %e, "update aborted: could not take the operation lock on every host");
             Err(e)
         }
         Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
@@ -2234,9 +2243,15 @@ pub async fn perform_update(
     targets.package_check_selected(false, &eligible).await;
 
     if let Err(e) = targets.update_lock_selected(&eligible).await {
-        return Err(UpdateFailure::Check(UpdateError::reason_only(
-            e.to_string(),
-        )));
+        let reason = if noprepare {
+            e.to_string()
+        } else {
+            format!(
+                "{e}; any packages installed by the prepare that ran first are left in place \
+                 (see `list_history`)"
+            )
+        };
+        return Err(UpdateFailure::LockFailed(UpdateError::reason_only(reason)));
     }
 
     targets
@@ -4655,6 +4670,47 @@ mod tests {
         fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
             Some(&self.composed)
         }
+    }
+
+    #[tokio::test]
+    async fn perform_update_names_a_host_claimed_during_its_prepare_as_a_lock_failure() {
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1], false);
+        let repo = ContendingRepo::new(
+            vec![(
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            )],
+            h1.clone(),
+        );
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::LockFailed(e)) = res else {
+            panic!("a host claimed after the prepare is a lock failure: {res:?}");
+        };
+        let reason = e.to_string();
+        assert!(reason.contains("Hosts locked"), "{reason}");
+        assert!(
+            reason.contains("left in place (see `list_history`)"),
+            "a prepare ran first, so its packages stay: {reason}"
+        );
+        assert!(!was_patched(&h1), "{:?}", h1.commands());
     }
 
     #[tokio::test]
@@ -8256,6 +8312,84 @@ mod tests {
             cmds.iter()
                 .any(|c| c.contains("pkg-a") && c.contains("1.0-1")),
             "rollback must issue a downgrade command: {cmds:?}"
+        );
+    }
+
+    /// A SLES host answering every command cleanly while `alice` holds its
+    /// operation lock.
+    fn sles_target_held_by_alice(hostname: &str) -> (Target, MockConnection) {
+        let (t, handle) = sles_target_with_exit(hostname, "", 0);
+        let _ = handle
+            .clone()
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn perform_update_refuses_a_held_lock_without_a_rollback_label() {
+        let (t, handle) = sles_target_held_by_alice("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::LockFailed(e)) = res else {
+            panic!("a held lock is LockFailed, not Check: {res:?}");
+        };
+        let reason = e.to_string();
+        assert!(
+            reason.contains("Hosts locked: h1: held by alice"),
+            "{reason}"
+        );
+        assert!(
+            !reason.contains("left in place"),
+            "no prepare ran under --noprepare: {reason}"
+        );
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(!ops.contains(&RepoOp::Add), "{ops:?}");
+        assert!(
+            !handle.commands().iter().any(|c| c.contains(":p=42:7")),
+            "{:?}",
+            handle.commands()
+        );
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).as_deref(),
+            Some(&b"1700000000:alice:4242:busy"[..]),
+            "the foreign lock must be left alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_with_rollback_does_not_roll_back_a_lock_failure() {
+        let (t, _handle) = sles_target_held_by_alice("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        // An empty package list makes `perform_downgrade` return early, which
+        // would let this test pass with the rollback still wired in.
+        assert!(!report.get_package_list().is_empty());
+
+        let mut diagnostics = Vec::new();
+        let err = report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("a held lock aborts the update");
+
+        assert!(err.to_string().contains("Hosts locked"), "{err}");
+        assert!(
+            !diagnostics.iter().any(|d| d.text.contains("rollback")),
+            "nothing was installed, so no rollback may be attempted or reported: {diagnostics:?}"
         );
     }
 
