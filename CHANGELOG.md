@@ -463,6 +463,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `update` no longer attempts an automatic rollback when it cannot take the
+  operation lock on every host (another tester holds it, or its state cannot be
+  read) — the common case with `--noprepare`, and possible when another session
+  claims a host during the pre-update prepare. Nothing had been installed, yet
+  it reported `the automatic rollback also failed (…); one or more hosts are
+  left partly updated`, and had the lock come free in between it would have run
+  the rollback downgrade on hosts the update never patched (#813).
 - `list_packages` with `package` naming a package the report already lists, or
   naming the same package more than once, no longer prints its row twice per
   host (#791).
