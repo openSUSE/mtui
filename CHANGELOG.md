@@ -482,6 +482,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `checkers` fails, naming the cause, when its TeReGen lookup fails: TeReGen
+  unreachable, an error status, or a body that is not JSON or carries no
+  `checkers` array. It printed `No checker results for <id>` and succeeded,
+  the same answer as an update with none. A 404 is such a failure: for an
+  SLFO id TeReGen answers it when it could not fetch the runs from SMELT or
+  does not know the update. TeReGen serves checker results for SLFO ids only,
+  so for any other id `checkers` no longer asks it and answers `No checker
+  results for <id> (TeReGen serves checker results for SLFO ids only)`, as
+  the command help now says (#794). **MCP schema note:** only the `checkers`
+  tool description changes.
 - `prepare --update` names a host it refused because the update's
   repositories do not reach it even when a peer stops the prepare first: a
   peer's missing preparer, another tester's lock on a peer, or a peer's failed

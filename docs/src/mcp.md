@@ -435,6 +435,16 @@ and nothing is written there.
   literal `|` as an argument. Split the words yourself
   (`["cat","/etc/os-release"]`), and for anything needing a shell — pipes,
   redirection, `;` — ask for one explicitly: `["sh","-c","zypper lr | grep x"]`.
+- `checkers` lists the checker runs TeReGen holds for the update, not the
+  report's `build_checks/` logs, which `report_files` lists. TeReGen serves
+  checker results for SLFO ids only, so for any other id the tool does not
+  ask it and answers `No checker results for <id> (TeReGen serves checker
+  results for SLFO ids only)`. For an SLFO id, `No checker results for <id>`
+  means TeReGen answered with an empty list. A lookup that failed fails the
+  tool with `Checker lookup for <id>: TeReGen fetch failed: …`, naming the
+  cause: TeReGen unreachable, an error status, or a body that is not JSON or
+  carries no `checkers` array. A 404 is one of them: TeReGen answers it when
+  it could not fetch the runs from SMELT or does not know the update.
 
 ## Report document tools
 

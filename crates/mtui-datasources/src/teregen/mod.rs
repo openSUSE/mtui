@@ -306,28 +306,37 @@ impl TeReGen {
         d.is_object().then_some(d)
     }
 
-    /// Live checker (build-check) result runs for a report, or `None` when
-    /// TeReGen could not be asked and when the body carries no `checkers` array
-    /// — the caller cannot tell those apart, so the latter warns: the container
-    /// shape is the likeliest drift point of an inferred schema, and the only
-    /// one no per-element warning can see.
+    /// Live checker (build-check) result runs for a report.
     ///
     /// An element that does not deserialise as a [`CheckerRun`] is skipped and
     /// warned about by its **key set only** — never the body nor serde's error
     /// (which quotes the offending value), both of which carry customer-visible
     /// check output (#431, #439). A drifted verdict inside a run is skipped the
     /// same way, so it costs one row rather than the whole run.
-    pub async fn checkers(&self, rrid: &str) -> Option<Vec<CheckerRun>> {
-        let body = self.get(&format!("reports/{rrid}/checkers"), &[]).await?;
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TeReGenError::Fetch`] on a transport failure, a non-2xx
+    /// status, a body that is not JSON, or one without a `checkers` array, so
+    /// the caller can tell a failed lookup apart from none. A 404 is no
+    /// exception: TeReGen answers it for an id it serves no checker results for
+    /// (every non-SLFO id), and for an SLFO id whose runs it could not fetch
+    /// from SMELT or does not know.
+    pub async fn checkers(&self, rrid: &str) -> Result<Vec<CheckerRun>, TeReGenError> {
+        let body = self
+            .try_get(&format!("reports/{rrid}/checkers"), &[])
+            .await?;
         let Some(elements) = body.get("checkers").and_then(Value::as_array) else {
-            tracing::warn!(
+            tracing::debug!(
                 "TeReGen checkers for {rrid}: response carries no `checkers` array; its keys were \
                  [{}]",
                 json_keys(&body)
             );
-            return None;
+            return Err(TeReGenError::Fetch(
+                "the response carries no `checkers` array".to_owned(),
+            ));
         };
-        Some(lenient_elements(&format!(" for {rrid}"), "run", elements))
+        Ok(lenient_elements(&format!(" for {rrid}"), "run", elements))
     }
 
     /// The unreleased update queue (live from SMELT). Each [`UpdatesQuery`]
@@ -898,10 +907,10 @@ mod tests {
 
     /// The container shape is the likeliest drift point of an inferred schema
     /// and the only one no per-element warning can see: a renamed key or a
-    /// non-array `checkers` would otherwise reach the user as a bare "No checker
-    /// results", indistinguishable from an unreachable TeReGen.
+    /// non-array `checkers` fails the lookup rather than reading as none, and
+    /// the log names the keys that were served.
     #[tokio::test]
-    async fn checkers_warns_when_container_is_absent_or_not_an_array() {
+    async fn checkers_errs_when_container_is_absent_or_not_an_array() {
         for (body, expected_keys) in [
             (json!({"other": 1}), "other"),
             (json!({"checkers": {"run-1": {}}}), "checkers"),
@@ -913,26 +922,37 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(&body))
                 .mount(&server)
                 .await;
-            let mut runs = Some(Vec::new());
+            let mut result = None;
             let logs = capture_logs(|| async {
-                runs = client(&server).checkers(RRID).await;
+                result = Some(client(&server).checkers(RRID).await);
             })
             .await;
-            assert_eq!(runs, None, "{body}");
+            let Some(Err(TeReGenError::Fetch(msg))) = &result else {
+                panic!("{body}: expected a Fetch error, got {result:?}");
+            };
+            assert!(msg.contains("no `checkers` array"), "{body}: {msg}");
             let line = failure_line(&logs, "no `checkers` array");
             assert!(line.contains(expected_keys), "{body}: {line}");
         }
     }
 
+    /// A 404 included: for an SLFO id TeReGen answers it when it could not
+    /// fetch the runs from SMELT. The mock must be hit: wiremock answers an
+    /// unmatched path with a 404 of its own.
     #[tokio::test]
-    async fn checkers_none_on_failure() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID}/checkers")))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&server)
-            .await;
-        assert_eq!(client(&server).checkers(RRID).await, None);
+    async fn checkers_errs_on_error_status() {
+        for (status, expected) in [(404, "404 Not Found"), (503, "503 Service Unavailable")] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("/reports/{RRID}/checkers")))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let err = client(&server).checkers(RRID).await.unwrap_err();
+            let TeReGenError::Fetch(msg) = &err;
+            assert!(msg.contains(expected), "{status}: {msg}");
+        }
     }
 
     // --- updates: query-param rules ---
