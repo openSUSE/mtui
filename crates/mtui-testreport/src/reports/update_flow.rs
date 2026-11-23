@@ -75,10 +75,13 @@ pub enum UpdateFailure {
     /// host answered with an unchanged boot id. Unlike [`Reboot`](Self::Reboot)
     /// this *does* roll back — it is up, serving the old snapshot while the
     /// group runs the new packages (the split-brain the rollback undoes), and
-    /// the downgrade can reach it.
+    /// the downgrade can reach it. Also used when such a reboot follows a
+    /// [`ProbeFailed`](Self::ProbeFailed) peer, which leaves no host with an
+    /// unknown patch result.
     RebootNotTaken(UpdateError),
-    /// The update command never ran to completion on any host that failed —
-    /// it timed out, or the connection dropped part-way (`Target::run`'s `-1`).
+    /// The update command never ran to completion on any host whose patch
+    /// failed — it timed out, or the connection dropped part-way
+    /// (`Target::run`'s `-1`).
     ///
     /// Skips the rollback, but not by [`Reboot`](Self::Reboot)'s reachability
     /// argument: `-1` is a sentinel, not a liveness verdict. Either the flow
@@ -94,10 +97,16 @@ pub enum UpdateFailure {
     /// including a mix with [`ProbeFailed`](Self::ProbeFailed) hosts, since
     /// this is the more conservative label. A mix with a real check failure
     /// still rolls back, on behalf of the repairable host.
+    ///
+    /// The transactional peers whose patch passed are still rebooted, and one
+    /// whose reboot then fails is named beside the failed host, never rolled
+    /// back.
     NotRun(UpdateError),
-    /// Every failed host ran the update command and reported that it could not
-    /// work out what to patch, so none dispatched a patch
-    /// (`checks::update`'s `probe_failure`).
+    /// Every host whose patch failed ran the update command and reported that
+    /// it could not work out what to patch, so none dispatched a patch
+    /// (`checks::update`'s `probe_failure`). Its peers are finished as under
+    /// [`NotRun`](Self::NotRun), except that a reachable peer whose reboot did
+    /// not take routes to [`RebootNotTaken`](Self::RebootNotTaken).
     ///
     /// Skips the rollback for a *stronger* reason than
     /// [`NotRun`](Self::NotRun)'s: a definite verdict, not the absence of one.
@@ -137,6 +146,43 @@ pub enum UpdateFailure {
     /// written. The locks that were taken are already released, no repository
     /// was added and no patch dispatched, so there is nothing to roll back.
     LockFailed(UpdateError),
+}
+
+impl UpdateFailure {
+    /// Whether [`perform_update_with_rollback`] rolls the group back on this
+    /// failure: the one rule its rollback and the update's degradation text
+    /// share. Exhaustive, so a new variant cannot default to no rollback.
+    fn rolls_back(&self) -> bool {
+        match self {
+            Self::Check(_) | Self::RebootNotTaken(_) => true,
+            Self::Prepare(_)
+            | Self::MissingUpdater(_)
+            | Self::Cancelled(_)
+            | Self::Reboot(_)
+            | Self::NotRun(_)
+            | Self::ProbeFailed(_)
+            | Self::Excluded(_)
+            | Self::RepoAdd(_)
+            | Self::LockFailed(_) => false,
+        }
+    }
+
+    /// The error every variant carries.
+    fn error(&self) -> &UpdateError {
+        match self {
+            Self::Check(e)
+            | Self::Prepare(e)
+            | Self::MissingUpdater(e)
+            | Self::Cancelled(e)
+            | Self::Reboot(e)
+            | Self::RebootNotTaken(e)
+            | Self::NotRun(e)
+            | Self::ProbeFailed(e)
+            | Self::Excluded(e)
+            | Self::RepoAdd(e)
+            | Self::LockFailed(e) => e,
+        }
+    }
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -182,10 +228,11 @@ where
 /// [`perform_downgrade`], before re-surfacing the original error, on the two
 /// failures that leave the group repairable: a *check* failure, and a reboot
 /// that did not take effect on a host still reachable
-/// ([`UpdateFailure::RebootNotTaken`]).
+/// ([`UpdateFailure::RebootNotTaken`]), as [`UpdateFailure::rolls_back`] decides.
 ///
-/// Every other failure installed nothing, so each re-surfaces without a
-/// rollback attempt. The rollback is best-effort, but it *can* fail —
+/// Every other failure re-surfaces without a rollback attempt: it installed
+/// nothing, or only on hosts that completed, which it names (see
+/// [`UpdateError::completed`]). The rollback is best-effort, but it *can* fail —
 /// [`perform_downgrade`] returns a `Result`, and a host whose version probe
 /// never answered raises it (#451). The call site logs that error at WARN and
 /// re-surfaces the original update error, so a failed rollback can never bury
@@ -200,66 +247,71 @@ pub async fn perform_update_with_rollback<R>(
 where
     R: crate::testreport::TestReport + SetRepo,
 {
-    match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await {
-        Ok(()) => Ok(()),
-        Err(UpdateFailure::Prepare(e)) => {
+    let failure =
+        match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await
+        {
+            Ok(()) => return Ok(()),
+            Err(failure) => failure,
+        };
+    if failure.rolls_back() {
+        error!("Update failed");
+        warn!("Error while updating. Rolling back changes");
+        let pkgs = report.get_package_list();
+        let id = report.base().rrid.as_ref().map(ToString::to_string);
+        // The downgrade's own per-package checkpoint must not see a cancel
+        // that landed during the run phase: it would abort the rollback at
+        // package 0 and leave exactly the half-applied state it undoes.
+        let token = targets.suspend_cancellation();
+        // Best-effort: a failed downgrade must never bury the original
+        // update error, so its result is logged and diagnosed, not returned.
+        if let Err(de) = perform_downgrade(targets, report, &pkgs, id.as_deref(), diagnostics).await
+        {
+            warn!(error = %de, "rollback downgrade failed");
+            diagnostics.push(Diagnostic::degradation(format!(
+                "the update failed and the automatic rollback also failed ({de}); \
+                 one or more hosts are left partly updated"
+            )));
+        }
+        targets.set_cancel_token(token);
+    }
+    match failure {
+        UpdateFailure::Prepare(e) => {
             error!(
                 error = %e,
                 "update aborted: prepare could not run (rerun with --noprepare to patch anyway)"
             );
             Err(e)
         }
-        Err(UpdateFailure::MissingUpdater(e)) => {
+        UpdateFailure::MissingUpdater(e) => {
             error!(error = %e, "update failed");
             Err(e)
         }
-        Err(UpdateFailure::Cancelled(e)) => {
+        UpdateFailure::Cancelled(e) => {
             info!(reason = %e, "update cancelled");
             Err(e)
         }
-        Err(UpdateFailure::Reboot(e) | UpdateFailure::NotRun(e)) => {
+        UpdateFailure::Reboot(e) | UpdateFailure::NotRun(e) => {
             error!(error = %e, "update failed");
             Err(e)
         }
-        Err(UpdateFailure::ProbeFailed(e)) => {
+        UpdateFailure::ProbeFailed(e) => {
             error!(error = %e, "update failed: could not determine what to patch");
             Err(e)
         }
-        Err(UpdateFailure::Excluded(e)) => {
+        UpdateFailure::Excluded(e) => {
             error!(error = %e, "update did not run on every host");
             Err(e)
         }
-        Err(UpdateFailure::RepoAdd(e)) => {
+        UpdateFailure::RepoAdd(e) => {
             error!(error = %e, "update did not run on every host: test repository add failed");
             Err(e)
         }
-        Err(UpdateFailure::LockFailed(e)) => {
+        UpdateFailure::LockFailed(e) => {
             error!(error = %e, "update aborted: could not take the operation lock on every host");
             Err(e)
         }
-        Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
-            error!("Update failed");
-            warn!("Error while updating. Rolling back changes");
-            let pkgs = report.get_package_list();
-            let id = report.base().rrid.as_ref().map(ToString::to_string);
-            // The downgrade's own per-package checkpoint must not see a cancel
-            // that landed during the run phase: it would abort the rollback at
-            // package 0 and leave exactly the half-applied state it undoes.
-            let token = targets.suspend_cancellation();
-            // Best-effort: a failed downgrade must never bury the original
-            // update error, so its result is logged and diagnosed, not returned.
-            if let Err(de) =
-                perform_downgrade(targets, report, &pkgs, id.as_deref(), diagnostics).await
-            {
-                warn!(error = %de, "rollback downgrade failed");
-                diagnostics.push(Diagnostic::degradation(format!(
-                    "the update failed and the automatic rollback also failed ({de}); \
-                     one or more hosts are left partly updated"
-                )));
-            }
-            targets.set_cancel_token(token);
-            Err(e)
-        }
+        // Logged and rolled back above.
+        UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e) => Err(e),
     }
 }
 
@@ -547,6 +599,38 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
     }
 }
 
+/// The enabled hosts in `ran` that no failure names, sorted, for
+/// [`UpdateError::with_completed`]. Empty when a failure is a cancel, which
+/// never claims completion, or names no host, which leaves every host in doubt.
+///
+/// Each failure's `host` must be the one failed host: an error naming a
+/// comma-joined list, or only its first offender, would claim the rest.
+fn completed_hosts<'a>(
+    targets: &HostsGroup,
+    ran: impl IntoIterator<Item = &'a String>,
+    failures: &[UpdateError],
+) -> Vec<String> {
+    if failures.iter().any(|e| e.cancelled || e.host.is_none()) {
+        return Vec::new();
+    }
+    let failed: BTreeSet<&str> = failures.iter().filter_map(|e| e.host.as_deref()).collect();
+    let done: BTreeSet<String> = ran
+        .into_iter()
+        .filter(|h| !failed.contains(h.as_str()))
+        .filter(|h| is_enabled(targets, h))
+        .cloned()
+        .collect();
+    done.into_iter().collect()
+}
+
+/// Whether `host` is an enabled member of `targets`. A disabled one ran
+/// nothing, yet its empty exit-0 snapshot passes every check.
+fn is_enabled(targets: &HostsGroup, host: &str) -> bool {
+    targets
+        .get(host)
+        .is_some_and(|t| t.state() == mtui_types::TargetState::Enabled)
+}
+
 /// Scans every host's post-fan-out `last*` snapshot for a command failure
 /// (non-empty stderr or a non-zero exit) and returns one [`UpdateError`] per
 /// failed host, keyed on `reason`.
@@ -613,7 +697,7 @@ fn repo_unreached(
     };
     targets
         .targets()
-        .filter(|t| t.state() == mtui_types::TargetState::Enabled && in_scope(t.hostname()))
+        .filter(|t| is_enabled(targets, t.hostname()) && in_scope(t.hostname()))
         .filter_map(|t| {
             let outcome = RepoOutcome::reach(repos, &t.system().flatten()).err()?;
             Some(UpdateError::new(
@@ -802,7 +886,9 @@ async fn perform_operation_with(
         })
         .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
-    aggregate_failures(op, failures)
+    // Every host was planned and nothing rolls back, so each one not failed is done.
+    let completed = completed_hosts(targets, &targets.names(), &failures);
+    aggregate_failures(op, failures).map_err(|e| e.with_completed(completed))
 }
 
 /// Renders the WARN for an `install`/`uninstall` operation lock that did not
@@ -1415,8 +1501,13 @@ async fn prepare_body(
     // A genuine host failure outranks the cancellation, which would otherwise
     // bury a broken host the operator must still see.
     if !failures.is_empty() {
-        return aggregate_failures("prepare", failures)
-            .map_err(|error| PrepareFailure::HostReported { error, uncomposed });
+        let completed = completed_hosts(targets, &dispatched, &failures);
+        return aggregate_failures("prepare", failures).map_err(|error| {
+            PrepareFailure::HostReported {
+                error: error.with_completed(completed),
+                uncomposed,
+            }
+        });
     }
     if cancelled {
         return Err(PrepareFailure::Cancelled(UpdateError::cancelled(
@@ -1850,6 +1941,9 @@ async fn downgrade_body(
         .map(|t| t.hostname().to_owned())
         .collect();
 
+    // Hosts a downgrade command was dispatched to.
+    let mut ran: BTreeSet<String> = BTreeSet::new();
+
     // Non-transactional hosts: per-package `zypper downgrade`, gated on the
     // package being installed (present in `versions`).
     let mut cancelled_at: Option<usize> = None;
@@ -1892,6 +1986,7 @@ async fn downgrade_body(
         }
         if !cmd.is_empty() {
             targets.run(Command::PerHost(cmd.clone())).await;
+            ran.extend(cmd.keys().cloned());
             // Only the hosts that ran this command: a host outside `cmd` (e.g.
             // a dead-probe one) still carries a stale `-1` that would trip the
             // timeout gate and cancel the healthy hosts' rollback. Scoped
@@ -1943,6 +2038,7 @@ async fn downgrade_body(
     let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
+        ran.extend(combined.keys().cloned());
         // Same scoping as the per-package loop, and for the same reason.
         let judged = run_checks_where(
             targets,
@@ -2012,21 +2108,29 @@ async fn downgrade_body(
 
     let not_downgraded = downgrade_verdict(targets, &dead_probes).await;
 
+    // A cancel cuts only the non-transactional per-package loop short.
+    let verified = ran.iter().filter(|h| {
+        !not_downgraded.contains_key(*h)
+            && (cancelled_at.is_none() || transactional_hosts.contains(*h))
+    });
+    let completed = completed_hosts(targets, verified, &failures);
+
     // A per-host check failure aborts first (matches the pre-#336 aggregation).
-    aggregate_failures("downgrade", failures)?;
+    aggregate_failures("downgrade", failures).map_err(|e| e.with_completed(completed.clone()))?;
 
     // Then the dead probes, now that the healthy hosts have rolled back.
     if !dead_probes.is_empty() {
         return Err(UpdateError::new(
             "package version probe failed",
             dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
-        ));
+        )
+        .with_completed(completed));
     }
 
     // `downgrade_verdict` has already logged the per-host detail; fail so a
     // caller cannot mistake a half-rollback for success.
     if !not_downgraded.is_empty() {
-        return Err(UpdateError::reason_only("downgrade not completed"));
+        return Err(UpdateError::reason_only("downgrade not completed").with_completed(completed));
     }
 
     // Cancellation last: a real verdict above outranks it. The message names
@@ -2180,7 +2284,12 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 ///
 /// A run that excluded hosts but patched the rest fails with
 /// [`UpdateFailure::Excluded`] or [`UpdateFailure::RepoAdd`], whose error
-/// lists the patched hosts in [`UpdateError::completed`].
+/// lists the patched hosts in [`UpdateError::completed`]. So do the failures
+/// that roll nothing back ([`UpdateFailure::NotRun`],
+/// [`UpdateFailure::ProbeFailed`], [`UpdateFailure::Reboot`]): the
+/// transactional peers whose patch passed are rebooted, and the hosts it
+/// completed on are finished by the same [`finish_update`] step as a
+/// successful run's, leaving the test repositories on the hosts it did not.
 // Grouping these into a struct would only obscure the call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
@@ -2431,8 +2540,8 @@ pub async fn perform_update(
     }
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
-    // repo cleanup only on success. The history row is written inside
-    // `update_run_phase`, between the fan-out and the reboot.
+    // repo cleanup only on the hosts it completed on. The history row is
+    // written inside `update_run_phase`, between the fan-out and the reboot.
     let update_result = update_run_phase(
         targets,
         &registry,
@@ -2446,25 +2555,82 @@ pub async fn perform_update(
     .await;
 
     if let Err(e) = update_result {
-        warn!(
-            "update did not complete; leaving the test update repositories in place \
-             for retry/diagnosis (remove later with `set_repo --remove`)"
-        );
-        diagnostics.push(Diagnostic::degradation(
-            "update did not complete; the test update repositories are left in place for \
-             retry/diagnosis (remove later with `set_repo --remove`)",
-        ));
+        let completed: BTreeSet<String> = e.error().completed().iter().cloned().collect();
+        let unfinished: Vec<String> = eligible
+            .iter()
+            .filter(|h| !completed.contains(*h) && is_enabled(targets, h))
+            .cloned()
+            .collect();
+        // The rollback's downgrade removes the test repositories itself.
+        let message = if e.rolls_back() {
+            format!(
+                "update did not complete on {}; rolling it back",
+                unfinished.join(", ")
+            )
+        } else {
+            format!(
+                "update did not complete on {}; the test update repositories are left in place \
+                 there for retry/diagnosis (remove later with `set_repo --remove`)",
+                unfinished.join(", ")
+            )
+        };
+        warn!("{message}");
+        // Ahead of the finishing steps' own diagnostics, under the verdict line.
+        diagnostics.push(Diagnostic::degradation(message));
+        if !completed.is_empty() {
+            finish_update(
+                targets,
+                &completed,
+                report,
+                packages,
+                newpackage,
+                diagnostics,
+            )
+            .await;
+        }
         return Err(e);
     }
 
+    finish_update(
+        targets,
+        &eligible,
+        report,
+        packages,
+        newpackage,
+        diagnostics,
+    )
+    .await;
+    // A repo-add failure outranks the other exclusions in the label; every
+    // kind of message survives in `excluded`'s joined detail either way.
+    let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
+        UpdateFailure::RepoAdd
+    } else {
+        UpdateFailure::Excluded
+    };
+    // Every enabled host still eligible here was patched and passed its checks;
+    // a disabled one ran nothing, yet its empty exit-0 snapshot passes them.
+    let completed = completed_hosts(targets, &eligible, &[]);
+    aggregate_failures("update", excluded).map_err(|e| wrap(e.with_completed(completed)))
+}
+
+/// The steps that follow a passed patch on `hosts`: the `--newpackage` testing
+/// prepare, the post-update package check, and the test repository cleanup.
+async fn finish_update(
+    targets: &mut HostsGroup,
+    hosts: &BTreeSet<String>,
+    report: &dyn SetRepo,
+    packages: &[String],
+    newpackage: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     // Scoped like every other step: this one *adds* the test repo, and
-    // `remove_test_repos` below only removes it from `eligible`, so a
-    // group-wide add here strands it on the excluded host (#409). It also
-    // composes nothing for that host, so there is nothing to prepare on it.
+    // `remove_test_repos` below only removes it from `hosts`, so a group-wide
+    // add here strands it on an excluded host (#409). It also composes nothing
+    // for that host, so there is nothing to prepare on it.
     if newpackage
         && let Err(e) = perform_prepare_for(
             targets,
-            &eligible,
+            hosts,
             report,
             packages,
             false,
@@ -2481,32 +2647,15 @@ pub async fn perform_update(
         )));
     }
 
-    targets.package_check_selected(true, &eligible).await;
+    targets.package_check_selected(true, hosts).await;
 
-    remove_test_repos(targets, &eligible, report, diagnostics).await;
-    // A repo-add failure outranks the other exclusions in the label; every
-    // kind of message survives in `excluded`'s joined detail either way.
-    let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
-        UpdateFailure::RepoAdd
-    } else {
-        UpdateFailure::Excluded
-    };
-    // Every enabled host still eligible here was patched and passed its checks;
-    // a disabled one ran nothing, yet its empty exit-0 snapshot passes them.
-    let completed: Vec<String> = eligible
-        .into_iter()
-        .filter(|h| {
-            targets
-                .get(h)
-                .is_some_and(|t| t.state() == mtui_types::TargetState::Enabled)
-        })
-        .collect();
-    aggregate_failures("update", excluded).map_err(|e| wrap(e.with_completed(completed)))
+    remove_test_repos(targets, hosts, report, diagnostics).await;
 }
 
-/// Removes the test update repositories after a successful update.
+/// Removes the test update repositories from the hosts an update completed on.
 ///
-/// Scoped to `eligible`, the hosts the update added a repo to: a host it
+/// Scoped to `hosts`: every eligible host of a successful run, or the hosts a
+/// partial run completed on, which keeps the repos on the others. A host it
 /// excluded never received one, and locking it here would let its contention
 /// strand the repos on every peer (#409) over a cleanup it does not need.
 ///
@@ -2520,11 +2669,11 @@ pub async fn perform_update(
 /// the kind of degradation that must not be silent there.
 async fn remove_test_repos(
     targets: &mut HostsGroup,
-    eligible: &BTreeSet<String>,
+    hosts: &BTreeSet<String>,
     report: &dyn SetRepo,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if let Err(e) = targets.update_lock_selected(eligible).await {
+    if let Err(e) = targets.update_lock_selected(hosts).await {
         warn!(
             error = %e,
             "could not lock hosts to remove the test update repositories; \
@@ -2538,29 +2687,29 @@ async fn remove_test_repos(
         return;
     }
     targets
-        .fanout_set_repo_for(eligible, RepoOp::Remove, report)
+        .fanout_set_repo_for(hosts, RepoOp::Remove, report)
         .await;
     // The lock succeeded but the removal command may still have failed on a
     // host — #409's complaint (a stale test repo) can happen silently here too,
     // not only on a lock failure. Reads `Target::last_repo` rather than
     // `host_command_failures`, which only sees the *last* zypper command and
     // so misses a failed `rr` masked by a successful trailing `ref` (#551).
-    let failures: Vec<UpdateError> = repo_set_failures(targets, |h| eligible.contains(h));
+    let failures: Vec<UpdateError> = repo_set_failures(targets, |h| hosts.contains(h));
     if !failures.is_empty() {
-        let hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
+        let failed: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         warn!(
-            hosts = %hosts.join(", "),
+            hosts = %failed.join(", "),
             "failed to remove the test update repo on one or more hosts; \
              remove it manually with `set_repo --remove`"
         );
         diagnostics.push(Diagnostic::degradation(format!(
             "failed to remove the test update repo on {}; remove it manually with \
              `set_repo --remove`",
-            hosts.join(", ")
+            failed.join(", ")
         )));
     }
 
-    let unlock_outcomes = targets.unlock_selected(eligible).await;
+    let unlock_outcomes = targets.unlock_selected(hosts).await;
     warn_on_unlock_failures("update", &unlock_outcomes);
     let unlock_failures: Vec<(String, String)> = unlock_outcomes
         .iter()
@@ -2590,10 +2739,15 @@ async fn remove_test_repos(
 /// reboot took effect — reconnecting is not sufficient, since a host can answer
 /// without ever having gone down.
 ///
-/// Otherwise `Err` with the aggregated failure, which **suppresses the reboot
-/// entirely** on a check failure. The [`UpdateFailure`] variant is what routes
-/// the caller's rollback; a single failure is returned verbatim, more than one
-/// is summarised into `"update failed on {hosts} ({detail})"`.
+/// Otherwise `Err` with the aggregated failure. A failed host is never
+/// rebooted. A check failure rolls the group back and **suppresses the reboot
+/// entirely**; any other failure still reboots the transactional peers whose
+/// patch passed and names each one whose reboot then failed. Beside a probe
+/// failure a reboot that did not take rolls the group back, as on success;
+/// beside a host whose patch result is unknown (`-1`) it does not. The
+/// [`UpdateFailure`] variant is what routes the caller's rollback; a single
+/// failure is returned verbatim, more than one is summarised into
+/// `"update failed on {hosts} ({detail})"`.
 #[allow(clippy::too_many_arguments)]
 async fn update_run_phase(
     targets: &mut HostsGroup,
@@ -2615,7 +2769,7 @@ async fn update_run_phase(
     // the host whose state an operator most needs to reconstruct.
     add_op_history_for(targets, &dispatched, "update", id, packages).await;
 
-    let failures = run_checks_where(targets, registry, Role::Update, diagnostics, |h| {
+    let mut failures = run_checks_where(targets, registry, Role::Update, diagnostics, |h| {
         dispatched.contains(h)
     });
     let failed_hosts: std::collections::HashSet<String> =
@@ -2632,8 +2786,8 @@ async fn update_run_phase(
         error!(error = %e, "update failed");
     }
 
-    // A check failure keeps precedence and suppresses the reboot entirely: a
-    // transactional host whose patch failed must not be rebooted into it.
+    // A check failure keeps precedence: a transactional host whose patch failed
+    // must not be rebooted into it.
     let result = if !failures.is_empty() {
         // `-1` and a probe failure both veto the rollback
         // (`UpdateFailure::NotRun` / `ProbeFailed` carry the arguments). The
@@ -2653,39 +2807,70 @@ async fn update_run_phase(
                     .and_then(mtui_hosts::Target::lastexit)
                     != Some(-1)
         };
-        let wrap: fn(UpdateError) -> UpdateFailure = if failures.iter().any(repairable) {
+        let check_failed = failures.iter().any(repairable);
+        // Without a rollback the peers that passed are finished as on success;
+        // a failed host may still hold the package-manager lock.
+        let passed: BTreeMap<String, String> = if check_failed {
+            BTreeMap::new()
+        } else {
+            reboot
+                .into_iter()
+                .filter(|(h, _)| !failed_hosts.contains(h))
+                .collect()
+        };
+        let reboot_failures = reboot_transactional(targets, passed, diagnostics).await;
+        let probe_failed = failures.iter().all(|e| e.probe_failed);
+        // Beside a failed probe no host's patch result is unknown, so a reboot
+        // that did not take rolls back as it would on success.
+        let rolls_back = check_failed || (probe_failed && reboot_not_taken(&reboot_failures));
+        let wrap: fn(UpdateError) -> UpdateFailure = if check_failed {
             UpdateFailure::Check
-        } else if failures.iter().all(|e| e.probe_failed) {
+        } else if rolls_back {
+            UpdateFailure::RebootNotTaken
+        } else if probe_failed {
             UpdateFailure::ProbeFailed
         } else {
             UpdateFailure::NotRun
         };
-        aggregate_failures("update", failures).map_err(wrap)
+        failures.extend(reboot_failures.into_iter().map(reboot_error));
+        let completed = if rolls_back {
+            Vec::new()
+        } else {
+            completed_hosts(targets, &dispatched, &failures)
+        };
+        aggregate_failures("update", failures).map_err(|e| wrap(e.with_completed(completed)))
     } else {
         let reboot_failures = reboot_transactional(targets, reboot, diagnostics).await;
-        // Route on *why* the reboot failed, not on the fact that it did (see
-        // `Reboot` vs `RebootNotTaken`). `all`, not `any`: with one host
-        // unreachable and one merely inert, rolling back cannot reach the
-        // first, leaves the second needing manual work anyway, and reverts the
-        // hosts that did everything right. Both are still named in the error.
-        let repairable = !reboot_failures.is_empty()
-            && reboot_failures
-                .iter()
-                .all(|f| f.cause.host_still_reachable());
+        let repairable = reboot_not_taken(&reboot_failures);
         let wrap: fn(UpdateError) -> UpdateFailure = if repairable {
             UpdateFailure::RebootNotTaken
         } else {
             UpdateFailure::Reboot
         };
-        aggregate_failures(
-            "update",
-            reboot_failures.into_iter().map(reboot_error).collect(),
-        )
-        .map_err(wrap)
+        let failures: Vec<UpdateError> = reboot_failures.into_iter().map(reboot_error).collect();
+        // `RebootNotTaken` rolls the whole group back, so no host is done.
+        let completed = if repairable {
+            Vec::new()
+        } else {
+            completed_hosts(targets, &dispatched, &failures)
+        };
+        aggregate_failures("update", failures).map_err(|e| wrap(e.with_completed(completed)))
     };
 
     warn_on_unlock_failures("update", &targets.unlock_selected(locked).await);
     result
+}
+
+/// Whether `failures` are reboots that did not take on hosts still reachable,
+/// which [`UpdateFailure::RebootNotTaken`] rolls back.
+///
+/// Routes on *why* the reboot failed, not on the fact that it did (see
+/// `Reboot` vs `RebootNotTaken`). `all`, not `any`: with one host unreachable
+/// and one merely inert, rolling back cannot reach the first, leaves the
+/// second needing manual work anyway, and reverts the hosts that did
+/// everything right. Both are still named in the error.
+fn reboot_not_taken(failures: &[RebootFailure]) -> bool {
+    !failures.is_empty() && failures.iter().all(|f| f.cause.host_still_reachable())
 }
 
 /// Whether `target` resolves to a doer for `role`: a known release plus a
@@ -4562,6 +4747,1188 @@ mod tests {
             panic!("h2's exclusion is the verdict: {err:?}");
         };
         assert_eq!(e.completed(), ["h1"], "{e:?}");
+    }
+
+    // --- the hosts a partial run completed on ------------------------------
+
+    #[tokio::test]
+    async fn a_partial_install_names_only_the_enabled_host_it_completed_on() {
+        // h2's install fails its check and nothing is rolled back, so h1 stays
+        // installed. Disabled h3 ran nothing, yet its exit-0 snapshot passes.
+        let (t1, _h1) = sles_target("h1", "");
+        let (t2, _h2) = sles_target_with_exit("h2", "", 104);
+        let (mut t3, h3) = sles_target("h3", "");
+        t3.set_state(TargetState::Disabled);
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("h2's failed install fails the run");
+
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err:?}");
+        assert!(h3.commands().is_empty(), "{:?}", h3.commands());
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_partial_uninstall_never_names_the_host_lost_to_its_reboot() {
+        let (t1, _h1) = slmicro_target("h1", "", 0);
+        let (t2, _h2) = slmicro_target_failing_reconnect("h2");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("a host lost to its reboot fails the run");
+
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err:?}");
+        assert!(err.reason.contains("did not come back"), "{err:?}");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_install_that_failed_on_every_host_completed_on_none() {
+        let (t1, _h1) = sles_target_with_exit("h1", "", 104);
+        let (t2, _h2) = sles_target_with_exit("h2", "", 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("both installs failed");
+
+        // The summary names no single host, so "the group minus the failed
+        // host" would claim both.
+        assert!(err.host.is_none(), "{err:?}");
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    /// [`CancellingProvider`] stopping at the checkpoint on `h2` alone, so
+    /// `h1`'s install passes its check.
+    struct CancellingOnH2Provider;
+
+    impl mtui_hosts::PlanProvider for CancellingOnH2Provider {
+        fn doer(&self, role: &str, release: &str, transactional: bool) -> Result<Doer, HostError> {
+            CancellingProvider.doer(role, release, transactional)
+        }
+
+        fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+            Box::new(|a: CheckArgs<'_>| {
+                if a.hostname == "h2" {
+                    Err(CheckFailure::cancelled("stopped at a checkpoint"))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_install_completed_on_none() {
+        let (t1, _h1) = sles_target("h1", "");
+        let (t2, _h2) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_operation_with(
+            &mut group,
+            Role::Install,
+            &["pkg-a".to_owned()],
+            Arc::new(CancellingOnH2Provider),
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h2 stopped at a checkpoint");
+
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_partial_prepare_names_the_host_it_completed_on() {
+        // h1's prepare fails and it is not rebooted; h2 is prepared and rebooted.
+        let (t1, _h1) = slmicro_target("h1", "", 1);
+        let (t2, _h2) = slmicro_target("h2", "", 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h1's prepare failed");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert_eq!(err.completed(), ["h2"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_prepare_never_names_a_refused_or_lost_host_as_completed() {
+        // h2 composes none of the list; h3 is prepared but never comes back.
+        let x86 = SystemProduct::new("SL-Micro", "6.0", "x86_64");
+        let arm = SystemProduct::new("SL-Micro", "6.0", "aarch64");
+        let (t1, _h1) = composed_host("h1", x86.clone(), BTreeSet::new());
+        let (t2, h2) = composed_host("h2", arm.clone(), BTreeSet::new());
+        let (t3, _h3) = slmicro_target_failing_reconnect("h3");
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+        let repo = ComposingRepo::new(vec![(x86, names(&["pkg-a"])), (arm, names(&["pkg-z"]))]);
+
+        let err = perform_prepare(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a refused and a lost host fail the run");
+
+        assert!(
+            err.reason.contains("compose none") && err.reason.contains("did not come back"),
+            "{err:?}"
+        );
+        assert!(
+            !h2.commands()
+                .iter()
+                .any(|c| c.starts_with("transactional-update -n pkg in")),
+            "{:?}",
+            h2.commands()
+        );
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_prepare_cancelled_after_its_probe_completed_on_none() {
+        // h1's probe dies and h2's lists pkg-a; the cancel lands while both
+        // probes are in flight, so nothing is dispatched to h2 and the run
+        // reports h1's failure rather than the cancel.
+        let host = |name: &str, stdout: &str, exit: i16| {
+            let conn = MockConnection::new(name)
+                .with_default(CommandLog::new("", "", "", 0, 0))
+                .with_response(
+                    INSTALLED_PROBE.to_owned(),
+                    CommandLog::new(INSTALLED_PROBE, stdout, "", exit, 0),
+                )
+                .with_run_delay(std::time::Duration::from_millis(10))
+                .with_changing_boot_id();
+            let handle = conn.clone();
+            let mut t = Target::with_connection(name, TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                    BTreeSet::new(),
+                    true,
+                ),
+                true,
+            );
+            (t, handle)
+        };
+        let (t1, _h1) = host("h1", "", 7);
+        let (t2, h2) = host("h2", "pkg-a\n", 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let token = group.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            token.cancel();
+        });
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            true,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a dead probe must not report success");
+
+        assert!(!err.is_cancelled(), "{err:?}");
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert_eq!(
+            h2.commands(),
+            vec![INSTALLED_PROBE.to_owned()],
+            "h2 was probed and nothing else"
+        );
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_with_a_dead_probe_names_the_host_it_rolled_back() {
+        let (t1, _h1) = sles_target("h1", "pkg-a = 1.0-1\n");
+        let (t2, _h2) = sles_target_with_exit("h2", "", -1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h2's probe died");
+
+        assert_eq!(err.reason, "package version probe failed");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    /// A transactional SL-Micro target whose probe resolves `pkg-a = 1.0-1`
+    /// and whose combined downgrade then exits `1`.
+    fn slmicro_target_failing_its_downgrade(hostname: &str) -> (Target, MockConnection) {
+        let combined_cmd = format!(
+            "transactional-update -n pkg in --force-resolution --oldpackage -y {}",
+            quote_args(&["pkg-a=1.0-1"])
+        );
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                combined_cmd.clone(),
+                CommandLog::new(&combined_cmd, "", "", 1, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_names_the_host_it_completed_on_past_a_failed_peer() {
+        let (t1, h1) = slmicro_target("h1", "pkg-a = 1.0-1\n", 0);
+        let (t2, _h2) = slmicro_target_failing_its_downgrade("h2");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h2's downgrade failed");
+
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err:?}");
+        assert_eq!(err.reason, "downgrade command failed");
+        assert!(
+            h1.fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "h1 staged its downgrade and rebooted: {:?}",
+            h1.fired_commands()
+        );
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_not_completed_names_the_host_that_did_roll_back() {
+        // Both hosts ran the downgrade, but h2 still reports the update's
+        // version afterwards.
+        let packages = vec!["pkg-a".to_owned()];
+        let query = format!(
+            "rpm -q --queryformat \"%{{Name}} %{{Version}}-%{{Release}}\n\" {}",
+            quote_args(&packages)
+        );
+        let host = |name: &str, current: &str| {
+            let conn = MockConnection::new(name)
+                .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+                .with_response(
+                    query.clone(),
+                    CommandLog::new(&query, format!("pkg-a {current}\n"), "", 0, 0),
+                );
+            let mut t = Target::with_connection(name, TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new("SLES", "15.5", "x86_64"),
+                    BTreeSet::new(),
+                    false,
+                ),
+                false,
+            );
+            let mut pkg = mtui_types::package::Package::new("pkg-a");
+            pkg.set_required(Some("2.0-1")).unwrap();
+            t.set_packages(vec![pkg]);
+            t
+        };
+        let mut group = HostsGroup::new(vec![host("h1", "1.0-1"), host("h2", "2.0-1")], false);
+
+        let err = perform_downgrade(&mut group, &NoopRepo, &packages, None, &mut Vec::new())
+            .await
+            .expect_err("h2 is still at the update's version");
+
+        assert_eq!(err.reason, "downgrade not completed");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_downgrade_names_only_the_transactional_host_it_completed_on() {
+        // The cancel lands while non-transactional h2 downgrades package 1 of
+        // 2, cutting its loop short; transactional h1 still downgrades both in
+        // its combined block and reboots. h3's dead probe is the verdict.
+        let both = "pkg-a = 1.0-1\npkg-b = 1.0-1\n";
+        let (t1, h1) = slmicro_target("h1", both, 0);
+        let conn = MockConnection::new("h2")
+            .with_default(CommandLog::new("", both, "", 0, 0))
+            .with_run_delay(std::time::Duration::from_millis(10));
+        let h2 = conn.clone();
+        let mut t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        t2.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let (t3, _h3) = sles_target_with_exit("h3", "", -1);
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+        // h2's version probe ends at 10ms and its pkg-a downgrade at 20ms.
+        let token = group.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            token.cancel();
+        });
+
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h3's probe died");
+
+        assert_eq!(err.reason, "package version probe failed");
+        let h2_downgrades: Vec<String> = h2
+            .commands()
+            .into_iter()
+            .filter(|c| c.contains("--oldpackage"))
+            .collect();
+        assert!(
+            h2_downgrades.len() == 1
+                && h2_downgrades[0].contains("pkg-a")
+                && !h2_downgrades[0].contains("pkg-b"),
+            "h2 downgraded pkg-a and never reached pkg-b: {:?}",
+            h2.commands()
+        );
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c.contains("--oldpackage") && c.contains("pkg-a") && c.contains("pkg-b")),
+            "h1 ran its combined downgrade despite the cancel: {:?}",
+            h1.commands()
+        );
+        assert!(rebooted(&h1), "{:?}", h1.fired_commands());
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_names_the_peer_it_patched() {
+        // h2's patch never ran, so nothing is rolled back and h1 stays patched.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, _, _) = sles_target_with_patch_exit("h1", &packages, 0);
+            let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, -1);
+            HostsGroup::new(vec![t1, t2], false)
+        };
+
+        let res = perform_update(
+            &mut group(),
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h2's lost patch is NotRun: {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h2"), "{e:?}");
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+
+        let err = report
+            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .await
+            .expect_err("h2's patch never ran");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_whose_peer_could_not_probe_names_the_host_it_patched() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _, _) = sles_target_with_patch_exit("h1", &packages, 0);
+        let (t2, _, _) = sles_target_with_probe_failure("h2", &packages);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::ProbeFailed(e)) = res else {
+            panic!("h2's probe failure is ProbeFailed: {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h2"), "{e:?}");
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_to_its_reboot_names_the_peer_that_came_back() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, _) = slmicro_target("h1", "", 0);
+            let (t2, _) = slmicro_reboot_failure("h2", RebootFault::Unreachable);
+            HostsGroup::new(vec![t1, t2], false)
+        };
+
+        let res = perform_update(
+            &mut group(),
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Reboot(e)) = res else {
+            panic!("an unreachable host is Reboot: {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h2"), "{e:?}");
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+
+        let err = report
+            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .await
+            .expect_err("h2 never came back");
+        assert_eq!(err.completed(), ["h1"], "{err:?}");
+    }
+
+    /// `pkg-a`'s version query, as `package_check` issues it.
+    fn pkg_a_query() -> String {
+        format!(
+            "rpm -q --queryformat \"%{{Name}} %{{Version}}-%{{Release}}\n\" {}",
+            quote_args(&["pkg-a".to_owned()])
+        )
+    }
+
+    /// How many version queries `handle` was sent: the pre-update baseline,
+    /// then one more for a post-update check.
+    fn version_queries(handle: &MockConnection) -> usize {
+        handle
+            .commands()
+            .iter()
+            .filter(|c| c.starts_with("rpm -q"))
+            .count()
+    }
+
+    /// The `pkg-a` version `host`'s post-update check recorded, if one ran.
+    fn after_version(group: &HostsGroup, host: &str) -> Option<String> {
+        group
+            .get(host)?
+            .packages()
+            .first()?
+            .after()
+            .map(ToString::to_string)
+    }
+
+    /// Whether `handle` was sent a reboot.
+    fn rebooted(handle: &MockConnection) -> bool {
+        handle
+            .fired_commands()
+            .iter()
+            .any(|c| c.contains("systemctl reboot"))
+    }
+
+    /// A target carrying `pkg-a` whose every command passes and whose version
+    /// query answers `2.0-1`, so a post-update check records that version. A
+    /// transactional one is SL Micro, and its reboot takes.
+    fn checked_target(hostname: &str, transactional: bool) -> (Target, MockConnection) {
+        let query = pkg_a_query();
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                query.clone(),
+                CommandLog::new(&query, "pkg-a 2.0-1\n", "", 0, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        let product = if transactional {
+            SystemProduct::new("SL-Micro", "6.0", "x86_64")
+        } else {
+            SystemProduct::new("SLES", "15.5", "x86_64")
+        };
+        t.set_system(
+            System::new(product, BTreeSet::new(), transactional),
+            transactional,
+        );
+        t.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        (t, handle)
+    }
+
+    /// The rendered `("slmicro", true)` patch command for `pkg-a`.
+    fn slmicro_patch_command() -> String {
+        WorkflowRegistry::default()
+            .doer(Role::Update, "slmicro", true)
+            .expect("slmicro has an updater")
+            .render_command(
+                &[
+                    ("repa", repa_for("42", "7").as_str()),
+                    ("packages", quote_args(&["pkg-a".to_owned()]).as_str()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .expect("safe substitution never fails")
+    }
+
+    /// [`slmicro_target_with_lost_update`] carrying `pkg-a`, so a version
+    /// query sent to it after its patch shows in its command log.
+    fn lost_update_target(hostname: &str) -> (Target, MockConnection) {
+        let (mut t, handle) = slmicro_target_with_lost_update(hostname);
+        t.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_reboots_and_names_the_transactional_peer_it_patched() {
+        // h1's patch never ran, so nothing is rolled back; transactional h2's
+        // patch passed, so its snapshot is activated rather than left staged.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = lost_update_target("h1");
+        let (t2, h2) = checked_target("h2", true);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h1's lost patch is NotRun: {res:?}");
+        };
+        assert!(rebooted(&h2), "{:?}", h2.fired_commands());
+        assert_eq!(e.completed(), ["h2"], "{e:?}");
+        assert_eq!(after_version(&group, "h2").as_deref(), Some("2.0-1"));
+        assert_eq!(version_queries(&h2), 2, "{:?}", h2.commands());
+
+        // h1 may still hold the package-manager lock: nothing follows its patch.
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        assert_eq!(
+            h1.commands().last().map(String::as_str),
+            Some(slmicro_patch_command().as_str()),
+            "{:?}",
+            h1.commands()
+        );
+        assert_eq!(after_version(&group, "h1"), None);
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_never_names_a_peer_lost_to_its_reboot() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = lost_update_target("h1");
+        let (t2, h2) = checked_target("h2", true);
+        let (mut t3, h3) = slmicro_reboot_failure("h3", RebootFault::Unreachable);
+        t3.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h1's lost patch is NotRun: {res:?}");
+        };
+        assert!(rebooted(&h2) && rebooted(&h3), "{:?}", h3.fired_commands());
+        assert!(
+            e.reason.contains("h3: did not come back after the reboot"),
+            "{e:?}"
+        );
+        assert_eq!(e.completed(), ["h2"], "{e:?}");
+        assert_eq!(after_version(&group, "h2").as_deref(), Some("2.0-1"));
+        assert_eq!(version_queries(&h3), 1, "{:?}", h3.commands());
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+    }
+
+    /// A rollback would fire a second transaction at h1, whose first was never
+    /// observed to end. h2 answers its version probe, so a rollback that did
+    /// run would render `--oldpackage` on it.
+    #[tokio::test]
+    async fn a_peer_whose_reboot_did_not_take_beside_a_lost_host_rolls_nothing_back() {
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        let packages = report.get_package_list();
+        let (t1, _) = lost_update_target("h1");
+        let (t2, _) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h1's lost patch is NotRun: {res:?}");
+        };
+        assert!(e.reason.contains("h2: never rebooted"), "{e:?}");
+        assert!(e.completed().is_empty(), "{e:?}");
+
+        let (t1, h1) = lost_update_target("h1");
+        let (t2, h2) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h1's patch never ran");
+        assert!(rebooted(&h2), "{:?}", h2.fired_commands());
+        for (name, handle) in [("h1", &h1), ("h2", &h2)] {
+            assert!(
+                !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+                "{name}: {:?}",
+                handle.commands()
+            );
+        }
+        // The text and the rollback decision come from one rule.
+        assert!(
+            degradations(&diagnostics)
+                .iter()
+                .any(|d| d.contains("left in place")),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// Unlike a lost host, a failed probe leaves no host whose patch result is
+    /// unknown, so a reachable peer whose reboot did not take rolls the group
+    /// back as it would on success.
+    #[tokio::test]
+    async fn a_peer_whose_reboot_did_not_take_beside_a_failed_probe_rolls_the_group_back() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, _, _) = sles_target_with_probe_failure("h1", &packages);
+            let (t2, h2) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+            (HostsGroup::new(vec![t1, t2], false), h2)
+        };
+        let mut diagnostics = Vec::new();
+
+        let (mut g, _) = group();
+        let res = perform_update(
+            &mut g,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+        let Err(UpdateFailure::RebootNotTaken(e)) = res else {
+            panic!("h2's reboot that did not take is RebootNotTaken: {res:?}");
+        };
+        assert!(e.reason.contains("h2: never rebooted"), "{e:?}");
+        assert!(e.completed().is_empty(), "{e:?}");
+        assert_eq!(
+            degradations(&diagnostics),
+            ["update did not complete on h1, h2; rolling it back"]
+        );
+
+        let (mut g, h2) = group();
+        let mut diagnostics = Vec::new();
+        report
+            .perform_update(&mut g, true, false, &mut diagnostics)
+            .await
+            .expect_err("h1 could not work out what to patch");
+        assert!(
+            h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h2.commands()
+        );
+        // The text and the rollback decision come from one rule.
+        assert!(
+            degradations(&diagnostics)
+                .contains(&"update did not complete on h1, h2; rolling it back"),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// A rollback cannot reach h2, so it would revert h3 on behalf of a host it
+    /// leaves as it is either way. h1 and h3 answer their version probes, so a
+    /// rollback that did run would render `--oldpackage` on them.
+    #[tokio::test]
+    async fn a_peer_lost_to_its_reboot_beside_a_failed_probe_rolls_nothing_back() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, h1, _) = sles_target_with_probe_failure("h1", &packages);
+            let (t2, h2) = slmicro_reboot_failure("h2", RebootFault::Unreachable);
+            let (t3, h3) = slmicro_target("h3", "pkg-a = 1.0-1\n", 0);
+            (HostsGroup::new(vec![t1, t2, t3], false), [h1, h2, h3])
+        };
+
+        let (mut g, [_, _, h3]) = group();
+        let res = perform_update(
+            &mut g,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::ProbeFailed(e)) = res else {
+            panic!("an unreachable peer beside a failed probe is ProbeFailed: {res:?}");
+        };
+        assert!(e.reason.contains("h2: did not come back"), "{e:?}");
+        assert!(rebooted(&h3), "{:?}", h3.fired_commands());
+        assert_eq!(e.completed(), ["h3"], "{e:?}");
+
+        let (mut g, handles) = group();
+        report
+            .perform_update(&mut g, true, false, &mut Vec::new())
+            .await
+            .expect_err("h1 could not work out what to patch");
+        for (name, handle) in ["h1", "h2", "h3"].into_iter().zip(&handles) {
+            assert!(
+                !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+                "{name}: {:?}",
+                handle.commands()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_update_whose_peer_could_not_probe_reboots_and_checks_the_transactional_host() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = checked_target("h1", true);
+        let (mut t2, h2, update) = sles_target_with_probe_failure("h2", &packages);
+        t2.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::ProbeFailed(e)) = res else {
+            panic!("h2's probe failure is ProbeFailed: {res:?}");
+        };
+        assert!(rebooted(&h1), "{:?}", h1.fired_commands());
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+        assert_eq!(after_version(&group, "h1").as_deref(), Some("2.0-1"));
+        assert_eq!(
+            h2.commands().last(),
+            Some(&update),
+            "nothing follows h2's failed probe: {:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_checks_the_non_transactional_peer_it_patched() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = checked_target("h1", false);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, -1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h2's lost patch is NotRun: {res:?}");
+        };
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+        assert_eq!(after_version(&group, "h1").as_deref(), Some("2.0-1"));
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+    }
+
+    #[tokio::test]
+    async fn an_update_that_lost_a_host_to_its_reboot_checks_the_peer_that_came_back() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _) = checked_target("h1", true);
+        let (mut t2, h2) = slmicro_reboot_failure("h2", RebootFault::Unreachable);
+        t2.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Reboot(e)) = res else {
+            panic!("an unreachable host is Reboot: {res:?}");
+        };
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+        assert_eq!(after_version(&group, "h1").as_deref(), Some("2.0-1"));
+        assert_eq!(version_queries(&h2), 1, "{:?}", h2.commands());
+    }
+
+    /// The degradation texts `perform_update` pushed.
+    fn degradations(diagnostics: &[Diagnostic]) -> Vec<&str> {
+        diagnostics
+            .iter()
+            .filter(|d| d.degradation)
+            .map(|d| d.text.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_keeps_the_test_repos_only_on_the_hosts_it_did_not_complete_on() {
+        // Disabled h3 ran nothing, yet its empty exit-0 snapshot passes the
+        // check: it is neither completed nor left unfinished.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _) = checked_target("h1", true);
+        let (t2, _) = lost_update_target("h2");
+        let (mut t3, h3) = checked_target("h3", true);
+        t3.set_state(TargetState::Disabled);
+        let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+        let repo = ComposingRepo::default();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h2's lost patch is NotRun: {res:?}");
+        };
+        assert!(h3.commands().is_empty(), "{:?}", h3.commands());
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+        assert_eq!(repo.ops_for("h1"), [RepoOp::Add, RepoOp::Remove]);
+        assert_eq!(repo.ops_for("h2"), [RepoOp::Add]);
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h2; the test update repositories are left in place \
+                 there for retry/diagnosis (remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_runs_the_newpackage_step_on_the_hosts_it_completed_on() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = checked_target("h1", false);
+        let (t2, h2, patch) = sles_target_with_patch_exit("h2", &packages, -1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::default();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            true,
+            &mut diagnostics,
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h2's lost patch is NotRun: {res:?}");
+        };
+        assert_eq!(e.completed(), ["h1"], "{e:?}");
+        let h1_cmds = h1.commands();
+        let prepared = h1_cmds
+            .iter()
+            .position(|c| c.starts_with("zypper -n in -y -l"))
+            .unwrap_or_else(|| panic!("no newpackage prepare on h1: {h1_cmds:?}"));
+        let checked = h1_cmds
+            .iter()
+            .rposition(|c| c.starts_with("rpm -q"))
+            .unwrap_or_else(|| panic!("no post-update check on h1: {h1_cmds:?}"));
+        assert!(
+            prepared < checked,
+            "versions are read after it: {h1_cmds:?}"
+        );
+        assert_eq!(
+            repo.ops_for("h1"),
+            [RepoOp::Add, RepoOp::Add, RepoOp::Remove],
+            "the update's add, the newpackage add, and the cleanup"
+        );
+        assert_eq!(repo.ops_for("h2"), [RepoOp::Add]);
+        assert_eq!(h2.commands().last(), Some(&patch), "{:?}", h2.commands());
+        assert!(
+            !degradations(&diagnostics)
+                .iter()
+                .any(|d| d.contains("newpackage")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_names_its_unfinished_hosts_before_finishing_the_rest() {
+        // The head of the output is what survives the MCP output cap.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let prepare = "zypper -n in -y -l  pkg-a";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(prepare, CommandLog::new(prepare, "", "", 1, 0));
+        let h1 = conn.clone();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t1.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, -1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &ComposingRepo::default(),
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            true,
+            &mut diagnostics,
+        )
+        .await;
+        assert!(matches!(res, Err(UpdateFailure::NotRun(_))), "{res:?}");
+        assert!(
+            h1.commands().iter().any(|c| c == prepare),
+            "{:?}",
+            h1.commands()
+        );
+        let texts = degradations(&diagnostics);
+        assert!(
+            texts.len() == 2
+                && texts[0].starts_with("update did not complete on h2;")
+                && texts[1].starts_with("newpackage prepare after update failed"),
+            "{texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rolled_back_update_names_every_host_it_did_not_complete_on() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _) = checked_target("h1", true);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+        assert!(matches!(res, Err(UpdateFailure::Check(_))), "{res:?}");
+        assert_eq!(
+            degradations(&diagnostics),
+            ["update did not complete on h1, h2; rolling it back"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_neither_reboots_nor_checks_the_peer_it_rolls_back() {
+        // The group-wide rollback reverts h1, so activating its snapshot first
+        // would boot it into packages that are about to be removed.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = checked_target("h1", true);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Check(e)) = res else {
+            panic!("h2's failed patch is Check: {res:?}");
+        };
+        assert!(e.completed().is_empty(), "{e:?}");
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        assert_eq!(version_queries(&h1), 1, "{:?}", h1.commands());
+        assert_eq!(after_version(&group, "h1"), None);
+    }
+
+    #[tokio::test]
+    async fn an_update_rolled_back_after_a_failed_check_completed_on_none() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, _, _) = sles_target_with_patch_exit("h1", &packages, 0);
+            let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+            HostsGroup::new(vec![t1, t2], false)
+        };
+
+        let res = perform_update(
+            &mut group(),
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::Check(e)) = res else {
+            panic!("h2's failed patch is Check: {res:?}");
+        };
+        assert!(e.completed().is_empty(), "{e:?}");
+
+        let err = report
+            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .await
+            .expect_err("h2's patch failed");
+        assert!(err.completed().is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_update_rolled_back_after_a_reboot_not_taken_completed_on_none() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let group = || {
+            let (t1, _) = slmicro_target("h1", "", 0);
+            let (t2, _) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+            HostsGroup::new(vec![t1, t2], false)
+        };
+
+        let res = perform_update(
+            &mut group(),
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::RebootNotTaken(e)) = res else {
+            panic!("a reachable host that never rebooted is RebootNotTaken: {res:?}");
+        };
+        assert!(e.completed().is_empty(), "{e:?}");
+
+        let err = report
+            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .await
+            .expect_err("h2 never rebooted");
+        assert!(err.completed().is_empty(), "{err:?}");
     }
 
     /// One `update` over h1 (composes `pkg-a`) + h2 (composes only `pkg-z`, so
@@ -6616,6 +7983,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completed_hosts_claims_nothing_beside_a_hostless_failure() {
+        let (t1, _h1) = sles_target("h1", "");
+        let (t2, _h2) = sles_target("h2", "");
+        let group = HostsGroup::new(vec![t1, t2], false);
+        let names = group.names();
+
+        let named = [UpdateError::new("boom", "h2")];
+        assert_eq!(completed_hosts(&group, &names, &named), ["h1"]);
+        let hostless = [UpdateError::reason_only("boom")];
+        assert!(completed_hosts(&group, &names, &hostless).is_empty());
+    }
+
+    #[test]
+    fn only_a_check_failure_and_a_reboot_not_taken_roll_back() {
+        let e = || UpdateError::new("boom", "h1");
+        for (failure, expected) in [
+            (UpdateFailure::Check(e()), true),
+            (UpdateFailure::RebootNotTaken(e()), true),
+            (UpdateFailure::Prepare(e()), false),
+            (UpdateFailure::MissingUpdater(e()), false),
+            (UpdateFailure::Cancelled(e()), false),
+            (UpdateFailure::Reboot(e()), false),
+            (UpdateFailure::NotRun(e()), false),
+            (UpdateFailure::ProbeFailed(e()), false),
+            (UpdateFailure::Excluded(e()), false),
+            (UpdateFailure::RepoAdd(e()), false),
+            (UpdateFailure::LockFailed(e()), false),
+        ] {
+            assert_eq!(failure.rolls_back(), expected, "{failure:?}");
+        }
+    }
+
     // --- perform_update ----------------------------------------------------
 
     /// Builds an SLES report seeded by [`seed_rrid_and_package`].
@@ -8234,15 +9634,15 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_pushes_a_diagnostic_when_the_update_fails() {
-        // 104 on the patch ⇒ the check flags "package not found" and the flow
-        // returns Err before reaching `remove_test_repos`. The diagnostic must
+        // `-1` on the patch ⇒ nothing is rolled back and the flow returns Err
+        // without reaching `remove_test_repos`. The diagnostic must
         // still tell an MCP caller the repos are left configured — asserted on
         // the text (the check itself pushes its own sections into the same
         // vec, so asserting on emptiness could never fail), and that the
         // matching entry is a `degradation`, not a plain/highlighted section.
         let report = report_with_rrid();
         let packages = report.get_package_list();
-        let (t, _handle, _patch) = sles_target_with_patch_exit("h1", &packages, 104);
+        let (t, _handle, _patch) = sles_target_with_patch_exit("h1", &packages, -1);
         let mut group = HostsGroup::new(vec![t], false);
         let mut diagnostics = Vec::new();
 
@@ -8259,8 +9659,8 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(res, Err(UpdateFailure::Check(_))),
-            "a failed patch returns Err(Check): {res:?}"
+            matches!(res, Err(UpdateFailure::NotRun(_))),
+            "a lost patch returns Err(NotRun): {res:?}"
         );
 
         let repo_left_diagnostic = diagnostics.iter().find(|d| {

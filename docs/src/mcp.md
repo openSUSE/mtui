@@ -357,7 +357,8 @@ and nothing is written there.
   the update's repositories do not reach it, a repository refresh that
   may have left stale metadata on a host that still gets patched, a prepare
   host failure it continues past, a failed `--newpackage` step, a failed
-  update leaving the test repositories configured, a failed automatic
+  update naming the hosts it did not complete on and whether it rolls back or
+  leaves their test repositories configured, a failed automatic
   rollback, and the three ways the post-update test-repo cleanup can fail — on
   both the success and the failure path. The server's tracing goes to its own
   stderr, not the tool result, so a `tracing::warn!` alone would never reach an
@@ -371,10 +372,27 @@ and nothing is written there.
   count is of degradations only; a check's own recognised sections (the
   vendor-support notice, extra rpm output) ride in the same diagnostics and are
   routine on a healthy update, so they leave the confirmation bare. A partial
-  `update` — one that excluded a host (its products compose none of the
-  update's packages, or its test update repository failed to register) but
-  patched the rest — still fails, naming the excluded hosts, but first prints
+  run — one that failed on some hosts and completed on the rest, with nothing
+  rolled back — still fails, naming the hosts it failed on, but first prints
   the confirmation for the hosts it completed on, so they need no second run.
+  A host counts as completed only when it passed its check and, if
+  transactional, came back from its reboot with the new snapshot active. An
+  `update` is partial when it excluded a host (its products compose none of
+  the update's packages, or its test update repository failed to register),
+  or when a peer's patch never ran, could not work out what to patch, or did
+  not come back from its reboot. On the last three it first finishes the peers
+  whose patch passed as a successful run would: it reboots the transactional
+  ones, then runs the `--newpackage` step, records the post-update package
+  versions and removes the test update repositories on every host it
+  completed on. Its degradation names the hosts it did not complete on, which
+  keep their test update repositories for retry/diagnosis. A patch that
+  failed its check rolls the whole group back and names no host. So does a
+  reboot that did not take on a reachable host, but only when every reboot
+  that failed is on a reachable host and no peer's patch never ran: the
+  rollback cannot reach a peer lost to its reboot, and would start a second
+  transaction on a peer whose first was never observed to end. Otherwise
+  nothing is rolled back and the hosts whose reboot failed are named among the
+  failures. A cancelled run names none either.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, an arch of the testplatform
