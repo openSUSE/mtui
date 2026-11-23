@@ -98,6 +98,32 @@ expression: pretty
     "read_only": false
   },
   {
+    "description": "Set `verdict` or `comment` back to unanswered (null), so report_sections lists it as unfilled again; any other section is refused. Applied to local state only; `commit` uploads it. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "section": {
+          "description": "Section to set back to unanswered.",
+          "enum": [
+            "verdict",
+            "comment"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section"
+      ],
+      "type": "object"
+    },
+    "name": "report_section_clear",
+    "read_only": false
+  },
+  {
     "description": "Without `issue_id`, list the report's issues (`id`, `title`, `status`, `severity`, `new` — true for a tester-filed bug); with it, read that issue in full. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,

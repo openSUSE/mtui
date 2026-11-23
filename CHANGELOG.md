@@ -10,6 +10,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New MCP tool `report_section_clear` sets `verdict` or `comment` back to
+  unanswered (`null`), so `report_sections` lists it as unfilled again; any
+  other section is refused. No `value` that `report_section_write` declares
+  could do this: its schema has no null arm, and the string `"null"` is refused
+  as a verdict and stored as a comment's text. The tool joins the core profile
+  (#792). **MCP schema note:** additive only — one new tool taking `section`
+  and `template`; `report_section_write` is unchanged.
 - MCP `put` takes a `source`: an absolute path of a file on the `mtui-mcp`
   server, uploaded byte for byte without passing through the call, so a file
   such as a baseline-check script no longer has to be reproduced by the model.

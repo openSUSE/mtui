@@ -72,6 +72,12 @@ impl Section {
     pub const fn is_tester_writable(self) -> bool {
         !matches!(self, Self::Update | Self::Install)
     }
+
+    /// Whether the whole section may be `null`, i.e. unanswered.
+    #[must_use]
+    pub const fn is_nullable(self) -> bool {
+        matches!(self, Self::Verdict | Self::Comment)
+    }
 }
 
 impl fmt::Display for Section {
@@ -497,6 +503,49 @@ mod tests {
             .filter(|s| !s.is_tester_writable())
             .collect();
         assert_eq!(read_only, [Section::Update, Section::Install]);
+    }
+
+    fn admits_null(schema: &Value, spec: &Value) -> bool {
+        if let Some(target) = spec.get("$ref").and_then(Value::as_str) {
+            let target = schema
+                .pointer(target.trim_start_matches('#'))
+                .expect("$ref resolves");
+            return admits_null(schema, target);
+        }
+        let typed = match spec.get("type") {
+            Some(Value::String(t)) => t == "null",
+            Some(Value::Array(types)) => types.contains(&json!("null")),
+            _ => false,
+        };
+        let listed = spec
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.contains(&Value::Null));
+        let arm = ["anyOf", "oneOf"]
+            .into_iter()
+            .filter_map(|key| spec.get(key).and_then(Value::as_array))
+            .flatten()
+            .any(|arm| admits_null(schema, arm));
+        typed || listed || arm
+    }
+
+    #[test]
+    fn a_section_is_nullable_exactly_where_the_schema_admits_null() {
+        let schema: Value = serde_json::from_str(crate::report_document::SCHEMA_JSON).unwrap();
+        for section in Section::ALL {
+            let spec = &schema["properties"][section.as_str()];
+            assert!(spec.is_object(), "{section} is a schema property");
+            assert_eq!(
+                section.is_nullable(),
+                admits_null(&schema, spec),
+                "{section}"
+            );
+        }
+        let nullable: Vec<_> = Section::ALL
+            .into_iter()
+            .filter(|s| s.is_nullable())
+            .collect();
+        assert_eq!(nullable, [Section::Verdict, Section::Comment]);
     }
 
     const ALL_FIXTURES: [(&str, &str); 7] = [
