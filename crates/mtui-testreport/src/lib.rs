@@ -18,11 +18,11 @@ pub mod support;
 pub mod testreport;
 pub mod update_workflow;
 
-pub use authoring::author_document;
 pub use authoring::auto::openqa_install_from_auto;
 pub use authoring::kernel::regression_from_kernel;
 pub use authoring::manual::install_from_hosts;
 pub use authoring::overview::openqa_extra_from_overview;
+pub use authoring::{ChecksScope, author_document};
 pub use commit_upload::{
     CollectError, Collected, CommitReport, CommitUploadError, collect_artifacts, upload_current,
 };

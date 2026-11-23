@@ -8,16 +8,19 @@ use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::report_document::{ReportDocument, TesterEntry};
 
+use crate::authoring::ChecksScope;
 use crate::export::ManualHost;
 
 /// Composes authoring's typed `testing.*` subtrees onto `document`. `hosts` is
 /// only meaningful for the manual workflow; pass `None` for `Auto`/`Kernel`.
+/// Its [`ChecksScope`] says whether they are every connected host or a
+/// selection.
 ///
 /// Returns the top-level pointers touched — empty when `document` is `None`,
 /// since nothing is authored then.
 pub fn author_export(
     document: &mut Option<ReportDocument>,
-    hosts: Option<&[ManualHost]>,
+    hosts: Option<(&[ManualHost], ChecksScope)>,
     auto: Option<&DashboardAutoOpenQA>,
     kernel: &[KernelOpenQA],
     overview: Option<&OpenQAOverviewResult>,
@@ -26,8 +29,12 @@ pub fn author_export(
     let Some(document) = document.as_mut() else {
         return Vec::new();
     };
-    let install =
-        hosts.map(|hosts| crate::authoring::manual::install_from_hosts(hosts, &document.install));
+    let install = hosts.map(|(hosts, scope)| {
+        (
+            crate::authoring::manual::install_from_hosts(hosts, &document.install),
+            scope,
+        )
+    });
     let openqa_install = crate::authoring::auto::openqa_install_from_auto(auto);
     let regression = crate::authoring::kernel::regression_from_kernel(kernel);
     let openqa_extra = overview
@@ -115,7 +122,14 @@ mod tests {
             hostlog: HostLog::new(),
         };
 
-        let touched = author_export(&mut document, Some(&[host]), None, &[], None, None);
+        let touched = author_export(
+            &mut document,
+            Some((&[host], ChecksScope::Group)),
+            None,
+            &[],
+            None,
+            None,
+        );
         assert_eq!(touched, ["testing.install"]);
 
         let install = document

@@ -475,6 +475,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `export -t <host>` rewrites the install checks of the selected hosts only
+  and keeps every other row of `testing.install.checks`, the row of a host no
+  longer connected included. It used to replace them all with the selected
+  hosts' rows, so exporting a host alone dropped the rows of every host
+  exported before it. Without `-t`, or with the deprecated `-t all`, the
+  checks are still rewritten from the connected hosts. The rows are ordered by
+  host, and `export` names the rows it did not rewrite:
+  `testing.install.checks: kept the rows of the hosts not selected: <hosts>`
+  after a selection, `testing.install.checks: dropped the rows of the hosts
+  not connected: <hosts>` after an export of every connected host (#793).
 - A cancelled `reload_products` (MCP `job_cancel`, or Ctrl-C in the REPL)
   stops at the next host instead of reloading every remaining host first, also
   on hosts added with no template loaded; a host whose reload is in flight

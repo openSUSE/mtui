@@ -1,10 +1,12 @@
 //! The `export` command (authors the gathered update data onto the report document).
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::HttpClient;
 use mtui_testreport::{
-    AutoExport, DenyOverwrite, ExportContext, KernelExport, ManualExport, ManualHost,
+    AutoExport, ChecksScope, DenyOverwrite, ExportContext, KernelExport, ManualExport, ManualHost,
 };
 use mtui_types::Workflow;
 use mtui_types::package::VersionCheck;
@@ -12,7 +14,7 @@ use mtui_types::package::VersionCheck;
 use super::openqa_overview::{OverviewOpts, OverviewParams, fetch_overview};
 use super::support::{
     add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_document,
-    require_update, select_names, stale_hash_gate, template_completion,
+    require_update, select_names, selects_hosts, stale_hash_gate, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -47,6 +49,10 @@ use crate::session::Session;
 /// recorded package versions — because this session never ran `update`
 /// (#526), or because no package of the update is tracked for the host;
 /// `--allow-unverified` writes the scaffold anyway.
+///
+/// A `-t` selection rewrites the selected hosts' `testing.install.checks`
+/// rows and keeps every other row; without one the rows are rewritten from
+/// the connected hosts. The answer names the rows it did not rewrite.
 ///
 /// Also refuses on a template that loaded with a stale Gitea hash
 /// (`load_template --force-continue`) unless `--allow-stale` is given —
@@ -174,13 +180,14 @@ impl Command for Export {
     }
 }
 
-/// The selected hosts' [`ManualHost`] views, refusing (#526) when not one of
-/// them has recorded package versions unless `allow_unverified`.
+/// The selected hosts' [`ManualHost`] views and whether `-t` selected them,
+/// refusing (#526) when not one of them has recorded package versions unless
+/// `allow_unverified`.
 fn verified_manual_hosts(
     session: &mut Session,
     args: &ArgMatches,
     allow_unverified: bool,
-) -> Result<(Vec<String>, Vec<ManualHost>), CommandError> {
+) -> Result<(Vec<String>, Vec<ManualHost>, ChecksScope), CommandError> {
     let hosts = select_names(session.targets(), args, false)
         .map_err(|e| CommandError::Other(e.to_string()))?;
     let results = manual_hosts(session, &hosts);
@@ -213,7 +220,12 @@ fn verified_manual_hosts(
         };
         session.display.println(&line);
     }
-    Ok((hosts, results))
+    let scope = if selects_hosts(args) {
+        ChecksScope::Selection
+    } else {
+        ChecksScope::Group
+    };
+    Ok((hosts, results, scope))
 }
 
 /// The refusal for a selection with no verifiable host. Only a host whose
@@ -271,11 +283,12 @@ impl Export {
         workflow: Workflow,
         force: bool,
         rrid: mtui_types::RequestReviewID,
-        manual_results: Option<(Vec<String>, Vec<ManualHost>)>,
+        manual_results: Option<(Vec<String>, Vec<ManualHost>, ChecksScope)>,
     ) -> CommandResult {
         let hostless = workflow == Workflow::Manual && manual_results.is_none();
         let ctx = ExportContext::new(session.config.clone(), force, rrid.clone());
         let overview = session.metadata().openqa().overview.clone();
+        let mut checks_lines = Vec::new();
         let (touched, written) = match workflow {
             Workflow::Auto => {
                 let http = build_http(session)?;
@@ -301,15 +314,18 @@ impl Export {
                 (touched, Vec::new())
             }
             Workflow::Manual => {
-                let (hosts, results) = manual_results.expect("computed for a hosted Manual export");
+                let (hosts, results, scope) =
+                    manual_results.expect("computed for a hosted Manual export");
                 let auto = session.metadata().openqa().auto.clone();
+                let before = check_refhosts(session);
                 let touched = author_onto_document(
                     session,
                     auto.as_ref(),
                     &[],
                     overview.as_ref(),
-                    Some(&results),
+                    Some((&results, scope)),
                 );
+                checks_lines = untouched_checks_lines(&before, &check_refhosts(session), &results);
                 let written = ManualExport::new(ctx, results).write_logs(&hosts, &DenyOverwrite);
                 (touched, written)
             }
@@ -335,8 +351,58 @@ impl Export {
         if let Some(line) = document_line(&touched) {
             session.display.println(&line);
         }
+        for line in checks_lines {
+            session.display.println(&line);
+        }
         Ok(())
     }
+}
+
+/// The `refhost` of every `testing.install.checks` row, in document order.
+fn check_refhosts(session: &Session) -> Vec<String> {
+    session
+        .metadata()
+        .base()
+        .document
+        .as_ref()
+        .and_then(|d| d.testing.install.as_ref())
+        .map(|install| install.checks.iter().map(|c| c.refhost.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Names the `testing.install.checks` rows an export did not rewrite, from the
+/// `refhost`s before and after it: rows of hosts it did not export are those a
+/// selection kept, and rows gone after it are those a group export dropped.
+fn untouched_checks_lines(
+    before: &[String],
+    after: &[String],
+    exported: &[ManualHost],
+) -> Vec<String> {
+    let kept: BTreeSet<&str> = after
+        .iter()
+        .map(String::as_str)
+        .filter(|r| !exported.iter().any(|h| h.hostname == *r))
+        .collect();
+    let dropped: BTreeSet<&str> = before
+        .iter()
+        .map(String::as_str)
+        .filter(|r| !after.iter().any(|a| a == r))
+        .collect();
+    let join = |hosts: BTreeSet<&str>| hosts.into_iter().collect::<Vec<_>>().join(", ");
+    let mut lines = Vec::new();
+    if !kept.is_empty() {
+        lines.push(format!(
+            "testing.install.checks: kept the rows of the hosts not selected: {}",
+            join(kept)
+        ));
+    }
+    if !dropped.is_empty() {
+        lines.push(format!(
+            "testing.install.checks: dropped the rows of the hosts not connected: {}",
+            join(dropped)
+        ));
+    }
+    lines
 }
 
 /// Saves the `openqa_overview` result on the report unless one is already
@@ -407,7 +473,7 @@ fn author_onto_document(
     auto: Option<&mtui_datasources::qem_dashboard::DashboardAutoOpenQA>,
     kernel: &[mtui_datasources::openqa::kernel::KernelOpenQA],
     overview: Option<&mtui_datasources::OpenQAOverviewResult>,
-    hosts: Option<&[ManualHost]>,
+    hosts: Option<(&[ManualHost], ChecksScope)>,
 ) -> Vec<&'static str> {
     if session.metadata().base().document.is_none() {
         return Vec::new();
@@ -1143,6 +1209,143 @@ mod tests {
                 && out.contains("updated"),
             "{out:?}"
         );
+    }
+
+    /// `testing.install.checks` as `"<refhost> <verdict>"`, in document order.
+    fn check_rows(session: &Session) -> Vec<String> {
+        authored_testing(session)
+            .install
+            .map(|install| {
+                install
+                    .checks
+                    .iter()
+                    .map(|c| format!("{} {:?}", c.refhost, c.verdict.0))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Seeds `host` with a package the update left at the same version, which
+    /// the export judges FAILED.
+    fn record_unchanged_versions(session: &mut Session, host: &str) {
+        let t = session.targets_mut().get_mut(host).expect("host present");
+        let mut pkg = mtui_types::package::Package::new("bash");
+        pkg.set_before(Some("5.1-2")).unwrap();
+        pkg.set_after(Some("5.1-2")).unwrap();
+        t.set_packages(vec![pkg]);
+    }
+
+    /// A selection rewrites the selected host's row and keeps the row of a
+    /// connected host it does not name, and the answer names the kept host.
+    /// h2 turns FAILED between the exports, so a kept old h2 row fails too.
+    #[tokio::test]
+    async fn a_selection_keeps_the_rows_of_the_hosts_not_selected() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        record_versions(&mut session, "h1");
+        record_versions(&mut session, "h2");
+        Export
+            .call(&mut session, &matches(&Export, &[]))
+            .await
+            .unwrap();
+        assert_eq!(check_rows(&session), ["h1 Some(Passed)", "h2 Some(Passed)"]);
+
+        record_unchanged_versions(&mut session, "h2");
+        let first = buf.contents().len();
+        Export
+            .call(&mut session, &matches(&Export, &["-t", "h2"]))
+            .await
+            .unwrap();
+
+        assert_eq!(check_rows(&session), ["h1 Some(Passed)", "h2 Some(Failed)"]);
+        let answer = buf.contents()[first..].to_owned();
+        assert!(
+            answer
+                .lines()
+                .any(|l| l == "testing.install.checks: kept the rows of the hosts not selected: h1"),
+            "{answer}"
+        );
+    }
+
+    /// A host exported alone after the others were exported and disconnected
+    /// is added beside their rows instead of replacing them.
+    #[tokio::test]
+    async fn a_selection_adds_a_new_host_beside_the_rows_of_disconnected_hosts() {
+        let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        record_versions(&mut session, "h1");
+        record_versions(&mut session, "h2");
+        Export
+            .call(&mut session, &matches(&Export, &["-t", "h1"]))
+            .await
+            .unwrap();
+        session.targets_mut().remove("h1").expect("h1 present");
+
+        let first = buf.contents().len();
+        Export
+            .call(&mut session, &matches(&Export, &["-t", "h2"]))
+            .await
+            .unwrap();
+
+        assert_eq!(check_rows(&session), ["h1 Some(Passed)", "h2 Some(Passed)"]);
+        let answer = buf.contents()[first..].to_owned();
+        assert!(
+            answer.contains("kept the rows of the hosts not selected: h1"),
+            "{answer}"
+        );
+    }
+
+    /// The rows stay ordered by host whatever order `-t` names them in.
+    #[tokio::test]
+    async fn a_selection_orders_the_rows_by_host() {
+        let (mut session, _buf, _dir, _server) = manual_export_fixture(&["h1", "h2", "h3"]).await;
+        for host in ["h1", "h2", "h3"] {
+            record_versions(&mut session, host);
+        }
+        Export
+            .call(&mut session, &matches(&Export, &["-t", "h3", "-t", "h1"]))
+            .await
+            .unwrap();
+        assert_eq!(check_rows(&session), ["h1 Some(Passed)", "h3 Some(Passed)"]);
+
+        Export
+            .call(&mut session, &matches(&Export, &["-t", "h2"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            check_rows(&session),
+            ["h1 Some(Passed)", "h2 Some(Passed)", "h3 Some(Passed)"]
+        );
+    }
+
+    /// Without a selection, and with the deprecated `-t all`, the checks are
+    /// rewritten from the connected hosts: a disconnected host's row is
+    /// dropped, and the answer names it.
+    #[tokio::test]
+    async fn a_group_export_drops_the_row_of_a_disconnected_host() {
+        for argv in [&[][..], &["-t", "all"][..]] {
+            let (mut session, buf, _dir, _server) = manual_export_fixture(&["h1", "h2"]).await;
+            record_versions(&mut session, "h1");
+            record_versions(&mut session, "h2");
+            Export
+                .call(&mut session, &matches(&Export, &[]))
+                .await
+                .unwrap();
+            session.targets_mut().remove("h2").expect("h2 present");
+
+            let first = buf.contents().len();
+            Export
+                .call(&mut session, &matches(&Export, argv))
+                .await
+                .unwrap();
+
+            assert_eq!(check_rows(&session), ["h1 Some(Passed)"], "{argv:?}");
+            let answer = buf.contents()[first..].to_owned();
+            assert!(
+                answer.lines().any(|l| l
+                    == "testing.install.checks: dropped the rows of the hosts not connected: h2"),
+                "{argv:?}: {answer}"
+            );
+            assert!(!answer.contains("kept the rows"), "{argv:?}: {answer}");
+        }
     }
 
     /// A manual-workflow session on the document path: a document loaded, a

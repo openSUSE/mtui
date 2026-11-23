@@ -406,6 +406,13 @@ and nothing is written there.
   packages for none of its products), and `WARNING: no package version data
   recorded for <host>...` when the host's tracked packages were never checked
   (no `update` ran in this session).
+- `export` names the `testing.install.checks` rows it did not rewrite. With
+  `-t` it rewrites the selected hosts' rows only and keeps every other row,
+  including that of a host no longer connected:
+  `testing.install.checks: kept the rows of the hosts not selected: <hosts>`.
+  Without `-t` it rewrites the checks from the connected hosts:
+  `testing.install.checks: dropped the rows of the hosts not connected:
+  <hosts>`. The rows are ordered by host.
 - `reload_products` follows `<host>: reloaded products (<base>)`, for a host
   whose products changed, with `<host>: tracked packages: +crmsh, ~smc-tools
   (required 1.0-1 -> 1.2-1), -foo (kept for their recorded checks: bar)` —
@@ -481,8 +488,9 @@ Replaces one tester section with `value`.
   array minimums are **not** checked locally, so the server can still refuse
   at `commit`.
 - A write changes local state only and marks the report dirty; `commit`
-  uploads it. A later `export` overwrites `testing.install`, `testing.openqa`
-  and `people.testers`.
+  uploads it. A later `export` overwrites the checks in `testing.install`
+  (with `-t`, only the selected hosts' rows), `testing.openqa` and
+  `people.testers`.
 - Returns `{ "id", "section", "dirty": true, "size" }`.
 
 ### `report_issue_read` (read-only)
