@@ -685,7 +685,7 @@ Options:
 
 ## `checkers`
 
-Lists the build-check (checker) result runs for the loaded update.
+Lists TeReGen's checker result runs for the loaded update; TeReGen serves them for SLFO ids only.
 
 ```text
 Usage: checkers [OPTIONS]

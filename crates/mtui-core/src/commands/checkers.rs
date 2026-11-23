@@ -1,14 +1,15 @@
-//! The `checkers` command — list the build-check results for the loaded update.
+//! The `checkers` command — list TeReGen's checker results for the loaded update.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::CheckerRun;
+use mtui_types::RequestKind;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
 use crate::commands::support::{require_update, template_completion};
 use crate::display::{CommandPromptDisplay, sanitize_external};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Indent of a `--full-output` continuation line: `"  "` + the status column +
@@ -150,12 +151,18 @@ fn print_run(display: &mut CommandPromptDisplay, rrid: &str, run: &CheckerRun, f
     }
 }
 
-/// Lists the build-check (checker) result runs for the loaded update.
+/// Lists TeReGen's checker result runs for the loaded update.
 ///
 /// Fetches the live checker results from the TeReGen report API
 /// (`GET /reports/{id}/checkers`) and prints, per run, a header with the run's
 /// non-zero counts followed by one colored `<status> <check_type>` row per
 /// result. Requires a loaded update.
+///
+/// TeReGen serves checker results for SLFO ids only, so any other id is answered
+/// without asking it. For an SLFO id an empty list prints `No checker results
+/// for <id>`, and a failed lookup fails the command, naming the cause. A 404 is
+/// one: TeReGen answers it when it could not fetch the runs from SMELT or does
+/// not know the update.
 ///
 /// The payload is external, so every field it contributes is filtered of
 /// terminal control sequences and bounded to 200 characters per row before
@@ -169,7 +176,10 @@ impl Command for Checkers {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Lists the build-check (checker) result runs for the loaded update.")
+        Some(
+            "Lists TeReGen's checker result runs for the loaded update; TeReGen serves them for \
+             SLFO ids only.",
+        )
     }
 
     fn scope(&self) -> Scope {
@@ -194,13 +204,20 @@ impl Command for Checkers {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
+        // TeReGen's answer for any other id is fixed, whatever the update's state.
+        if rrid.kind != RequestKind::Slfo {
+            session.display.println(&format!(
+                "No checker results for {rrid} (TeReGen serves checker results for SLFO ids only)"
+            ));
+            return Ok(());
+        }
         let teregen = teregen_client(session)?;
         let full_output = args.get_flag("full_output");
 
         let runs = teregen
             .checkers(&rrid.to_string())
             .await
-            .unwrap_or_default();
+            .map_err(|e| CommandError::Other(format!("Checker lookup for {rrid}: {e}")))?;
         if runs.is_empty() {
             session
                 .display
@@ -226,7 +243,8 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const RRID: &str = "SUSE:Maintenance:1:1";
+    /// An SLFO id: TeReGen serves checker results for no other kind.
+    const RRID: &str = "SUSE:SLFO:1.2:5";
 
     /// ANSI SGR introducers the row colors must actually emit.
     const GREEN: &str = "\u{1b}[32m";
@@ -443,7 +461,7 @@ mod tests {
     /// Regression (#522): `null` is the wire form of an in-progress run's
     /// timestamps and a drifted verdict is a single bad row — neither may cost
     /// the run, its header or its good siblings, which would render as
-    /// "No checker results", byte-identical to an unreachable TeReGen.
+    /// "No checker results".
     #[tokio::test]
     async fn null_and_drifted_keys_cost_at_most_one_row() {
         let body = serde_json::json!({"checkers": [{
@@ -641,15 +659,150 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn reports_empty_when_no_checkers() {
-        let (_server, mut session, buf) =
-            session_serving(serde_json::json!({"checkers": []})).await;
-        let args = matches(&Checkers, &[]);
-        Checkers.call(&mut session, &args).await.unwrap();
+    /// A base URL where nothing listens, so the lookup fails before any status.
+    const CLOSED_PORT: &str = "http://127.0.0.1:1";
+
+    /// A session whose TeReGen answers `rrid`'s checker lookup with `response`,
+    /// or one pointed at [`CLOSED_PORT`] when there is none. The mock must be
+    /// hit: wiremock answers an unmatched path with a 404 of its own.
+    async fn session_answering(
+        rrid: &str,
+        response: Option<ResponseTemplate>,
+    ) -> (Option<MockServer>, Session, Buffer) {
+        let (server, uri) = match response {
+            Some(response) => {
+                let server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(path(format!("/reports/{rrid}/checkers")))
+                    .respond_with(response)
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let uri = server.uri();
+                (Some(server), uri)
+            }
+            None => (None, CLOSED_PORT.to_owned()),
+        };
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        let mut config = Config::default();
+        config.teregen_api = uri;
+        session.config = config;
+        (server, session, buf)
+    }
+
+    /// The lookup's error, after checking it printed no "none" line.
+    async fn failed_lookup(response: Option<ResponseTemplate>) -> String {
+        let (_server, mut session, buf) = session_answering(RRID, response).await;
+        let err = Checkers
+            .call(&mut session, &matches(&Checkers, &[]))
+            .await
+            .unwrap_err();
+        assert!(buf.contents().is_empty(), "{}", buf.contents());
+        let msg = err.to_string();
         assert!(
-            buf.contents()
-                .contains(&format!("No checker results for {RRID}"))
+            msg.starts_with(&format!(
+                "Checker lookup for {RRID}: TeReGen fetch failed: "
+            )),
+            "{msg}"
         );
+        msg
+    }
+
+    /// TeReGen's answer for any other id is fixed, so it is given without
+    /// asking: a request would print this server's run and fail its expectation.
+    #[tokio::test]
+    async fn non_slfo_id_is_answered_without_a_request() {
+        for rrid in ["SUSE:Maintenance:1:1", "SUSE:PI:1:1"] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(run_with_status("FAIL", "finding")),
+                )
+                .expect(0)
+                .mount(&server)
+                .await;
+            let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+            let mut config = Config::default();
+            config.teregen_api = server.uri();
+            session.config = config;
+            Checkers
+                .call(&mut session, &matches(&Checkers, &[]))
+                .await
+                .unwrap();
+            assert_eq!(
+                buf.contents(),
+                format!(
+                    "No checker results for {rrid} (TeReGen serves checker results for SLFO ids \
+                     only)\n"
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_list_is_no_results() {
+        let (_server, mut session, buf) = session_answering(
+            RRID,
+            Some(ResponseTemplate::new(200).set_body_json(serde_json::json!({"checkers": []}))),
+        )
+        .await;
+        Checkers
+            .call(&mut session, &matches(&Checkers, &[]))
+            .await
+            .unwrap();
+        assert_eq!(buf.contents(), format!("No checker results for {RRID}\n"));
+    }
+
+    /// For an SLFO id TeReGen answers 404 when it could not fetch the runs from
+    /// SMELT or does not know the update, never for an update without runs.
+    #[tokio::test]
+    async fn not_found_fails_naming_the_status() {
+        let msg = failed_lookup(Some(ResponseTemplate::new(404))).await;
+        assert!(msg.contains("404 Not Found"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn server_error_fails_naming_the_status() {
+        let msg = failed_lookup(Some(ResponseTemplate::new(503))).await;
+        assert!(msg.contains("503 Service Unavailable"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn unreachable_teregen_fails_naming_the_transport_error() {
+        let msg = failed_lookup(None).await;
+        assert!(msg.contains("error sending request"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn non_json_body_fails_naming_it() {
+        let msg = failed_lookup(Some(ResponseTemplate::new(200).set_body_string("<html>"))).await;
+        assert!(msg.contains("invalid JSON"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn body_without_checkers_array_fails_naming_it() {
+        let msg = failed_lookup(Some(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
+        ))
+        .await;
+        assert!(msg.contains("no `checkers` array"), "{msg}");
+    }
+
+    /// A configured TeReGen URL may carry credentials, and the error reaches
+    /// scrollback and the MCP result. reqwest moves them into a header before
+    /// sending, so the request URL its error renders is credential-free; the
+    /// configured one, interpolated raw, would not be.
+    #[tokio::test]
+    async fn failed_lookup_renders_no_url_or_credentials() {
+        let (_server, mut session, _buf) = session_answering(RRID, None).await;
+        session.config.teregen_api = "http://user:hunter2@127.0.0.1:1".to_owned();
+        let err = Checkers
+            .call(&mut session, &matches(&Checkers, &[]))
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("error sending request"), "{msg}");
+        assert!(!msg.contains(" for url ("), "{msg}");
+        assert!(!msg.contains("hunter2"), "{msg}");
     }
 }
