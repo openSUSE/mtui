@@ -655,6 +655,25 @@ mod tests {
         }
     }
 
+    /// A number in an open `extra` object that serde_json's default float
+    /// parse reads inexactly must still survive a serialize/parse round trip.
+    /// An integer literal beyond `u64` stays an `f64`, so its text is rewritten
+    /// (`2.4e+98`) but the value no longer drifts.
+    #[test]
+    fn a_number_beyond_f64_exactness_in_an_open_object_survives_a_round_trip() {
+        let huge = format!("24{}", "0".repeat(97));
+        let probe = format!(r#""testing":{{"zz":{{"job":{huge},"ratio":2.339241}},"#);
+        let raw = MAINTENANCE_OPENQA_L3.replacen(r#""testing":{"#, &probe, 1);
+        assert_ne!(raw, MAINTENANCE_OPENQA_L3, "the probe was not inserted");
+
+        let doc: ReportDocument = raw.parse().unwrap();
+        assert!(doc.testing.extra.contains_key("zz"), "probe not parsed");
+
+        let json = serde_json::to_string(&doc).unwrap();
+        let again: ReportDocument = json.parse().unwrap();
+        assert_eq!(again, doc, "the document changed across a round trip");
+    }
+
     // --- has_tester_content ---
 
     /// Every freshly generated (server-produced) fixture: none of them carry
