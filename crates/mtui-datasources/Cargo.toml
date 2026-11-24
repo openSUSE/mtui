@@ -48,10 +48,10 @@ serde.workspace = true
 serde_json.workspace = true
 # OBS "Signature" (SSH) auth (G1c). `ssh-key` provides the SSHSIG wire-format
 # signer (`sshsig` module) + `Fingerprint` for any key type; pinned to the exact
-# version russh 0.62 resolves so Cargo unifies on one copy and the file-key and
+# version russh resolves so Cargo unifies on one copy and the file-key and
 # ssh-agent (russh) paths share `ssh_key::PublicKey`/`PrivateKey`. `crypto`
 # enables ed25519/ecdsa/rsa/p256 signing (RSA is signed rsa-sha2-512, not SHA-1).
-ssh-key = { version = "=0.7.0-rc.11", features = ["crypto", "encryption", "std"] }
+ssh-key = { version = "=0.7.0-rc.12", features = ["crypto", "encryption", "std"] }
 thiserror.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
