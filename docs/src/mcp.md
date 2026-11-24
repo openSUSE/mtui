@@ -528,7 +528,7 @@ lists it in `unfilled` again.
   `template`. It takes no `value`.
 - Any other section is refused, as none of them can be unanswered as a whole.
   A `null` inside one, such as `testing.regression.verdict`, is written with
-  `report_field_write`.
+  `report_section_write`.
 - Applied to local state like `report_section_write`: it marks the report
   dirty, and `commit` uploads it.
 - Returns `{ "id", "section", "dirty": true, "size" }`.
@@ -549,7 +549,11 @@ report_field_write pointer=/testing/install/checks/1/verdict value="PASSED"
 - Parameters (required): `pointer`, `value` (declared as a string or a
   boolean). Plus optional `template`. `value` replaces the field as given: a
   string is stored literally, so `"null"` or `"{}"` is text, and a JSON `null`
-  clears the field back to unanswered. A yes/no field, such as
+  clears the field back to unanswered, but the declared schema has no null
+  arm, so a client that builds its call from the schema cannot send one: such
+  a client clears a nested field with `report_section_write`, where the `null`
+  travels inside the section's value, and `verdict` or `comment` with
+  `report_section_clear`. A yes/no field, such as
   `/issues/<key>/reproducer` or `/review/build_log/test_suite_passed`, takes
   `true` or `false`.
 - Only the fields the REPL report editor (`edit`) lets a tester change are

@@ -202,9 +202,10 @@ impl ReportDocument {
     /// `testing.regression` with a non-null `verdict`/`comment`, or a
     /// non-null `review.source.comment`/`review.build_log.comment`.
     ///
-    /// The leaf list follows the editable set in [`policy`], minus what `export` writes and minus the `review`
-    /// yes/no answers: the pipeline pre-fills those in generated documents, so
-    /// a set one is not evidence of tester input.
+    /// The leaf list follows the editable set in [`policy`], minus what
+    /// `export` writes and minus the `review` yes/no answers: the pipeline
+    /// pre-fills those in generated documents, so a set one is not evidence of
+    /// tester input.
     ///
     /// `testing.openqa` is deliberately excluded: the pipeline pre-fills it in
     /// every freshly generated document, so its presence is not evidence of
