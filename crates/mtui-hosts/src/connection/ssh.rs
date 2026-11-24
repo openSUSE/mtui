@@ -1548,8 +1548,8 @@ impl Connection for SshConnection {
         // only caller is the post-operation reboot, which follows a
         // `transactional-update` long enough for the server to have closed an
         // idle session. A failed dispatch with a *successful* reconnect is the
-        // signature `update` routes its group-wide rollback on, so without this
-        // an idle TCP session would downgrade every host in the group.
+        // signature `update` routes its rollback on, so without this an idle
+        // TCP session would downgrade every patched host.
         if !self.is_active() {
             self.reconnect(0, false).await?;
         }

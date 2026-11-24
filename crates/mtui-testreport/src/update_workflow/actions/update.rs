@@ -18,8 +18,8 @@
 //! Each script is one remote `exec`, so the shell's last-command-wins rule
 //! would hand the verdict to the trailing repo-cleanup loop. The patch's own
 //! status is captured into `$mtui_status` and re-`exit`ed instead: an `update`
-//! check failure fires the **group-wide** rollback downgrade, so a cosmetic
-//! `zypper -n rr` hiccup must not revert every healthy host in the group.
+//! check failure fires the rollback downgrade, so a cosmetic `zypper -n rr`
+//! hiccup must not revert every healthy patched host.
 //!
 //! Emptiness is tested with `set -- $mtui_patches` + `[ "$#" -gt 0 ]`, not
 //! `[ -n … ]`: a whitespace-only list is "non-empty" to `-n` but splits into
@@ -791,8 +791,8 @@ exit "$MTUI_STUB_PATCH_EXIT"
         fn a_failing_cleanup_does_not_fail_a_successful_patch() {
             // The other direction, and the reason a bare "report the last
             // command's status" would be wrong: the repo cleanup is cosmetic,
-            // and an update check failure fires the *group-wide* rollback
-            // downgrade, reverting every healthy host in the group.
+            // and an update check failure fires the rollback downgrade,
+            // reverting every healthy patched host.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
                 let ran = run_script(

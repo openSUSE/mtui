@@ -493,6 +493,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `update`'s automatic rollback reaches only the patched hosts it can repair.
+  A host the update excluded (its products compose none of the update's
+  packages, no repository of the update reaches it, or its test update
+  repository failed to register), a peer that could not work out what to
+  patch, and a peer whose patch never ran to completion (it timed out or lost
+  its connection, so the rollback may be unable to reach it or would start a
+  second transaction there) no longer have their operation lock taken, test
+  update repositories removed, packages downgraded with `--oldpackage`, a
+  `downgrade` row appended to `/var/log/mtui.log`, or, if transactional, a
+  reboot. Another tester's lock on such a host, the unreadable lock of a lost
+  one, or a transactional one whose products could not be read, no longer
+  stops the rollback of the peer that needs it, and a version probe that fails
+  there no longer reports the rollback as failed. Such a peer keeps its test
+  update repositories, and the degradation names it with its reason:
+  `update did not complete on h1, h2, h3; rolling it back on h1; not on h2,
+  which could not work out what to patch; not on h3, whose patch result is
+  unknown; the test update repositories are left in place on h2, h3 for
+  retry/diagnosis (…)`. A failed rollback names the hosts it did not restore:
+  `the update failed and the automatic rollback also failed (…); <hosts> may
+  be left partly updated` (#815).
 - `checkers` fails, naming the cause, when its TeReGen lookup fails: TeReGen
   unreachable, an error status, or a body that is not JSON or carries no
   `checkers` array. It printed `No checker results for <id>` and succeeded,

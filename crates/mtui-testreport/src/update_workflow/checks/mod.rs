@@ -142,8 +142,8 @@ pub(crate) const EXIT_NOT_RUN: i32 = -1;
 /// The band's *extent* is load-bearing: `107`
 /// ([`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`]) once sat outside it, making a
 /// routine kernel/dracut `%posttrans` hiccup a failed update — and an `update`
-/// check failure fires the **group-wide** rollback downgrade. `102` ("reboot
-/// needed" after a kernel patch) is the same shape.
+/// check failure fires the rollback downgrade on every patched host. `102`
+/// ("reboot needed" after a kernel patch) is the same shape.
 ///
 /// [`PackageNotFound`]: ExitClass::PackageNotFound
 /// [`Unknown`]: ExitClass::Unknown
@@ -164,7 +164,7 @@ pub(crate) enum ExitClass {
     /// failed, `-1` is a host mtui never reached, and "Unknown Error" about a
     /// host never contacted is a wrong diagnosis, not a vaguer one. It does
     /// **not** change the rollback: `never_ran` in `reports::update_flow` vetoes
-    /// the group-wide downgrade from the target's recorded `lastexit()`, never
+    /// the rollback downgrade from the target's recorded `lastexit()`, never
     /// from a class or reason. Being a variant also makes the distinction
     /// structural — the one `match` on this enum is exhaustive, so removing the
     /// arm is a compile error (for exhaustive matchers; a `_ =>` still
@@ -190,7 +190,7 @@ pub(crate) enum ExitClass {
 /// to completion" sentinel, and "Unknown Error" about a host mtui never
 /// contacted is the wrong thing to tell an operator. `not_run` in [`update`] is
 /// the gate that normally catches it first. The reason string is **not** what
-/// vetoes the group-wide rollback for such a host — `reports::update_flow`
+/// vetoes the rollback for such a host — `reports::update_flow`
 /// routes on `Target::lastexit()` and `UpdateError`'s typed `probe_failed`
 /// flag. Nothing in the tree makes control flow depend on a reason's text, and
 /// nothing should.
@@ -237,7 +237,7 @@ mod tests {
         // ("reboot needed" after a kernel patch) and `107` ("Installation
         // basically succeeded, but some of the packages %post install scripts
         // returned an error … registered in the rpm database") are routine, and
-        // each failing would fire the group-wide rollback downgrade. `107` is
+        // each failing would fire the rollback downgrade. `107` is
         // the *last* code in the band, which is where it got missed.
         for code in [
             0,
@@ -292,7 +292,7 @@ mod tests {
         // Reached only if a caller forgets its `not_run` gate. Falling through
         // to `Unknown` reports a host mtui never contacted as a failed patch —
         // the wrong diagnosis, but not a wrong rollback: `never_ran` in
-        // `reports::update_flow` vetoes the group-wide downgrade from the
+        // `reports::update_flow` vetoes the rollback downgrade from the
         // target's `lastexit()`, not from anything a check returns.
         assert_eq!(classify_exit(EXIT_NOT_RUN), ExitClass::NotRun);
     }

@@ -1444,7 +1444,15 @@ impl HostsGroup {
         self.query_versions_where(|_t| true).await;
     }
 
-    /// Shared implementation for [`query_versions`](Self::query_versions) and
+    /// [`query_versions`](Self::query_versions) restricted to `names`,
+    /// otherwise identical. A name not in the group is ignored.
+    pub async fn query_versions_selected(&mut self, names: &BTreeSet<String>) {
+        self.query_versions_where(|t| names.contains(t.hostname()))
+            .await;
+    }
+
+    /// Shared implementation for [`query_versions`](Self::query_versions),
+    /// [`query_versions_selected`](Self::query_versions_selected) and
     /// [`package_check`](Self::package_check)'s I/O phase.
     async fn query_versions_where<S>(&mut self, select: S)
     where
@@ -2110,7 +2118,7 @@ impl HostsGroup {
         // Skipping it in only *some* phases would be worse than not skipping it
         // at all: the boot-id probes would then read the same id twice and
         // report a host that "never rebooted" -- which `update` reads as still
-        // reachable, and routes a group-wide rollback on.
+        // reachable, and routes a rollback on.
         let selected = |t: &Target| {
             reboot.contains_key(t.hostname())
                 && t.state() != mtui_types::enums::TargetState::Disabled
@@ -2210,11 +2218,11 @@ impl HostsGroup {
                     //
                     // A failed reconnect is the only direct evidence anyone
                     // gathers about reachability, and reachability is what
-                    // decides whether the caller runs a destructive group-wide
-                    // rollback. So it outranks phase 2's dispatch diagnosis: a
+                    // decides whether the caller runs a destructive rollback.
+                    // So it outranks phase 2's dispatch diagnosis: a
                     // link that died before the dispatch produces a `Transport`
                     // error there, which would otherwise claim the host is
-                    // still up and send the whole group into a rollback on
+                    // still up and send every patched host into a rollback on
                     // behalf of a machine nothing can reach.
                     //
                     // A *successful* reconnect must not overwrite a dispatch
@@ -2329,7 +2337,7 @@ fn bytes_only(
 ///
 /// An unrecognised error is reported as
 /// [`Unreachable`](RebootFailureCause::Unreachable) deliberately: that is the
-/// arm that *suppresses* the automatic rollback, and a group-wide downgrade is
+/// arm that *suppresses* the automatic rollback, and the rollback downgrade is
 /// destructive enough that it should not be triggered by an error nobody has
 /// classified. The host is still named in the failure either way.
 fn reboot_failure_cause(err: &HostError) -> RebootFailureCause {
@@ -4298,7 +4306,7 @@ mod tests {
         // makes `fire_and_forget` fail, which phase 2 records as
         // `RebootNotDispatched` — a variant that asserts the host is still
         // reachable. If phase 2 simply won, that claim would stand unchallenged
-        // and `update` would revert the whole group on behalf of a machine
+        // and `update` would revert every patched host on behalf of a machine
         // nothing can talk to. Phase 3 actually probes reachability, so its
         // failure has to outrank the phase-2 diagnosis.
         let m1 = MockConnection::new("h1")
@@ -4419,8 +4427,8 @@ mod tests {
         // report a restart that never happened. A fixed id is what a real
         // untouched host returns, and it is what catches a phase that forgot
         // the state check: phase 4 would then record `NotRebooted`, which
-        // `update` reads as still-reachable and routes a group-wide rollback
-        // on -- reverting every healthy host on behalf of a disabled one.
+        // `update` reads as still-reachable and routes a rollback on --
+        // reverting every patched host on behalf of a disabled one.
         let m1 = reboot_mock("h1", "id-1");
         let h1 = m1.clone();
         let mut g = HostsGroup::new(
@@ -5543,6 +5551,37 @@ mod tests {
         assert!(
             g.get("h2").unwrap().packages()[0].before().is_none(),
             "the omitted host's before/after must stay untouched"
+        );
+        assert!(
+            h2.commands().is_empty(),
+            "the omitted host must draw no query_versions command: {:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn query_versions_selected_leaves_the_omitted_host_untouched() {
+        use mtui_types::package::Package;
+
+        let conn1 =
+            MockConnection::new("h1").with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let conn2 =
+            MockConnection::new("h2").with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let h2 = conn2.clone();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn1));
+        let mut t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn2));
+        t1.set_packages(vec![Package::new("bash")]);
+        t2.set_packages(vec![Package::new("bash")]);
+        let mut g = HostsGroup::new(vec![t1, t2], false);
+        let names: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+
+        g.query_versions_selected(&names).await;
+
+        assert!(g.get("h1").unwrap().packages()[0].current().is_some());
+        assert_eq!(
+            g.get("h2").unwrap().packages()[0].current_check(),
+            &VersionCheck::NotChecked,
+            "the omitted host's current version must stay unchecked"
         );
         assert!(
             h2.commands().is_empty(),

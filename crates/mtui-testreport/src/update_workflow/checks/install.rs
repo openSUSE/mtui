@@ -84,7 +84,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// failure needs observed `yum`/`dnf` output from a real RHEL refhost. Reading
 /// the exit code at all is safe here only because a failed install/uninstall
 /// verdict fails just the operation asked for, where the *update* check's would
-/// fire the group-wide rollback downgrade.
+/// fire the rollback downgrade.
 ///
 /// # Errors
 ///
