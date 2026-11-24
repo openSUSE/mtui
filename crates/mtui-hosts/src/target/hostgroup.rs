@@ -43,7 +43,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::connection::SftpRead;
-use crate::error::{HostError, Result};
+use crate::error::{HostError, LockRefusal, Result};
 
 use mtui_types::package::VersionCheck;
 use mtui_types::system::System;
@@ -1565,7 +1565,7 @@ impl HostsGroup {
     /// locked by another owner, log a warning (with the lock's timestamp, owner
     /// and any comment) and mark the group as partially contended; otherwise
     /// take the lock. If any host was skipped, release the locks we did take
-    /// (best-effort) and return [`HostError::Update`] so the caller aborts — the
+    /// (best-effort) and return [`HostError::HostsLocked`] so the caller aborts — the
     /// group is not fully owned by this process.
     ///
     /// **Fails closed**: success (`Ok`) means *every* host is verifiably locked
@@ -1576,7 +1576,7 @@ impl HostsGroup {
     ///
     /// # Errors
     ///
-    /// Returns [`HostError::Update`] when one or more hosts were locked by
+    /// Returns [`HostError::HostsLocked`] when one or more hosts were locked by
     /// another owner or could not be locked/read.
     pub async fn update_lock(&mut self) -> Result<()> {
         self.update_lock_where(None).await
@@ -1611,7 +1611,7 @@ impl HostsGroup {
         // order-independent; a skipped host pushes its reason onto the shared
         // `reasons` list. The per-host lock wire semantics are unchanged —
         // only the fan-out is now concurrent (Contract preserved).
-        let reasons: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let reasons: Mutex<Vec<LockRefusal>> = Mutex::new(Vec::new());
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
@@ -1631,7 +1631,7 @@ impl HostsGroup {
                         Err(e) => {
                             let host = target.hostname().to_owned();
                             tracing::warn!(host = %host, error = %e, "update_lock: lock state unreadable; skipping");
-                            reasons.lock().expect("reasons mutex").push(format!("{host}: lock state unreadable: {e}"));
+                            reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: format!("lock state unreadable: {e}") });
                             return;
                         }
                     };
@@ -1652,7 +1652,7 @@ impl HostsGroup {
                         if !comment.is_empty() {
                             tracing::info!(host = %hostname, %by, %comment, "lock comment");
                         }
-                        reasons.lock().expect("reasons mutex").push(format!("{hostname}: held by {by} since {time}"));
+                        reasons.lock().expect("reasons mutex").push(LockRefusal { host: hostname, reason: format!("held by {by} since {time}") });
                     } else {
                         // Any failure to acquire — contention or an SFTP/transport
                         // error — means we do NOT own this host, so the whole
@@ -1663,12 +1663,12 @@ impl HostsGroup {
                             Err(HostError::TargetLocked(msg)) => {
                                 let host = target.hostname().to_owned();
                                 tracing::debug!(host = %host, %msg, "update_lock: held by another owner");
-                                reasons.lock().expect("reasons mutex").push(format!("{host}: {msg}"));
+                                reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: msg });
                             }
                             Err(e) => {
                                 let host = target.hostname().to_owned();
                                 tracing::warn!(host = %host, error = %e, "update_lock: lock failed");
-                                reasons.lock().expect("reasons mutex").push(format!("{host}: {e}"));
+                                reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: e.to_string() });
                             }
                         }
                     }
@@ -1681,13 +1681,11 @@ impl HostsGroup {
         if !reasons.is_empty() {
             // Release the locks we did take, best-effort (concurrently), then
             // signal the abort. Sort first: the fan-out is concurrent, so
-            // collection order is nondeterministic.
-            reasons.sort();
+            // collection order is nondeterministic; by the rendered line, the
+            // order the message has always had.
+            reasons.sort_by_cached_key(ToString::to_string);
             let _ = self.unlock_collecting(select).await;
-            return Err(HostError::Update(format!(
-                "Hosts locked: {}",
-                reasons.join("; ")
-            )));
+            return Err(HostError::HostsLocked(reasons));
         }
         Ok(())
     }
@@ -2358,7 +2356,7 @@ fn reboot_failure_cause(err: &HostError) -> RebootFailureCause {
 /// (`/var/lock/mtui.lock`) and the reboot/reconnect lifecycle out across the
 /// group over each [`Target`]'s connect-time
 /// [`TargetLock`](super::TargetLock). `update_lock` returns
-/// [`HostError::Update`] if any host is locked by another owner (after
+/// [`HostError::HostsLocked`] if any host is locked by another owner (after
 /// releasing the locks it took), which the template surfaces to abort the run.
 #[async_trait::async_trait]
 impl OperationGroup for HostsGroup {
@@ -4537,7 +4535,7 @@ mod tests {
         );
 
         let err = g.update_lock().await.expect_err("foreign lock -> abort");
-        assert!(matches!(err, HostError::Update(_)));
+        assert!(matches!(err, HostError::HostsLocked(_)));
         // h1's lock was released during the abort.
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
     }
@@ -4560,9 +4558,8 @@ mod tests {
 
         let err = g.update_lock().await.expect_err("invalid lock -> abort");
 
-        let HostError::Update(msg) = err else {
-            panic!("expected Update, got {err:?}");
-        };
+        assert!(matches!(err, HostError::HostsLocked(_)), "{err:?}");
+        let msg = err.to_string();
         assert!(
             msg.contains("h2") && msg.contains("invalid (empty or unparseable)"),
             "{msg}"
@@ -4620,7 +4617,7 @@ mod tests {
             .update_lock()
             .await
             .expect_err("non-contention lock failure -> abort");
-        assert!(matches!(err, HostError::Update(_)));
+        assert!(matches!(err, HostError::HostsLocked(_)));
         // The message names the real per-host cause instead of the bare
         // "Hosts locked" literal.
         let msg = err.to_string();
@@ -4628,6 +4625,70 @@ mod tests {
         assert!(msg.contains("h2:"));
         assert!(msg.contains("scripted exclusive-create failure"));
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    /// h1 held by another owner, h2 unwritable, h3 free.
+    fn two_unlockable_hosts() -> HostsGroup {
+        let foreign = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let failing = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_exclusive_write_error(TARGET_LOCK_PATH);
+        HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(foreign)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(failing)),
+                enabled("h3"),
+            ],
+            false,
+        )
+    }
+
+    #[tokio::test]
+    async fn update_lock_names_each_unlockable_host_in_host_order() {
+        let mut g = two_unlockable_hosts();
+
+        let err = g
+            .update_lock()
+            .await
+            .expect_err("two hosts cannot be locked");
+
+        let HostError::HostsLocked(refusals) = err else {
+            panic!("expected one entry per host, got {err:?}");
+        };
+        assert_eq!(
+            refusals,
+            vec![
+                LockRefusal {
+                    host: "h1".to_owned(),
+                    reason: "held by alice since Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+                },
+                LockRefusal {
+                    host: "h2".to_owned(),
+                    reason: "sftp error on h2: scripted exclusive-create failure: \
+                             /var/lock/mtui.lock"
+                        .to_owned(),
+                },
+            ]
+        );
+        assert!(!g.get_mut("h3").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_lock_failure_still_renders_as_one_hosts_locked_line() {
+        let mut g = two_unlockable_hosts();
+
+        let err = g
+            .update_lock()
+            .await
+            .expect_err("two hosts cannot be locked");
+
+        assert_eq!(
+            err.to_string(),
+            "Hosts locked: h1: held by alice since Tuesday, 14.11.2023 22:13 UTC; \
+             h2: sftp error on h2: scripted exclusive-create failure: /var/lock/mtui.lock"
+        );
     }
 
     #[tokio::test]
@@ -4808,7 +4869,7 @@ mod tests {
             .update_lock()
             .await
             .expect_err("a sibling's hold must abort the update");
-        assert!(matches!(err, HostError::Update(_)), "{err}");
+        assert!(matches!(err, HostError::HostsLocked(_)), "{err}");
         assert!(
             conn.file_contents(TARGET_LOCK_PATH).is_some(),
             "the abort rollback removed the sibling's lockfile"
