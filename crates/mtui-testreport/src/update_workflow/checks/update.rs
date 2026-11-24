@@ -26,8 +26,8 @@ use crate::update_workflow::checks::{
 /// The informational carve-out is the load-bearing part, not the failure rule:
 /// `102` ("reboot needed" after a kernel patch) and `107` (`%post` failed but
 /// the package is installed and registered) are routine outcomes, and failing
-/// either would fire the **group-wide** rollback downgrade over every healthy
-/// host in the group. Every failing status except `104` and the `-1` sentinel
+/// either would fire the rollback downgrade over every healthy patched host.
+/// Every failing status except `104` and the `-1` sentinel
 /// gives the stdout/stderr [`markers`] first refusal, because they name the
 /// failure where a class label only admits there was one. All of it is gated on
 /// the command text containing `zypper` — inert in production, but it keeps
@@ -83,8 +83,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Two consequences. `0` is also what `pkg in` returns when its dry run finds
 /// nothing to do (`quit 0` at `:1192`), so a clean exit cannot distinguish
 /// "patched" from "had nothing to patch". And with `1` classified `Unknown`,
-/// this key fails on any non-zero status — firing the **group-wide** rollback,
-/// which downgrades and reboots every host in the group — including on failures
+/// this key fails on any non-zero status — firing the rollback, which
+/// downgrades and reboots every patched host — including on failures
 /// that are not the patch's (an already-open transaction, a snapshot that could
 /// not be created or deleted), which `transactional-update` flattens into that
 /// same `1`. Accepted with the blast radius understood: the alternative reports
@@ -173,7 +173,7 @@ pub(super) fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateE
 /// The yum update check.
 ///
 /// Deliberately gates **only** on the [`not_run`] sentinel — narrow is the
-/// point on a key whose failures route the **group-wide** rollback downgrade,
+/// point on a key whose failures route the rollback downgrade,
 /// and neither other signal survives scrutiny. The **exit code**: `("YUM",
 /// false)` is not one package manager (`System::get_release` maps *every*
 /// `rhel` version to it, and on RHEL 8/9 `yum` is `dnf`, which differs from yum
@@ -218,7 +218,7 @@ fn not_run(args: CheckArgs<'_>) -> Result<(), UpdateError> {
 ///
 /// Built here so [`not_run`] and [`classified`]'s [`ExitClass::NotRun`] arm
 /// cannot drift into two spellings of the same sentinel. The flow's veto of the
-/// group-wide rollback keys on `lastexit()` being `-1`, not on this string; the
+/// rollback keys on `lastexit()` being `-1`, not on this string; the
 /// string only decides what the operator is told, which for a host mtui never
 /// reached must not read as a package problem.
 fn not_run_error(args: CheckArgs<'_>) -> UpdateError {
@@ -264,8 +264,8 @@ pub(crate) const PROBE_FAILURE_MARKER: &str = "mtui: could not determine what to
 ///
 /// Returns [`UpdateError`] with a reason of "could not determine what to
 /// patch", flagged as a probe failure so the flow routes it away from the
-/// group-wide rollback downgrade: the host never ran a patch, so there is
-/// nothing half-applied to repair and the rollback would revert every healthy
+/// rollback downgrade: the host never ran a patch, so there is nothing
+/// half-applied to repair and the rollback would revert every healthy patched
 /// peer.
 fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
     let marked = |stream: &str| {
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn yum_judges_only_whether_the_command_ran() {
         // Both of these would fail a host that updated fine, and route the
-        // group-wide rollback downgrade — see `yum`'s doc for why.
+        // rollback downgrade — see `yum`'s doc for why.
         assert!(yum(args("yum -y update pkg-a pkg-b", "Upgraded: pkg-a", "", 1)).is_ok());
         assert!(
             yum(args(
@@ -622,7 +622,7 @@ mod tests {
         // ("reboot needed"), `100`/`101` ("(security) updates available", left
         // behind whenever the host carries more than this update) and `107`
         // (installed and registered, `%post` failed) are routine, and failing
-        // any of them fires the group-wide rollback downgrade. The whole band
+        // any of them fires the rollback downgrade. The whole band
         // is listed, not a sample — this and the classifier's own test are the
         // two places a code can be forgotten, and `107` once was.
         for code in [
@@ -841,7 +841,7 @@ mod tests {
     fn the_probe_marker_is_flagged_for_the_flow_to_route_on() {
         // The reason string is for the operator; the *flag* is what
         // `reports::update_flow` routes on, and routing it wrong fires the
-        // group-wide rollback over a host that never ran a patch. Asserted here
+        // rollback over a host that never ran a patch. Asserted here
         // because in the flow a `false` still produces a plausible error.
         let marker = format!("{PROBE_FAILURE_MARKER}: zypper -n patches exited 6");
         let err = zypper(args("zypper", &marker, "", 6)).unwrap_err();

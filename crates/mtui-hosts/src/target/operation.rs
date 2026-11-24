@@ -109,7 +109,7 @@ pub type Check = Box<dyn FnMut(CheckArgs<'_>) -> Result<(), CheckFailure> + Send
 /// Mirrors [`RebootFailure`]'s `reason` + cause shape: a bare `String` made a
 /// cancellation unrepresentable across this seam, so `reports::update_flow`
 /// could not route a check that stopped at a cancellation checkpoint away from
-/// the group-wide rollback the way it does for every other cancel point. The
+/// the rollback the way it does for every other cancel point. The
 /// producer side lives in `mtui-testreport`'s `WorkflowRegistry::check` adapter
 /// (`update_workflow/mod.rs`), which forwards `UpdateError::cancelled` here;
 /// nothing on this path sets it today (checks are pure verdicts over a

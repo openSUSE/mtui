@@ -822,7 +822,7 @@ impl Target {
             // Deliberately *not* `RebootNotDispatched`: that variant asserts
             // the host is still reachable, and a target with no connection at
             // all is the least reachable state there is. Claiming otherwise
-            // would route a group-wide rollback at a host nothing can talk to.
+            // would route a rollback at a host nothing can talk to.
             return Err(HostError::ReconnectFailed {
                 host: self.hostname.clone(),
             });
@@ -2530,7 +2530,7 @@ mod tests {
             .expect_err("an unconnected target cannot be rebooted");
         // `ReconnectFailed`, deliberately, and NOT `RebootNotDispatched`: the
         // latter asserts the host is still reachable, which routes a
-        // destructive group-wide rollback at it. A target with no connection
+        // destructive rollback at it. A target with no connection
         // is the least reachable state there is.
         assert!(
             matches!(&err, HostError::ReconnectFailed { host } if host == "h1"),

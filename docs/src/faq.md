@@ -185,9 +185,10 @@ matches the host's products (…); it was excluded from the update`, `<host>:
 its products could not be read; it was excluded from the update`, or `<host>:
 this update has no repository to add; it was excluded from the update`.
 
-These exclusions cover `update`'s own steps. When a host that was patched then
-fails its check, the automatic rollback runs on the whole group, and reaches
-an excluded host as well.
+These exclusions cover the automatic rollback too. When a host that was patched
+then fails its check, the rollback reaches only the hosts the patch was
+dispatched to, so an excluded host gets no lock, repository change, downgrade,
+history row or reboot from it.
 
 `prepare -u` fails such a host by name too, on any report: no test repository
 would be added to it, so its install would draw only on the repositories it

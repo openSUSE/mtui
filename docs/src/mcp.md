@@ -344,14 +344,14 @@ and nothing is written there.
   products (…); it was excluded from the update`, `its products could not be
   read; …` for a host whose system was never read, or `this update has no
   repository to add; …` when the update has none): the patch would find
-  nothing to install there and pass. Neither exclusion keeps the automatic
-  rollback off a host: when a patched peer fails its check, the rollback runs
-  on the whole group. `prepare` with `update` set fails such a host by name the
-  same way (`…; nothing was installed`), before anything runs on it, instead of
-  installing from the repositories it already had; the other hosts are
-  prepared. The refusal is in the tool's error, once, also when a peer stops
-  the prepare before its verdict: then one `prepare failed on <hosts> (…)`
-  summary carries both.
+  nothing to install there and pass. A host either exclusion leaves out is
+  left out of the automatic rollback too: when a patched peer fails its check,
+  the rollback reaches only the hosts the patch was dispatched to. `prepare`
+  with `update` set fails such a host by name the same way (`…; nothing was
+  installed`), before anything runs on it, instead of installing from the
+  repositories it already had; the other hosts are prepared. The refusal is
+  in the tool's error, once, also when a peer stops the prepare before its
+  verdict: then one `prepare failed on <hosts> (…)` summary carries both.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a host excluded because its test update
   repository genuinely failed to register (its partial add is undone and its
@@ -387,14 +387,20 @@ and nothing is written there.
   ones, then runs the `--newpackage` step, records the post-update package
   versions and removes the test update repositories on every host it
   completed on. Its degradation names the hosts it did not complete on, which
-  keep their test update repositories for retry/diagnosis. A patch that
-  failed its check rolls the whole group back and names no host. So does a
-  reboot that did not take on a reachable host, but only when every reboot
-  that failed is on a reachable host and no peer's patch never ran: the
-  rollback cannot reach a peer lost to its reboot, and would start a second
-  transaction on a peer whose first was never observed to end. Otherwise
-  nothing is rolled back and the hosts whose reboot failed are named among the
-  failures. A cancelled run names none either.
+  keep their test update repositories for retry/diagnosis. A rollback leaves
+  out a peer that could not work out what to patch, since no patch ran there,
+  and a peer whose patch never ran to completion, which it may be unable to
+  reach or would hit with a second transaction; the degradation names each
+  with its reason, and they keep their test update repositories. A patch that
+  failed its check rolls back the patched hosts, those two kinds of peer apart,
+  and names no host as completed. So does a reboot that did not take on a
+  reachable host, but only when every reboot that failed is on a reachable
+  host and no peer's patch never ran: the rollback cannot reach a peer lost to
+  its reboot, and would start a second transaction on a peer whose first was
+  never observed to end. Otherwise nothing is rolled back and the hosts whose
+  reboot failed are named among the failures. A cancelled run names none as
+  completed either. A rollback that fails itself names the hosts it did not
+  restore.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, an arch of the testplatform

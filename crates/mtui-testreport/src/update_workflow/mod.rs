@@ -61,9 +61,9 @@ pub struct UpdateError {
     /// so dispatched none (`checks::update`'s `probe_failure`).
     ///
     /// A flag for the same reason `cancelled` is: the flow must route this away
-    /// from the group-wide rollback downgrade, and the alternative — matching
-    /// on the `reason` string — would be the first place in the tree where
-    /// control flow depended on a reason's text.
+    /// from the rollback downgrade, and the alternative — matching on the
+    /// `reason` string — would be the first place in the tree where control
+    /// flow depended on a reason's text.
     pub(crate) probe_failed: bool,
     /// The hosts the operation completed on despite this error, sorted. Set
     /// only where every one of them is known to be done; empty otherwise.
