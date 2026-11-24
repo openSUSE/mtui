@@ -33,7 +33,7 @@ mtui-config.workspace = true
 mtui-types.workspace = true
 quick-xml.workspace = true
 russh.workspace = true
-russh-config = "0.58"
+russh-config = "0.65"
 russh-sftp.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true }
