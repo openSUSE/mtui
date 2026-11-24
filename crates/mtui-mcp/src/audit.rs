@@ -41,10 +41,11 @@
 //!   records a bare credential value at all — the `config_set` arm below drops
 //!   `value` for every attribute — so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
-//!   `content`/`content_b64`, `report_section_write`/`report_issue_write`/`report_field_write`
-//!   `value`) never
-//!   land verbatim either: each records `{bytes, sha256}` over the original string, so a credentials file or SSH key uploaded via
-//!   `put` is correlatable without being persisted.
+//!   `content`/`content_b64`,
+//!   `report_section_write`/`report_issue_write`/`report_field_write`
+//!   `value`) never land verbatim either: each records `{bytes, sha256}` over
+//!   the original string, so a credentials file or SSH key uploaded via `put`
+//!   is correlatable without being persisted.
 //!
 //! Record schema (versioned by [`AUDIT_SCHEMA_VERSION`], one object per line;
 //! `ts` is epoch millis taken when the call arrives, so timestamps order

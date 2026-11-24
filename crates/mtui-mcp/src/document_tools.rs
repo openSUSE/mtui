@@ -200,7 +200,10 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
              the rest of its section back. `value` replaces that field and is taken as given: a \
              string is stored literally; a yes/no field (`/issues/<key>/reproducer`, \
              `/review/build_log/test_suite_passed`) takes `true` or `false`; a JSON `null` \
-             clears the field back to unanswered. Only \
+             clears the field back to unanswered, but the declared schema has no null arm, so a \
+             client that builds its call from the schema cannot send one and clears a nested \
+             field with report_section_write instead (`/verdict` and `/comment` with \
+             report_section_clear). Only \
              the fields the report editor lets a tester edit are accepted; `export`'s check rows \
              (`refhost`, `before`, `after`) and testing.openqa are refused. The next `export` \
              rewrites every covered host's check row, its `verdict` included. An absent \
@@ -219,7 +222,9 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
                 (
                     "value",
                     value_prop(
-                        "The field's new value; `null` clears it.",
+                        "The field's new value. `null` clears it but is not in this schema: from the schema, \
+                         clear a nested field with report_section_write, `/verdict` or \
+                         `/comment` with report_section_clear.",
                         json!({ "anyOf": [
                             { "type": "string" },
                             { "type": "boolean" },

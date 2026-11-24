@@ -19,8 +19,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the REPL report editor lets a tester change, so a check row's `refhost`,
   `before` and `after` and `testing.openqa` stay `export`'s, and the next
   `export` rewrites every covered host's check row, its `verdict` included. An
-  absent `testing.regression` is created with its keys `null` first, and a
-  JSON `null` clears a field. The tool joins the core profile, and the audit
+  absent `testing.regression` is created with its keys `null` first. A JSON
+  `null` clears a field, but the declared schema has no null arm, so a client
+  that builds its call from the schema clears a nested one with
+  `report_section_write` instead, and `verdict` or `comment` with
+  `report_section_clear`. The tool joins the core profile, and the audit
   log records its `value` only as `{bytes, sha256}` (#833). **MCP schema
   note:** additive only — one new tool taking `pointer`, `value` (string or
   boolean) and `template`; `report_section_write` is unchanged.
