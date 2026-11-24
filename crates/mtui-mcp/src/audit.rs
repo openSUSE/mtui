@@ -41,7 +41,8 @@
 //!   records a bare credential value at all — the `config_set` arm below drops
 //!   `value` for every attribute — so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
-//!   `content`/`content_b64`, `report_section_write`/`report_issue_write` `value`) never
+//!   `content`/`content_b64`, `report_section_write`/`report_issue_write`/`report_field_write`
+//!   `value`) never
 //!   land verbatim either: each records `{bytes, sha256}` over the original string, so a credentials file or SSH key uploaded via
 //!   `put` is correlatable without being persisted.
 //!
@@ -761,7 +762,7 @@ pub(crate) fn sanitize_args(tool: &str, kwargs: &Map<String, Value>) -> Value {
 fn payload_keys_for(tool: &str) -> Option<&'static [&'static str]> {
     match tool {
         "put" => Some(&["content", "content_b64"]),
-        "report_section_write" | "report_issue_write" => Some(&["value"]),
+        "report_section_write" | "report_issue_write" | "report_field_write" => Some(&["value"]),
         "report_new_issue_write" => Some(&["title", "comment"]),
         _ => None,
     }
@@ -1530,11 +1531,14 @@ mod tests {
     #[test]
     fn sanitize_report_document_values_are_fingerprinted_not_stored() {
         let note = "SECRET-TESTER-FREE-TEXT";
-        for tool in ["report_section_write", "report_issue_write"] {
-            let kwargs: Map<String, Value> = serde_json::from_value(
-                json!({"value": {"comment": note}, "template": "SUSE:Maintenance:1:1"}),
-            )
-            .expect("object");
+        for (tool, value) in [
+            ("report_section_write", json!({"comment": note})),
+            ("report_issue_write", json!({"comment": note})),
+            ("report_field_write", json!(note)),
+        ] {
+            let kwargs: Map<String, Value> =
+                serde_json::from_value(json!({"value": value, "template": "SUSE:Maintenance:1:1"}))
+                    .expect("object");
             let args = sanitize_args(tool, &kwargs);
             let raw = serde_json::to_string(&args).expect("serialisable");
             assert!(!raw.contains(note), "{tool}: value fingerprinted: {raw}");

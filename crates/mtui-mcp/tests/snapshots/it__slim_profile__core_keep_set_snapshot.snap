@@ -26,6 +26,7 @@ openqa_overview
 openqa_summary
 prepare
 reject
+report_field_write
 report_file_read
 report_files
 report_issue_read

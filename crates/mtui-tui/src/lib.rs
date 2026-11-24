@@ -7,7 +7,7 @@
 
 pub mod app;
 pub mod form;
-pub mod policy;
+pub use mtui_types::report_document::policy;
 pub mod schema;
 
 pub use app::{App, Exit};

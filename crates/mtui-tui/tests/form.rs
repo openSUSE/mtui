@@ -154,6 +154,32 @@ fn a_regression_block_can_be_created_but_an_install_block_cannot() {
 }
 
 #[test]
+fn creating_follows_the_schema_the_form_was_given() {
+    let mut schema: Value = serde_json::from_str(SCHEMA_JSON).unwrap();
+    let regression = &mut schema["$defs"]["testing"]["properties"]["regression"];
+    regression["properties"]["extra"] = json!({"type": "string"});
+    regression["required"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("extra"));
+    let mut form = Form::new(
+        &Schema::parse(&schema.to_string()).unwrap(),
+        &doc(OPENQA_L3),
+    );
+
+    assert_eq!(
+        field(&form, "/testing/regression").widget,
+        Widget::Absent { creatable: false }
+    );
+    let refused = form.create("/testing/regression").unwrap_err();
+    assert!(
+        refused.message.contains("export builds it"),
+        "{}",
+        refused.message
+    );
+}
+
+#[test]
 fn creating_what_is_already_there_is_refused() {
     let mut form = form(MAXIMAL);
 

@@ -191,6 +191,48 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         read_only: false,
     };
 
+    let field_write = ToolDescriptor {
+        name: "report_field_write".to_owned(),
+        description: format!(
+            "Set one tester field of the report document, addressed by its RFC 6901 `pointer` \
+             as report_sections lists it under `unfilled` (e.g. `/testing/regression/comment`, \
+             `/testing/install/verdict`, `/testing/install/checks/0/verdict`), without sending \
+             the rest of its section back. `value` replaces that field and is taken as given: a \
+             string is stored literally; a yes/no field (`/issues/<key>/reproducer`, \
+             `/review/build_log/test_suite_passed`) takes `true` or `false`; a JSON `null` \
+             clears the field back to unanswered. Only \
+             the fields the report editor lets a tester edit are accepted; `export`'s check rows \
+             (`refhost`, `before`, `after`) and testing.openqa are refused. The next `export` \
+             rewrites every covered host's check row, its `verdict` included. An absent \
+             testing.regression is created with its keys null first. {WRITE_NOTE} \
+             {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
+        ),
+        input_schema: schema(
+            vec![
+                (
+                    "pointer",
+                    json!({
+                        "type": "string",
+                        "description": "RFC 6901 pointer of the field, such as `/testing/regression/comment`.",
+                    }),
+                ),
+                (
+                    "value",
+                    value_prop(
+                        "The field's new value; `null` clears it.",
+                        json!({ "anyOf": [
+                            { "type": "string" },
+                            { "type": "boolean" },
+                        ] }),
+                    ),
+                ),
+                ("template", template_prop()),
+            ],
+            &["pointer", "value"],
+        ),
+        read_only: false,
+    };
+
     let issue_read = ToolDescriptor {
         name: "report_issue_read".to_owned(),
         description: format!(
@@ -336,6 +378,7 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         section_read,
         section_write,
         section_clear,
+        field_write,
         issue_read,
         issue_write,
         new_issue_write,
@@ -420,6 +463,12 @@ async fn dispatch_document_tool_inner(
                 )));
             }
             report_section_write(session, section, Value::Null, template, ran_under).await?
+        }
+        "report_field_write" => {
+            let pointer =
+                opt_str(kwargs, "pointer")?.ok_or_else(|| refuse("`pointer` is required"))?;
+            let value = value_arg(kwargs, false)?;
+            report_field_write(session, pointer, value, template, ran_under).await?
         }
         "report_issue_read" => {
             report_issue_read(session, opt_str(kwargs, "issue_id")?, template, ran_under).await?
@@ -842,6 +891,25 @@ async fn report_section_write(
         base.document = Some(updated);
         base.mark_document_authored(&[&format!("/{}", section.as_str())]);
         Ok(json!({ "id": id, "section": section.as_str(), "dirty": true, "size": size }))
+    })
+    .await
+}
+
+async fn report_field_write(
+    session: &McpSession,
+    pointer: &str,
+    value: Value,
+    template: Option<&str>,
+    ran_under: Option<&ScopeSlot>,
+) -> Result<Value, McpCommandError> {
+    write_base(session, template, ran_under, |base| {
+        let doc = base.document.as_ref().ok_or_else(no_document)?;
+        let updated = doc.with_field(pointer, value).map_err(write_refusal)?;
+        let id = updated.id.clone();
+        base.document = Some(updated);
+        let section = pointer.split('/').nth(1).unwrap_or_default();
+        base.mark_document_authored(&[&format!("/{section}")]);
+        Ok(json!({ "id": id, "pointer": pointer, "section": section, "dirty": true }))
     })
     .await
 }
