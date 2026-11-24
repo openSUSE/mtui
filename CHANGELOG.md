@@ -994,6 +994,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   marks the caller's own user, and states that `unlock --force` releases the
   whole group of every loaded template (#544).
 
+### Security
+
+- The SSH client stack is updated to `russh` 0.65.4, fixing three client
+  advisories: `GHSA-ppq4-8rhp-9xrq` (a malicious server could grow the
+  client's memory without bound before authentication), `GHSA-66vf-xq4p-pg7q`
+  (a host key and signature that do not match the negotiated host-key
+  algorithm were accepted) and `GHSA-7qgr-cjxw-6vjf` (channel-open replies
+  were accepted for channels that were not being opened). `ssh-key` moves to
+  0.7.0-rc.12 with it, and `rsa` and `pkcs1` to their stable releases; `rsa`
+  0.10.0 fixes `RUSTSEC-2023-0071` (CVE-2023-49092, the Marvin timing side
+  channel), whose advisory ignore is dropped.
+
 ## [26.3.1] - 2026-09-02
 
 ### Changed
