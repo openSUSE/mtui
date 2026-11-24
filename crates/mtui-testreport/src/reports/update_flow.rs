@@ -464,20 +464,109 @@ fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
 /// transactional|non-transactional`, or the undecided root mode that left the
 /// host without a key.
 fn unresolved_key(target: &mtui_hosts::Target) -> String {
-    let base = target.system().get_base();
-    let product = if base.name.is_empty() || base.name == "unknown" {
-        "unrecognised product".to_owned()
-    } else if base.version.is_empty() {
-        base.name.clone()
-    } else {
-        format!("{} {}", base.name, base.version)
-    };
-    let mode = match target.transactional_state() {
-        mtui_hosts::Transactional::Yes => "transactional",
-        mtui_hosts::Transactional::No => "non-transactional",
-        mtui_hosts::Transactional::Assumed => "transactional-update.conf but root mode unknown",
-    };
-    format!("{product}, {mode}")
+    HostProductKey::of(target).to_string()
+}
+
+/// Whether `name` is no product at all: empty, or the `unknown` sentinel of a
+/// system that was never parsed.
+fn is_unknown_product(name: &str) -> bool {
+    name.is_empty() || name == "unknown"
+}
+
+/// A host's base product and root mode as the operator reads them:
+/// `Product version, transactional|non-transactional`, or the undecided root
+/// mode. It keeps the full base
+/// version (`15-SP6`), not the release the workflow tables are keyed by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostProductKey {
+    product: String,
+    version: String,
+    transactional: mtui_hosts::Transactional,
+}
+
+impl HostProductKey {
+    /// A key from its parts.
+    #[must_use]
+    pub fn new(
+        product: impl Into<String>,
+        version: impl Into<String>,
+        transactional: mtui_hosts::Transactional,
+    ) -> Self {
+        Self {
+            product: product.into(),
+            version: version.into(),
+            transactional,
+        }
+    }
+
+    /// The key of `target`'s parsed system.
+    #[must_use]
+    pub fn of(target: &mtui_hosts::Target) -> Self {
+        let base = target.system().get_base();
+        Self::new(&base.name, &base.version, target.transactional_state())
+    }
+}
+
+impl std::fmt::Display for HostProductKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if is_unknown_product(&self.product) {
+            f.write_str("unrecognised product")?;
+        } else if self.version.is_empty() {
+            f.write_str(&self.product)?;
+        } else {
+            write!(f, "{} {}", self.product, self.version)?;
+        }
+        let mode = match self.transactional {
+            mtui_hosts::Transactional::Yes => "transactional",
+            mtui_hosts::Transactional::No => "non-transactional",
+            mtui_hosts::Transactional::Assumed => "transactional-update.conf but root mode unknown",
+        };
+        write!(f, ", {mode}")
+    }
+}
+
+/// Why a host has no update-workflow command set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandSetGap {
+    /// `/etc/products.d/baseproduct` is missing or dangling, so the base
+    /// product is not known.
+    UnreadableBaseProduct,
+    /// A base product mtui maps to no release.
+    UnrecognisedProduct {
+        /// The base product's name.
+        name: String,
+        /// The base product's version.
+        version: String,
+    },
+    /// A base product with no version to take the release from.
+    NoProductVersion {
+        /// The base product's name.
+        name: String,
+    },
+    /// A known release whose key no action or check table serves.
+    NoCommandSet(HostProductKey),
+}
+
+impl std::fmt::Display for CommandSetGap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnreadableBaseProduct => f.write_str(
+                "base product unreadable (/etc/products.d/baseproduct is missing or dangling)",
+            ),
+            Self::UnrecognisedProduct { name, version } => {
+                f.write_str("unrecognised product")?;
+                if !is_unknown_product(name) {
+                    write!(f, " {name}")?;
+                }
+                if !version.is_empty() {
+                    write!(f, " {version}")?;
+                }
+                Ok(())
+            }
+            Self::NoProductVersion { name } => write!(f, "base product {name} has no version"),
+            Self::NoCommandSet(key) => write!(f, "no command set for {key}"),
+        }
+    }
 }
 
 /// Resolves one host's [`ActionCommands`] for `role`, or logs and returns
@@ -3075,6 +3164,35 @@ fn host_has_doer(registry: &WorkflowRegistry, role: Role, target: &mtui_hosts::T
     })
 }
 
+/// Why `target` has no update-workflow command set, or `None` when it has
+/// one. A product problem is named as such rather than as a key no table
+/// serves. The action and check tables share one key set, so the update role
+/// stands for all of them.
+#[must_use]
+pub fn missing_command_set(target: &mtui_hosts::Target) -> Option<CommandSetGap> {
+    let system = target.system();
+    if system.dangling_base {
+        return Some(CommandSetGap::UnreadableBaseProduct);
+    }
+    let base = system.get_base();
+    match system.get_release() {
+        Err(_) => {
+            return Some(CommandSetGap::UnrecognisedProduct {
+                name: base.name.clone(),
+                version: base.version.clone(),
+            });
+        }
+        Ok(release) if release.is_empty() => {
+            return Some(CommandSetGap::NoProductVersion {
+                name: base.name.clone(),
+            });
+        }
+        Ok(_) => {}
+    }
+    (!host_has_doer(&WorkflowRegistry::default(), Role::Update, target))
+        .then(|| CommandSetGap::NoCommandSet(HostProductKey::of(target)))
+}
+
 /// Whether `target` resolves to no updater: an unknown release or no doer for
 /// its `(release, transactional)` key. See [`host_has_doer`].
 fn updater_unresolved(target: &mtui_hosts::Target, registry: &WorkflowRegistry) -> bool {
@@ -3273,6 +3391,139 @@ mod tests {
         assert_eq!(
             unresolved_host_label(&t),
             "h1 (unrecognised product, transactional)"
+        );
+    }
+
+    /// A target whose parsed system is `base`, with `dangling_base` and
+    /// `transactional` as given.
+    fn target_with_base(base: SystemProduct, dangling_base: bool, transactional: bool) -> Target {
+        let conn = MockConnection::new("h1");
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(base, BTreeSet::new(), dangling_base),
+            transactional,
+        );
+        t
+    }
+
+    /// `missing_command_set` must follow the tables, not a key list of its
+    /// own. It walks the release space `get_release` produces, every one- and
+    /// two-digit release plus the empty one and sample non-numeric ones: the
+    /// nine action and check tables must agree on each key, which is what lets
+    /// one role stand for all of them, and the predicate must agree with them.
+    #[test]
+    fn missing_command_set_agrees_with_every_workflow_table() {
+        let reg = WorkflowRegistry::default();
+        let roles = [
+            Role::Install,
+            Role::Uninstall,
+            Role::Update,
+            Role::Prepare,
+            Role::Downgrade,
+        ];
+        // Install and uninstall share one check table.
+        let check_roles = [Role::Install, Role::Update, Role::Prepare, Role::Downgrade];
+        // The SLES family takes its release from the version's first two
+        // characters, so a short or non-numeric version yields an odd one;
+        // the others map by name.
+        let releases = (0..100)
+            .map(|n| format!("{n:02}"))
+            .chain((0..10).map(|n| n.to_string()))
+            .chain(["", "SP", "x1", "1-", "YUM", "slmicro"].map(str::to_owned));
+        let (mut served, mut refused) = (0, 0);
+        for release in releases {
+            for transactional in [false, true] {
+                let key = format!("({release:?}, {transactional})");
+                let tables = roles
+                    .iter()
+                    .filter(|&&role| reg.doer(role, &release, transactional).is_ok())
+                    .count()
+                    + check_roles
+                        .iter()
+                        .filter(|&&role| reg.check(role, &release, transactional).is_some())
+                        .count();
+                assert!(
+                    tables == 0 || tables == roles.len() + check_roles.len(),
+                    "the tables disagree on {key}: {tables} of 9 serve it"
+                );
+                let base = match release.as_str() {
+                    "YUM" => SystemProduct::new("rhel", "8", "x86_64"),
+                    "slmicro" => SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                    n if n.chars().count() < 2 => SystemProduct::new("SLES", n, "x86_64"),
+                    n => SystemProduct::new("SLES", format!("{n}.1"), "x86_64"),
+                };
+                let t = target_with_base(base, false, transactional);
+                assert_eq!(t.system().get_release().ok(), Some(release.clone()));
+                let has = tables > 0;
+                assert_eq!(missing_command_set(&t).is_none(), has, "{key}");
+                if has { served += 1 } else { refused += 1 }
+            }
+        }
+        assert!(
+            served > 0 && refused > 0,
+            "{served} served, {refused} refused"
+        );
+    }
+
+    /// The gap names what is wrong: a product problem as itself, and a key
+    /// no table serves with both halves spelled out.
+    #[test]
+    fn missing_command_set_names_the_gap() {
+        let sles = |version: &str| SystemProduct::new("SLES", version, "x86_64");
+        let cases = [
+            (
+                target_with_base(sles("15-SP6"), false, true),
+                CommandSetGap::NoCommandSet(HostProductKey::new(
+                    "SLES",
+                    "15-SP6",
+                    mtui_hosts::Transactional::Yes,
+                )),
+                "no command set for SLES 15-SP6, transactional",
+            ),
+            (
+                // A dangling `baseproduct` falls back to the link's stem with
+                // no version.
+                target_with_base(sles(""), true, false),
+                CommandSetGap::UnreadableBaseProduct,
+                "base product unreadable (/etc/products.d/baseproduct is missing or dangling)",
+            ),
+            (
+                target_with_base(SystemProduct::new("unknown", "", ""), true, false),
+                CommandSetGap::UnreadableBaseProduct,
+                "base product unreadable (/etc/products.d/baseproduct is missing or dangling)",
+            ),
+            (
+                target_with_base(SystemProduct::new("Leap", "15.6", "x86_64"), false, false),
+                CommandSetGap::UnrecognisedProduct {
+                    name: "Leap".to_owned(),
+                    version: "15.6".to_owned(),
+                },
+                "unrecognised product Leap 15.6",
+            ),
+            (
+                // The sentinel of a system that was never parsed.
+                target_with_base(SystemProduct::new("unknown", "", ""), false, false),
+                CommandSetGap::UnrecognisedProduct {
+                    name: "unknown".to_owned(),
+                    version: String::new(),
+                },
+                "unrecognised product",
+            ),
+            (
+                target_with_base(sles(""), false, false),
+                CommandSetGap::NoProductVersion {
+                    name: "SLES".to_owned(),
+                },
+                "base product SLES has no version",
+            ),
+        ];
+        for (target, gap, text) in cases {
+            assert_eq!(missing_command_set(&target), Some(gap.clone()), "{text}");
+            assert_eq!(gap.to_string(), text);
+        }
+        assert_eq!(
+            missing_command_set(&target_with_base(sles("15-SP6"), false, false)),
+            None
         );
     }
 
