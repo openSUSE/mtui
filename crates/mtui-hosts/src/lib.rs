@@ -37,7 +37,7 @@ pub use target::{
     LostHoldKind, LostHoldProof, OpLockHolders, Operation, OperationGroup, OperationReport, Owner,
     POOL_LOCK_PATH, PackageQuerier, PlanProvider, PoolLock, RebootFailure, RebootFailureCause,
     RebootReport, RemoteLock, RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo, Sink,
-    SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner,
-    UninstallOperation, contended_lock_reason, get_arbiter, parse_system, set_test_sink,
-    sibling_holder_name, spinner, suspend,
+    SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, Transactional,
+    TtySpinner, UninstallOperation, contended_lock_reason, get_arbiter, parse_system,
+    set_test_sink, sibling_holder_name, spinner, suspend,
 };

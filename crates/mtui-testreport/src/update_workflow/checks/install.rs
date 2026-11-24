@@ -32,7 +32,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     super::update::classified(args)
 }
 
-/// The transactional-update (`slmicro`) install/uninstall check.
+/// The transactional-update install/uninstall check, for `("slmicro", true)` and
+/// `("16", true)`.
 ///
 /// Reuses the `update` check's [`classified`](super::update::classified)
 /// verdict so the two `transactional-update` keys cannot drift apart. What that
@@ -115,7 +116,7 @@ pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckF
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) => Some(Box::new(transactional_update)),
+        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
         _ => None,
     }
 }
@@ -394,8 +395,8 @@ mod tests {
         // no lock/dependency/RPM attribution and no never-ran verdict.
         assert!(install_check("slmicro", true).is_some());
         assert!(install_check("YUM", false).is_some());
-        // The key shape still matters — `slmicro` is only ever transactional,
-        // and no zypper release is.
+        // The key shape still matters: `slmicro` is never read-write, and of
+        // the zypper releases only `16` has a read-only-root entry.
         assert!(install_check("slmicro", false).is_none());
         assert!(install_check("15", true).is_none());
         assert!(install_check("nonesuch", false).is_none());

@@ -189,7 +189,7 @@ pub(crate) fn updater(release: &str, transactional: bool) -> Option<ActionComman
     match (release, transactional) {
         ("YUM", false) => Some(yum()),
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
-        ("slmicro", true) => Some(slmicro()),
+        ("slmicro", true) | ("16", true) => Some(slmicro()),
         _ => None,
     }
 }

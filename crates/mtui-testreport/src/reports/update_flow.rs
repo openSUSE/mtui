@@ -442,13 +442,14 @@ enum PrepareFailure {
     Cancelled(UpdateError),
 }
 
-/// Resolves a host's `(release, transactional)` key from its parsed system.
+/// Resolves a host's `(release, transactional)` key; see
+/// [`mtui_hosts::Target::workflow_key`].
 ///
-/// Returns `None` when the system has no release (an unknown/unparsed host);
-/// the callers treat a `None` as "no doer for this host".
+/// Returns `None` when the system has no release (an unknown/unparsed host) or
+/// its root mode is undecided; the callers treat a `None` as "no doer for this
+/// host".
 fn host_key(target: &mtui_hosts::Target) -> Option<(String, bool)> {
-    let release = target.system().get_release().ok()?;
-    Some((release, target.transactional()))
+    target.workflow_key()
 }
 
 /// One host's label for missing-doer errors: `host (Product version,
@@ -460,7 +461,8 @@ fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
 }
 
 /// [`unresolved_host_label`] without the host: `Product version,
-/// transactional|non-transactional`.
+/// transactional|non-transactional`, or the undecided root mode that left the
+/// host without a key.
 fn unresolved_key(target: &mtui_hosts::Target) -> String {
     let base = target.system().get_base();
     let product = if base.name.is_empty() || base.name == "unknown" {
@@ -470,10 +472,10 @@ fn unresolved_key(target: &mtui_hosts::Target) -> String {
     } else {
         format!("{} {}", base.name, base.version)
     };
-    let mode = if target.transactional() {
-        "transactional"
-    } else {
-        "non-transactional"
+    let mode = match target.transactional_state() {
+        mtui_hosts::Transactional::Yes => "transactional",
+        mtui_hosts::Transactional::No => "non-transactional",
+        mtui_hosts::Transactional::Assumed => "transactional-update.conf but root mode unknown",
     };
     format!("{product}, {mode}")
 }
@@ -4007,7 +4009,7 @@ mod tests {
         product: SystemProduct,
         addons: BTreeSet<SystemProduct>,
     ) -> (Target, MockConnection) {
-        slmicro_target_on(hostname, product, addons, "", "", 0)
+        transactional_target_on(hostname, product, addons, "", "", 0)
     }
 
     #[tokio::test]
@@ -4510,7 +4512,7 @@ mod tests {
         );
         // Every command h2 answers exits non-zero, which the `("slmicro", true)`
         // update check reads as a failed patch.
-        let (mut t2, h2) = slmicro_target_on(
+        let (mut t2, h2) = transactional_target_on(
             "h2",
             SystemProduct::new("SL-Micro", "6.1", "aarch64"),
             BTreeSet::new(),
@@ -8872,12 +8874,11 @@ mod tests {
         assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("0.9-1"));
     }
 
-    /// Builds an enabled SL Micro (transactional) target carrying `product` and
-    /// `addons`, on a mock returning `stdout`/`stderr` with `exit` for every
-    /// command.
+    /// Builds an enabled transactional target carrying `product` and `addons`,
+    /// on a mock returning `stdout`/`stderr` with `exit` for every command.
     ///
     /// The general form; the two fixtures below pin the default product.
-    fn slmicro_target_on(
+    fn transactional_target_on(
         hostname: &str,
         product: SystemProduct,
         addons: BTreeSet<SystemProduct>,
@@ -8893,13 +8894,13 @@ mod tests {
             .with_changing_boot_id();
         let handle = conn.clone();
         let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
-        t.set_system(System::new(product, addons, true), true);
+        t.set_system(System::new(product, addons, false), true);
         (t, handle)
     }
 
-    /// [`slmicro_target_on`] for the default SL-Micro 6.0 x86_64 product.
+    /// [`transactional_target_on`] for the default SL-Micro 6.0 x86_64 product.
     fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
-        slmicro_target_on(
+        transactional_target_on(
             hostname,
             SystemProduct::new("SL-Micro", "6.0", "x86_64"),
             BTreeSet::new(),
@@ -8916,7 +8917,7 @@ mod tests {
     /// and leaving the failure signal entirely in `stderr` — the shape the exit
     /// code alone would miss.
     fn slmicro_target_with_stderr(hostname: &str, stderr: &str) -> (Target, MockConnection) {
-        slmicro_target_on(
+        transactional_target_on(
             hostname,
             SystemProduct::new("SL-Micro", "6.0", "x86_64"),
             BTreeSet::new(),
@@ -9465,80 +9466,387 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_fails_a_transactional_host_whose_stack_is_locked() {
-        // End-to-end proof that the `("slmicro", true)` check is reached:
-        // without one, the check lookup hits its `else { continue }` and `update`
+        // End-to-end proof that the transactional check is reached: without
+        // one, the check lookup hits its `else { continue }` and `update`
         // reports success however the patch went. The marker is scripted onto
         // the **patch command specifically** because `perform_update` runs
         // other commands first (the repo add's trailing `… -n ref`), so a
         // `with_default` marker keeps the test green even with the patch
         // fan-out deleted — the check then reads the refresh's snapshot.
-        let report = report_with_rrid();
+        let report = transactional_report();
         let packages = report.get_package_list();
-        let patch = WorkflowRegistry::default()
-            .doer(Role::Update, "slmicro", true)
-            .expect("slmicro has an updater")
-            .render_command(
-                &[
-                    ("repa", repa_for("42", "7").as_str()),
-                    ("packages", quote_args(&packages).as_str()),
-                ]
-                .into_iter()
-                .collect(),
-            )
-            .expect("safe substitution never fails");
-
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "all good", "", 0, 0))
-            .with_response(
-                patch.clone(),
-                CommandLog::new(&patch, "", "System management is locked", 0, 0),
-            )
-            .with_changing_boot_id();
-        let handle = conn.clone();
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
+        let patch = slmicro_patch_command();
+        for (product, version) in TRANSACTIONAL_PRODUCTS {
+            let conn = MockConnection::new("h1")
+                .with_default(CommandLog::new("", "all good", "", 0, 0))
+                .with_response(
+                    patch.clone(),
+                    CommandLog::new(&patch, "", "System management is locked", 0, 0),
+                )
+                .with_changing_boot_id();
+            let handle = conn.clone();
+            let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new(product, version, "x86_64"),
+                    BTreeSet::new(),
+                    false,
+                ),
                 true,
-            ),
-            true,
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let res = perform_update(
+                &mut group,
+                &report,
+                &packages,
+                "42",
+                "7",
+                None,
+                true,
+                false,
+                &mut Vec::new(),
+            )
+            .await;
+
+            let Err(UpdateFailure::Check(e, _)) = res else {
+                panic!("{product}: a locked update stack must fail the update: {res:?}");
+            };
+            assert_eq!(e.reason, "update stack locked", "{product}");
+            assert_eq!(e.host.as_deref(), Some("h1"), "{product}");
+
+            // The verdict must come from the patch, so the patch must have run.
+            let cmds = handle.commands();
+            assert!(
+                cmds.contains(&patch),
+                "{product}: the patch command must have been dispatched: {cmds:?}"
+            );
+
+            // The check failure must suppress the reboot: activating the new
+            // snapshot would hide the failed patch behind a healthy-looking boot.
+            assert!(
+                !rebooted(&handle),
+                "{product}: a host whose update check failed must not be rebooted: {:?}",
+                handle.fired_commands()
+            );
+        }
+    }
+
+    // --- every transactional product: SL Micro and SLES 16 ------------------
+
+    /// The products whose read-only root SL Micro's entries drive;
+    /// [`transactional_report`] carries a test update repository for each.
+    const TRANSACTIONAL_PRODUCTS: [(&str, &str); 2] = [("SL-Micro", "6.0"), ("SLES", "16.1")];
+
+    /// [`transactional_target_on`] for `product` x86_64 with no addons,
+    /// answering `stdout` with exit `0`.
+    fn transactional_target(
+        hostname: &str,
+        (product, version): (&str, &str),
+        stdout: &str,
+    ) -> (Target, MockConnection) {
+        transactional_target_on(
+            hostname,
+            SystemProduct::new(product, version, "x86_64"),
+            BTreeSet::new(),
+            stdout,
+            "",
+            0,
+        )
+    }
+
+    /// A SLES 16.1 x86_64 host with a read-write root.
+    fn sles16_read_write_target(hostname: &str) -> (Target, MockConnection) {
+        let (mut t, handle) = transactional_target(hostname, ("SLES", "16.1"), "");
+        let system = t.system().clone();
+        t.set_system(system, false);
+        (t, handle)
+    }
+
+    /// `handle`'s commands without the boot-id reads that verify a reboot.
+    fn commands_but_boot_probes(handle: &MockConnection) -> Vec<String> {
+        handle
+            .commands()
+            .into_iter()
+            .filter(|c| c != "cat /proc/sys/kernel/random/boot_id")
+            .collect()
+    }
+
+    /// [`report_with_rrid`], which carries SL Micro 6.0's test update
+    /// repository, plus one for SLES 16.1 x86_64.
+    fn transactional_report() -> SlReport {
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("SLES", "16.1", "x86_64"),
+            "https://example/sles16-x86_64".to_owned(),
         );
+        report
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_drives_a_transactional_host_through_transactional_update() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_target("h1", product, "");
+            let mut group = HostsGroup::new(vec![t], false);
+
+            perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{product:?} has a preparer: {e}"));
+
+            assert_eq!(
+                commands_but_boot_probes(&handle),
+                vec!["transactional-update -n pkg in -l  pkg-a"],
+                "{product:?}"
+            );
+            assert!(
+                rebooted(&handle),
+                "{product:?}: the snapshot must be activated"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_update_drives_a_transactional_host_through_transactional_update() {
+        // A bare `update`: the repo add and its refresh, the prepare step, the
+        // patch, a reboot after each snapshot, and the repo removal.
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_target("h1", product, "");
+            let mut group = HostsGroup::new(vec![t], false);
+            let report = transactional_report();
+            let packages = report.get_package_list();
+            let repo = report
+                .base()
+                .update_repos
+                .get(&SystemProduct::new(product.0, product.1, "x86_64"))
+                .expect("a repository for the product")
+                .clone();
+
+            let res = perform_update(
+                &mut group,
+                &report,
+                &packages,
+                "42",
+                "7",
+                None,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await;
+            assert!(res.is_ok(), "{product:?}: {res:?}");
+
+            let cmds = handle.commands();
+            assert!(
+                cmds.iter()
+                    .any(|c| c.starts_with("zypper -n ar -cfGkn ") && c.contains(&repo)),
+                "{product:?}: the repo add: {cmds:?}"
+            );
+            assert!(
+                cmds.iter().any(|c| c
+                    == "transactional-update --continue --non-interactive run \
+                        zypper --gpg-auto-import-keys -n ref"),
+                "{product:?}: the refresh runs inside a snapshot: {cmds:?}"
+            );
+            assert!(
+                cmds.iter()
+                    .any(|c| c == "transactional-update -n pkg in -l  pkg-a"),
+                "{product:?}: the prepare step: {cmds:?}"
+            );
+            let patch = slmicro_patch_command();
+            assert!(
+                patch.contains("transactional-update -n pkg in -l -y -t patch"),
+                "{patch}"
+            );
+            assert!(cmds.contains(&patch), "{product:?}: the patch: {cmds:?}");
+            assert!(
+                cmds.contains(&format!("zypper -n rr {repo}")),
+                "{product:?}: the repo removal: {cmds:?}"
+            );
+            let fired = handle.fired_commands();
+            assert_eq!(
+                fired
+                    .iter()
+                    .filter(|c| c.contains("systemctl reboot"))
+                    .count(),
+                2,
+                "{product:?}: one reboot per staged snapshot: {fired:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_install_and_uninstall_drive_a_transactional_host_through_transactional_update()
+    {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_target("h1", product, "");
+            let mut group = HostsGroup::new(vec![t], false);
+            perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+                .await
+                .unwrap_or_else(|e| panic!("{product:?} has an installer: {e}"));
+            assert_eq!(
+                commands_but_boot_probes(&handle),
+                vec!["transactional-update -n pkg install pkg-a"],
+                "{product:?}"
+            );
+            assert!(
+                rebooted(&handle),
+                "{product:?}: the snapshot must be activated"
+            );
+
+            let (t, handle) = transactional_target("h1", product, "");
+            let mut group = HostsGroup::new(vec![t], false);
+            perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+                .await
+                .unwrap_or_else(|e| panic!("{product:?} has an uninstaller: {e}"));
+            assert_eq!(
+                commands_but_boot_probes(&handle),
+                vec!["transactional-update -n pkg remove pkg-a"],
+                "{product:?}"
+            );
+            assert!(
+                rebooted(&handle),
+                "{product:?}: the snapshot must be activated"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_install_keeps_zypper_on_a_read_write_sles_16_host() {
+        let (t, handle) = sles16_read_write_target("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_update(
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect("a read-write SLES 16 host has an installer");
+
+        assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg-a"]);
+        assert!(!rebooted(&handle), "{:?}", handle.fired_commands());
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_gives_each_sles_16_host_its_own_command_set() {
+        // A pool slot can draw either kind for the same product, version and
+        // arch, so one group routinely holds both.
+        let (ro, ro_handle) = transactional_target("h1", ("SLES", "16.1"), "");
+        let (rw, rw_handle) = sles16_read_write_target("h2");
+        let mut group = HostsGroup::new(vec![ro, rw], false);
+
+        perform_prepare(
             &mut group,
-            &report,
-            &packages,
-            "42",
-            "7",
-            None,
-            true,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
             false,
             &mut Vec::new(),
         )
-        .await;
+        .await
+        .expect("both SLES 16 hosts have a preparer");
 
-        let Err(UpdateFailure::Check(e, _)) = res else {
-            panic!("a locked update stack must fail the update: {res:?}");
-        };
-        assert_eq!(e.reason, "update stack locked");
-        assert_eq!(e.host.as_deref(), Some("h1"));
-
-        // The verdict must come from the patch, so the patch must have run.
-        let cmds = handle.commands();
-        assert!(
-            cmds.contains(&patch),
-            "the patch command must have been dispatched: {cmds:?}"
+        assert_eq!(
+            commands_but_boot_probes(&ro_handle),
+            vec!["transactional-update -n pkg in -l  pkg-a"]
         );
-
-        // The check failure must suppress the reboot: activating the new
-        // snapshot would hide the failed patch behind a healthy-looking boot.
-        let fired = handle.fired_commands();
+        assert!(rebooted(&ro_handle), "h1's snapshot must be activated");
+        assert_eq!(rw_handle.commands(), vec!["zypper -n in -y -l  pkg-a"]);
         assert!(
-            !fired.iter().any(|c| c.contains("systemctl reboot")),
-            "a host whose update check failed must not be rebooted: {fired:?}"
+            !rebooted(&rw_handle),
+            "h2 has nothing to activate: {:?}",
+            rw_handle.fired_commands()
         );
+    }
+
+    /// A host parsed from its own files: `product` `version` x86_64 carrying
+    /// `transactional-update.conf`, under a mount table with no `/` entry.
+    async fn unconfirmed_root_target(
+        hostname: &str,
+        product: &str,
+        version: &str,
+    ) -> (Target, MockConnection) {
+        let prod = format!("{product}.prod");
+        let conn = MockConnection::new(hostname)
+            .with_listing("/etc/products.d", [prod.clone()])
+            .with_link("/etc/products.d/baseproduct", prod.clone())
+            .with_file(
+                format!("/etc/products.d/{prod}"),
+                format!(
+                    "<product><name>{product}</name><version>{version}</version>\
+                     <arch>x86_64</arch></product>"
+                ),
+            )
+            .with_file("/usr/etc/transactional-update.conf", Vec::new())
+            .with_file("/proc/self/mounts", "/dev/vda4 /var btrfs rw 0 0\n")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.reload_system().await.expect("the mock's files parse");
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn a_sles_16_host_whose_root_mode_is_unconfirmed_is_refused() {
+        // Read-write SLES 16 refhosts carry transactional-update.conf too, so
+        // the file alone must not buy this host transactional-update and a
+        // reboot into a snapshot it may never have needed.
+        let (t, handle) = unconfirmed_root_target("h1", "SLES", "16.1").await;
+        let mut group = HostsGroup::new(vec![t], false);
+        let err = perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("an unconfirmed root must be refused");
+        assert!(
+            err.reason
+                .contains("h1 (SLES 16.1, transactional-update.conf but root mode unknown)"),
+            "{}",
+            err.reason
+        );
+        assert!(handle.commands().is_empty(), "{:?}", handle.commands());
+
+        let (t, handle) = unconfirmed_root_target("h1", "SLES", "16.1").await;
+        let mut group = HostsGroup::new(vec![t], false);
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("an unconfirmed root must be refused");
+        assert!(
+            err.reason.contains(
+                "missing preparer: h1 (SLES 16.1, transactional-update.conf but root mode unknown)"
+            ),
+            "{}",
+            err.reason
+        );
+        assert!(handle.commands().is_empty(), "{:?}", handle.commands());
+        assert!(!rebooted(&handle));
+    }
+
+    #[tokio::test]
+    async fn an_sl_micro_host_whose_root_mode_is_unconfirmed_stays_transactional() {
+        // SL Micro has no read-write variant, so the config file still decides.
+        let (t, handle) = unconfirmed_root_target("h1", "SL-Micro", "6.1").await;
+        let mut group = HostsGroup::new(vec![t], false);
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect("SL Micro keeps its commands");
+        assert_eq!(
+            commands_but_boot_probes(&handle),
+            vec!["transactional-update -n pkg install pkg-a"]
+        );
+        assert!(rebooted(&handle));
     }
 
     /// The rendered zypper `update` command for `("15", false)` — the exact
@@ -10808,31 +11116,41 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_transactional_host_combines_into_one_command() {
-        let (t, handle) = slmicro_target("h1", "pkg-a = 1.0-1\npkg-b = 2.0-1\n", 0);
-        let mut group = HostsGroup::new(vec![t], false);
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_target("h1", product, "pkg-a = 1.0-1\npkg-b = 2.0-1\n");
+            let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(
-            &mut group,
-            &NoopRepo,
-            &["pkg-a".to_owned(), "pkg-b".to_owned()],
-            None,
-            &mut Vec::new(),
-        )
-        .await;
-        assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
+            let res = perform_downgrade(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned(), "pkg-b".to_owned()],
+                None,
+                &mut Vec::new(),
+            )
+            .await;
+            assert!(
+                res.is_ok(),
+                "{product:?}: a clean downgrade returns Ok: {res:?}"
+            );
 
-        let cmds = handle.commands();
-        assert!(
-            cmds.iter()
-                .any(|c| c.contains("pkg-a=1.0-1") && c.contains("pkg-b=2.0-1")),
-            "expected a single combined transactional downgrade: {cmds:?}"
-        );
-        // The gate must not withhold the reboot from a succeeded transaction.
-        let fired = handle.fired_commands();
-        assert!(
-            fired.iter().any(|c| c.contains("systemctl reboot")),
-            "a clean transactional downgrade must still reboot: {fired:?}"
-        );
+            let cmds = handle.commands();
+            let downgrades: Vec<&String> =
+                cmds.iter().filter(|c| c.contains("--oldpackage")).collect();
+            assert_eq!(
+                downgrades,
+                [
+                    "transactional-update -n pkg in --force-resolution --oldpackage -y \
+                     'pkg-a=1.0-1' 'pkg-b=2.0-1'"
+                ],
+                "{product:?}: one combined transactional downgrade: {cmds:?}"
+            );
+            // The gate must not withhold the reboot from a succeeded transaction.
+            assert!(
+                rebooted(&handle),
+                "{product:?}: a clean transactional downgrade must still reboot: {:?}",
+                handle.fired_commands()
+            );
+        }
     }
 
     #[tokio::test]
@@ -12998,8 +13316,14 @@ mod tests {
             let h1 = conn.clone();
             let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
             t1.set_system(System::new(x86.clone(), BTreeSet::new(), true), true);
-            let (t2, h2) =
-                slmicro_target_on("h2", arm.clone(), BTreeSet::new(), "pkg-a = 1.0-1\n", "", 0);
+            let (t2, h2) = transactional_target_on(
+                "h2",
+                arm.clone(),
+                BTreeSet::new(),
+                "pkg-a = 1.0-1\n",
+                "",
+                0,
+            );
             (HostsGroup::new(vec![t1, t2], false), h1, h2)
         };
 

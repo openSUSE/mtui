@@ -10,6 +10,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- SLES 16 hosts with a read-only root can now be prepared, updated,
+  downgraded, installed and uninstalled. They use SL Micro's
+  `transactional-update` commands and checks, and reboot into the new snapshot
+  afterwards. Before, `prepare`, `update`, `downgrade`, `install` and
+  `uninstall` stopped with `missing preparer: <host> (SLES 16.1,
+  transactional)` (or the matching missing updater, downgrader, installer or
+  uninstaller) on any group holding one. A pool draw can pick such a host for a
+  plain SLES 16 slot. SLES 16 hosts with a read-write root keep their zypper
+  commands. A SLES 16 host that carries `transactional-update.conf` but whose
+  mount table gives no answer for `/` is refused by name (`… root mode
+  unknown`), not given `transactional-update`: read-write SLES 16 hosts carry
+  that file too. That covers `set_repo` and the repository add around
+  `update`/`prepare` as well, which now run no command on such a host, and
+  `list_hosts` labels it `root mode unknown` instead of `transactional`. SL
+  Micro, which has no read-write variant, is still driven as transactional in
+  that case (#830).
 - New MCP tool `report_field_write` sets one field of the report document by
   its RFC 6901 `pointer`, as `report_sections` lists it under `unfilled`, such
   as `/testing/regression/comment` or a check row's `verdict`, without sending

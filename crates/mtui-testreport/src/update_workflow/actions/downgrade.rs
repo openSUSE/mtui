@@ -155,7 +155,7 @@ pub(crate) fn downgrader(release: &str, transactional: bool) -> Option<ActionCom
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
         ("YUM", false) => Some(yum()),
-        ("slmicro", true) => Some(slmicro()),
+        ("slmicro", true) | ("16", true) => Some(slmicro()),
         _ => None,
     }
 }

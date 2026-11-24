@@ -11,4 +11,4 @@
 pub mod product;
 pub mod system;
 
-pub use system::parse_system;
+pub use system::{Transactional, parse_system};

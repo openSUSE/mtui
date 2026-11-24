@@ -35,17 +35,45 @@ const TRANSACTIONAL_CONFS: [&str; 2] = [
 /// parse then falls back as described in [`parse_system`].
 const MOUNTS: &str = "/proc/self/mounts";
 
+/// Whether a host is transactional (a read-only root managed by
+/// `transactional-update`), as [`parse_system`] could establish it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transactional {
+    /// A read-write root, or no `transactional-update.conf`.
+    #[default]
+    No,
+    /// `transactional-update.conf` and a read-only `/`.
+    Yes,
+    /// `transactional-update.conf`, but the mount table gave no answer for
+    /// `/`, so the root mode is unknown.
+    Assumed,
+}
+
+impl Transactional {
+    /// `true` unless the host is known to be [`No`](Self::No).
+    #[must_use]
+    pub const fn is_transactional(self) -> bool {
+        !matches!(self, Self::No)
+    }
+}
+
+impl From<bool> for Transactional {
+    fn from(transactional: bool) -> Self {
+        if transactional { Self::Yes } else { Self::No }
+    }
+}
+
 /// Parses the system information of a target host over SFTP.
 ///
 /// Returns the [`System`] (base product + addons, with `dangling_base` set when
-/// the baseproduct symlink could not be resolved) and a boolean indicating
-/// whether the host is a transactional (read-only-root) system.
+/// the baseproduct symlink could not be resolved) and whether the host is a
+/// transactional (read-only-root) system.
 ///
 /// # Errors
 /// Propagates an unexpected SFTP error (anything other than the "not found"
 /// status that drives the SUSE/non-SUSE/dangling branches) or a product-file
 /// XML parse error.
-pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
+pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, Transactional)> {
     // Read every probe through one batched SFTP session: the
     // channel+subsystem handshake is paid once for the
     // whole parse instead of per file. `hostname` is captured before the
@@ -68,7 +96,9 @@ pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
 
     // Step 2: non-SUSE hosts fall back to /etc/os-release, then to RHEL 6.
     if !suse {
-        return parse_non_suse(sftp.as_mut()).await;
+        return parse_non_suse(sftp.as_mut())
+            .await
+            .map(|(system, transactional)| (system, transactional.into()));
     }
 
     // Step 3: resolve the base product via the baseproduct symlink.
@@ -147,33 +177,35 @@ pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
     // (#686). Only a read-only `/` makes the host transactional.
     //
     // When the mount table gives no answer (the file is missing, or it has no
-    // `/` entry), keep the config-file answer from before #686. That is the
-    // safer mistake: a transactional host taken for a standard one would run
-    // zypper on its read-only root, while the reverse only refuses commands.
+    // `/` entry), the host is `Assumed`: which commands that buys is the
+    // workflow tables' call, made per product (`Target::workflow_key`).
     // Any other error reading it is propagated, like the config probes above,
     // so a transport or permission failure is not taken for either answer.
-    let transactional = has_conf
-        && match sftp.open(Path::new(MOUNTS)).await {
+    let transactional = if !has_conf {
+        Transactional::No
+    } else {
+        match sftp.open(Path::new(MOUNTS)).await {
             Ok(bytes) => match root_is_read_only(&bytes) {
-                Some(read_only) => read_only,
+                Some(read_only) => read_only.into(),
                 None => {
-                    warn!(host = %hostname, "no / entry in {MOUNTS}; keeping the transactional-update.conf answer");
-                    true
+                    warn!(host = %hostname, "no / entry in {MOUNTS}; root mode unknown");
+                    Transactional::Assumed
                 }
             },
             Err(HostError::SftpNotFound { .. }) => {
-                warn!(host = %hostname, "{MOUNTS} not found; keeping the transactional-update.conf answer");
-                true
+                warn!(host = %hostname, "{MOUNTS} not found; root mode unknown");
+                Transactional::Assumed
             }
             Err(e) => return Err(e),
-        };
-    if transactional {
-        tracing::info!(host = %hostname, "host is a transactional system");
-    } else if has_conf {
-        tracing::info!(
+        }
+    };
+    match transactional {
+        Transactional::Yes => tracing::info!(host = %hostname, "host is a transactional system"),
+        Transactional::No if has_conf => tracing::info!(
             host = %hostname,
             "host has transactional-update.conf but a read-write root; not transactional"
-        );
+        ),
+        _ => {}
     }
 
     Ok((System::new(base, addons, dangling_base), transactional))
@@ -300,7 +332,7 @@ mod tests {
                 b"/dev/vda2 / btrfs rw,relatime 0 0\n".to_vec(),
             );
         let (_system, transactional) = super::parse_system(&mut conn).await.expect("parse ok");
-        assert!(!transactional);
+        assert_eq!(transactional, super::Transactional::No);
         assert_eq!(conn.sftp_session_count(), 1);
     }
 
@@ -316,7 +348,7 @@ mod tests {
         assert_eq!(system.get_base().version, "15-SP5");
         assert_eq!(system.get_base().arch, "x86_64");
         assert!(!system.dangling_base);
-        assert!(!transactional);
+        assert_eq!(transactional, super::Transactional::No);
 
         // Full structural snapshot via Debug (System is not PartialEq): pins
         // the exact base + sorted addon set the golden fixture must yield.

@@ -2377,28 +2377,19 @@ impl OperationGroup for HostsGroup {
 
         let mut plans = Vec::with_capacity(self.data.len());
         for target in self.data.values() {
-            // The registry lookup is keyed on
-            // `(self.system.get_release(), self.transactional)`. An unknown /
-            // unparsed system has no release, which surfaces as the
-            // role's Missing*Error (no doer for an empty key).
-            let release = target.system().get_release().map_err(|_| match role {
-                "uninstaller" => HostError::MissingUninstaller {
-                    release: String::new(),
-                },
-                "updater" => HostError::MissingUpdater {
-                    release: String::new(),
-                },
-                "preparer" => HostError::MissingPreparer {
-                    release: String::new(),
-                },
-                "downgrader" => HostError::MissingDowngrader {
-                    release: String::new(),
-                },
-                _ => HostError::MissingInstaller {
-                    release: String::new(),
-                },
+            // The registry lookup is keyed on `Target::workflow_key`. A host
+            // without one (an unknown / unparsed system, or an undecided root
+            // mode) surfaces as the role's Missing*Error.
+            let (release, transactional) = target.workflow_key().ok_or_else(|| {
+                let release = target.system().get_release().unwrap_or_default();
+                match role {
+                    "uninstaller" => HostError::MissingUninstaller { release },
+                    "updater" => HostError::MissingUpdater { release },
+                    "preparer" => HostError::MissingPreparer { release },
+                    "downgrader" => HostError::MissingDowngrader { release },
+                    _ => HostError::MissingInstaller { release },
+                }
             })?;
-            let transactional = target.transactional();
             let doer = provider.doer(role, &release, transactional)?;
             let check = provider.check(role, &release, transactional);
             plans.push(HostPlan {

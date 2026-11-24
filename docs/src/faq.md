@@ -261,8 +261,9 @@ checkpoints are:
   end (rolling back on failure) rather than leaving a half-applied update behind.
 - `prepare --installed` checks before and after its installed-package probe,
   and stops without installing anything; `downgrade` on non-transactional hosts
-  checks between packages. A transactional (SL-Micro) `downgrade` applies in one
-  transaction, so it finishes first like the commands below.
+  checks between packages. A transactional `downgrade` (SL Micro, or SLES 16
+  with a read-only root) applies in one transaction, so it finishes first like
+  the commands below.
 - `reload_products` checks before each host; a host already reloading finishes
   or times out first, and the reply names the hosts it reloaded and those it
   did not reach.

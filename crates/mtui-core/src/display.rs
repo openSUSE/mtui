@@ -299,22 +299,23 @@ impl CommandPromptDisplay {
     }
 
     /// Displays the status of a host: colored `state` label (green/red),
-    /// `transactional`/`standard` label, in a fixed-width layout line.
+    /// `transactional`/`standard`/`root mode unknown` label, in a fixed-width
+    /// layout line.
     pub(crate) fn list_host(
         &mut self,
         hostname: &str,
         system: &System,
-        transactional: bool,
+        transactional: mtui_hosts::Transactional,
         state: TargetState,
     ) {
         let state_label = match state {
             TargetState::Enabled => Self::green(self, "Enabled"),
             TargetState::Disabled => Self::red(self, "Disabled"),
         };
-        let trn = if transactional {
-            Self::red(self, "transactional")
-        } else {
-            Self::green(self, "standard     ")
+        let trn = match transactional {
+            mtui_hosts::Transactional::Yes => Self::red(self, "transactional"),
+            mtui_hosts::Transactional::No => Self::green(self, "standard     "),
+            mtui_hosts::Transactional::Assumed => Self::red(self, "root mode unknown"),
         };
         let sys = system.to_string();
         self.println(&format!(
@@ -929,7 +930,12 @@ mod tests {
     #[test]
     fn list_host_shows_state_label() {
         let (mut d, buf) = buffered(ColorMode::Never);
-        d.list_host("test_host", &system("SLES"), false, TargetState::Enabled);
+        d.list_host(
+            "test_host",
+            &system("SLES"),
+            mtui_hosts::Transactional::No,
+            TargetState::Enabled,
+        );
         let out = rendered(&buf);
         assert!(out.contains("test_host"));
         assert!(out.contains("Enabled"));
@@ -939,10 +945,29 @@ mod tests {
     #[test]
     fn list_host_transactional_and_disabled() {
         let (mut d, buf) = buffered(ColorMode::Never);
-        d.list_host("h", &system("SLES"), true, TargetState::Disabled);
+        d.list_host(
+            "h",
+            &system("SLES"),
+            mtui_hosts::Transactional::Yes,
+            TargetState::Disabled,
+        );
         let out = rendered(&buf);
         assert!(out.contains("Disabled"));
         assert!(out.contains("transactional"));
+    }
+
+    #[test]
+    fn list_host_does_not_call_an_assumed_root_transactional() {
+        let (mut d, buf) = buffered(ColorMode::Never);
+        d.list_host(
+            "h",
+            &system("SLES"),
+            mtui_hosts::Transactional::Assumed,
+            TargetState::Enabled,
+        );
+        let out = rendered(&buf);
+        assert!(out.contains("root mode unknown"), "{out}");
+        assert!(!out.contains("transactional"), "{out}");
     }
 
     #[test]

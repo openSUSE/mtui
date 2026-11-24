@@ -5,7 +5,7 @@
 //! the whole SUSE/non-SUSE/dangling/transactional branch matrix is exercised
 //! end-to-end.
 
-use mtui_hosts::{Connection, MockConnection, MockSftpOp, parse_system};
+use mtui_hosts::{Connection, MockConnection, MockSftpOp, Transactional, parse_system};
 
 /// Builds a minimal `<product>` XML document for the given fields. When
 /// `patchlevel` is `Some`, a `<baseversion>`+`<patchlevel>` pair is emitted (so
@@ -45,7 +45,7 @@ async fn parse_suse_system() {
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "SLES");
     assert_eq!(system.get_base().version, "15-SP5");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn parse_non_suse_falls_back_to_os_release() {
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "ubuntu");
     assert_eq!(system.get_base().version, "22.04");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 #[tokio::test]
@@ -71,7 +71,7 @@ async fn parse_non_suse_without_os_release_falls_back_to_rhel() {
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "rhel");
     assert_eq!(system.get_base().version, "6");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 #[tokio::test]
@@ -93,7 +93,7 @@ async fn parse_transactional_system_usr_etc() {
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().name, "SL-Micro");
     assert_eq!(system.get_base().version, "6.1");
-    assert!(transactional);
+    assert_eq!(transactional, Transactional::Yes);
 }
 
 #[tokio::test]
@@ -110,7 +110,7 @@ async fn parse_transactional_system_etc_config() {
         .with_file(MOUNTS, RO_ROOT.to_vec());
 
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(transactional);
+    assert_eq!(transactional, Transactional::Yes);
 }
 
 /// A SLES 16 host carrying the transactional-update config file.
@@ -131,7 +131,7 @@ async fn parse_read_write_root_with_conf_is_not_transactional() {
     let mut conn = sles16_with_conf().with_file(MOUNTS, RW_ROOT.to_vec());
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert_eq!(system.get_base().version, "16.0");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 /// The same host with a read-only root is transactional.
@@ -139,16 +139,16 @@ async fn parse_read_write_root_with_conf_is_not_transactional() {
 async fn parse_read_only_root_with_conf_is_transactional() {
     let mut conn = sles16_with_conf().with_file(MOUNTS, RO_ROOT.to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(transactional);
+    assert_eq!(transactional, Transactional::Yes);
 }
 
-/// When the mount table is missing, the config file still decides, as before
-/// #686.
+/// When the mount table is missing, the config file alone cannot decide: a
+/// read-write SLES 16 host carries it too.
 #[tokio::test]
-async fn parse_missing_mounts_keeps_the_conf_answer() {
+async fn parse_missing_mounts_leaves_the_root_mode_unknown() {
     let mut conn = sles16_with_conf();
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(transactional);
+    assert_eq!(transactional, Transactional::Assumed);
 }
 
 /// Any other error reading the mount table is propagated, like the config
@@ -159,13 +159,12 @@ async fn parse_mounts_open_error_propagates() {
     assert!(parse_system(&mut conn).await.is_err());
 }
 
-/// A mount table without a `/` entry gives no answer, so the config file
-/// decides.
+/// A mount table without a `/` entry gives no answer either.
 #[tokio::test]
-async fn parse_mounts_without_root_keeps_the_conf_answer() {
+async fn parse_mounts_without_root_leaves_the_root_mode_unknown() {
     let mut conn = sles16_with_conf().with_file(MOUNTS, b"/dev/vda4 /var btrfs ro 0 0\n".to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(transactional);
+    assert_eq!(transactional, Transactional::Assumed);
 }
 
 /// A full mount table: other mounts are ignored, `errors=remount-ro` is not
@@ -178,7 +177,11 @@ async fn parse_reads_root_from_a_full_mount_table() {
 /dev/vda2 / ext4 rw,relatime,errors=remount-ro 0 0\n";
     let mut conn = sles16_with_conf().with_file(MOUNTS, table.to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(!transactional, "the read-write / on top wins");
+    assert_eq!(
+        transactional,
+        Transactional::No,
+        "the read-write / on top wins"
+    );
 }
 
 /// The older `/etc` config layout with a read-write root is not transactional
@@ -195,7 +198,7 @@ async fn parse_read_write_root_with_etc_conf_is_not_transactional() {
         .with_file("/etc/transactional-update.conf", b"".to_vec())
         .with_file(MOUNTS, RW_ROOT.to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 /// A read-only root alone, without the config file, is not transactional.
@@ -210,7 +213,7 @@ async fn parse_read_only_root_without_conf_is_not_transactional() {
         )
         .with_file(MOUNTS, RO_ROOT.to_vec());
     let (_, transactional) = parse_system(&mut conn).await.expect("parse");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
     assert!(
         !conn.sftp_ops().contains(&MockSftpOp::Open(MOUNTS.into())),
         "without the config file the mount table is not read"
@@ -270,7 +273,7 @@ async fn parse_dangling_baseproduct_symlink() {
     // Best-effort base name from the symlink target ("SLES.prod" -> "SLES").
     assert_eq!(system.get_base().name, "SLES");
     assert_eq!(system.get_base().version, "");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 #[tokio::test]
@@ -288,7 +291,7 @@ async fn parse_absolute_baseproduct_symlink() {
     assert!(!system.dangling_base);
     assert_eq!(system.get_base().name, "SLES");
     assert_eq!(system.get_base().version, "15-SP6");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 #[tokio::test]
@@ -301,7 +304,7 @@ async fn parse_missing_baseproduct_symlink() {
     let (system, transactional) = parse_system(&mut conn).await.expect("parse");
     assert!(system.dangling_base);
     assert_eq!(system.get_base().name, "unknown");
-    assert!(!transactional);
+    assert_eq!(transactional, Transactional::No);
 }
 
 /// Compile-time proof the parser accepts any `&mut dyn Connection`.

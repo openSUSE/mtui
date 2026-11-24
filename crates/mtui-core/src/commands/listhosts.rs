@@ -17,7 +17,7 @@ use crate::session::Session;
 pub struct ListHosts;
 
 /// One host's full status tuple, snapshotted for rendering.
-type HostStatus = (String, System, bool, TargetState);
+type HostStatus = (String, System, mtui_hosts::Transactional, TargetState);
 
 #[async_trait]
 impl Command for ListHosts {
@@ -41,7 +41,7 @@ impl Command for ListHosts {
                 (
                     t.hostname().to_owned(),
                     t.system().clone(),
-                    t.transactional(),
+                    t.transactional_state(),
                     t.state(),
                 )
             })
@@ -117,5 +117,30 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("sles-15-SP5-x86_64"), "{out}");
         assert!(!out.contains("unknown--"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_root_is_listed_as_unknown_not_transactional() {
+        let mut target = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1")),
+        );
+        target.set_system(
+            System::new(
+                mtui_types::SystemProduct::new("SLES", "16.1", "x86_64"),
+                std::collections::BTreeSet::new(),
+                false,
+            ),
+            mtui_hosts::Transactional::Assumed,
+        );
+
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![target]);
+        let args = matches(&ListHosts, &[]);
+        ListHosts.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("root mode unknown"), "{out}");
+        assert!(!out.contains("transactional"), "{out}");
     }
 }

@@ -77,7 +77,7 @@ pub(crate) fn preparer(
             Some(zypper(force, testing))
         }
         ("YUM", false) => Some(yum(force, testing)),
-        ("slmicro", true) => Some(slmicro(force, testing)),
+        ("slmicro", true) | ("16", true) => Some(slmicro(force, testing)),
         _ => None,
     }
 }

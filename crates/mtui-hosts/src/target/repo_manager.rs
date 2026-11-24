@@ -196,6 +196,9 @@ pub enum RepoFailure {
         /// The unrecognised sub-command.
         command: String,
     },
+    /// The host's root mode is undecided ([`Target::root_mode_undecided`]), so
+    /// no command was run on it.
+    RootModeUnknown,
 }
 
 impl std::fmt::Display for RepoFailure {
@@ -207,6 +210,10 @@ impl std::fmt::Display for RepoFailure {
             Self::UnknownCommand { command } => {
                 write!(f, "unknown zypper sub-command: {command}")
             }
+            Self::RootModeUnknown => write!(
+                f,
+                "transactional-update.conf but root mode unknown; no repo command run"
+            ),
         }
     }
 }
@@ -331,6 +338,16 @@ impl<'a> RepoManager<'a> {
     ) -> bool {
         let is_ar = cmd.contains("ar");
         let is_rr = cmd.contains("rr");
+
+        // Neither refresh form is safe on a root that may be read-write or not.
+        if self.target.root_mode_undecided() {
+            warn!(
+                host = %self.target.hostname(),
+                "transactional-update.conf but root mode unknown; not touching repos"
+            );
+            self.target.set_last_repo(Err(RepoFailure::RootModeUnknown));
+            return true;
+        }
 
         // Aggregate the whole run's verdict for `Target::last_repo`: any non-zero
         // zypper exit (a failed `ar`/`rr`, or the trailing `ref`) is a per-host
@@ -998,6 +1015,45 @@ mod tests {
         let cmds = conn.commands();
         assert_eq!(
             cmds.last().map(String::as_str),
+            Some(
+                "transactional-update --continue --non-interactive run \
+                 zypper --gpg-auto-import-keys -n ref"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_sles_16_root_gets_no_repo_command() {
+        // A read-write SLES 16 host carries transactional-update.conf too, so
+        // neither refresh form is safe to pick for it, nor the add before it.
+        let sles = product("SLES", "16.1");
+        let (mut t, conn) = target_with(system_of(sles.clone(), &[]), false);
+        t.set_system(system_of(sles.clone(), &[]), crate::Transactional::Assumed);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert!(conn.commands().is_empty(), "{:?}", conn.commands());
+        assert!(
+            matches!(t.last_repo(), Some(Err(_))),
+            "the refusal is a failure: {:?}",
+            t.last_repo()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_sl_micro_root_still_refreshes_through_transactional_update() {
+        let micro = product("SL-Micro", "6.1");
+        let (mut t, conn) = target_with(system_of(micro.clone(), &[]), false);
+        t.set_system(system_of(micro.clone(), &[]), crate::Transactional::Assumed);
+        let mut repos = BTreeMap::new();
+        repos.insert(micro, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert_eq!(
+            conn.commands().last().map(String::as_str),
             Some(
                 "transactional-update --continue --non-interactive run \
                  zypper --gpg-auto-import-keys -n ref"
