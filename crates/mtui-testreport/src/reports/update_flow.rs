@@ -1171,7 +1171,18 @@ async fn perform_prepare_classified(
         None => targets.update_lock().await,
     };
     if let Err(e) = locked {
-        let stopped = vec![UpdateError::reason_only(e.to_string())];
+        // Beside a refusal, one failure per locked host, as for a missing
+        // preparer above; the prefix keeps a non-contention reason (a
+        // transport error, an SFTP timeout) reading as the lock's.
+        let stopped = match e {
+            HostError::HostsLocked(hosts) if !refused.is_empty() => hosts
+                .into_iter()
+                .map(|h| {
+                    UpdateError::new(format!("operation lock not taken: {}", h.reason), h.host)
+                })
+                .collect(),
+            e => vec![UpdateError::reason_only(e.to_string())],
+        };
         return and_refused(stopped, refused).map_err(PrepareFailure::DidNotRun);
     }
 
@@ -12345,13 +12356,11 @@ mod tests {
         assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
     }
 
-    #[tokio::test]
-    async fn testing_prepare_names_a_refused_host_when_a_peer_is_locked() {
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
-        let mut h1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        h1.set_system(
+    /// A `SLES 15.5 x86_64` host over `conn`, which [`testing_prepare`]'s
+    /// update reaches.
+    fn reached_sles(hostname: &str, conn: MockConnection) -> Target {
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
             System::new(
                 SystemProduct::new("SLES", "15.5", "x86_64"),
                 BTreeSet::new(),
@@ -12359,16 +12368,28 @@ mod tests {
             ),
             false,
         );
+        t
+    }
+
+    /// A mock whose operation lock another tester holds.
+    fn held_by_alice(hostname: &str) -> MockConnection {
+        MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec())
+    }
+
+    #[tokio::test]
+    async fn testing_prepare_names_a_refused_host_when_a_peer_is_locked() {
         let (h2, h2_handle) = sles_aarch64_target("h2", "");
-        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let mut group = HostsGroup::new(vec![reached_sles("h1", held_by_alice("h1")), h2], false);
 
         let (err, diagnostics) = testing_prepare(&mut group, &[]).await;
 
         assert_eq!(
             err.to_string(),
             format!(
-                "prepare failed on h2 (Hosts locked: h1: held by alice since Tuesday, \
-                 14.11.2023 22:13 UTC; {H2_REFUSED})"
+                "prepare failed on h1, h2 (h1: operation lock not taken: held by alice since \
+                 Tuesday, 14.11.2023 22:13 UTC; {H2_REFUSED})"
             )
         );
         assert_eq!(times_refused(&err, &diagnostics), 1, "{diagnostics:?}");
@@ -12377,6 +12398,42 @@ mod tests {
             "{:?}",
             h2_handle.commands()
         );
+    }
+
+    /// A lock that failed for another reason than contention still says it
+    /// was the lock.
+    #[tokio::test]
+    async fn testing_prepare_says_an_unwritable_lockfile_beside_a_refusal_was_the_lock() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_exclusive_write_error(TARGET_LOCK_PATH);
+        let (h2, _) = sles_aarch64_target("h2", "");
+        let mut group = HostsGroup::new(vec![reached_sles("h1", conn), h2], false);
+
+        let (err, _) = testing_prepare(&mut group, &[]).await;
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "prepare failed on h1, h2 (h1: operation lock not taken: sftp error on h1: \
+                 scripted exclusive-create failure: /var/lock/mtui.lock; {H2_REFUSED})"
+            )
+        );
+    }
+
+    /// With nothing refused, the lock failure is not split per host.
+    #[tokio::test]
+    async fn testing_prepare_with_nothing_refused_reports_a_lock_as_before() {
+        let (h2, _) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![reached_sles("h1", held_by_alice("h1")), h2], false);
+
+        let (err, diagnostics) = testing_prepare(&mut group, &[]).await;
+
+        assert_eq!(
+            err.to_string(),
+            "Hosts locked: h1: held by alice since Tuesday, 14.11.2023 22:13 UTC"
+        );
+        assert_eq!(times_refused(&err, &diagnostics), 0, "{diagnostics:?}");
     }
 
     #[tokio::test]

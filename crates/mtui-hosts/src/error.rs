@@ -174,14 +174,16 @@ pub enum HostError {
         remedy: String,
     },
 
-    /// One or more hosts in the group were locked by another owner when the
-    /// group operation lock was being acquired.
+    /// The group operation lock could not be taken on one or more hosts:
+    /// another owner holds it, its state was unreadable, or the lockfile could
+    /// not be written.
     ///
     /// Raised by [`HostsGroup::update_lock`](crate::HostsGroup) *after* it has
-    /// released the locks it did take, so an update/prepare/downgrade workflow
-    /// aborts before running against a fleet it does not fully own.
-    #[error("{0}")]
-    Update(String),
+    /// released the locks it did take, so a workflow aborts before running
+    /// against a fleet it does not fully own. One [`LockRefusal`] per host, in
+    /// the order of their rendered lines.
+    #[error("Hosts locked: {}", join_lock_refusals(.0))]
+    HostsLocked(Vec<LockRefusal>),
 
     /// No installer "doer" is defined for the given product release.
     ///
@@ -296,6 +298,27 @@ pub enum HostError {
         /// The transport failure that hid the outcome.
         reason: String,
     },
+}
+
+/// One host the group operation lock could not be taken on (see
+/// [`HostError::HostsLocked`]); renders as `host: reason`.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{host}: {reason}")]
+#[non_exhaustive]
+pub struct LockRefusal {
+    /// The host the lock was not taken on.
+    pub host: String,
+    /// Why: who holds it and since when, or the error that kept it unread or
+    /// unwritten.
+    pub reason: String,
+}
+
+fn join_lock_refusals(refusals: &[LockRefusal]) -> String {
+    refusals
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Why an upload was refused (see [`HostError::UploadRefused`]).

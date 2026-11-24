@@ -225,11 +225,11 @@ pub trait OperationGroup: Send {
     /// On success every host is
     /// locked for this process; on failure (some host is locked by another
     /// owner) the group has already released the locks it took and returns
-    /// [`HostError::Update`], so the template aborts before running.
+    /// [`HostError::HostsLocked`], so the template aborts before running.
     ///
     /// # Errors
     ///
-    /// Returns [`HostError::Update`] when one or more hosts were locked by
+    /// Returns [`HostError::HostsLocked`] when one or more hosts were locked by
     /// another owner.
     async fn update_lock(&mut self) -> Result<(), HostError>;
 
@@ -430,7 +430,7 @@ pub trait Operation: Send + Sync {
     ///
     /// Returns the resolver's error when no host plan can be built (no
     /// [`PlanProvider`] injected, or no doer registered for a host's
-    /// `(release, transactional)` key), and [`HostError::Update`] when
+    /// `(release, transactional)` key), and [`HostError::HostsLocked`] when
     /// `update_lock` finds a host held by another owner. In both cases nothing
     /// ran on any host.
     ///
@@ -722,7 +722,7 @@ mod tests {
         /// The ordered event log.
         events: Arc<Mutex<Vec<Event>>>,
         /// When `true`, `update_lock` records its event then returns
-        /// [`HostError::Update`] to model a foreign-locked host.
+        /// [`HostError::HostsLocked`] to model a foreign-locked host.
         fail_update_lock: bool,
         /// What `reboot` should report as failed, modelling a transactional
         /// host that rebooted and did not reconnect.
@@ -817,7 +817,10 @@ mod tests {
         async fn update_lock(&mut self) -> Result<(), HostError> {
             self.events.lock().unwrap().push(Event::UpdateLock);
             if self.fail_update_lock {
-                return Err(HostError::Update("Hosts locked".to_owned()));
+                return Err(HostError::HostsLocked(vec![crate::LockRefusal {
+                    host: "h1".to_owned(),
+                    reason: "held by alice".to_owned(),
+                }]));
             }
             Ok(())
         }
@@ -858,7 +861,9 @@ mod tests {
                         RebootFailureCause::NotRebooted => HostError::RebootDidNotHappen {
                             host: f.host.clone(),
                         },
-                        RebootFailureCause::Unreachable => HostError::Update(f.reason.clone()),
+                        RebootFailureCause::Unreachable => HostError::ReconnectFailed {
+                            host: f.host.clone(),
+                        },
                     };
                     (f.host.clone(), Err(err))
                 })
@@ -1074,7 +1079,7 @@ mod tests {
             .run(&mut group)
             .await
             .expect_err("a foreign-held lock is reported, not swallowed");
-        assert!(matches!(err, HostError::Update(_)), "{err:?}");
+        assert!(matches!(err, HostError::HostsLocked(_)), "{err:?}");
 
         // update_lock was attempted, but no run / check / reboot / unlock
         // followed: the failing lock self-cleaned and aborted the operation.
@@ -1195,7 +1200,7 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans)).with_reboot_failures(vec![RebootFailure {
             host: "h1".to_owned(),
             cause: RebootFailureCause::Unreachable,
-            reason: "reconnect failed".to_owned(),
+            reason: "failed to reconnect to h1".to_owned(),
         }]);
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
@@ -1209,7 +1214,7 @@ mod tests {
             vec![RebootFailure {
                 host: "h1".to_owned(),
                 cause: RebootFailureCause::Unreachable,
-                reason: "reconnect failed".to_owned(),
+                reason: "failed to reconnect to h1".to_owned(),
             }]
         );
         // Unlock must still be the last event: a lost host does not skip
