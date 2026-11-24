@@ -1183,6 +1183,23 @@ mod tests {
         assert_eq!(notified.code, code, "the error keeps its own code");
     }
 
+    /// A `null` type anywhere: `{"type":"null"}` or `"null"` in a type array.
+    fn has_null_arm(schema: &serde_json::Value) -> bool {
+        use serde_json::Value;
+        match schema {
+            Value::Object(map) => {
+                let null_type = match map.get("type") {
+                    Some(Value::String(t)) => t == "null",
+                    Some(Value::Array(types)) => types.iter().any(|t| t == "null"),
+                    _ => false,
+                };
+                null_type || map.values().any(has_null_arm)
+            }
+            Value::Array(items) => items.iter().any(has_null_arm),
+            _ => false,
+        }
+    }
+
     #[test]
     fn schemas_are_slimmed_on_the_wire() {
         // The slimming pass ran over the live surface.
@@ -1196,7 +1213,7 @@ mod tests {
                 tool.name
             );
             assert!(
-                !blob.contains("{\"type\":\"null\"}"),
+                !has_null_arm(&serde_json::Value::Object((*tool.input_schema).clone())),
                 "{} kept a null arm",
                 tool.name
             );

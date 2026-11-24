@@ -22,6 +22,7 @@ const OTHER: &str = "SUSE:Maintenance:2:2";
 const MAINTENANCE_OBS: &str = mtui_types::fixtures::MAINTENANCE_OBS;
 const MAINTENANCE_NEW_ISSUES: &str = mtui_types::fixtures::MAINTENANCE_NEW_ISSUES;
 const PI: &str = mtui_types::fixtures::PI;
+const MAXIMAL: &str = mtui_types::fixtures::MAXIMAL;
 
 fn report(session: &mtui_core::Session, rrid: &str, document: Option<&str>) -> ObsReport {
     let mut report = ObsReport::new(session.config.clone());
@@ -228,7 +229,7 @@ async fn sections_report_completeness_with_a_pointer_per_null_leaf() {
 }
 
 /// One valid call per document tool.
-fn every_tool_call() -> [(&'static str, Value); 10] {
+fn every_tool_call() -> [(&'static str, Value); 11] {
     [
         ("report_sections", json!({})),
         ("report_section_read", json!({"section": "verdict"})),
@@ -237,6 +238,10 @@ fn every_tool_call() -> [(&'static str, Value); 10] {
             json!({"section": "verdict", "value": null}),
         ),
         ("report_section_clear", json!({"section": "verdict"})),
+        (
+            "report_field_write",
+            json!({"pointer": "/verdict", "value": null}),
+        ),
         ("report_issue_read", json!({})),
         (
             "report_issue_write",
@@ -979,6 +984,391 @@ async fn a_new_issue_is_deleted_but_a_pipeline_or_unknown_issue_is_refused() {
     )
     .await;
     assert_eq!(view["data"], json!([]));
+}
+
+// ---- report_field_write ----------------------------------------------- //
+
+async fn testing_of(session: &McpSession) -> Value {
+    call(
+        session,
+        "report_section_read",
+        json!({"section": "testing"}),
+    )
+    .await["data"]
+        .clone()
+}
+
+/// MAXIMAL with the second check row left unanswered by `export`, and both
+/// rows tracking many packages, as a product increment's do.
+fn with_an_unanswered_check() -> String {
+    let mut doc: Value = serde_json::from_str(MAXIMAL).unwrap();
+    let checks = doc["testing"]["install"]["checks"].as_array_mut().unwrap();
+    for (row, arch) in checks.iter_mut().zip(["x86_64", "aarch64"]) {
+        for n in 0..150 {
+            row["before"][format!("pkg{n:03}")] = json!(format!("1.{n}-1.1.{arch}"));
+            row["after"][format!("pkg{n:03}")] = json!(format!("1.{n}-2.1.{arch}"));
+        }
+    }
+    checks[1]["verdict"] = Value::Null;
+    doc.to_string()
+}
+
+#[tokio::test]
+async fn a_field_write_creates_an_absent_regression_with_null_keys_and_sets_the_field() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    assert_eq!(testing_of(&session).await, json!({}));
+
+    let written = call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/regression/comment", "value": "zypper ps clean"}),
+    )
+    .await;
+
+    assert_eq!(written["section"], "testing");
+    assert_eq!(written["dirty"], true);
+    assert_eq!(
+        testing_of(&session).await,
+        json!({"regression": {"verdict": null, "comment": "zypper ps clean"}})
+    );
+    let sections = call(&session, "report_sections", json!({})).await;
+    assert_eq!(sections["dirty"], true);
+    assert!(
+        sections["unfilled"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("/testing/regression/verdict")),
+        "{sections}"
+    );
+    assert!(
+        state(&session, RRID).await.1,
+        "the section is marked authored"
+    );
+}
+
+#[tokio::test]
+async fn a_field_write_sets_the_install_verdict_and_nothing_else() {
+    let session = loaded(Some(MAXIMAL)).await;
+    let mut expected = testing_of(&session).await;
+    assert_eq!(expected["install"]["verdict"], "PASSED");
+    expected["install"]["verdict"] = json!("FAILED");
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/install/verdict", "value": "FAILED"}),
+    )
+    .await;
+
+    assert_eq!(testing_of(&session).await, expected);
+}
+
+#[tokio::test]
+async fn a_field_write_answers_one_check_row_and_keeps_the_rows_export_wrote() {
+    let session = loaded(Some(&with_an_unanswered_check())).await;
+    let before = testing_of(&session).await;
+    let rows = |testing: &Value| testing["install"]["checks"].as_array().unwrap().clone();
+    assert!(before.to_string().len() > 15_000, "rows as big as a PI's");
+    assert_eq!(rows(&before)[1]["verdict"], Value::Null);
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/install/checks/1/verdict", "value": "PASSED"}),
+    )
+    .await;
+
+    let after = testing_of(&session).await;
+    assert_eq!(rows(&after)[1]["verdict"], "PASSED");
+    assert_eq!(rows(&after)[0].to_string(), rows(&before)[0].to_string());
+    for map in ["before", "after", "refhost", "target"] {
+        assert_eq!(
+            rows(&after)[1][map].to_string(),
+            rows(&before)[1][map].to_string(),
+            "{map}"
+        );
+    }
+    let mut expected = before.clone();
+    expected["install"]["checks"][1]["verdict"] = json!("PASSED");
+    assert_eq!(after, expected);
+}
+
+#[tokio::test]
+async fn a_field_write_refuses_what_the_editor_shows_read_only() {
+    let session = loaded(Some(&with_an_unanswered_check())).await;
+    let (document, _) = state(&session, RRID).await;
+
+    // Each value fits the schema, so only the policy can refuse it.
+    for (pointer, value) in [
+        ("/testing/install/checks/1/before", json!({"pkg": "1-1"})),
+        ("/testing/install/checks/1/after", json!({"pkg": "1-1"})),
+        ("/testing/install/checks/1/before/pkg000", json!("0-0")),
+        (
+            "/testing/install/checks/1/refhost",
+            json!("elsewhere.suse.de"),
+        ),
+        ("/testing/openqa/install/verdict", json!("failed")),
+        ("/update/packager", json!("someone")),
+    ] {
+        let msg = refusal(
+            &session,
+            "report_field_write",
+            json!({"pointer": pointer, "value": value}),
+        )
+        .await;
+        assert!(msg.contains(pointer), "{pointer}: {msg}");
+        assert!(msg.contains("read-only"), "{pointer}: {msg}");
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_field_write_refuses_a_pointer_outside_the_tester_sections() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    for (pointer, needle) in [
+        ("/bogus/comment", "names no section"),
+        ("testing/regression/comment", "not an RFC 6901 pointer"),
+        ("/schema_version", "names no section"),
+        ("/", "names no section"),
+        (
+            "/testing/install/verdict",
+            "/testing/install cannot be created by hand; export builds it",
+        ),
+    ] {
+        let msg = refusal(
+            &session,
+            "report_field_write",
+            json!({"pointer": pointer, "value": "PASSED"}),
+        )
+        .await;
+        assert!(msg.contains(needle), "{pointer}: {msg}");
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_field_write_refuses_a_pointer_that_holds_fields_as_not_a_field() {
+    let session = loaded(Some(&with_an_unanswered_check())).await;
+    let (document, _) = state(&session, RRID).await;
+
+    for (pointer, value) in [
+        ("", json!("x")),
+        ("/testing/regression", json!("x")),
+        ("/testing/install/checks", json!("x")),
+        ("/testing/install/checks/1", json!("x")),
+    ] {
+        let msg = refusal(
+            &session,
+            "report_field_write",
+            json!({"pointer": pointer, "value": value}),
+        )
+        .await;
+        assert!(msg.contains("not a field"), "{pointer:?}: {msg}");
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_field_write_refuses_a_field_this_report_does_not_have() {
+    let session = loaded(Some(&with_an_unanswered_check())).await;
+    let (document, _) = state(&session, RRID).await;
+    for pointer in [
+        "/testing/install/checks/-/verdict",
+        "/testing/install/checks/01/verdict",
+        "/testing/install/checks/2/verdict",
+        "/testing/install/checks/18446744073709551616/verdict",
+        "/issues/bsc#424242/status",
+    ] {
+        let msg = refusal(
+            &session,
+            "report_field_write",
+            json!({"pointer": pointer, "value": "PASSED"}),
+        )
+        .await;
+        assert!(
+            msg.contains("not present in this report"),
+            "{pointer}: {msg}"
+        );
+    }
+    assert_eq!(state(&session, RRID).await, (document, false));
+
+    let session = loaded(Some(PI)).await;
+    let (document, _) = state(&session, RRID).await;
+    let msg = refusal(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/review/source/comment", "value": "x"}),
+    )
+    .await;
+    assert!(msg.contains("not present in this report"), "{msg}");
+    assert_eq!(state(&session, RRID).await, (document, false));
+}
+
+#[tokio::test]
+async fn a_refused_value_on_the_creation_path_creates_nothing() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+    let (document, _) = state(&session, RRID).await;
+
+    let msg = refusal(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/regression/verdict", "value": "MAYBE"}),
+    )
+    .await;
+
+    assert!(msg.contains("/testing/regression/verdict"), "{msg}");
+    assert_eq!(state(&session, RRID).await, (document, false));
+    assert_eq!(testing_of(&session).await, json!({}));
+}
+
+#[tokio::test]
+async fn a_filed_bug_is_edited_in_place_when_the_report_has_no_new_issues_list() {
+    let mut doc: Value = serde_json::from_str(MAINTENANCE_NEW_ISSUES).unwrap();
+    doc.as_object_mut().unwrap().remove("new_issues");
+    let session = loaded(Some(&doc.to_string())).await;
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/issues/bsc#999/status", "value": "FIXED"}),
+    )
+    .await;
+
+    let issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bsc#999"}),
+    )
+    .await;
+    assert_eq!(issue["issue"]["status"], "FIXED");
+    assert_eq!(issue["issue"]["new"], true);
+}
+
+#[tokio::test]
+async fn a_filed_bugs_comment_can_be_set_again_after_it_was_cleared() {
+    let session = loaded(Some(MAINTENANCE_NEW_ISSUES)).await;
+    let comment = |text: Value| json!({"pointer": "/new_issues/0/comment", "value": text});
+
+    for value in [json!("first"), Value::Null, json!("second")] {
+        call(&session, "report_field_write", comment(value.clone())).await;
+        let view = call(
+            &session,
+            "report_section_read",
+            json!({"section": "new_issues"}),
+        )
+        .await;
+        assert_eq!(
+            view["data"][0].get("comment").unwrap_or(&Value::Null),
+            &value
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_yes_no_field_takes_a_json_boolean() {
+    let session = loaded(Some(MAINTENANCE_OBS)).await;
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/issues/bnc#1276308/reproducer", "value": true}),
+    )
+    .await;
+
+    let issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bnc#1276308"}),
+    )
+    .await;
+    assert_eq!(issue["issue"]["reproducer"], true);
+}
+
+#[tokio::test]
+async fn a_field_write_refuses_an_issue_listed_under_new_issues() {
+    let session = loaded(Some(MAINTENANCE_NEW_ISSUES)).await;
+
+    let msg = refusal(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/issues/bsc#999/status", "value": "FIXED"}),
+    )
+    .await;
+    assert!(msg.contains("tester-filed bug"), "{msg}");
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/issues/bnc#1276308/status", "value": "FIXED"}),
+    )
+    .await;
+    let issue = call(
+        &session,
+        "report_issue_read",
+        json!({"issue_id": "bnc#1276308"}),
+    )
+    .await;
+    assert_eq!(issue["issue"]["status"], "FIXED");
+}
+
+#[tokio::test]
+async fn a_field_write_takes_a_string_literally_and_still_validates() {
+    let session = loaded(Some(MAXIMAL)).await;
+
+    for text in [r#"{"looks": "like json"}"#, "[1, 2]", "null", ""] {
+        call(
+            &session,
+            "report_field_write",
+            json!({"pointer": "/testing/regression/comment", "value": text}),
+        )
+        .await;
+        assert_eq!(
+            testing_of(&session).await["regression"]["comment"],
+            json!(text)
+        );
+    }
+
+    let msg = refusal(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/regression/verdict", "value": "MAYBE"}),
+    )
+    .await;
+    assert!(msg.contains("/testing/regression/verdict"), "{msg}");
+
+    call(
+        &session,
+        "report_field_write",
+        json!({"pointer": "/testing/regression/verdict", "value": null}),
+    )
+    .await;
+    assert_eq!(
+        testing_of(&session).await["regression"]["verdict"],
+        Value::Null
+    );
+}
+
+#[tokio::test]
+async fn a_section_write_takes_no_pointer_and_still_replaces_the_whole_section() {
+    let session = loaded(Some(MAXIMAL)).await;
+    let msg = refusal(
+        &session,
+        "report_section_write",
+        json!({"section": "testing", "pointer": "/testing/regression/comment", "value": "x"}),
+    )
+    .await;
+    assert!(msg.contains("unknown argument(s): pointer"), "{msg}");
+
+    let value = json!({"regression": {"verdict": "PASSED", "comment": "whole"}});
+    call(
+        &session,
+        "report_section_write",
+        json!({"section": "testing", "value": value}),
+    )
+    .await;
+    assert_eq!(testing_of(&session).await, value);
 }
 
 /// Full-schema golden: pins the tool names, descriptions, input schemas

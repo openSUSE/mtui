@@ -10,6 +10,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New MCP tool `report_field_write` sets one field of the report document by
+  its RFC 6901 `pointer`, as `report_sections` lists it under `unfilled`, such
+  as `/testing/regression/comment` or a check row's `verdict`, without sending
+  the rest of the section back. Setting `testing.regression.comment` used to
+  mean re-sending all of `testing`, `export`'s check rows included, which on a
+  product increment runs to tens of kilobytes. It accepts exactly the fields
+  the REPL report editor lets a tester change, so a check row's `refhost`,
+  `before` and `after` and `testing.openqa` stay `export`'s, and the next
+  `export` rewrites every covered host's check row, its `verdict` included. An
+  absent `testing.regression` is created with its keys `null` first, and a
+  JSON `null` clears a field. The tool joins the core profile, and the audit
+  log records its `value` only as `{bytes, sha256}` (#833). **MCP schema
+  note:** additive only — one new tool taking `pointer`, `value` (string or
+  boolean) and `template`; `report_section_write` is unchanged.
 - New MCP tool `report_section_clear` sets `verdict` or `comment` back to
   unanswered (`null`), so `report_sections` lists it as unfilled again; any
   other section is refused. No `value` that `report_section_write` declares

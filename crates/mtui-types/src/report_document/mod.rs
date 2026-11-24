@@ -42,6 +42,7 @@ pub const SCHEMA_JSON: &str = include_str!("../../schema/report-template-v1.json
 
 pub mod install;
 pub mod issues;
+pub mod policy;
 pub mod review;
 pub mod schema_diff;
 pub mod sections;
@@ -68,7 +69,8 @@ pub use review::{
 };
 pub use schema_diff::{schema_diffs, schema_drift};
 pub use sections::{
-    Completeness, Section, SectionSummary, SectionWriteError, UnknownSectionError, null_pointers,
+    Completeness, FieldRefusal, Section, SectionSummary, SectionWriteError, UnknownSectionError,
+    null_pointers,
 };
 pub use testing::{
     InstallCheck, Openqa, OpenqaFailure, OpenqaIncident, OpenqaInstall, OpenqaJob,
@@ -200,8 +202,7 @@ impl ReportDocument {
     /// `testing.regression` with a non-null `verdict`/`comment`, or a
     /// non-null `review.source.comment`/`review.build_log.comment`.
     ///
-    /// The leaf list follows the editable set in `mtui-tui` (which this crate
-    /// cannot depend on), minus what `export` writes and minus the `review`
+    /// The leaf list follows the editable set in [`policy`], minus what `export` writes and minus the `review`
     /// yes/no answers: the pipeline pre-fills those in generated documents, so
     /// a set one is not evidence of tester input.
     ///

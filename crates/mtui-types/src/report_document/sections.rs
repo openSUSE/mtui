@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use super::{
     DocumentError, Issue, IssueKey, IssueKeyParseError, NewIssue, ReportDocument, Req,
-    dropped_pointers, project_new_issues,
+    dropped_pointers, policy, project_new_issues,
 };
 
 /// A top-level section of the report document.
@@ -156,6 +156,30 @@ pub enum SectionWriteError {
     NewIssueConflict { pointers: Vec<String> },
     #[error(transparent)]
     BadIssueKey(#[from] IssueKeyParseError),
+    #[error("{pointer}: {reason}")]
+    Field {
+        pointer: String,
+        reason: FieldRefusal,
+    },
+}
+
+/// Why [`ReportDocument::with_field`] refused a pointer before validating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum FieldRefusal {
+    #[error("not an RFC 6901 pointer")]
+    NotAPointer,
+    #[error("names no section of the report")]
+    NoSection,
+    #[error("not a field: it holds fields, so address one of them")]
+    NotAField,
+    #[error("read-only: the pipeline or export owns it, and the report editor shows it read-only")]
+    ReadOnly,
+    #[error("a tester-filed bug; change it under /new_issues or with report_new_issue_write")]
+    FiledBug,
+    #[error("{0} cannot be created by hand; export builds it")]
+    NotCreatable(&'static str),
+    #[error("not present in this report")]
+    Absent,
 }
 
 /// RFC 6901 pointer of every `null` leaf under `value`, each prefixed with
@@ -378,6 +402,79 @@ impl ReportDocument {
         Ok(document)
     }
 
+    /// A copy of this document with the leaf at the RFC 6901 `pointer` set to
+    /// `value`, the rest of its section kept as it is. An absent
+    /// [creatable](policy::is_creatable_root) subtree above the leaf is first
+    /// created with its required keys `null`.
+    ///
+    /// # Errors
+    ///
+    /// Refused when `pointer` names no section, is not
+    /// [editable](policy::is_editable), lies under an issue listed in
+    /// `new_issues` or under a subtree that cannot be created, or is not
+    /// present in this report; and for the same validation reasons as
+    /// [`with_section`](Self::with_section), which the changed section goes
+    /// through.
+    pub fn with_field(&self, pointer: &str, value: Value) -> Result<Self, SectionWriteError> {
+        let refused = |reason| SectionWriteError::Field {
+            pointer: pointer.to_owned(),
+            reason,
+        };
+        if pointer.is_empty() {
+            return Err(refused(FieldRefusal::NotAField));
+        }
+        let token = pointer
+            .strip_prefix('/')
+            .map(|rest| rest.split('/').next().unwrap_or_default())
+            .ok_or_else(|| refused(FieldRefusal::NotAPointer))?;
+        let section: Section = token
+            .parse()
+            .map_err(|_| refused(FieldRefusal::NoSection))?;
+        if !policy::is_editable(pointer) {
+            return Err(refused(if policy::is_editable_parent(pointer) {
+                FieldRefusal::NotAField
+            } else {
+                FieldRefusal::ReadOnly
+            }));
+        }
+        let mut candidate = self.to_value();
+        // As in the editor: without a `new_issues` list a filed bug is edited in place.
+        if candidate.get("new_issues").is_some()
+            && let Some(issue) = issue_entry(pointer).and_then(|entry| candidate.pointer(&entry))
+            && policy::is_hidden_entry("/issues", issue)
+        {
+            return Err(refused(FieldRefusal::FiledBug));
+        }
+        for &root in policy::CREATABLE_ROOTS {
+            if pointer.starts_with(&format!("{root}/")) && candidate.pointer(root).is_none() {
+                let skeleton = policy::creatable_skeleton(root)
+                    .ok_or_else(|| refused(FieldRefusal::NotCreatable(root)))?;
+                let (parent, key) = root.rsplit_once('/').unwrap_or_default();
+                candidate
+                    .pointer_mut(parent)
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| refused(FieldRefusal::Absent))?
+                    .insert(key.to_owned(), skeleton);
+            }
+        }
+        // An optional leaf cleared to null is not serialised; setting it again re-adds it.
+        if candidate.pointer(pointer).is_none()
+            && let Some((parent, key)) = pointer.rsplit_once('/')
+            && let Some(map) = candidate.pointer_mut(parent).and_then(Value::as_object_mut)
+        {
+            map.insert(key.replace("~1", "/").replace("~0", "~"), Value::Null);
+        }
+        let slot = candidate
+            .pointer_mut(pointer)
+            .ok_or_else(|| refused(FieldRefusal::Absent))?;
+        *slot = value;
+        let section_value = candidate
+            .get(section.as_str())
+            .cloned()
+            .ok_or(SectionWriteError::Absent(section))?;
+        self.with_section(section, section_value)
+    }
+
     /// Replaces the `new: true` issues with `items`, as the server does when
     /// `items` differs from its stored view: an entry already there keeps its
     /// reproducer, status, severity and L3 record, and only title and comment
@@ -441,6 +538,12 @@ fn check_issue_keys(current: &Value, proposed: &Value) -> Result<(), SectionWrit
     } else {
         Err(SectionWriteError::IssueKeysChanged { added, removed })
     }
+}
+
+/// `/issues/<key>` when `pointer` lies under one entry of `issues`.
+fn issue_entry(pointer: &str) -> Option<String> {
+    let key = pointer.strip_prefix("/issues/")?.split('/').next()?;
+    Some(format!("/issues/{key}"))
 }
 
 fn is_new_issue_comment(pointer: &str) -> bool {

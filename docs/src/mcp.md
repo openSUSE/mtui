@@ -454,7 +454,7 @@ and nothing is written there.
 
 ## Report document tools
 
-Ten hand-written tools work on the loaded report as a **document**: eight read
+Eleven hand-written tools work on the loaded report as a **document**: nine read
 and edit it as named sections and issues rather than lines of text, and two list
 and read its files. Each accepts an optional
 **`template="<RRID>"`** selecting which loaded template to act on; with more than
@@ -515,6 +515,9 @@ Replaces one tester section with `value`.
   (with `-t`, only the selected hosts' rows), `testing.openqa` and
   `people.testers`.
 - Returns `{ "id", "section", "dirty": true, "size" }`.
+- To set one field without sending the rest of its section back, such as
+  `testing.regression.comment` next to the check rows `export` wrote, use
+  `report_field_write`.
 
 ### `report_section_clear`
 
@@ -525,10 +528,49 @@ lists it in `unfilled` again.
   `template`. It takes no `value`.
 - Any other section is refused, as none of them can be unanswered as a whole.
   A `null` inside one, such as `testing.regression.verdict`, is written with
-  `report_section_write`.
+  `report_field_write`.
 - Applied to local state like `report_section_write`: it marks the report
   dirty, and `commit` uploads it.
 - Returns `{ "id", "section", "dirty": true, "size" }`.
+
+### `report_field_write`
+
+Sets one field of the report document, addressed by its RFC 6901 pointer as
+`report_sections` lists it under `unfilled`, and keeps the rest of its section
+as it is. A product increment's `testing.install.checks` can run to tens of
+kilobytes; this tool never sends them.
+
+```
+report_field_write pointer=/testing/regression/comment value="zypper ps clean"
+report_field_write pointer=/testing/install/verdict value="PASSED"
+report_field_write pointer=/testing/install/checks/1/verdict value="PASSED"
+```
+
+- Parameters (required): `pointer`, `value` (declared as a string or a
+  boolean). Plus optional `template`. `value` replaces the field as given: a
+  string is stored literally, so `"null"` or `"{}"` is text, and a JSON `null`
+  clears the field back to unanswered. A yes/no field, such as
+  `/issues/<key>/reproducer` or `/review/build_log/test_suite_passed`, takes
+  `true` or `false`.
+- Only the fields the REPL report editor (`edit`) lets a tester change are
+  accepted, from one shared list: `verdict`, `comment`,
+  `people.reviewer.name`, an issue's `reproducer`/`status`/`comment`, a
+  tester-filed bug's `title`/`comment` under `new_issues`, the `verdict` and
+  `comment` of `testing.install` and `testing.regression`, a check row's
+  `verdict`, and the `review` answers and comments. Anything else is refused
+  as read-only, notably a check row's `refhost`, `before` and `after`, and all
+  of `testing.openqa`: those are `export`'s. The next `export` rewrites every
+  covered host's check row, its `verdict` included. When the report has a
+  `new_issues` list, a tester-filed bug is changed there, not under `issues`.
+  A pointer to an object or list that holds such fields, such as
+  `/testing/regression`, is refused as not a field.
+- A pointer under an absent `testing.regression` creates it with its keys
+  `null`, then sets the field. An absent `testing.install` cannot be created
+  this way, as its `checks` come from `export`.
+- The changed section goes through the same validation as
+  `report_section_write`, and the write likewise changes local state only and
+  marks the report dirty; `commit` uploads it.
+- Returns `{ "id", "pointer", "section", "dirty": true }`.
 
 ### `report_issue_read` (read-only)
 
@@ -830,7 +872,7 @@ failed on some host has no `upload`.
 
 No tool argument carrying a credential in bulk lands verbatim. File-body
 payloads (`put` `content`/`content_b64`,
-`report_section_write`/`report_issue_write` `value`,
+`report_section_write`/`report_issue_write`/`report_field_write` `value`,
 `report_new_issue_write` `title`/`comment`) each record
 `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
