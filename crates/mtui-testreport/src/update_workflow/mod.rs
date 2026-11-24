@@ -29,7 +29,8 @@ pub use checks::Diagnostic;
 /// a product major version (`"11"`, `"12"`, `"15"`, `"16"`), the
 /// package-manager family `"YUM"`, or `"slmicro"` — paired with a
 /// *transactional* flag (read-only-root hosts, e.g. SL Micro). Lookups accept
-/// `(&str, bool)`.
+/// `(&str, bool)`. `("16", true)`, SLES 16 with a read-only root, resolves
+/// SL Micro's `transactional-update` entries.
 pub(crate) type WorkflowKey = (String, bool);
 
 /// A failure recognised by a post-run [`checks`] function.
@@ -549,6 +550,105 @@ mod tests {
         }
     }
 
+    const ROLES: [Role; 5] = [
+        Role::Install,
+        Role::Uninstall,
+        Role::Update,
+        Role::Prepare,
+        Role::Downgrade,
+    ];
+
+    /// Asserts `role`'s check gives `actual` the verdict it gives `expected` on
+    /// every transcript in a matrix of exit codes and output markers.
+    fn assert_checked_alike(role: Role, actual: (&str, bool), expected: (&str, bool)) {
+        let reg = WorkflowRegistry::default();
+        let want = reg
+            .check(role, expected.0, expected.1)
+            .unwrap_or_else(|| panic!("{role:?} @ {expected:?} has no check"));
+        let got = reg
+            .check(role, actual.0, actual.1)
+            .unwrap_or_else(|| panic!("{role:?} @ {actual:?} has no check"));
+        for (stdout, stderr, exitcode) in [
+            ("", "", 0),
+            ("", "", 1),
+            ("", "", checks::EXIT_NOT_RUN),
+            ("", "", 104),
+            ("", "", 106),
+            ("", "", 107),
+            ("", "System management is locked", 0),
+            ("", "A ZYpp transaction is already in progress.", 0),
+            ("(c): c", "", 0),
+            ("", "Error: rpm failed", 0),
+            (
+                "mtui: could not determine what to patch: awk exited 2",
+                "",
+                2,
+            ),
+        ] {
+            // Only the command without `zypper` separates the zypper update
+            // check (markers alone) from the transactional one. The real update
+            // scripts all name `zypper`, so there the two nearly coincide.
+            for stdin in ["zypper -n in", "transactional-update -n pkg in"] {
+                let args = || checks::CheckArgs {
+                    hostname: "h1",
+                    stdout,
+                    stdin,
+                    stderr,
+                    exitcode,
+                };
+                assert_eq!(
+                    got(args()),
+                    want(args()),
+                    "{role:?} @ {actual:?} vs {expected:?} on \
+                     ({stdin:?}, {stdout:?}, {stderr:?}, {exitcode})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_only_sles_16_host_resolves_the_sl_micro_command_sets() {
+        // Equal entries, not merely present ones: a `("16", true)` host given
+        // zypper's would run it against its read-only root.
+        for reg in [
+            WorkflowRegistry::new(false, false),
+            WorkflowRegistry::new(true, true),
+        ] {
+            for role in ROLES {
+                let micro = reg.doer(role, "slmicro", true).expect("the slmicro entry");
+                let sles = reg
+                    .doer(role, "16", true)
+                    .unwrap_or_else(|e| panic!("{role:?} @ (\"16\", true): {e}"));
+                assert_eq!(sles, micro, "{role:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_only_sles_16_host_is_checked_like_sl_micro() {
+        for role in ROLES {
+            assert_checked_alike(role, ("16", true), ("slmicro", true));
+        }
+    }
+
+    #[test]
+    fn a_read_write_sles_16_host_keeps_the_zypper_command_sets() {
+        for reg in [
+            WorkflowRegistry::new(false, false),
+            WorkflowRegistry::new(true, true),
+        ] {
+            for role in ROLES {
+                let zypper = reg.doer(role, "15", false).expect("the zypper entry");
+                let sles = reg.doer(role, "16", false).expect("the read-write entry");
+                assert_eq!(sles, zypper, "{role:?}");
+                assert_eq!(sles.render_reboot().unwrap(), None, "{role:?}");
+            }
+        }
+        for role in ROLES {
+            assert_checked_alike(role, ("16", false), ("15", false));
+        }
+    }
+
     // --- the mtui-hosts PlanProvider adapter --------------------------------
 
     #[test]
@@ -665,6 +765,7 @@ mod tests {
             ("16", false),
             ("YUM", false),
             ("slmicro", true),
+            ("16", true),
         ] {
             for role in [Role::Install, Role::Uninstall] {
                 let commands = WorkflowRegistry::default()

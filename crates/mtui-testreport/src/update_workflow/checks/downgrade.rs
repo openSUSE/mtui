@@ -65,7 +65,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     Ok(Vec::new())
 }
 
-/// The transactional (`slmicro`) downgrade check.
+/// The transactional downgrade check, for `("slmicro", true)` and
+/// `("16", true)`.
 ///
 /// Only the timed-out/unrunnable gate: transactional-update's own exit codes and
 /// messages differ from zypper's, so the zypper-specific branches (104, lock
@@ -121,7 +122,7 @@ pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<Chec
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) => Some(Box::new(transactional_update)),
+        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
         _ => None,
     }
 }

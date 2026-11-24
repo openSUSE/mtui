@@ -59,7 +59,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     classified(args)
 }
 
-/// The transactional-update (`slmicro`) update check.
+/// The transactional-update update check, for `("slmicro", true)` and
+/// `("16", true)`.
 ///
 /// Judged on the exit code as well as the markers: the slmicro template
 /// captures the `transactional-update -n pkg in … -t patch` status and exits
@@ -375,7 +376,7 @@ pub(crate) fn update_check(release: &str, transactional: bool) -> Option<CheckFn
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) => Some(Box::new(transactional_update)),
+        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
         _ => None,
     }
 }
@@ -528,8 +529,8 @@ mod tests {
         // success whatever happened.
         assert!(update_check("YUM", false).is_some());
         assert!(update_check("slmicro", true).is_some());
-        // The key shape still matters — `slmicro` is only ever transactional,
-        // and no zypper release is.
+        // The key shape still matters: `slmicro` is never read-write, and of
+        // the zypper releases only `16` has a read-only-root entry.
         assert!(update_check("slmicro", false).is_none());
         assert!(update_check("15", true).is_none());
         assert!(update_check("nonesuch", false).is_none());

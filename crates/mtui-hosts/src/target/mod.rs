@@ -60,7 +60,7 @@ pub use operation::{
     UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
-pub use parsers::parse_system;
+pub use parsers::{Transactional, parse_system};
 pub use repo_manager::{RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo};
 pub(crate) use spinner::suspend_async;
 pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinner, suspend};
@@ -125,7 +125,7 @@ pub struct Target {
     system: System,
     /// Whether the host is a transactional (read-only-root) system, set
     /// alongside [`system`](Self::system).
-    transactional: bool,
+    transactional: Transactional,
     /// The config this target was built from, retained so
     /// [`connect`](Target::connect) can build the operation [`TargetLock`] with
     /// the session identity / reap / wait settings.
@@ -225,7 +225,7 @@ impl Target {
             out: HostLog::new(),
             connection: None,
             system: unknown_system(),
-            transactional: false,
+            transactional: Transactional::No,
             config: config.clone(),
             lock: None,
             op_lock_holders: OpLockHolders::default(),
@@ -298,7 +298,7 @@ impl Target {
             out: HostLog::new(),
             connection: Some(connection),
             system: unknown_system(),
-            transactional: false,
+            transactional: Transactional::No,
             config,
             lock,
             op_lock_holders: OpLockHolders::default(),
@@ -344,10 +344,44 @@ impl Target {
         &self.system
     }
 
-    /// Whether the host is a transactional (read-only-root) system.
+    /// Whether the host is, or is assumed to be, a transactional
+    /// (read-only-root) system; [`transactional_state`](Self::transactional_state)
+    /// tells the two apart.
     #[must_use]
     pub const fn transactional(&self) -> bool {
+        self.transactional.is_transactional()
+    }
+
+    /// How [`parse_system`] established [`transactional`](Self::transactional).
+    #[must_use]
+    pub const fn transactional_state(&self) -> Transactional {
         self.transactional
+    }
+
+    /// Whether the host is [`Assumed`](Transactional::Assumed) transactional on
+    /// a product where that cannot decide its commands (see
+    /// [`workflow_key`](Self::workflow_key)).
+    #[must_use]
+    pub fn root_mode_undecided(&self) -> bool {
+        self.transactional == Transactional::Assumed && self.workflow_key().is_none()
+    }
+
+    /// The `(release, transactional)` key the workflow command tables are
+    /// looked up by, or `None` when the host has no release or its key is
+    /// undecided.
+    ///
+    /// An [`Assumed`](Transactional::Assumed) host is undecided unless it is SL
+    /// Micro: only SL Micro has no read-write variant, while a SLES 16 host
+    /// with a read-write root also carries `transactional-update.conf`, and
+    /// would be rebooted into a snapshot it never needed.
+    #[must_use]
+    pub fn workflow_key(&self) -> Option<(String, bool)> {
+        let release = self.system.get_release().ok()?;
+        match self.transactional {
+            Transactional::No => Some((release, false)),
+            Transactional::Yes => Some((release, true)),
+            Transactional::Assumed => (release == "slmicro").then_some((release, true)),
+        }
     }
 
     /// The connect/command timeout for this target, in whole seconds.
@@ -928,9 +962,9 @@ impl Target {
     /// Called with the pair returned by
     /// [`parse_system`] once a connection is live; the
     /// two values always move together (they are set in the same parse step).
-    pub fn set_system(&mut self, system: System, transactional: bool) {
+    pub fn set_system(&mut self, system: System, transactional: impl Into<Transactional>) {
         self.system = system;
-        self.transactional = transactional;
+        self.transactional = transactional.into();
     }
 
     /// Re-parses the host's system/product over the live connection and records

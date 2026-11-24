@@ -37,7 +37,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     Ok(Vec::new())
 }
 
-/// The transactional-update (`slmicro`) prepare check.
+/// The transactional-update prepare check, for `("slmicro", true)` and
+/// `("16", true)`.
 ///
 /// Two rules, and the *absence* of a third is the load-bearing part.
 ///
@@ -120,7 +121,7 @@ pub(crate) fn prepare_check(release: &str, transactional: bool) -> Option<CheckF
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) => Some(Box::new(transactional_update)),
+        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
         _ => None,
     }
 }
@@ -322,8 +323,8 @@ mod tests {
         // transaction.
         assert!(prepare_check("YUM", false).is_some());
         assert!(prepare_check("slmicro", true).is_some());
-        // The key shape still matters — `slmicro` is only ever transactional,
-        // and no zypper release is.
+        // The key shape still matters: `slmicro` is never read-write, and of
+        // the zypper releases only `16` has a read-only-root entry.
         assert!(prepare_check("slmicro", false).is_none());
         assert!(prepare_check("15", true).is_none());
         assert!(prepare_check("nonesuch", false).is_none());
