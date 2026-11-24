@@ -11,7 +11,9 @@ pub mod repoparse;
 pub mod sl;
 pub(crate) mod update_flow;
 
-pub use update_flow::warn_on_unlock_failures;
+pub use update_flow::{
+    CommandSetGap, HostProductKey, missing_command_set, warn_on_unlock_failures,
+};
 
 pub use null::NullReport;
 pub use obs::ObsReport;

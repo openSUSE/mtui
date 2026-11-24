@@ -23,6 +23,7 @@ use mtui_hosts::{
     Connection, HostArbiter, HostError, HostsGroup, LockOutcome, OpLockHolders, Owner, Prompter,
     Target,
 };
+use mtui_testreport::reports::CommandSetGap;
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
@@ -324,6 +325,13 @@ pub(crate) enum HostFailure {
     ClaimedBy(Option<String>),
     /// The host connected but writing its remote pool claim failed.
     ClaimFailed,
+    /// The host connected while an update was loaded, but has no
+    /// update-workflow command set. `drift` is its refhosts.yml product drift,
+    /// which would otherwise be lost with the host.
+    Unusable {
+        gap: CommandSetGap,
+        drift: Option<Vec<String>>,
+    },
 }
 
 impl HostFailure {
@@ -333,8 +341,29 @@ impl HostFailure {
             Self::ClaimedBy(Some(rrid)) => format!("claimed by {rrid}"),
             Self::ClaimedBy(None) => "claimed remotely".to_owned(),
             Self::ClaimFailed => "pool claim failed".to_owned(),
+            Self::Unusable { gap, .. } => gap.to_string(),
         }
     }
+}
+
+/// Each host refused as [`HostFailure::Unusable`], once and sorted by host,
+/// whether it failed as a primary or named host (`failures`) or as a backup
+/// sibling (`unserved`): a primary appears in both.
+fn refused_unusable<'a>(
+    failures: &'a [(String, HostFailure)],
+    unserved: &'a [Unserved],
+) -> Vec<(&'a str, &'a HostFailure)> {
+    let backups = unserved.iter().flat_map(|u| match u {
+        Unserved::Unconnectable { failures, .. } => failures.as_slice(),
+        _ => &[],
+    });
+    let refused: std::collections::BTreeMap<&str, &HostFailure> = failures
+        .iter()
+        .chain(backups)
+        .filter(|(_, f)| matches!(f, HostFailure::Unusable { .. }))
+        .map(|(h, f)| (h.as_str(), f))
+        .collect();
+    refused.into_iter().collect()
 }
 
 /// A test-target slot, or a testplatform, that `add_host` left without a host.
@@ -779,10 +808,27 @@ impl Session {
     }
 
     /// Registers a mock connection `host` dials instead of SSH (test seam for
-    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts)).
+    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts) and its backup
+    /// siblings).
     #[cfg(test)]
     pub(crate) fn inject_mock_connection(&mut self, host: &str, conn: MockConnection) {
         self.mock_conns.insert(host.to_owned(), conn);
+    }
+
+    /// The registered dial replacements, by host; always empty in production.
+    #[cfg(test)]
+    fn injected_connections(&self) -> std::collections::HashMap<String, Box<dyn Connection>> {
+        self.mock_conns
+            .iter()
+            .map(|(h, c)| (h.clone(), Box::new(c.clone()) as Box<dyn Connection>))
+            .collect()
+    }
+
+    /// The registered dial replacements, by host; always empty in production.
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    fn injected_connections(&self) -> std::collections::HashMap<String, Box<dyn Connection>> {
+        std::collections::HashMap::new()
     }
 
     /// The session-scoped openQA transport, built lazily and reused.
@@ -1482,8 +1528,18 @@ impl Session {
             .collect();
         let pool_primaries: std::collections::HashSet<String> = wanted.iter().cloned().collect();
 
-        self.connect_and_add_hosts(wanted, rrid, &pool_primaries)
+        let (unserved, failures) = self
+            .connect_and_add_hosts(wanted, rrid, &pool_primaries)
             .await;
+        // `load_template` prints no unserved-slot lines, so a refusal is named
+        // here, or under `mtui-mcp` it would only reach the log.
+        for (host, failure) in refused_unusable(&failures, &unserved) {
+            self.display.println(
+                &self
+                    .display
+                    .yellow(&format!("skipped {host}: {}", failure.render())),
+            );
+        }
     }
 
     /// Builds a live [`Target`] for each host in `hosts`, connects it, and adds
@@ -1526,10 +1582,10 @@ impl Session {
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
         let holders = self.op_lock_holders.clone();
-        // Test-only dial replacements, snapshotted like the rest (see
-        // `inject_mock_connection`); always empty in production.
-        #[cfg(test)]
-        let mocks = self.mock_conns.clone();
+        let injected = self.injected_connections();
+        // A host the update workflow cannot drive is refused only while an
+        // update is loaded: with none, run/get/put still serve it.
+        let require_command_set = !self.metadata().id().is_empty();
         // One inventory for the whole batch, built before the `targets_mut()`
         // borrow so this await does not straddle it. `None` disables the drift
         // check for every host — best-effort, never fatal.
@@ -1547,14 +1603,8 @@ impl Session {
         let config_ref = &config;
         let pool_claims_ref = &pool_claims;
         let holders_ref = &holders;
+        let injected_ref = &injected;
         let connect_futs = hosts.iter().map(|host| {
-            #[cfg(test)]
-            let injected: Option<Box<dyn Connection>> = mocks
-                .get(host)
-                .cloned()
-                .map(|c| Box::new(c) as Box<dyn Connection>);
-            #[cfg(not(test))]
-            let injected: Option<Box<dyn Connection>> = None;
             Self::connect_one(
                 config_ref,
                 host.clone(),
@@ -1564,8 +1614,9 @@ impl Session {
                 package_meta,
                 store_ref,
                 pool_claims_ref.contains(host),
+                require_command_set,
                 holders_ref,
-                injected,
+                injected_ref.get(host).map(|c| c.clone_box()),
             )
         });
         let bound = (config.max_parallel as usize).max(1);
@@ -1594,7 +1645,7 @@ impl Session {
             }
         }
 
-        let (backup_drift, unserved) = self
+        let (backup_drift, unserved, refused_backups) = self
             .connect_pool_backups(
                 &config,
                 rrid,
@@ -1602,6 +1653,8 @@ impl Session {
                 failures.clone(),
                 timeout_prompt.clone(),
                 pool_primaries,
+                &injected,
+                require_command_set,
             )
             .await;
         drift.extend(backup_drift);
@@ -1610,14 +1663,25 @@ impl Session {
         self.apply_product_warnings(drift);
         // Failures for hosts that never attached (a backup sibling may have
         // served the slot instead); named hosts have no backup, so all of
-        // theirs come back.
+        // theirs come back, as do refused backup siblings.
         let attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
         let mut connect_failures: Vec<(String, HostFailure)> = failures
             .into_iter()
             .filter(|(host, _)| !attached.contains(host))
+            .chain(refused_backups)
             .collect();
         connect_failures.sort_by(|a, b| a.0.cmp(&b.0));
+        // A refused host's product drift is shown, not recorded: the host is
+        // not part of the report.
+        for (host, failure) in refused_unusable(&connect_failures, &unserved) {
+            if let HostFailure::Unusable {
+                drift: Some(lines), ..
+            } = failure
+            {
+                self.show_product_drift(host, lines);
+            }
+        }
         (unserved, connect_failures)
     }
 
@@ -1705,6 +1769,7 @@ impl Session {
         package_meta: &PackageMeta,
         store: Option<&Refhosts>,
         is_pool_claim: bool,
+        require_command_set: bool,
         holders: &OpLockHolders,
         injected: Option<Box<dyn Connection>>,
     ) -> Result<(Target, (String, Option<Vec<String>>)), (String, HostFailure)> {
@@ -1724,6 +1789,16 @@ impl Session {
         }
         match target.connect().await {
             Ok(()) => {
+                // Before any claim or lock is written: a host mtui cannot
+                // prepare or update would otherwise fail only at the first
+                // `update`, and a pool slot would never reach a sibling.
+                if require_command_set
+                    && let Some(gap) = mtui_testreport::reports::missing_command_set(&target)
+                {
+                    warn!(host = %host, %gap, "skipping host");
+                    let drift = Self::verify_target_products(store, &target);
+                    return Err((host, HostFailure::Unusable { gap, drift }));
+                }
                 if let Err(failure) = Self::lock_connected_target(
                     &mut target,
                     &host,
@@ -1770,7 +1845,12 @@ impl Session {
     /// siblings are abandoned with a `warn!`.
     ///
     /// `primary_failures` carries why each of `attempted_initial` was dropped.
-    /// Every retried slot that ends without a host is returned as [`Unserved`].
+    /// Every retried slot that ends without a host is returned as [`Unserved`],
+    /// and every sibling refused as [`HostFailure::Unusable`] is returned with
+    /// its reason, whatever became of its slot. `injected` and
+    /// `require_command_set` are as for
+    /// [`connect_one`](Self::connect_one).
+    #[allow(clippy::too_many_arguments)]
     async fn connect_pool_backups(
         &mut self,
         config: &Config,
@@ -1779,7 +1859,13 @@ impl Session {
         primary_failures: std::collections::HashMap<String, HostFailure>,
         timeout_prompt: Option<mtui_hosts::TimeoutPrompt>,
         pool_primaries: &std::collections::HashSet<String>,
-    ) -> (Vec<(String, Option<Vec<String>>)>, Vec<Unserved>) {
+        injected: &std::collections::HashMap<String, Box<dyn Connection>>,
+        require_command_set: bool,
+    ) -> (
+        Vec<(String, Option<Vec<String>>)>,
+        Vec<Unserved>,
+        Vec<(String, HostFailure)>,
+    ) {
         // Snapshot pool state + selection identity before any await.
         let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
             let base = self.metadata().base();
@@ -1792,10 +1878,10 @@ impl Session {
             )
         };
         let (Some(arbiter), Some(owner)) = (arbiter, owner) else {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new());
         };
         if slot_candidates.is_empty() {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new());
         }
         let store = Self::build_refhosts_store(config).await;
         let holders = self.op_lock_holders.clone();
@@ -1834,6 +1920,7 @@ impl Session {
             attempted_initial.iter().cloned().collect();
         let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         let mut unserved: Vec<Unserved> = Vec::new();
+        let mut refused: Vec<(String, HostFailure)> = Vec::new();
 
         // Bounds the phase regardless of report size, at the cost of a late slot
         // being starved when earlier slots burn the budget — logged per slot,
@@ -1903,8 +1990,9 @@ impl Session {
                     &package_meta,
                     store.as_ref(),
                     true, // backup hosts are always pool claims
+                    require_command_set,
                     &holders,
-                    None,
+                    injected.get(&chosen).map(|c| c.clone_box()),
                 )
                 .await
                 {
@@ -1916,6 +2004,11 @@ impl Session {
                         break;
                     }
                     Err((host, failure)) => {
+                        // A served or budget-cut slot drops its failures, so
+                        // a refusal is kept apart to still be named.
+                        if matches!(failure, HostFailure::Unusable { .. }) {
+                            refused.push((host.clone(), failure.clone()));
+                        }
                         slot_failures.push((host, failure));
                         // Free the claim for the next candidate.
                         let base = self.metadata_mut().base_mut();
@@ -1943,7 +2036,7 @@ impl Session {
                 });
             }
         }
-        (new_drift, unserved)
+        (new_drift, unserved, refused)
     }
 
     /// Compares a freshly connected `target`'s detected products against its
@@ -1978,6 +2071,17 @@ impl Session {
         Some(lines)
     }
 
+    /// Prints `host`'s product drift as a yellow warning block.
+    fn show_product_drift(&mut self, host: &str, lines: &[String]) {
+        self.display.println(&self.display.yellow(&format!(
+            "{host}: products differ from refhosts.yml metadata:"
+        )));
+        for line in lines {
+            self.display
+                .println(&self.display.yellow(&format!("  - {line}")));
+        }
+    }
+
     /// Applies collected product-drift results to the active report and
     /// surfaces them: `Some(lines)` records drift under the hostname and prints
     /// a yellow warning block, `None` clears any stale entry.
@@ -1987,13 +2091,7 @@ impl Session {
         }
         for (host, lines) in &drift {
             if let Some(lines) = lines {
-                self.display.println(&self.display.yellow(&format!(
-                    "{host}: products differ from refhosts.yml metadata:"
-                )));
-                for line in lines {
-                    self.display
-                        .println(&self.display.yellow(&format!("  - {line}")));
-                }
+                self.show_product_drift(host, lines);
             }
         }
         let warnings = self.metadata_mut().base_mut();
@@ -3323,7 +3421,7 @@ mod tests {
             format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:2:2 [bob]").into_bytes();
         s.inject_mock_connection(
             "remote-held.invalid",
-            MockConnection::new("remote-held.invalid")
+            crate::commands::testkit::product_host("remote-held.invalid", "SLES", "15", "6", false)
                 .with_file(mtui_hosts::POOL_LOCK_PATH, foreign),
         );
 
@@ -4018,6 +4116,14 @@ mod tests {
                     ),
                     ("h5".to_owned(), HostFailure::ClaimedBy(None)),
                     ("h8".to_owned(), HostFailure::ClaimFailed),
+                    ("h9".to_owned(), sles15_ro_refusal()),
+                    (
+                        "h10".to_owned(),
+                        HostFailure::Unusable {
+                            gap: CommandSetGap::UnreadableBaseProduct,
+                            drift: None,
+                        },
+                    ),
                 ],
             },
             Unserved::BudgetSpent {
@@ -4065,7 +4171,7 @@ mod tests {
             .iter()
             .map(|p| (p.clone(), HostFailure::Unreachable))
             .collect();
-        let (drift, unserved) = tokio::time::timeout(
+        let (drift, unserved, _) = tokio::time::timeout(
             Duration::from_secs(30),
             s.connect_pool_backups(
                 &config,
@@ -4074,6 +4180,8 @@ mod tests {
                 failures,
                 None,
                 &primaries.iter().cloned().collect(),
+                &std::collections::HashMap::new(),
+                true,
             ),
         )
         .await
@@ -4312,6 +4420,381 @@ mod tests {
         assert_eq!(arbiter.owner_of(&primary), None);
         assert_eq!(arbiter.owner_of(&sibling_addr), None);
         assert!(s.metadata().base().pool_claims.is_empty());
+    }
+
+    /// The rendered refusal of a SLES 15 SP6 host with a read-only root,
+    /// whose key no update-workflow table serves.
+    const SLES15_RO_REFUSAL: &str = "no command set for SLES 15-SP6, transactional";
+
+    /// The refusal of a SLES 15 SP6 host with a read-only root, outside
+    /// refhosts.yml (so with no drift).
+    fn sles15_ro_refusal() -> HostFailure {
+        HostFailure::Unusable {
+            gap: CommandSetGap::NoCommandSet(mtui_testreport::reports::HostProductKey::new(
+                "SLES",
+                "15-SP6",
+                mtui_hosts::Transactional::Yes,
+            )),
+            drift: None,
+        }
+    }
+
+    /// Whether `conn` carries either remote lock mtui writes on attach.
+    fn holds_a_lock(conn: &MockConnection) -> bool {
+        conn.file_contents(mtui_hosts::POOL_LOCK_PATH).is_some()
+            || conn.file_contents(mtui_hosts::TARGET_LOCK_PATH).is_some()
+    }
+
+    /// A display-capturing session over an active report naming `hostnames`
+    /// and `testplatforms`, with its own arbiter (the process-global one would
+    /// arbitrate these hosts against other tests) and a PI `lock_comment`, so
+    /// an attach writes the operation lock, and the pool claim for a pool draw.
+    fn locking_session(
+        config: Config,
+        hostnames: &[&str],
+        testplatforms: &[&str],
+    ) -> (Session, crate::commands::testkit::Buffer) {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let buf = crate::commands::testkit::Buffer::new();
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut s = Session::with_display(config, false, display);
+        let rrid = "SUSE:Maintenance:1:1";
+        seed_active_report(&mut s, rrid, hostnames, testplatforms);
+        let base = s.metadata_mut().base_mut();
+        base.arbiter = Some(test_arbiter());
+        base.owner = Some(("reg".to_owned(), rrid.to_owned()));
+        base.lock_comment = "mtui pi".to_owned();
+        (s, buf)
+    }
+
+    /// A pool-drawn host with no command set is a failed draw: its slot goes
+    /// to a sibling that has one, and the refused host is neither claimed nor
+    /// locked.
+    #[tokio::test]
+    async fn pool_host_without_command_set_yields_its_slot_to_a_sibling() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        s.metadata_mut().base_mut().lock_comment = "mtui pi".to_owned();
+        let (ro, rw) = ("ro-primary.invalid", "rw-sibling.invalid");
+        let ro_conn = product_host(ro, "SLES", "15", "6", true);
+        let rw_conn = product_host(rw, "SLES", "15", "6", false);
+        s.inject_mock_connection(ro, ro_conn.clone());
+        s.inject_mock_connection(rw, rw_conn.clone());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[ro.to_owned(), rw.to_owned()])],
+            &[ro],
+        );
+
+        let (unserved, failures) = s
+            .connect_and_add_hosts(
+                vec![ro.to_owned()],
+                rrid,
+                &std::collections::HashSet::from([ro.to_owned()]),
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![rw.to_owned()]);
+        assert_eq!(failures, vec![(ro.to_owned(), sles15_ro_refusal())]);
+        assert_eq!(arbiter.owner_of(ro), None);
+        assert!(!s.metadata().base().pool_claims.contains(ro));
+        assert!(!holds_a_lock(&ro_conn), "the refused host was locked");
+        assert!(
+            rw_conn.file_contents(mtui_hosts::POOL_LOCK_PATH).is_some()
+                && rw_conn
+                    .file_contents(mtui_hosts::TARGET_LOCK_PATH)
+                    .is_some(),
+            "the sibling's locks must be observable, or the check above proves nothing"
+        );
+    }
+
+    /// A backup sibling refused before a later sibling serves the slot is
+    /// named like the refused primary, though the slot reports nothing.
+    #[tokio::test]
+    async fn refused_backup_on_a_served_slot_is_named() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (ro, ro_backup, rw) = (
+            "ro-served-primary.invalid",
+            "ro-served-backup.invalid",
+            "rw-served-backup.invalid",
+        );
+        let ro_backup_conn = product_host(ro_backup, "SLES", "15", "6", true);
+        s.inject_mock_connection(ro, product_host(ro, "SLES", "15", "6", true));
+        s.inject_mock_connection(ro_backup, ro_backup_conn.clone());
+        s.inject_mock_connection(rw, product_host(rw, "SLES", "15", "6", false));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[(
+                "slot",
+                &[ro.to_owned(), ro_backup.to_owned(), rw.to_owned()],
+            )],
+            &[ro],
+        );
+
+        let (unserved, failures) = s
+            .connect_and_add_hosts(
+                vec![ro.to_owned()],
+                rrid,
+                &std::collections::HashSet::from([ro.to_owned()]),
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![rw.to_owned()]);
+        let named: Vec<&str> = refused_unusable(&failures, &unserved)
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(named, vec![ro_backup, ro]);
+        assert!(!holds_a_lock(&ro_backup_conn));
+    }
+
+    /// With no sibling that has a command set, the slot is unserved and the
+    /// reason names each host's key.
+    #[tokio::test]
+    async fn pool_slot_without_a_command_set_sibling_names_the_key() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (first, second) = ("ro-first.invalid", "ro-second.invalid");
+        let second_conn = product_host(second, "SLES", "15", "6", true);
+        s.inject_mock_connection(first, product_host(first, "SLES", "15", "6", true));
+        s.inject_mock_connection(second, second_conn.clone());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[first.to_owned(), second.to_owned()])],
+            &[first],
+        );
+
+        let unserved = s
+            .connect_and_add_hosts(
+                vec![first.to_owned()],
+                rrid,
+                &std::collections::HashSet::from([first.to_owned()]),
+            )
+            .await
+            .0;
+
+        assert_eq!(
+            unserved,
+            vec![Unserved::Unconnectable {
+                slot: "slot".to_owned(),
+                failures: vec![
+                    (first.to_owned(), sles15_ro_refusal()),
+                    (second.to_owned(), sles15_ro_refusal()),
+                ],
+            }]
+        );
+        assert!(
+            unserved[0]
+                .render()
+                .contains(&format!("{second}: {SLES15_RO_REFUSAL}")),
+            "{}",
+            unserved[0].render()
+        );
+        assert!(s.targets().is_empty());
+        assert!(s.metadata().base().pool_claims.is_empty());
+        assert_eq!(arbiter.owner_of(second), None);
+        assert!(!holds_a_lock(&second_conn));
+    }
+
+    /// A template's named host with no command set is refused at load time,
+    /// before any claim or lock, and the load's output says so: under
+    /// `mtui-mcp` a log line is never seen.
+    #[tokio::test]
+    async fn template_named_host_without_command_set_is_refused_on_the_display() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let host = "ro-named.invalid";
+        let (mut s, buf) = locking_session(config, &[host], &[]);
+        let conn = product_host(host, "SLES", "15", "6", true);
+        s.inject_mock_connection(host, conn.clone());
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        assert!(s.targets().is_empty());
+        assert!(!holds_a_lock(&conn), "the refused host was locked");
+        assert_eq!(
+            buf.contents(),
+            format!("skipped {host}: {SLES15_RO_REFUSAL}\n")
+        );
+    }
+
+    /// The same session attaches and locks a host with a command set, so
+    /// [`template_named_host_without_command_set_is_refused_on_the_display`]'s
+    /// lock check can fail.
+    #[tokio::test]
+    async fn template_named_host_with_a_command_set_is_locked() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let host = "rw-named.invalid";
+        let (mut s, _buf) = locking_session(config, &[host], &[]);
+        let conn = product_host(host, "SLES", "15", "6", false);
+        s.inject_mock_connection(host, conn.clone());
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        assert_eq!(s.targets().names(), vec![host.to_owned()]);
+        // A template's named host takes no pool claim; the PI autolock is
+        // what an attach writes.
+        assert!(conn.file_contents(mtui_hosts::TARGET_LOCK_PATH).is_some());
+    }
+
+    /// Under `load_template`'s pool draw every refused host is named, the
+    /// backup siblings tried after the primary included, and none is locked.
+    #[tokio::test]
+    async fn load_template_names_every_refused_pool_host() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        assert!(
+            candidates.len() >= 2,
+            "a slot needs a sibling: {candidates:?}"
+        );
+        let (mut s, buf) = locking_session(config, &[], &[tp]);
+        let conns: Vec<MockConnection> = candidates
+            .iter()
+            .map(|h| product_host(h, "SLES", "15", "5", true))
+            .collect();
+        for (h, c) in candidates.iter().zip(&conns) {
+            s.inject_mock_connection(h, c.clone());
+        }
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        assert!(s.targets().is_empty());
+        let out = buf.contents();
+        for (h, c) in candidates.iter().zip(&conns) {
+            assert!(
+                out.contains(&format!(
+                    "skipped {h}: no command set for SLES 15-SP5, transactional"
+                )),
+                "{h} not named: {out:?}"
+            );
+            assert!(!holds_a_lock(c), "{h} was locked");
+        }
+    }
+
+    /// A refused host's product problem is named as such, and its
+    /// refhosts.yml drift still reaches the display.
+    #[tokio::test]
+    async fn refused_host_names_its_product_problem_and_keeps_its_drift() {
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let inventoried = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()])
+            .await
+            .remove(0);
+        let (mut s, buf) = locking_session(config, &[], &[]);
+        // The link names a product file that is not there.
+        let dangling = MockConnection::new(&inventoried)
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod");
+        let leap = "leap.invalid";
+        s.inject_mock_connection(&inventoried, dangling.clone());
+        s.inject_mock_connection(
+            leap,
+            MockConnection::new(leap)
+                .with_missing_dir("/etc/products.d")
+                .with_file(
+                    "/etc/os-release",
+                    b"ID=\"opensuse-leap\"\nVERSION_ID=\"15.6\"\n".to_vec(),
+                ),
+        );
+
+        let mut refused = s
+            .add_named_hosts(vec![inventoried.clone(), leap.to_owned()])
+            .await;
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert!(s.targets().is_empty());
+        assert!(!holds_a_lock(&dangling));
+        let rendered: Vec<(String, String)> = refused
+            .iter()
+            .map(|(h, f)| (h.clone(), f.render()))
+            .collect();
+        let mut expected = vec![
+            (
+                inventoried.clone(),
+                "base product unreadable (/etc/products.d/baseproduct is missing or dangling)"
+                    .to_owned(),
+            ),
+            (
+                leap.to_owned(),
+                "unrecognised product opensuse-leap 15.6".to_owned(),
+            ),
+        ];
+        expected.sort();
+        assert_eq!(rendered, expected);
+        let out = buf.contents();
+        assert!(
+            out.contains(&format!(
+                "{inventoried}: products differ from refhosts.yml metadata:\n  - dangling /etc/products.d/baseproduct symlink"
+            )),
+            "{out:?}"
+        );
+        assert!(
+            !s.metadata()
+                .base()
+                .product_warnings
+                .contains_key(&inventoried),
+            "a refused host's drift is shown, not recorded"
+        );
+    }
+
+    /// With no update loaded a host without a command set still attaches:
+    /// `run`, `get` and `put` serve it, and nothing will try to update it.
+    #[tokio::test]
+    async fn named_host_without_command_set_attaches_with_nothing_loaded() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let mut s = Session::new(config, false);
+        assert!(s.metadata().id().is_empty(), "nothing must be loaded");
+        let host = "ro-unloaded.invalid";
+        s.inject_mock_connection(host, product_host(host, "SLES", "15", "6", true));
+
+        let refused = s.add_named_hosts(vec![host.to_owned()]).await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        assert_eq!(s.targets().names(), vec![host.to_owned()]);
+    }
+
+    /// Hosts whose key has a command set attach as before, a transactional SL
+    /// Micro one included.
+    #[tokio::test]
+    async fn hosts_with_a_command_set_still_attach() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let mut s = Session::new(config, false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let (sles, micro) = ("sles-rw.invalid", "slmicro.invalid");
+        s.inject_mock_connection(sles, product_host(sles, "SLES", "15", "6", false));
+        s.inject_mock_connection(micro, product_host(micro, "SL-Micro", "6", "1", true));
+
+        let refused = s
+            .add_named_hosts(vec![sles.to_owned(), micro.to_owned()])
+            .await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(s.targets().get(sles).is_some_and(|t| !t.transactional()));
+        assert!(s.targets().get(micro).is_some_and(Target::transactional));
     }
 
     /// A session over the active report with the pool seam wired, for the

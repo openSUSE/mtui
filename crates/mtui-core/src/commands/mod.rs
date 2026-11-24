@@ -695,6 +695,32 @@ pub(crate) mod testkit {
         Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
+    /// A mock host that parses as `name` `baseversion` SP `patchlevel` with
+    /// `transactional-update.conf` present, and `/` mounted read-only or
+    /// read-write: the mount, not the file, decides the transactional key.
+    pub(crate) fn product_host(
+        host: &str,
+        name: &str,
+        baseversion: &str,
+        patchlevel: &str,
+        read_only_root: bool,
+    ) -> MockConnection {
+        let product = format!(
+            "<product><name>{name}</name><baseversion>{baseversion}</baseversion>\
+             <patchlevel>{patchlevel}</patchlevel><arch>x86_64</arch></product>"
+        );
+        let mode = if read_only_root { "ro" } else { "rw" };
+        MockConnection::new(host)
+            .with_listing("/etc/products.d", [format!("{name}.prod")])
+            .with_link("/etc/products.d/baseproduct", format!("{name}.prod"))
+            .with_file(format!("/etc/products.d/{name}.prod"), product.into_bytes())
+            .with_file("/usr/etc/transactional-update.conf", Vec::new())
+            .with_file(
+                "/proc/self/mounts",
+                format!("/dev/vda2 / btrfs {mode},relatime 0 0\n").into_bytes(),
+            )
+    }
+
     /// A session (interactive `false`) whose active report has the named hosts,
     /// each mock echoing `stdout`, plus a captured display.
     #[must_use]

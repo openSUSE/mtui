@@ -272,6 +272,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- While an update is loaded, a reference host that `prepare`, `update`,
+  `downgrade`, `install` and `uninstall` cannot drive is no longer attached.
+  That covers a host whose key has no command set, such as SLES 15 with a
+  read-only root, and every host whose base product mtui does not map, such as
+  SLE Micro 5.x, Leap or Leap Micro, or whose `baseproduct` link is missing or
+  dangling. The check runs once the host is connected and before any claim or
+  lock is written; the first `update` used to be the first to say so. The
+  reason names the problem: `no command set for <Product version>, <root
+  mode>` (for example `no command set for SLES 15-SP6, transactional`; the
+  root mode is as detected), `unrecognised product opensuse-leap 15.6`, `base product unreadable
+  (/etc/products.d/baseproduct is missing or dangling)`, or `base product SLES
+  has no version`. A pool-drawn host counts as a failed draw and its slot goes
+  to a sibling; `add_host` names a slot no sibling serves. `add_host -t` and a
+  template's named host are refused; there is no override. `load_template`
+  prints `skipped <host>: <reason>` for every host it refused, including a
+  pool host whose slot a sibling then served, and a refused host's
+  `refhosts.yml` drift is still printed. With nothing loaded, hosts attach as
+  before, so a run-only session keeps them for `run`, `get` and `put` (#832).
+  **MCP note:** with an update loaded, `add_host -t` of such a host fails the
+  call; with none loaded it attaches as before. `add_host`'s error now reads
+  `could not attach any requested host: <host> (<reason>)`, for every refusal
+  (it said `could not connect`), and `add_host`/`load_template` output can carry
+  the new reasons.
 - `updates --mine` asks for the logins assignments are recorded under: the
   `user` of the oscrc section for `[obs] api_url`, which needs no signing key,
   and, with `[gitea] token` set, that token's Gitea login, merging the two like

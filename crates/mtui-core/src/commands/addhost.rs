@@ -141,7 +141,7 @@ impl Command for AddHost {
                 );
                 missing.sort();
                 return Err(CommandError::Other(format!(
-                    "could not connect any requested host: {}",
+                    "could not attach any requested host: {}",
                     missing.join(", ")
                 )));
             }
@@ -238,6 +238,69 @@ mod tests {
                 .names()
                 .contains(&"unreachable.invalid".to_owned())
         );
+    }
+
+    /// A `-t` host whose key has no command set is refused, naming the host
+    /// and the key, and nothing attaches, claims or locks it.
+    #[tokio::test]
+    async fn named_host_without_command_set_is_refused_naming_its_key() {
+        use mtui_hosts::{HostArbiter, Owner, POOL_LOCK_PATH, TARGET_LOCK_PATH};
+
+        use crate::commands::testkit::product_host;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let _refhosts_dir = use_path_refhosts(&mut session);
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = session.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner);
+            base.lock_comment = "mtui pi".to_owned();
+        }
+        let host = "ro-root.invalid";
+        let conn = product_host(host, "SLES", "15", "6", true);
+        session.inject_mock_connection(host, conn.clone());
+
+        let args = matches(&AddHost, &["-t", host]);
+        let err = AddHost.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m ==
+                "could not attach any requested host: \
+                 ro-root.invalid (no command set for SLES 15-SP6, transactional)"
+            ),
+            "{err:?}"
+        );
+        assert!(buf.contents().is_empty(), "{:?}", buf.contents());
+        assert_eq!(session.targets().names(), vec!["h1".to_owned()]);
+        assert!(!session.metadata().base().pool_claims.contains(host));
+        assert_eq!(arbiter.owner_of(host), None);
+        assert!(conn.file_contents(POOL_LOCK_PATH).is_none());
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    /// With no update loaded, `add_host -t` attaches a host that has no
+    /// command set: a run-only session still needs it.
+    #[tokio::test]
+    async fn named_host_without_command_set_attaches_with_nothing_loaded() {
+        use crate::commands::testkit::{Buffer, product_host};
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let buf = Buffer::new();
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session =
+            Session::with_display(mtui_config::options::Config::default(), false, display);
+        let _refhosts_dir = use_path_refhosts(&mut session);
+        assert!(session.metadata().id().is_empty(), "nothing must be loaded");
+        let host = "ro-unloaded-add.invalid";
+        session.inject_mock_connection(host, product_host(host, "SLES", "15", "6", true));
+
+        let args = matches(&AddHost, &["-t", host]);
+        AddHost.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(session.targets().names(), vec![host.to_owned()]);
+        assert_eq!(buf.contents(), format!("added {host}\n"));
     }
 
     /// One bad host never disturbs the group: an `add_host` of a different,
@@ -369,7 +432,7 @@ mod tests {
             other => panic!("expected refusal, got {other:?}"),
         };
         assert!(
-            msg.contains("could not connect any requested host"),
+            msg.contains("could not attach any requested host"),
             "{err:?}"
         );
         assert!(
@@ -413,7 +476,8 @@ mod tests {
         // Kept by handle: the holding template below dials through a clone
         // sharing the same mock files, so its unlock is observable here.
         let holder_conn =
-            MockConnection::new("remote-h2").with_file(POOL_LOCK_PATH, foreign.clone());
+            crate::commands::testkit::product_host("remote-h2", "SLES", "15", "6", false)
+                .with_file(POOL_LOCK_PATH, foreign.clone());
         session.inject_mock_connection("remote-h2", holder_conn.clone());
 
         let args = matches(&AddHost, &["-t", "remote-h2"]);

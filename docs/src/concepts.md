@@ -87,6 +87,17 @@ command out across all of them.
   candidate** from the same slot; only when *every* candidate for a slot is
   unreachable or claimed does `add_host` name the slot and why in its result and
   leave that slot unconnected.
+- A host the update workflow cannot drive counts as a failed draw, and the slot
+  moves on to a sibling: one whose key has no command set (`no command set for
+  <Product version>, <root mode>`, the root mode as detected, such as `SLES
+  15-SP6, transactional`), one whose base product mtui does not map (SLE
+  Micro 5.x, Leap, Leap Micro: `unrecognised product …`), and one whose
+  `baseproduct` link is missing or dangling (`base product unreadable …`). The
+  check runs after connecting and before any claim or lock is written. A pool
+  draw needs a loaded update, since its testplatforms come from one.
+  `load_template` shows no unserved-slot lines; it prints `skipped <host>:
+  <reason>` for each host refused this way, including a pool host whose slot a
+  sibling then served. A refused host's `refhosts.yml` drift is still printed.
 - Under fan-out, each test-target slot draws a **distinct** free host from the
   shared pool, arbitrated in-process so two templates never collide on the same
   host. When every candidate for a slot is busy, the claim **queues** on the
@@ -99,6 +110,9 @@ command out across all of them.
   blocks `-t` with no override on that template: have the holding template
   run `unlock --pool --force [host]`, or wait for the stale reap
   (`[lock] pool_stale_age`); a force flag for `-t` itself does not exist yet.
+  While an update is loaded, a named host the update workflow cannot drive is
+  refused too, with the reason, and there is no override. With nothing loaded
+  it attaches as before, for `run`, `get` and `put`.
 
 To search the inventory *without* connecting, use
 [`list_refhosts`](cli.md#list_refhosts) — it reads the same source offline (no
