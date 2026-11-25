@@ -690,6 +690,25 @@ impl Target {
         }
     }
 
+    /// The owner of this target's operation lock when another owner holds it,
+    /// by the same test [`update_lock`](HostsGroup::update_lock) refuses a
+    /// host on; `None` when it is free, ours, invalid, or the target is not
+    /// connected.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any transport error raised while reading the remote lock file.
+    pub async fn foreign_operation_lock(&mut self) -> Result<Option<LockOwner>> {
+        let Some(lock) = self.lock.as_mut() else {
+            return Ok(None);
+        };
+        if lock.is_locked().await? && lock.held_elsewhere() {
+            Ok(Some(lock.loaded_owner()))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Reports the RRID claiming this target's pool lock, if any.
     ///
     /// `None` when the target is not connected (no pool lock built yet) or the

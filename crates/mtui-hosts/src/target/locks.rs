@@ -611,6 +611,13 @@ impl<C: Clock> TargetLock<C> {
         Ok(self.is_mine()? && !self.sibling_holds())
     }
 
+    /// Whether the loaded lock, once known to be held, is another owner's: a
+    /// valid lockfile this instance does not own (see
+    /// [`owned_here`](Self::owned_here)).
+    pub(crate) fn held_elsewhere(&self) -> bool {
+        !self.is_invalid() && !self.owned_here().unwrap_or(false)
+    }
+
     /// Whether the last [`load`](Self::load) found an invalid lockfile.
     pub(crate) fn is_invalid(&self) -> bool {
         self.invalid

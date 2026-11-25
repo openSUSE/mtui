@@ -420,9 +420,10 @@ and nothing is written there.
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, an arch of the testplatform
   no reference host covers, every candidate claimed by another RRID, no
-  candidate connected (unreachable, claimed remotely, or refused because the
-  update workflow cannot drive it: `no command set for <Product version>, <root
-  mode>` with the root mode as detected, such as `transactional` or
+  candidate connected (unreachable, claimed remotely, `operation lock held by
+  <user> since <time>` for another owner's live operation lock, or refused
+  because the update workflow cannot drive it: `no command set for <Product
+  version>, <root mode>` with the root mode as detected, such as `transactional` or
   `transactional-update.conf but root mode unknown`, an
   unrecognised product, or an unreadable base product), the retry budget
   spent, or the refhosts inventory unavailable. The call still
@@ -431,8 +432,9 @@ and nothing is written there.
   cannot drive: `could not attach any requested host: <host> (<reason>)` when
   none attached. With nothing loaded it attaches such a host for `run`, `get`
   and `put`. `load_template` prints no unserved-slot lines, but prints
-  `skipped <host>: <reason>` for each host it refused this way, including a
-  pool host whose slot a sibling then served. `add_host` prints the same line
+  `skipped <host>: <reason>` for each host it refused this way or skipped
+  for another owner's operation lock, including a pool host whose slot a
+  sibling then served. `add_host` prints the same line
   for a refused host whose reason no unserved-slot line gives.
 - `export` emits one `WARNING:` line per host whose install-result block it
   left unverified in the report: `WARNING: no package of this update is tracked
