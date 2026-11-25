@@ -37,6 +37,6 @@ pub use slack::{
 };
 pub use teregen::{
     AuthHint, AuthStage, CachedToken, CheckerResult, CheckerRun, DocumentFetch, Precondition,
-    RegenOutcome, TeReGen, TeregenAuth, TeregenAuthError, TeregenV2, TeregenV2Error,
+    RegenOutcome, RegenRequest, TeReGen, TeregenAuth, TeregenAuthError, TeregenV2, TeregenV2Error,
     TeregenV2WriteError, TokenStore, UpdatesQuery, UploadOutcome, describe_age,
 };
