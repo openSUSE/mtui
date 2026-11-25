@@ -90,7 +90,7 @@ pub enum TeregenV2Error {
 /// [`TeregenV2Error::RejectedId`] — the server's own text, never mtui's
 /// hostile-input surface, but still capped so a misbehaving proxy cannot dump
 /// an arbitrary amount of text into a `CommandError`.
-const MAX_DETAIL_LEN: usize = 2048;
+pub(crate) const MAX_DETAIL_LEN: usize = 2048;
 
 /// The precondition governing a [`TeregenV2::upload_document`] write (P5-D2).
 ///

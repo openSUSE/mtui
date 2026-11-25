@@ -6,7 +6,7 @@ use mtui_datasources::CheckerRun;
 use mtui_types::RequestKind;
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::teregen_client;
+use crate::commands::apicall::{teregen_client, teregen_failure};
 use crate::commands::support::{require_update, template_completion};
 use crate::display::{CommandPromptDisplay, sanitize_external};
 use crate::error::{CommandError, CommandResult};
@@ -160,9 +160,10 @@ fn print_run(display: &mut CommandPromptDisplay, rrid: &str, run: &CheckerRun, f
 ///
 /// TeReGen serves checker results for SLFO ids only, so any other id is answered
 /// without asking it. For an SLFO id an empty list prints `No checker results
-/// for <id>`, and a failed lookup fails the command, naming the cause. A 404 is
-/// one: TeReGen answers it when it could not fetch the runs from SMELT or does
-/// not know the update.
+/// for <id>`, and a failed lookup fails the command, naming the status and
+/// TeReGen's own reason. A 404 is one: TeReGen answers it, with its reason, when
+/// it has none to give (SMELT does not know the update). A 502 or 504 means SMELT
+/// failed or timed out, so the results are unknown rather than none.
 ///
 /// The payload is external, so every field it contributes is filtered of
 /// terminal control sequences and bounded to 200 characters per row before
@@ -214,10 +215,12 @@ impl Command for Checkers {
         let teregen = teregen_client(session)?;
         let full_output = args.get_flag("full_output");
 
-        let runs = teregen
-            .checkers(&rrid.to_string())
-            .await
-            .map_err(|e| CommandError::Other(format!("Checker lookup for {rrid}: {e}")))?;
+        let runs = teregen.checkers(&rrid.to_string()).await.map_err(|e| {
+            CommandError::Other(format!(
+                "Checker lookup for {rrid}: {}",
+                teregen_failure(&e)
+            ))
+        })?;
         if runs.is_empty() {
             session
                 .display
@@ -700,9 +703,7 @@ mod tests {
         assert!(buf.contents().is_empty(), "{}", buf.contents());
         let msg = err.to_string();
         assert!(
-            msg.starts_with(&format!(
-                "Checker lookup for {RRID}: TeReGen fetch failed: "
-            )),
+            msg.starts_with(&format!("Checker lookup for {RRID}: TeReGen ")),
             "{msg}"
         );
         msg
@@ -753,18 +754,83 @@ mod tests {
         assert_eq!(buf.contents(), format!("No checker results for {RRID}\n"));
     }
 
-    /// For an SLFO id TeReGen answers 404 when it could not fetch the runs from
-    /// SMELT or does not know the update, never for an update without runs.
+    /// 404 is TeReGen's "nothing to give", with its reason: it stays a failure,
+    /// and prints no "none" line.
     #[tokio::test]
-    async fn not_found_fails_naming_the_status() {
-        let msg = failed_lookup(Some(ResponseTemplate::new(404))).await;
-        assert!(msg.contains("404 Not Found"), "{msg}");
+    async fn not_found_fails_naming_the_status_and_reason() {
+        let msg = failed_lookup(Some(
+            ResponseTemplate::new(404)
+                .set_body_json(serde_json::json!({"error": "SMELT does not know update 5702"})),
+        ))
+        .await;
+        assert!(
+            msg.ends_with("TeReGen answered 404 Not Found: SMELT does not know update 5702"),
+            "{msg}"
+        );
     }
 
     #[tokio::test]
-    async fn server_error_fails_naming_the_status() {
+    async fn smelt_failure_fails_naming_status_and_reason() {
+        let msg = failed_lookup(Some(ResponseTemplate::new(502).set_body_json(
+            serde_json::json!({"error": "SMELT checker lookup failed: SMELT is unreachable"}),
+        )))
+        .await;
+        assert!(
+            msg.ends_with(
+                "TeReGen answered 502 Bad Gateway: SMELT checker lookup failed: SMELT is unreachable"
+            ),
+            "{msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn smelt_timeout_fails_naming_status_and_reason() {
+        let msg = failed_lookup(Some(
+            ResponseTemplate::new(504)
+                .set_body_json(serde_json::json!({"error": "SMELT checker lookup timed out"})),
+        ))
+        .await;
+        assert!(
+            msg.ends_with("TeReGen answered 504 Gateway Timeout: SMELT checker lookup timed out"),
+            "{msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_error_without_a_reason_fails_naming_the_status() {
         let msg = failed_lookup(Some(ResponseTemplate::new(503))).await;
-        assert!(msg.contains("503 Service Unavailable"), "{msg}");
+        assert!(
+            msg.ends_with("TeReGen answered 503 Service Unavailable"),
+            "{msg}"
+        );
+    }
+
+    /// TeReGen's text is external: escapes and bidi overrides must not reach the
+    /// terminal or the MCP transcript, and the text around them survives.
+    #[tokio::test]
+    async fn reason_is_stripped_of_terminal_controls() {
+        let msg = failed_lookup(Some(ResponseTemplate::new(502).set_body_json(
+            serde_json::json!({
+                "error": "bad \u{1b}]52;c;ZXZpbA==\u{7}gateway \u{1b}[31mred\r\u{202e}rtl"
+            }),
+        )))
+        .await;
+        for bad in ['\u{1b}', '\u{7}', '\r', '\u{202e}'] {
+            assert!(!msg.contains(bad), "{bad:?} survived: {msg:?}");
+        }
+        assert!(msg.ends_with("bad gateway redrtl"), "{msg:?}");
+    }
+
+    /// The reason is bounded, and the cut is marked.
+    #[tokio::test]
+    async fn long_reason_is_bounded_and_marked() {
+        let msg = failed_lookup(Some(
+            ResponseTemplate::new(502)
+                .set_body_json(serde_json::json!({"error": "x".repeat(2000)})),
+        ))
+        .await;
+        assert!(msg.ends_with(TRUNCATION_MARK), "{msg}");
+        assert!(msg.chars().count() < 700, "{} chars", msg.chars().count());
     }
 
     #[tokio::test]

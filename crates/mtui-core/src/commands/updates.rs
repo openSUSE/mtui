@@ -14,7 +14,7 @@ use mtui_types::{RequestKind, RequestReviewID};
 use serde_json::Value;
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::teregen_client;
+use crate::commands::apicall::{teregen_client, teregen_failure};
 #[cfg(test)]
 use crate::display::TRUNCATION_MARK;
 use crate::display::sanitize_external;
@@ -368,7 +368,8 @@ impl Command for Updates {
         for result in results {
             let batch = result.map_err(|e| {
                 CommandError::Other(format!(
-                    "Update queue query failed (TeReGen unreachable): {e}"
+                    "Update queue query failed: {}",
+                    teregen_failure(&e)
                 ))
             })?;
             let Some(batch) = batch else { continue };
@@ -1392,6 +1393,46 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
         // Crucially it did NOT print the empty-queue message.
         assert!(!buf.contents().contains("No updates in the queue"));
+    }
+
+    /// A SMELT failure is TeReGen answering, not TeReGen being unreachable: the
+    /// failure names the status and TeReGen's reason, and lists no rows.
+    #[tokio::test]
+    async fn smelt_failure_names_status_and_reason_not_unreachable() {
+        for (status, reason, shown) in [
+            (
+                502,
+                "SMELT update queue lookup failed",
+                "TeReGen answered 502 Bad Gateway: SMELT update queue lookup failed",
+            ),
+            (
+                504,
+                "SMELT update queue lookup timed out",
+                "TeReGen answered 504 Gateway Timeout: SMELT update queue lookup timed out",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/updates"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_json(serde_json::json!({"error": reason})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let (mut session, buf) = teregen_session(&server);
+            let err = Updates
+                .call(&mut session, &matches(&Updates, &[]))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("Update queue query failed: {shown}")
+            );
+            assert!(buf.contents().is_empty(), "{}", buf.contents());
+        }
     }
 
     #[tokio::test]
