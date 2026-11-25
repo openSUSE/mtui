@@ -63,9 +63,9 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// `("16", true)`.
 ///
 /// Judged on the exit code as well as the markers: the slmicro template
-/// captures the `transactional-update -n pkg in … -t patch` status and exits
-/// with it, so the verdict is the patch's, not the trailing repo-cleanup loop's
-/// `0`.
+/// captures the `transactional-update --continue -n pkg in … -t patch` status
+/// and exits with it, so the verdict is the patch's, not the trailing
+/// repo-cleanup loop's `0`.
 ///
 /// It shares zypper's [`classify_exit`], which here reduces to "`0` passes,
 /// anything else fails", because **`transactional-update` does not propagate
@@ -559,8 +559,13 @@ mod tests {
     fn transactional_update_fails_on_an_unrecognised_non_zero_exit() {
         // The slmicro template exits with the patch's own status, so a non-zero
         // code with clean output is a failed patch, not the cleanup loop's.
-        let err = transactional_update(args("transactional-update -n pkg in", "all good", "", 1))
-            .expect_err("a failed patch with clean output must fail the check");
+        let err = transactional_update(args(
+            "transactional-update --continue -n pkg in",
+            "all good",
+            "",
+            1,
+        ))
+        .expect_err("a failed patch with clean output must fail the check");
         assert_eq!(err.reason, "Unknown Error");
         assert_eq!(err.host.as_deref(), Some("h1"));
     }
@@ -570,7 +575,7 @@ mod tests {
         // The other half of the verdict: exit `0` is the shape the exit-code
         // rule cannot see — a run that reported a problem and still succeeded.
         let err = transactional_update(args(
-            "transactional-update -n pkg in",
+            "transactional-update --continue -n pkg in",
             "",
             "System management is locked",
             0,
@@ -640,8 +645,13 @@ mod tests {
                 "zypper must pass on informational exit {code}"
             );
             assert!(
-                transactional_update(args("transactional-update -n pkg in", "all good", "", code))
-                    .is_ok(),
+                transactional_update(args(
+                    "transactional-update --continue -n pkg in",
+                    "all good",
+                    "",
+                    code
+                ))
+                .is_ok(),
                 "transactional-update must pass on informational exit {code}"
             );
         }
@@ -661,8 +671,13 @@ mod tests {
         ] {
             let err = zypper(args("zypper -n in -t patch", "", "", code)).unwrap_err();
             assert_eq!(err.reason, "package not found", "zypper exit {code}");
-            let err = transactional_update(args("transactional-update -n pkg in", "", "", code))
-                .unwrap_err();
+            let err = transactional_update(args(
+                "transactional-update --continue -n pkg in",
+                "",
+                "",
+                code,
+            ))
+            .unwrap_err();
             assert_eq!(
                 err.reason, "package not found",
                 "transactional-update exit {code}"

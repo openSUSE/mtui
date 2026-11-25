@@ -162,7 +162,7 @@ mtui_probe_ok "awk" $$?
 mtui_status=0
 set -- $$mtui_patches
 if [ "$$#" -gt 0 ]; then
-  transactional-update -n pkg in -l -y -t patch "$$@"
+  transactional-update --continue -n pkg in -l -y -t patch "$$@"
   mtui_status=$$?
 fi
 zypper -n patches | grep $repa
@@ -397,14 +397,14 @@ mod tests {
             Some("systemctl reboot".into())
         );
         let rendered = cmds.render_command(&vars(":p=1:2", "p")).unwrap();
-        assert!(rendered.contains("transactional-update -n pkg in -l -y -t patch"));
+        assert!(rendered.contains("transactional-update --continue -n pkg in -l -y -t patch"));
         assert!(rendered.contains("{ print $2; }"));
         assert!(!rendered.contains("{{"), "{rendered}");
         assert_status_comes_from_the_patch(
             "slmicro",
             &rendered,
             ":p=1:2",
-            "transactional-update -n pkg in -l -y -t patch",
+            "transactional-update --continue -n pkg in -l -y -t patch",
         );
     }
 

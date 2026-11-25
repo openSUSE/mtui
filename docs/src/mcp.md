@@ -380,13 +380,21 @@ and nothing is written there.
   verdict: then one `prepare failed on <hosts> (…)` summary carries both.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a host excluded because its test update
-  repository genuinely failed to register (its partial add is undone and its
-  lock released before the patch reaches its peers), a host excluded because
-  the update's repositories do not reach it, a repository refresh that
-  may have left stale metadata on a host that still gets patched, a prepare
+  repository genuinely failed to register, or because its refresh failed on a
+  read-only root (its partial add is undone and its lock released before the
+  patch reaches its peers; when that undo fails too on a read-only root, the
+  entry ends with what `transactional-update -n rollback` did: `…: staged
+  snapshot dropped`, `…: nothing was staged`, or that it failed and a staged
+  snapshot could remain), a host excluded because the update's repositories
+  do not reach it, a repository refresh that may have left stale metadata on a
+  read-write host that still gets patched, a prepare
   host failure it continues past, a failed `--newpackage` step, a failed
   update naming the hosts it did not complete on and whether it rolls back or
-  leaves their test repositories configured, a failed automatic
+  leaves their test repositories configured, a read-only-root host the
+  rollback left out because its refresh failed while its repository removal
+  succeeded, and which the reset put back (`<host>: refreshing repos failed:
+  …; no downgrade was run: staged snapshot dropped`, or `…: nothing was
+  staged`), a failed automatic
   rollback, and the three ways the post-update test-repo cleanup can fail — on
   both the success and the failure path. The server's tracing goes to its own
   stderr, not the tool result, so a `tracing::warn!` alone would never reach an

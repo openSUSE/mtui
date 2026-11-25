@@ -588,7 +588,7 @@ mod tests {
             // Only the command without `zypper` separates the zypper update
             // check (markers alone) from the transactional one. The real update
             // scripts all name `zypper`, so there the two nearly coincide.
-            for stdin in ["zypper -n in", "transactional-update -n pkg in"] {
+            for stdin in ["zypper -n in", "transactional-update --continue -n pkg in"] {
                 let args = || checks::CheckArgs {
                     hostname: "h1",
                     stdout,
@@ -620,6 +620,41 @@ mod tests {
                     .doer(role, "16", true)
                     .unwrap_or_else(|e| panic!("{role:?} @ (\"16\", true): {e}"));
                 assert_eq!(sles, micro, "{role:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_package_commands_that_follow_a_refresh_continue_its_snapshot() {
+        // Install and uninstall run no refresh, so they branch off the booted snapshot.
+        for reg in [
+            WorkflowRegistry::new(false, false),
+            WorkflowRegistry::new(true, true),
+        ] {
+            for release in ["slmicro", "16"] {
+                for role in ROLES {
+                    let cmds = reg
+                        .doer(role, release, true)
+                        .unwrap_or_else(|e| panic!("{role:?} @ ({release:?}, true): {e}"));
+                    let template = cmds.command_template();
+                    let (wanted, unwanted) = match role {
+                        Role::Prepare | Role::Update | Role::Downgrade => (
+                            "transactional-update --continue -n pkg ",
+                            "transactional-update -n pkg ",
+                        ),
+                        Role::Install | Role::Uninstall => {
+                            ("transactional-update -n pkg ", "--continue")
+                        }
+                    };
+                    assert!(
+                        template.contains(wanted),
+                        "{role:?} @ ({release:?}, true): {template}"
+                    );
+                    assert!(
+                        !template.contains(unwanted),
+                        "{role:?} @ ({release:?}, true): {template}"
+                    );
+                }
             }
         }
     }

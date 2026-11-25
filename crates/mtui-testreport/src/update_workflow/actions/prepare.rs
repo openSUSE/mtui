@@ -55,7 +55,7 @@ fn yum(_force: bool, testing: bool) -> ActionCommands {
 fn slmicro(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
     ActionCommands {
-        command: format!("transactional-update -n pkg in -l {parameter} $package"),
+        command: format!("transactional-update --continue -n pkg in -l {parameter} $package"),
         reboot: Some("systemctl reboot".to_owned()),
         list_command: Some(INSTALLED_PROBE.to_owned()),
         mode: crate::update_workflow::actions::SubstMode::Strict,
@@ -157,7 +157,7 @@ mod tests {
         assert!(
             cmds.render_command(&pkg("p"))
                 .unwrap()
-                .starts_with("transactional-update -n pkg in -l")
+                .starts_with("transactional-update --continue -n pkg in -l")
         );
     }
 

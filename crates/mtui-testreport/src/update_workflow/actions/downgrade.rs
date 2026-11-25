@@ -113,7 +113,13 @@ printf '%s\n' "$$mtui_versions"
 const ZYPPER_CMD: &str = "rpm -q $package &>/dev/null  && zypper -n in -C --force-resolution --oldpackage -y $package=$version";
 
 /// slmicro downgrade command, verbatim.
-const SLM_CMD: &str = "transactional-update -n pkg in --force-resolution --oldpackage -y $package";
+const SLM_CMD: &str =
+    "transactional-update --continue -n pkg in --force-resolution --oldpackage -y $package";
+
+/// Makes the booted snapshot the default again, dropping a staged one; needs
+/// no repository. Exits `1` when the booted snapshot already is the default.
+/// On success it also schedules a re-registration check for the next boot.
+pub(crate) const TRANSACTIONAL_ROLLBACK: &str = "transactional-update -n rollback";
 
 /// yum downgrade command, verbatim.
 const YUM_CMD: &str = "yum -y downgrade $package";
@@ -339,7 +345,7 @@ mod tests {
         let vars: HashMap<&str, &str> = [("package", "a=1 b=2")].into_iter().collect();
         assert_eq!(
             cmds.render_command(&vars).unwrap(),
-            "transactional-update -n pkg in --force-resolution --oldpackage -y a=1 b=2"
+            "transactional-update --continue -n pkg in --force-resolution --oldpackage -y a=1 b=2"
         );
     }
 
