@@ -215,7 +215,17 @@ impl Command for Checkers {
         let teregen = teregen_client(session)?;
         let full_output = args.get_flag("full_output");
 
-        let runs = teregen.checkers(&rrid.to_string()).await.map_err(|e| {
+        let cancel = session.cancel_token();
+        let id = rrid.to_string();
+        let lookup = tokio::select! {
+            () = cancel.cancelled() => {
+                return Err(CommandError::Cancelled(
+                    "checkers cancelled while waiting for TeReGen".to_owned(),
+                ));
+            }
+            lookup = teregen.checkers(&id) => lookup,
+        };
+        let runs = lookup.map_err(|e| {
             CommandError::Other(format!(
                 "Checker lookup for {rrid}: {}",
                 teregen_failure(&e)
@@ -852,6 +862,36 @@ mod tests {
         ))
         .await;
         assert!(msg.contains("no `checkers` array"), "{msg}");
+    }
+
+    /// A cancel while TeReGen is still deciding (it can take a minute behind a
+    /// slow SMELT) ends the wait as `Cancelled`, not as a failed lookup. The
+    /// outer timeout is the assertion: an unobserved cancel waits out the delay.
+    #[tokio::test]
+    async fn a_cancel_while_waiting_stops_the_lookup() {
+        let (_server, mut session, buf) = session_answering(
+            RRID,
+            Some(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"checkers": []}))
+                    .set_delay(std::time::Duration::from_secs(5)),
+            ),
+        )
+        .await;
+        let cancel = session.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel.cancel();
+        });
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Checkers.call(&mut session, &matches(&Checkers, &[])),
+        )
+        .await
+        .expect("the wait must observe the cancel")
+        .unwrap_err();
+        assert!(matches!(err, CommandError::Cancelled(_)), "{err:?}");
+        assert!(buf.contents().is_empty(), "{}", buf.contents());
     }
 
     /// A configured TeReGen URL may carry credentials, and the error reaches

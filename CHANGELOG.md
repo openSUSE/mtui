@@ -612,6 +612,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   serves checker results for SLFO ids only, so for any other id `checkers` no
   longer asks it and answers `No checker results for <id> (TeReGen serves
   checker results for SLFO ids only)`, as the command help now says (#794).
+  `checkers` and `updates` wait up to 60 seconds, not 30, so TeReGen's own 504
+  for a slow SMELT arrives instead of a client timeout, and Ctrl-C (or an MCP
+  cancel) stops the wait.
   **MCP schema note:** only the `checkers` tool description changes.
 - `updates` names the status and reason TeReGen gives when its queue query
   fails, for example `Update queue query failed: TeReGen answered 502 Bad
