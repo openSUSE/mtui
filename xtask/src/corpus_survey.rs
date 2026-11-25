@@ -173,7 +173,7 @@ pub async fn run(v1_base: &str, v2_base: &str, verify: VerifyPolicy) -> Result<(
     let teregen = TeReGen::with_client(http.clone(), v1_base);
 
     let query = UpdatesQuery {
-        review_group: None,
+        review_groups: &[],
         status: Some("testing"),
         assignee: None,
         unassigned: false,

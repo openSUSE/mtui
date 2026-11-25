@@ -1706,9 +1706,9 @@ expression: pretty
           "type": "integer"
         },
         "review_group": {
-          "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",
+          "description": "filter by review group, e.g. qam-sle or the '<group>-review' login form; repeatable — updates in any of the groups are listed (one server query)",
           "items": {
-            "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",
+            "description": "filter by review group, e.g. qam-sle or the '<group>-review' login form; repeatable — updates in any of the groups are listed (one server query)",
             "type": "string"
           },
           "type": "array"

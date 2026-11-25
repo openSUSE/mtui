@@ -707,7 +707,7 @@ Usage: updates [OPTIONS]
 
 Options:
   -G, --review-group <GROUP>
-          filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)
+          filter by review group, e.g. qam-sle or the '<group>-review' login form; repeatable — updates in any of the groups are listed (one server query)
 
   -F, --field <FIELD>
           select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; Package-Streams/Issues/Comments are read live from OBS per shown row (after --limit/--offset), so narrow large queues with --limit; non-OBS (SLFO) rows render n/a, a row OBS refuses renders unavailable (an unreadable comments document marks Comments alone), comments are sanitised and capped per row

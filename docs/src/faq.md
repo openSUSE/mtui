@@ -342,7 +342,7 @@ testing**. Widen or filter it:
 
 ```
 updates --review-group qam-sle --limit 5
-updates -G qam-sle -G qam-teradata                           # groups OR together
+updates -G qam-sle -G qam-teradata                           # either group, one query
 updates --mine                # assigned to your oscrc or Gitea login
 updates --status all          # every status and assignee
 updates -F Rating -F 'Assigned Roles' -F 'Unassigned Roles'  # osc-qam field names
@@ -372,9 +372,9 @@ numbers, not OBS requests); a row OBS refuses renders `unavailable` in all
 three, and an unreadable comments document renders `unavailable` for
 `Comments` while the row's packages and issues still print; comments are terminal-sanitised and capped to
 the newest five per row with the omitted count marked. `Unassigned Roles`
-renders `n/a` when it cannot be answered honestly: on SLFO rows (TeReGen
-does not expose review groups on them) and on any row served without
-assignment data, where "every group open" would be indistinguishable from
-the truth. `--json` and `-F` are mutually
-exclusive, and `Assignee`/`Assigned Roles` are refused under `--status all`,
-where TeReGen omits the assignment data they would render.
+renders `n/a` when it cannot be answered honestly: on any row served
+without review groups or without assignment data, where "every group open"
+would be indistinguishable from the truth. `--json` and `-F` are mutually
+exclusive, and `Assignee`/`Assigned Roles` are refused under any `--status`
+other than `testing`, where TeReGen omits the assignment data they would
+render.
