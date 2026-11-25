@@ -319,17 +319,19 @@ impl<'a> RepoManager<'a> {
     /// can say why nothing was added — even when the refresh then fails, which
     /// its own WARNING still reports.
     ///
-    /// Always finishes with a refresh so subsequent operations see the freshly
-    /// (un)registered repos: `zypper -n ref` normally, or
+    /// Every path but the two bails below finishes with a refresh so later
+    /// operations see the freshly (un)registered repos: `zypper -n ref`, or
     /// `transactional-update --continue --non-interactive run zypper
     /// --gpg-auto-import-keys -n ref` on a transactional (read-only-root) host,
     /// where a plain `zypper ref` of a not-yet-trusted signed repo would fail
     /// importing the key into the read-only rpmdb. A failed refresh is also
     /// surfaced as a WARNING.
     ///
-    /// Returns `true` on the normal path and `false` on the unknown-cmd
-    /// safeguard (after force-unlocking via [`Target::unlock`], and *without*
-    /// running the refresh).
+    /// Returns `true` on the normal path and `false` when it bails *without*
+    /// running the refresh: on the unknown-cmd safeguard (after force-unlocking
+    /// via [`Target::unlock`]), and on a host whose root mode is undecided
+    /// ([`Target::root_mode_undecided`]), where it runs no command at all and
+    /// records [`RepoFailure::RootModeUnknown`].
     pub async fn run_zypper(
         &mut self,
         cmd: &str,
@@ -346,7 +348,7 @@ impl<'a> RepoManager<'a> {
                 "transactional-update.conf but root mode unknown; not touching repos"
             );
             self.target.set_last_repo(Err(RepoFailure::RootModeUnknown));
-            return true;
+            return false;
         }
 
         // Aggregate the whole run's verdict for `Target::last_repo`: any non-zero
@@ -1032,8 +1034,9 @@ mod tests {
         let mut repos = BTreeMap::new();
         repos.insert(sles, "https://example/repo".to_owned());
 
-        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        let ran = t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
 
+        assert!(!ran, "a bail without a refresh returns false");
         assert!(conn.commands().is_empty(), "{:?}", conn.commands());
         assert!(
             matches!(t.last_repo(), Some(Err(_))),
