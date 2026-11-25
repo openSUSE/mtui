@@ -370,11 +370,10 @@ impl TeReGen {
     /// successful response whose body carried no `updates` key.
     pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Result<Option<Value>, TeReGenError> {
         let mut params: Vec<(&str, String)> = Vec::new();
-        for (name, value) in [
-            ("review_group", opts.review_group),
-            ("status", opts.status),
-            ("assignee", opts.assignee),
-        ] {
+        for group in opts.review_groups.iter().filter(|g| !g.is_empty()) {
+            params.push(("review_group", (*group).to_string()));
+        }
+        for (name, value) in [("status", opts.status), ("assignee", opts.assignee)] {
             if let Some(v) = value
                 && !v.is_empty()
             {
@@ -619,8 +618,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 /// omitted from the request query.
 #[derive(Debug, Clone, Default)]
 pub struct UpdatesQuery<'a> {
-    /// Narrow the queue to a single review group (server-side).
-    pub review_group: Option<&'a str>,
+    /// Narrow the queue to these review groups (server-side), sent as a repeated
+    /// `review_group`. TeReGen serves the union of the groups, and accepts the
+    /// bare name (`qam-sle`) and the review login (`qam-sle-review`) alike. Empty
+    /// means no narrowing.
+    pub review_groups: &'a [&'a str],
     /// Narrow the queue by status (server-side).
     pub status: Option<&'a str>,
     /// Keep only updates assigned to that user; implies `status=testing`.
@@ -1197,13 +1199,38 @@ mod tests {
         assert_eq!(
             client(&server)
                 .updates(&UpdatesQuery {
-                    review_group: Some("qam-sle"),
+                    review_groups: &["qam-sle"],
                     status: Some("testing"),
                     ..Default::default()
                 })
                 .await
                 .unwrap(),
             Some(json!([]))
+        );
+    }
+
+    /// Every group goes out as its own `review_group`, in order, and an empty
+    /// name is dropped.
+    #[tokio::test]
+    async fn updates_repeats_review_group_per_group() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
+            .mount(&server)
+            .await;
+        client(&server)
+            .updates(&UpdatesQuery {
+                review_groups: &["qam-sle", "", "qam-openqa-review"],
+                status: Some("testing"),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests[0].url.query(),
+            Some("review_group=qam-sle&review_group=qam-openqa-review&status=testing")
         );
     }
 
@@ -1311,7 +1338,7 @@ mod tests {
         // '&'/space were percent-encoded on the wire.
         let _ = client(&server)
             .updates(&UpdatesQuery {
-                review_group: Some("qam sle&x"),
+                review_groups: &["qam sle&x"],
                 status: Some("testing"),
                 ..Default::default()
             })

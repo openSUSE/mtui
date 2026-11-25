@@ -68,8 +68,7 @@ const STATUS_ALL: &str = "all";
 /// assignment to testing updates, so the assignment views and the unassigned
 /// default exist only for `--status testing`, and the views are refused with
 /// any other status. Session-global, so [`Scope::Single`] rather than a per-template
-/// fan-out — though it may issue one TeReGen query per `--review-group` and
-/// `--mine` login.
+/// fan-out — though it issues one TeReGen query per `--mine` login.
 pub struct Updates;
 
 #[async_trait]
@@ -101,9 +100,9 @@ impl Command for Updates {
                 .value_name("GROUP")
                 .action(ArgAction::Append)
                 .help(
-                    "filter by review group as the bare group name, e.g. qam-sle \
-                     (not the '<group>-review' login form, which classic rows lack); \
-                     repeatable — groups are OR-ed (one server query per group)",
+                    "filter by review group, e.g. qam-sle or the \
+                     '<group>-review' login form; repeatable — updates in any of \
+                     the groups are listed (one server query)",
                 ),
         )
         .arg(
@@ -239,7 +238,7 @@ impl Command for Updates {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Dedup so `-G a -G a` takes the single-query path.
+        // A repeated `-G` is sent once.
         let review_groups: Vec<String> = {
             let mut seen = HashSet::new();
             args.get_many::<String>("review_group")
@@ -327,17 +326,21 @@ impl Command for Updates {
         }
 
         let teregen = teregen_client(session)?;
+        // One query per assignee (none = one unfiltered query), carrying every
+        // `-G` group: TeReGen serves the union of a repeated `review_group`.
+        let groups: Vec<&str> = review_groups.iter().map(String::as_str).collect();
+        let status_filter = status.as_deref();
         // A named fn, not a closure: a closure cannot tie its return's
         // lifetime to its argument's.
         fn query_for<'a>(
-            group: Option<&'a str>,
+            groups: &'a [&'a str],
             status: Option<&'a str>,
             assignee: Option<&'a str>,
             unassigned: bool,
             with_assignment: bool,
         ) -> UpdatesQuery<'a> {
             UpdatesQuery {
-                review_group: group,
+                review_groups: groups,
                 status,
                 assignee,
                 unassigned,
@@ -345,35 +348,18 @@ impl Command for Updates {
                 no_cache: false,
             }
         }
-
-        // One query per group and assignee (none = one unfiltered query):
-        // TeReGen has no OR semantics for a repeated `review_group` param (the
-        // last wins), and the filter cannot be replicated client-side — the
-        // server matches SLFO rows against a group without serialising
-        // `review_groups` on them.
-        let groups: Vec<Option<&str>> = if review_groups.is_empty() {
-            vec![None]
-        } else {
-            review_groups.iter().map(|g| Some(g.as_str())).collect()
-        };
         let assignee_filters: Vec<Option<&str>> = if assignees.is_empty() {
             vec![None]
         } else {
             assignees.iter().map(|a| Some(a.as_str())).collect()
         };
-        let status_filter = status.as_deref();
-        let queries: Vec<UpdatesQuery<'_>> = groups
+        let queries: Vec<UpdatesQuery<'_>> = assignee_filters
             .iter()
-            .flat_map(|g| {
-                assignee_filters
-                    .iter()
-                    .map(move |a| query_for(*g, status_filter, *a, unassigned, want_assignment))
-            })
+            .map(|a| query_for(&groups, status_filter, *a, unassigned, want_assignment))
             .collect();
         let multi = queries.len() > 1;
-        // Bounded so a scripted thirty-`-G` call does not open thirty
-        // connections; `buffered` keeps batches in `-G` order. Materialised
-        // eagerly: a lazy `map` closure trips a higher-ranked-lifetime limit.
+        // `buffered` keeps batches in login order. Materialised eagerly: a lazy
+        // `map` closure trips a higher-ranked-lifetime limit.
         let futures: Vec<_> = queries.iter().map(|q| teregen.updates(q)).collect();
         let cancel = session.cancel_token();
         let results: Vec<_> = tokio::select! {
@@ -883,10 +869,9 @@ fn extract_assigned_roles(obj: &serde_json::Map<String, Value>) -> String {
     }
 }
 
-/// `Unassigned Roles`: `review_groups` minus the groups in `assignees`. TeReGen
-/// serialises `review_groups` only on classic Maintenance rows — SLFO rows omit
-/// it while still matching a `review_group` filter server-side — so there the
-/// honest answer is `n/a`, not an empty list.
+/// `Unassigned Roles`: `review_groups` minus the groups in `assignees`. A row
+/// without `review_groups` has no role data, so the honest answer is `n/a`, not
+/// an empty list.
 fn extract_unassigned_roles(obj: &serde_json::Map<String, Value>) -> String {
     let Some(groups) = obj.get("review_groups").and_then(Value::as_array) else {
         return "n/a".to_owned();
@@ -1944,33 +1929,38 @@ mod tests {
         (session, buf)
     }
 
+    /// The `review_group` values of every request `server` received, one entry
+    /// per request.
+    async fn requested_groups(server: &MockServer) -> Vec<Vec<String>> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r.url
+                    .query_pairs()
+                    .filter(|(k, _)| k == "review_group")
+                    .map(|(_, v)| v.into_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Several `-G` are one query: TeReGen serves the union of a repeated
+    /// `review_group`, so the rows come back merged and deduplicated.
     #[tokio::test]
-    async fn multi_group_queries_each_group_merges_and_dedups() {
-        // One query per group, rows merged priority-descending, and the row
-        // present in both groups appearing once.
+    async fn several_groups_are_one_query_carrying_all_of_them() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
-            .and(query_param("review_group", "qam-sle"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
                     {"priority": 10, "status": "testing", "kind": "Maintenance", "id": "row-a"},
-                    {"priority": 5, "status": "testing", "kind": "Maintenance", "id": "row-both"},
-                ]})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/updates"))
-            .and(query_param("review_group", "qam-teradata"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
                     {"priority": 7, "status": "testing", "kind": "Maintenance", "id": "row-c"},
                     {"priority": 5, "status": "testing", "kind": "Maintenance", "id": "row-both"},
                 ]})),
             )
-            .expect(1)
             .mount(&server)
             .await;
 
@@ -1981,41 +1971,82 @@ mod tests {
                 "--review-group",
                 "qam-sle",
                 "--review-group",
-                "qam-teradata",
+                "qam-teradata-review",
             ],
         );
         Updates.call(&mut session, &args).await.unwrap();
-        let out = buf.contents();
-        // Three unique rows, not four.
-        assert!(out.contains("Update queue (3):"), "{out}");
-        assert_eq!(out.matches("row-both").count(), 1, "{out}");
-        // Priority-descending across groups: a(10), c(7), both(5).
-        let (pa, pc, pb) = (
-            out.find("row-a").unwrap(),
-            out.find("row-c").unwrap(),
-            out.find("row-both").unwrap(),
+
+        assert_eq!(
+            requested_groups(&server).await,
+            vec![vec!["qam-sle".to_owned(), "qam-teradata-review".to_owned()]]
         );
-        assert!(pa < pc && pc < pb, "order wrong: {out}");
-        // wiremock verifies the .expect(1) counts on drop.
+        let out = buf.contents();
+        assert!(out.contains("Update queue (3):"), "{out}");
+        assert!(
+            out.find("row-a").unwrap() < out.find("row-c").unwrap(),
+            "{out}"
+        );
     }
 
+    /// `--mine` asks once per login, and each query carries every group.
     #[tokio::test]
-    async fn multi_group_partial_failure_is_an_error_not_partial_output() {
+    #[serial_test::serial(osc_config_env)]
+    async fn mine_with_several_groups_asks_once_per_login() {
+        let server = MockServer::start().await;
+        mount_gitea_login(&server, "giteauser").await;
+        mount_assigned(
+            &server,
+            PRINCIPAL,
+            serde_json::json!([assigned_row("a", 2, PRINCIPAL)]),
+            1,
+        )
+        .await;
+        mount_assigned(
+            &server,
+            "giteauser",
+            serde_json::json!([assigned_row("b", 1, "giteauser")]),
+            1,
+        )
+        .await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _oscrc = principal_oscrc(&dir);
+        let (mut session, buf) = mine_session(&server, true);
+
+        let args = matches(&Updates, &["--mine", "-G", "g1", "-G", "g2"]);
+        Updates.call(&mut session, &args).await.unwrap();
+
+        let updates_requests: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.url.path() == "/updates")
+            .collect();
+        assert_eq!(updates_requests.len(), 2);
+        for r in &updates_requests {
+            let groups: Vec<_> = r
+                .url
+                .query_pairs()
+                .filter(|(k, _)| k == "review_group")
+                .map(|(_, v)| v.into_owned())
+                .collect();
+            assert_eq!(groups, ["g1", "g2"], "{}", r.url);
+        }
+        assert!(
+            buf.contents().contains("Update queue (2):"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    /// One failing query lists nothing: no partial listing is printed.
+    #[tokio::test]
+    async fn a_failing_multi_group_query_is_an_error_not_partial_output() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
-            .and(query_param("review_group", "good"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
-                    {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "ok-row"},
-                ]})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/updates"))
-            .and(query_param("review_group", "bad"))
-            .respond_with(ResponseTemplate::new(500))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -2026,8 +2057,29 @@ mod tests {
         );
         let err = Updates.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
-        // No partial listing was printed.
-        assert!(!buf.contents().contains("ok-row"), "{}", buf.contents());
+        assert!(buf.contents().is_empty(), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn limit_slices_the_one_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 100, "status": "testing", "kind": "Maintenance", "id": "high"},
+                    {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "low"},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-G", "g1", "-G", "g2", "--limit", "1"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Update queue (1):"), "{out}");
+        assert!(out.contains("high"), "{out}");
+        assert!(!out.contains("low"), "{out}");
     }
 
     // ------------------------------------------------------- field selection
@@ -2118,7 +2170,7 @@ mod tests {
 
     #[tokio::test]
     async fn unassigned_roles_on_slfo_row_is_na_not_empty() {
-        // SLFO rows never serialise review_groups; the honest render is n/a.
+        // A row without review_groups has no role data; the honest render is n/a.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -2425,39 +2477,6 @@ mod tests {
         // Both rows survive: the id-less one is not dropped.
         assert!(out.contains("Update queue (2):"), "{out}");
         assert!(out.contains("with-id"), "{out}");
-    }
-
-    #[tokio::test]
-    async fn multi_group_limit_slices_after_merge_sort() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/updates"))
-            .and(query_param("review_group", "g1"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
-                    {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "low"},
-                ]})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/updates"))
-            .and(query_param("review_group", "g2"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
-                    {"priority": 100, "status": "testing", "kind": "Maintenance", "id": "high"},
-                ]})),
-            )
-            .mount(&server)
-            .await;
-        let (mut session, buf) = teregen_session(&server);
-        let args = matches(&Updates, &["-G", "g1", "-G", "g2", "--limit", "1"]);
-        Updates.call(&mut session, &args).await.unwrap();
-        let out = buf.contents();
-        // A slice taken before the merge-sort would keep "low".
-        assert!(out.contains("Update queue (1):"), "{out}");
-        assert!(out.contains("high"), "{out}");
-        assert!(!out.contains("low"), "{out}");
     }
 
     #[test]

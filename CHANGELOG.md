@@ -272,6 +272,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `updates -G` takes the bare name (`qam-sle`) or the review login
+  (`qam-sle-review`) and sends every group in one query, where it sent one per
+  group and merged the answers: TeReGen serves the union of a repeated
+  `review_group` and treats both name forms alike. `--mine` still asks once per
+  login. **MCP schema note:** only the `updates` `review_group` description
+  changes.
 - A refused TeReGen login or write names the cause TeReGen reports with its
   `401`, where it said the cause could not be told apart: an expired or used
   challenge, a rejected signature (the principal is not listed, has no usable
