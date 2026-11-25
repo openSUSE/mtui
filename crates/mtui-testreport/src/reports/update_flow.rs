@@ -2215,12 +2215,6 @@ async fn downgrade_body(
         }
     }
     failures.extend(repo_errors.iter().cloned());
-    // A host whose repo step failed ran no downgrade command, so it gets no row.
-    let recorded: BTreeSet<String> = hosts
-        .iter()
-        .filter(|h| !repo_failed.contains_key(*h))
-        .cloned()
-        .collect();
 
     // Discover each host's available downgrade versions, keeping the highest
     // per package.
@@ -2285,13 +2279,6 @@ async fn downgrade_body(
         );
     }
     if !dead_probes.is_empty() && dead_probes.len() == list_map.len() {
-        // The abort still leaves side effects: the repo removal above has
-        // already stripped the issue repo from every host in scope, and this
-        // path fires most often during the update rollback, where
-        // reconstructing what was done to a refhost matters most. Record the
-        // row before returning — the site below is unreachable from here, so
-        // there is no double write.
-        add_op_history_for(targets, &recorded, "downgrade", id, packages).await;
         if repo_errors.is_empty() {
             return Err(UpdateError::new(
                 "package version probe failed",
@@ -2326,8 +2313,8 @@ async fn downgrade_body(
         .map(|t| t.hostname().to_owned())
         .collect();
 
-    // Hosts a downgrade command was dispatched to, or whose staged update was dropped.
-    let mut ran: BTreeSet<String> = candidates;
+    // Hosts a downgrade command was dispatched to: only these get a history row.
+    let mut dispatched: BTreeSet<String> = BTreeSet::new();
 
     // Non-transactional hosts: per-package `zypper downgrade`, gated on the
     // package being installed (present in `versions`).
@@ -2371,7 +2358,7 @@ async fn downgrade_body(
         }
         if !cmd.is_empty() {
             targets.run(Command::PerHost(cmd.clone())).await;
-            ran.extend(cmd.keys().cloned());
+            dispatched.extend(cmd.keys().cloned());
             // Only the hosts that ran this command: a host outside `cmd` (e.g.
             // a dead-probe one) still carries a stale `-1` that would trip the
             // timeout gate and cancel the healthy hosts' rollback. Scoped
@@ -2423,7 +2410,7 @@ async fn downgrade_body(
     let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
-        ran.extend(combined.keys().cloned());
+        dispatched.extend(combined.keys().cloned());
         // Same scoping as the per-package loop, and for the same reason.
         let judged = run_checks_where(
             targets,
@@ -2482,7 +2469,7 @@ async fn downgrade_body(
     // Recorded after the run started but *before* the reboot: a transactional
     // host that never comes back cannot be written to afterwards, and that is
     // the host whose state an operator most needs to reconstruct.
-    add_op_history_for(targets, &recorded, "downgrade", id, packages).await;
+    add_op_history_for(targets, &dispatched, "downgrade", id, packages).await;
 
     failures.extend(
         reboot_transactional(targets, healthy_reboot, diagnostics)
@@ -2491,6 +2478,8 @@ async fn downgrade_body(
             .map(reboot_error),
     );
 
+    // Plus the left-out hosts the verdict may still count as rolled back.
+    let ran: BTreeSet<String> = dispatched.into_iter().chain(candidates).collect();
     let left_out: BTreeSet<String> = repo_failed
         .keys()
         .filter(|h| !ran.contains(*h))
@@ -5772,7 +5761,7 @@ mod tests {
             ),
             false,
         );
-        let (t3, _h3) = sles_target_with_exit("h3", "", -1);
+        let (t3, h3) = sles_target_with_exit("h3", "", -1);
         let mut group = HostsGroup::new(vec![t1, t2, t3], false);
         // h2's version probe ends at 10ms and its pkg-a downgrade at 20ms.
         let token = group.cancel_token();
@@ -5813,6 +5802,9 @@ mod tests {
         );
         assert!(rebooted(&h1), "{:?}", h1.fired_commands());
         assert_eq!(err.completed(), ["h1"], "{err:?}");
+        assert_eq!(downgrade_events(&h1), ["downgrade:pkg-a pkg-b"]);
+        assert_eq!(downgrade_events(&h2).len(), 1, "h2 downgraded pkg-a");
+        assert!(downgrade_events(&h3).is_empty(), "h3 ran no downgrade");
     }
 
     #[tokio::test]
@@ -7828,6 +7820,21 @@ mod tests {
 
     const HISTORY_LOG: &str = "/var/log/mtui.log";
 
+    /// `handle`'s `downgrade` history rows, each without its `timestamp:user:` prefix.
+    fn downgrade_events(handle: &MockConnection) -> Vec<String> {
+        let contents = handle.file_contents(HISTORY_LOG).unwrap_or_default();
+        String::from_utf8(contents)
+            .unwrap()
+            .lines()
+            .filter_map(|l| {
+                let mut parts = l.splitn(3, ':');
+                let (ts, _user, event) = (parts.next()?, parts.next()?, parts.next()?);
+                assert!(ts.parse::<u64>().is_ok(), "timestamp of {l:?}");
+                event.starts_with("downgrade:").then(|| event.to_owned())
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn install_writes_no_history_when_no_doer_resolves() {
         // A run that never starts (no installer doer for this host) must not
@@ -8428,10 +8435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downgrade_all_probes_dead_still_records_history() {
-        // The issue repo was removed from every host before the probe ran, and
-        // this abort fires on the rollback path — the row is what an operator
-        // reconstructs the refhost's state from.
+    async fn downgrade_all_probes_dead_writes_no_history() {
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -8452,18 +8456,10 @@ mod tests {
             "no downgrade command may run after a dead probe: {:?}",
             handle.commands()
         );
-
-        let contents = String::from_utf8(
-            handle
-                .file_contents(HISTORY_LOG)
-                .expect("the repo removal already landed; the row must be written"),
-        )
-        .unwrap();
-        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
-        // `id` is None here, so the row carries no RRID field.
         assert!(
-            contents.ends_with(":downgrade:pkg-a\n"),
-            "history line: {contents:?}"
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a host that ran no downgrade gets no row: {:?}",
+            downgrade_events(&handle)
         );
     }
 
@@ -9095,6 +9091,77 @@ mod tests {
                 .count(),
             1,
             "exactly one downgrade row on the healthy host: {contents:?}"
+        );
+        assert_eq!(downgrade_events(&h1), ["downgrade:pkg-a"]);
+        assert!(
+            h2.file_contents(HISTORY_LOG).is_none(),
+            "the dead-probe host ran no downgrade: {:?}",
+            downgrade_events(&h2)
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_writes_no_row_on_a_host_the_probe_resolved_no_versions_for() {
+        let (t1, h1) = sles_target("h1", "pkg-a = 1.0-1\n");
+        let (t2, h2) = sles_target("h2", "");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let _ = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            h2.commands()
+                .contains(&downgrade_list_command(&["pkg-a".to_owned()])),
+            "h2 was probed: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h2.commands()
+        );
+        assert_eq!(downgrade_events(&h1), ["downgrade:pkg-a"]);
+        assert!(
+            h2.file_contents(HISTORY_LOG).is_none(),
+            "{:?}",
+            downgrade_events(&h2)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_cancelled_before_its_first_package_writes_no_row() {
+        let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\npkg-b = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+        let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
+
+        let err = perform_downgrade(&mut group, &NoopRepo, &packages, None, &mut Vec::new())
+            .await
+            .expect_err("a cancelled downgrade reports an error");
+
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(
+            handle
+                .commands()
+                .contains(&downgrade_list_command(&packages)),
+            "the probe ran and answered versions: {:?}",
+            handle.commands()
+        );
+        assert!(
+            !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            handle.commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "{:?}",
+            downgrade_events(&handle)
         );
     }
 
@@ -10787,8 +10854,8 @@ mod tests {
         );
         assert!(!has_downgrade_row(&h1), "h1 ran nothing");
         assert!(
-            has_downgrade_row(&h2),
-            "h2's repo removal is still recorded"
+            !has_downgrade_row(&h2),
+            "h2's probe died before any downgrade"
         );
     }
 
@@ -11823,10 +11890,9 @@ mod tests {
     }
 
     /// Every probe in the rollback's scope dies, so it aborts before its
-    /// downgrade, still recording the repository removal it did. That row goes
-    /// to the hosts in scope only.
+    /// downgrade and writes no downgrade row; a host outside its scope is untouched.
     #[tokio::test]
-    async fn a_rollback_whose_every_probe_died_records_history_only_in_its_scope() {
+    async fn a_rollback_whose_every_probe_died_stays_in_its_scope() {
         let (t, handle) = sles_target_failing_all_but_the_repo_add("h1");
         let (excluded, excluded_handle) = sles_aarch64_target("h2", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t, excluded], false);
@@ -11846,10 +11912,7 @@ mod tests {
             ),
             "{diagnostics:?}"
         );
-        assert!(
-            has_downgrade_row(&handle),
-            "the abort still records h1's row"
-        );
+        assert!(!has_downgrade_row(&handle), "h1 ran no downgrade");
         assert!(
             excluded_handle.commands().is_empty(),
             "{:?}",
@@ -14405,6 +14468,47 @@ mod tests {
                 .iter()
                 .any(|d| d.contains("automatic rollback")),
             "the rollback succeeded: {diagnostics:?}"
+        );
+    }
+
+    /// h1's patch fails its check and h2's passes; the rollback reaches both,
+    /// but h2's version probe dies, so only h1 runs a downgrade.
+    #[tokio::test]
+    async fn the_rollback_writes_a_downgrade_row_only_where_a_downgrade_ran() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1, _) = sles_target_with_patch_exit("h1", &packages, 104);
+        let (t2, h2, probe) = sles_target_with_probe_exit("h2", &packages, 7);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        report
+            .perform_update(&mut group, false, false, &mut Vec::new())
+            .await
+            .expect_err("h1's patch failed its check");
+
+        assert!(
+            h2.commands().contains(&probe),
+            "the rollback reached h2: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h2.commands()
+        );
+        assert!(
+            h1.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h1.commands()
+        );
+        assert_eq!(
+            downgrade_events(&h1),
+            ["downgrade:SUSE:Maintenance:42:7:pkg-a"]
+        );
+        assert!(
+            downgrade_events(&h2).is_empty(),
+            "{:?}",
+            downgrade_events(&h2)
         );
     }
 

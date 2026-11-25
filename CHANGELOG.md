@@ -605,6 +605,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `downgrade`, and `update`'s automatic rollback, now append their `downgrade`
+  row to `/var/log/mtui.log` only on hosts a downgrade command was sent to. A
+  host whose package version probe failed, one for which it found no version
+  to go back to, and one a cancel stopped before its first package no longer
+  get a row claiming a downgrade that never ran there; this includes a run in
+  which every probe failed. The row itself is unchanged.
 - On SL Micro and SLES 16 hosts with a read-only root, the package commands
   of `prepare`, `update` and `downgrade` now build on the snapshot their
   repository refresh just made instead of discarding it, so a signing key the
