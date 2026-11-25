@@ -20,8 +20,9 @@
 //!
 //! `0` success or help/version, `1` runtime failure, `2` clap/argparse's
 //! usage-error convention, `130` (128 + `SIGINT`) a REPL force-quit by a double
-//! Ctrl-C — the status the process had when the signal still killed it outright.
-//! That is the whole vocabulary; downstream packaging, wrapper scripts and CI
+//! Ctrl-C, and `129`/`143` (128 + `SIGHUP`/`SIGTERM`) a REPL that tore down on
+//! that signal — each the status the process had when the signal still killed
+//! it outright. That is the whole vocabulary; downstream packaging, wrapper scripts and CI
 //! can rely on it and nothing else. See [`ExitStatus`] and `mtui_cli::ReplExit`.
 
 /// A process exit status of either entrypoint.
@@ -33,6 +34,9 @@
 /// * [`Usage`](ExitStatus::Usage) → `2` — a genuine argument *usage* error.
 /// * [`Interrupted`](ExitStatus::Interrupted) → `130` — the REPL was
 ///   force-quit by a double Ctrl-C; see `mtui_cli::ReplExit`.
+/// * [`Hangup`](ExitStatus::Hangup) → `129`,
+///   [`Terminated`](ExitStatus::Terminated) → `143` — the REPL tore down on
+///   `SIGHUP`/`SIGTERM`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitStatus {
     /// Success (or help/version output). Process exit code `0`.
@@ -47,10 +51,14 @@ pub enum ExitStatus {
     /// "killed by signal N" as 128 + N sees what it saw before mtui handled the
     /// signal at all.
     Interrupted,
+    /// Torn down on `SIGHUP`. Process exit code `129` (128 + `SIGHUP`).
+    Hangup,
+    /// Torn down on `SIGTERM`. Process exit code `143` (128 + `SIGTERM`).
+    Terminated,
 }
 
 impl ExitStatus {
-    /// The numeric process exit code (`0`, `1`, `2`, or `130`).
+    /// The numeric process exit code (`0`, `1`, `2`, `129`, `130` or `143`).
     #[must_use]
     fn code(self) -> i32 {
         match self {
@@ -58,6 +66,8 @@ impl ExitStatus {
             ExitStatus::Failure => 1,
             ExitStatus::Usage => 2,
             ExitStatus::Interrupted => 130,
+            ExitStatus::Hangup => 129,
+            ExitStatus::Terminated => 143,
         }
     }
 }
@@ -79,5 +89,7 @@ mod tests {
         assert_eq!(i32::from(ExitStatus::Usage), 2);
         // 128 + SIGINT: what wrapper scripts already read as "interrupted".
         assert_eq!(i32::from(ExitStatus::Interrupted), 130);
+        assert_eq!(i32::from(ExitStatus::Hangup), 129);
+        assert_eq!(i32::from(ExitStatus::Terminated), 143);
     }
 }

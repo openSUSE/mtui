@@ -328,9 +328,34 @@ And in a **non-interactive (piped) session** — mtui reading commands from a pi
 rather than a terminal — there is no line editor holding the keyboard, so a
 Ctrl-C arriving between commands is queued and then discarded when the next
 command starts: it interrupts nothing. Interrupt such a session with a signal to
-the process (`kill -INT`) *while a command is running*, or `kill` it outright.
+the process (`kill -INT`) *while a command is running*, or end it with `kill`.
+
+`SIGHUP` (the terminal closed) and `SIGTERM` (a plain `kill`) end the session
+through the same teardown as `quit`: a running command is cancelled at its next
+checkpoint first, as on the first Ctrl-C, then the pool claims and operation
+locks are released and mtui exits with 129 (`SIGHUP`) or 143 (`SIGTERM`). A
+repeated `SIGHUP`/`SIGTERM` does not force-quit; a second Ctrl-C still does,
+and `SIGKILL` skips the teardown. A host command already under way, such as
+`run`, finishes before the teardown starts, so a supervisor that kills after a
+short grace period (a container stop allows 10 seconds by default) can cut the
+teardown off and leave the locks behind. Once a signal has arrived, a
+command-timeout question ("keep waiting?") is answered no without reading the
+terminal; one already on screen when it arrives still waits for its answer, or
+for the terminal to close. If the terminal fails while mtui waits for the next
+command, the same teardown runs before mtui reports the error. Signals during
+the initial load (`-a`/`-k`/`--sut`) still end mtui at once, without teardown.
+Signals that arrive while `shell` or `edit` holds the terminal are not acted on
+until that command returns. After a hangup, a teardown that hangs on an
+unresponsive host has no further escape and stays until the process is killed.
 
 ## How do I remove a dangling lock left by a crashed session?
+
+`list_refhosts --free` shows who holds each lock, since when, and its comment,
+without attaching the host. A session that ends normally — `quit`, Ctrl-D,
+`SIGHUP` or `SIGTERM` in the REPL, or any end of an `mtui-mcp` session — removes
+its own locks, commented or not, so a lock that outlives its session means that
+session crashed or was killed (`SIGKILL`, a container stop) before its teardown
+reached the host.
 
 Reconnect to the same hosts and run `unlock -f` (force) to remove locks left by
 another user or session. mtui also reaps locks older than `[lock] stale_age`

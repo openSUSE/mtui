@@ -2399,6 +2399,7 @@ dependencies = [
  "mtui-testreport",
  "mtui-tui",
  "mtui-types",
+ "nix 0.32.0",
  "notify-rust",
  "nu-ansi-term",
  "owo-colors",

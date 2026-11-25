@@ -71,7 +71,13 @@ impl Prompter {
     /// `stdout` first (no trailing newline, like `input`).
     #[must_use]
     pub fn stdin() -> Self {
-        Self::new(Arc::new(|text: String| {
+        Self::new(Self::stdin_reader())
+    }
+
+    /// The [`stdin`](Self::stdin) prompter's reader, for a caller that wraps it.
+    #[must_use]
+    pub fn stdin_reader() -> Reader {
+        Arc::new(|text: String| {
             Box::pin(async move {
                 tokio::task::spawn_blocking(move || {
                     use std::io::Write as _;
@@ -87,7 +93,7 @@ impl Prompter {
                 .await
                 .unwrap_or_else(|e| Err(io::Error::other(e)))
             }) as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
-        }))
+        })
     }
 
     /// Prompts the user with `text` and returns the typed response.
