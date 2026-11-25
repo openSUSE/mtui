@@ -26,6 +26,7 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "unmaintained zvariant 5 under zbus 5; no known vuln, opt-in non-default feature, secret-free toast payloads (see block comment)" },
   { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus-names 4 under zbus 5 (see block comment)" },
   { id = "RUSTSEC-2026-0372", reason = "unmaintained zvariant-derive 5 under zbus 5 (see block comment)" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, with no known vulnerability; rmcp, russh-sftp and schemars depend on it as well as mtui, so it cannot leave the graph until they move off it" },
 ]
 
 # This section is considered when running `cargo deny check licenses`.
