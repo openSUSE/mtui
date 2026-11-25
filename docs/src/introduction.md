@@ -1,15 +1,13 @@
 # Introduction
 
-**mtui** is an improved, idiomatic Rust successor to
-[openSUSE/mtui](https://github.com/openSUSE/mtui) — the **M**aintenance **T**est
-**U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
-a request by RRID, install and test it on reference hosts over SSH in parallel,
-then approve or reject. It drives the OBS/IBS and Gitea review workflows and
+**mtui** — the **M**aintenance **T**est **U**pdate **I**nstaller — is SUSE QE's
+tool for validating maintenance updates: load a request by RRID, install and
+test it on reference hosts over SSH in parallel, then approve or reject. It drives the OBS/IBS and Gitea review workflows and
 openQA/QEM; reports load from and upload to TeReGen's v2 API.
 
-mtui is memory-safe, async-native, and distributed as two static binaries, while
-preserving the data-format and workflow contracts that keep it interoperable with
-the SUSE maintenance ecosystem: the RRID grammar, the `refhosts.yml` schema, the
+mtui is memory-safe, async-native, and distributed as two static binaries. Its
+data-format and workflow contracts keep it interoperable with the SUSE
+maintenance ecosystem: the RRID grammar, the `refhosts.yml` schema, the
 report document schema, and the remote-lock wire format.
 
 ## Two surfaces
@@ -22,8 +20,8 @@ report document schema, and the remote-lock wire format.
 
 ## This book
 
-- [Installation](installation.md) — build from source, install the binaries,
-  completions, and man pages.
+- [Installation](installation.md) — prebuilt packages, release tarballs, the
+  container image, building from source, completions, and man pages.
 - [Invocation](invocation.md) — the `mtui` and `mtui-mcp` binary flags and how to
   start a session.
 - [Configuration](configuration.md) — the TOML config file, its resolution order,
@@ -32,8 +30,8 @@ report document schema, and the remote-lock wire format.
   directly from the command registry.
 - [Workflow concepts](concepts.md) — fan-out across templates, reference-host pool
   selection, host state, and locking.
-- [MCP server](mcp.md) — running `mtui-mcp`, the tool surface, the testreport and
-  job tools, profiles, and the security boundary.
+- [MCP server](mcp.md) — running `mtui-mcp`, the tool surface, the report-document,
+  file-transfer and job tools, the audit log, profiles, and the security boundary.
 - [Architecture](architecture.md) — the crate layout and the data-format
   contracts.
 - [Developer guide](developer.md) — the toolchain, quality gates, the command
