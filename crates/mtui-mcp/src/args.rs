@@ -75,8 +75,10 @@ pub struct McpArgs {
     pub(crate) transport: Transport,
 
     /// Bind address for `--transport http` (default: 127.0.0.1). Ignored under
-    /// stdio. rmcp's DNS-rebinding guard answers 403 to any request whose
-    /// `Host` header is not loopback, so keep the listener on loopback.
+    /// stdio. The address is not restricted, but rmcp's DNS-rebinding guard
+    /// answers 403 to any request whose `Host` header is not `localhost`,
+    /// `127.0.0.1` or `::1`: bind loopback, or put the listener behind an
+    /// authenticated boundary.
     #[arg(long = "host", value_name = "ADDR", default_value = "127.0.0.1")]
     pub(crate) host: String,
 

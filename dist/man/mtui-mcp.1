@@ -56,7 +56,7 @@ http: Serve over streamable HTTP. One process serves many isolated clients
 .RE
 .TP
 \fB\-\-host\fR \fI<ADDR>\fR [default: 127.0.0.1]
-Bind address for `\-\-transport http` (default: 127.0.0.1). Ignored under stdio. rmcp\*(Aqs DNS\-rebinding guard answers 403 to any request whose `Host` header is not loopback, so keep the listener on loopback
+Bind address for `\-\-transport http` (default: 127.0.0.1). Ignored under stdio. The address is not restricted, but rmcp\*(Aqs DNS\-rebinding guard answers 403 to any request whose `Host` header is not `localhost`, `127.0.0.1` or `::1`: bind loopback, or put the listener behind an authenticated boundary
 .TP
 \fB\-\-port\fR \fI<PORT>\fR [default: 8000]
 Bind port for `\-\-transport http` (default: 8000). Ignored under stdio
