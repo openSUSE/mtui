@@ -148,8 +148,19 @@ other's state. Clients load their own state at runtime via the `load_template` a
 
 The HTTP registry refuses to create more than `[mcp] session_cap` concurrent
 sessions and reaps a session after `[mcp] session_idle_timeout` seconds of
-inactivity (disconnecting its hosts — the SDK gives no per-session teardown
-callback, so this sweep is what releases a vanished client's SSH connections).
+inactivity (disconnecting its hosts, for a client that vanished without ending
+its session).
+
+A session's teardown releases its pool claims, removes its operation locks
+(with or without a `lock -c` comment) and disconnects its hosts. It runs when
+the session ends: on stdin EOF, `SIGINT`, `SIGTERM` or `SIGHUP` under stdio;
+under HTTP when the client ends the session (`DELETE`), when the transport's
+keep-alive gives up on it, at the idle sweep, and for every session at server
+shutdown on the same signals. A teardown gives up after 45 seconds. Nothing runs
+on `SIGKILL` or a crash: those holds stay until a later session reaps them
+past `[lock] stale_age` / `pool_stale_age` (one day by default) or someone runs
+`unlock -f` / `unlock -p -f`. `list_refhosts --free` names the holder, start
+time and comment of every lock it finds, without attaching or reaping.
 
 This isolation depends on rmcp's legacy `Mcp-Session-Id` session lifecycle, so
 over **HTTP** `mtui-mcp` advertises protocol revisions `2024-11-05` through

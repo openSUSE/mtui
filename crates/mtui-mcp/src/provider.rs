@@ -31,8 +31,8 @@
 //!
 //! Each minted [`McpServer`] carries a [`SessionGuard`] that removes the session
 //! from the live set on `Drop` (so a session rmcp tears down frees a cap slot
-//! with no teardown hook) and shares the last-touch timestamp [`McpServer`] bumps
-//! per tool call. Activity is therefore measured at the *tool-call* boundary;
+//! with no teardown hook), spawns that session's [`McpSession::close`], and
+//! shares the last-touch timestamp [`McpServer`] bumps per tool call. Activity is therefore measured at the *tool-call* boundary;
 //! pure SSE-GET keepalive traffic (owned by rmcp, invisible here) is not counted
 //! — acceptable for a DoS/idle guard.
 
@@ -124,6 +124,9 @@ struct TrackedSession {
 struct LiveState {
     sessions: HashMap<u64, TrackedSession>,
     handles: HashMap<SessionHandle, u64>,
+    /// Closes spawned by a dropped [`SessionGuard`] or a sweep, awaited by
+    /// `close_all` so neither a cancelled sweep nor shutdown abandons them.
+    closing: Vec<JoinHandle<()>>,
 }
 
 impl LiveState {
@@ -204,16 +207,25 @@ impl LiveState {
 type LiveSet = Arc<StdMutex<LiveState>>;
 
 /// RAII handle owned by each minted [`McpServer`]: unregisters its session on
-/// `Drop`.
+/// `Drop` and closes it.
 ///
-/// When rmcp drops the `McpServer` at session close (or the idle sweeper evicts
-/// it), this frees a `session_cap` slot automatically, with no rmcp teardown
-/// hook required. Idempotent by construction (a removed key is a no-op remove).
-/// Removal cascades to the session's explicit `SessionHandle`, so a dropped
-/// session's handle never resolves again.
+/// When rmcp drops the `McpServer` at session close (a client DELETE, its
+/// keep-alive expiry), this frees a `session_cap` slot and spawns the
+/// session's [`McpSession::close`], with no rmcp teardown hook required. The
+/// close runs even when the sweeper or `SessionRegistry::close_all` closed the
+/// session already: closing is idempotent, and a session rmcp kept serving
+/// after a sweep may have attached hosts since. Removal cascades to the
+/// session's explicit `SessionHandle`, so a dropped session's handle never
+/// resolves again.
 pub struct SessionGuard {
     live: LiveSet,
     id: u64,
+    /// Strong, because the server's own `Arc` drops before this guard does.
+    session: Arc<McpSession>,
+    /// The runtime that minted the session, so a drop on any thread can close it.
+    runtime: Option<tokio::runtime::Handle>,
+    /// Bounds concurrent guard closes at `[mcp] sweep_parallel`.
+    permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl Drop for SessionGuard {
@@ -221,6 +233,32 @@ impl Drop for SessionGuard {
         if let Ok(mut state) = self.live.lock() {
             state.remove(self.id);
         }
+        let Some(runtime) = &self.runtime else {
+            tracing::debug!(id = self.id, "session minted outside a runtime; not closed");
+            return;
+        };
+        let session = Arc::clone(&self.session);
+        let permits = Arc::clone(&self.permits);
+        spawn_tracked(&self.live, runtime, async move {
+            let _permit = permits.acquire_owned().await;
+            session.close().await;
+        });
+    }
+}
+
+/// Spawns `close` on `runtime` and records it for `close_all` to await.
+///
+/// `Handle::spawn` on a runtime that is shutting down drops the task instead
+/// of panicking, so this is safe from any `Drop`.
+fn spawn_tracked(
+    live: &LiveSet,
+    runtime: &tokio::runtime::Handle,
+    close: impl Future<Output = ()> + Send + 'static,
+) {
+    let task = runtime.spawn(close);
+    if let Ok(mut state) = live.lock() {
+        state.closing.retain(|task| !task.is_finished());
+        state.closing.push(task);
     }
 }
 
@@ -252,6 +290,8 @@ pub struct SessionRegistry {
     sweep_parallel: usize,
     /// The live-session table, shared with every [`SessionGuard`] + the sweeper.
     live: LiveSet,
+    /// `sweep_parallel` permits shared by every [`SessionGuard`]'s close.
+    close_permits: Arc<tokio::sync::Semaphore>,
     /// Monotonic session-id counter (each mint gets a fresh id).
     next_id: Arc<AtomicU64>,
     /// Shared by every minted session: they all live in one process, so their
@@ -275,6 +315,7 @@ impl SessionRegistry {
             idle_timeout,
             sweep_parallel,
             live: Arc::new(StdMutex::new(LiveState::default())),
+            close_permits: Arc::new(tokio::sync::Semaphore::new(sweep_parallel)),
             next_id: Arc::new(AtomicU64::new(0)),
             op_lock_holders: OpLockHolders::default(),
         }
@@ -407,6 +448,9 @@ impl SessionRegistry {
             let guard = SessionGuard {
                 live: Arc::clone(&self.live),
                 id,
+                session: Arc::clone(&session),
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                permits: Arc::clone(&self.close_permits),
             };
             return Ok(McpServer::new_tracked(
                 Arc::clone(&self.registry),
@@ -455,16 +499,32 @@ impl SessionRegistry {
     /// single overall deadline so one wedged host close cannot hang process exit.
     /// Best-effort and idempotent: a second call finds an empty set.
     pub(crate) async fn close_all(&self) {
-        let sessions: Vec<Arc<McpSession>> = {
-            let mut state = match self.live.lock() {
-                Ok(s) => s,
-                Err(_) => return,
+        let deadline = tokio::time::Instant::now() + HOST_CLOSE_TIMEOUT + Duration::from_secs(1);
+        // Repeated until both are empty: a guard may drop while we wait.
+        loop {
+            let (sessions, closing) = {
+                let mut state = match self.live.lock() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let sessions = state.upgrades();
+                state.clear();
+                (sessions, std::mem::take(&mut state.closing))
             };
-            let sessions = state.upgrades();
-            state.clear();
-            sessions
-        };
-        close_sessions(sessions, self.sweep_parallel).await;
+            if sessions.is_empty() && closing.is_empty() {
+                return;
+            }
+            let round = async {
+                tokio::join!(
+                    close_sessions(sessions, self.sweep_parallel),
+                    futures::future::join_all(closing)
+                )
+            };
+            if tokio::time::timeout_at(deadline, round).await.is_err() {
+                tracing::warn!("session teardown timed out; abandoning remaining closes");
+                return;
+            }
+        }
     }
 }
 
@@ -472,7 +532,7 @@ impl SessionRegistry {
 /// overall deadline (`HOST_CLOSE_TIMEOUT + 1s`).
 ///
 /// Shared by the idle sweep ([`sweep_once`]) and graceful shutdown
-/// ([`SessionRegistry::close_all`]). One budget, not N×, so the batch returns
+/// (`SessionRegistry::close_all`). One budget, not N×, so the batch returns
 /// even if every close wedges and teardown latency stays ~independent of session
 /// count.
 async fn close_sessions(sessions: Vec<Arc<McpSession>>, parallel: usize) {
@@ -563,9 +623,15 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
         return;
     }
 
-    // Phase 2 (concurrent, unlocked). Entries are already out of the live set,
-    // so an abandoned close is a best-effort no-op the OS reclaims at exit.
-    close_sessions(to_close, parallel).await;
+    // Phase 2 (concurrent, unlocked), as a tracked task: entries are already
+    // out of the live set, so a sweep cancelled at shutdown must leave its
+    // closes for `close_all` to await rather than abandon them.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    spawn_tracked(live, &tokio::runtime::Handle::current(), async move {
+        close_sessions(to_close, parallel).await;
+        let _ = done_tx.send(());
+    });
+    let _ = done_rx.await;
 }
 
 #[cfg(test)]
@@ -1050,6 +1116,242 @@ mod tests {
             reg.live.lock().unwrap().handles.is_empty(),
             "a dropped session's handle index entry must be released, not leaked"
         );
+    }
+
+    /// A server whose session holds `h1` with an operation lock and a pool
+    /// claim, plus the host's mock connection.
+    async fn server_holding_h1(reg: &SessionRegistry) -> (McpServer, mtui_hosts::MockConnection) {
+        use mtui_hosts::{HostsGroup, MockConnection, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::TargetState;
+
+        let conn = MockConnection::new("h1");
+        let probe = conn.clone();
+        let mut target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        target.lock("").await.expect("operation lock taken");
+        assert!(
+            target
+                .pool_claim("mtui pool SUSE:Maintenance:1:1 [me]")
+                .await
+                .expect("pool claim"),
+            "pool claim taken"
+        );
+        let server = reg.try_make_server().expect("http server");
+        {
+            let session = reg.live_sessions().pop().expect("the minted session");
+            let mut guard = session.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+            report.base_mut().pool_claims.insert("h1".to_owned());
+            report.base_mut().targets = HostsGroup::new(vec![target], false);
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active("SUSE:Maintenance:1:1");
+        }
+        for path in [mtui_hosts::TARGET_LOCK_PATH, mtui_hosts::POOL_LOCK_PATH] {
+            assert!(probe.file_contents(path).is_some(), "fixture holds {path}");
+        }
+        (server, probe)
+    }
+
+    /// Attaches `conn` to `session` with nothing loaded, under an operation
+    /// lock, as `add_host` does.
+    async fn attach_locked(session: &Arc<McpSession>, conn: mtui_hosts::MockConnection) {
+        use mtui_hosts::{Connection as _, Target};
+        use mtui_types::enums::TargetState;
+        let name = conn.hostname().to_owned();
+        let mut target = Target::with_connection(&name, TargetState::Enabled, Box::new(conn));
+        target.lock("").await.expect("operation lock taken");
+        session.session().lock().await.targets_mut().add(target);
+    }
+
+    async fn until_closed(probe: &mtui_hosts::MockConnection) {
+        for _ in 0..250 {
+            if probe.is_closed() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A session rmcp drops (client DELETE, keep-alive expiry) is closed: its
+    /// operation lock and pool claim are released.
+    #[tokio::test]
+    async fn dropped_server_closes_its_session() {
+        use mtui_hosts::{POOL_LOCK_PATH, TARGET_LOCK_PATH};
+
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let (server, probe) = server_holding_h1(&reg).await;
+
+        drop(server);
+        assert_eq!(
+            reg.live.lock().unwrap().closing.len(),
+            1,
+            "the drop spawned one tracked close"
+        );
+        until_closed(&probe).await;
+        assert!(
+            probe.is_closed(),
+            "the dropped session's host is disconnected"
+        );
+        for path in [TARGET_LOCK_PATH, POOL_LOCK_PATH] {
+            assert!(probe.file_contents(path).is_none(), "{path} released");
+        }
+    }
+
+    /// A session swept (or shut down) while rmcp kept serving it may attach
+    /// hosts again; its drop must still release them.
+    #[tokio::test]
+    async fn a_swept_session_that_attached_hosts_again_is_closed_on_drop() {
+        use mtui_hosts::{Connection as _, MockConnection, TARGET_LOCK_PATH};
+
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let server = reg.try_make_server().expect("http server");
+        let session = reg.live_sessions().pop().expect("the minted session");
+        reg.close_all().await;
+        let conn = MockConnection::new("h2");
+        let probe = conn.clone();
+        attach_locked(&session, conn).await;
+        assert!(probe.file_contents(TARGET_LOCK_PATH).is_some());
+        assert!(probe.is_active());
+        drop(session);
+
+        drop(server);
+        until_closed(&probe).await;
+        assert!(probe.is_closed(), "the re-attached host is disconnected");
+        assert!(probe.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    /// rmcp may drop the server on a thread outside the runtime; the close
+    /// still runs on the runtime that minted it.
+    #[test]
+    fn a_server_dropped_off_its_runtime_is_still_closed() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let (server, probe) = rt.block_on(server_holding_h1(&reg));
+
+        drop(server);
+        rt.block_on(until_closed(&probe));
+        assert!(probe.is_closed(), "closed although dropped off-runtime");
+        assert!(probe.file_contents(mtui_hosts::TARGET_LOCK_PATH).is_none());
+    }
+
+    /// `Handle::spawn` on a shut-down runtime drops the task; it does not panic.
+    #[test]
+    fn dropping_a_server_after_its_runtime_shut_down_does_not_panic() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let server = rt.block_on(async { reg.try_make_server().expect("http server") });
+        drop(rt);
+        drop(server);
+        assert_eq!(reg.live_count(), 0);
+    }
+
+    /// A guard dropped with no runtime (a plain `#[test]`) must not panic.
+    #[test]
+    fn dropping_a_server_outside_a_runtime_does_not_panic() {
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        drop(reg.try_make_server().expect("http server"));
+        assert_eq!(reg.live_count(), 0);
+        assert!(reg.live.lock().unwrap().closing.is_empty());
+    }
+
+    /// A sweep cancelled at shutdown has already removed its sessions from the
+    /// live set; `close_all` must still see their closes through.
+    #[tokio::test]
+    async fn a_cancelled_sweep_leaves_its_closes_to_close_all() {
+        use mtui_hosts::MockConnection;
+
+        let reg = reg_with_idle(Duration::from_millis(50));
+        let conn = MockConnection::new("slow").with_close_delay(Duration::from_millis(300));
+        let probe = conn.clone();
+        let session = reg.make_session();
+        attach_locked(&session, conn).await;
+        track(&reg, &session, now_millis());
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        tokio::select! {
+            () = sweep_once(&reg.live, reg.idle_timeout, 4) => panic!("the sweep must still be closing"),
+            () = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        assert_eq!(reg.live_count(), 0, "the sweep removed the session");
+        assert!(!probe.is_closed());
+
+        reg.close_all().await;
+        assert!(
+            probe.is_closed(),
+            "close_all saw the cancelled sweep's close through"
+        );
+    }
+
+    /// A guard that drops while `close_all` is waiting is waited for too.
+    #[tokio::test]
+    async fn close_all_waits_for_a_close_that_starts_meanwhile() {
+        use mtui_hosts::MockConnection;
+
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let late = reg.try_make_server().expect("http server");
+        let late_session = reg.live_sessions().pop().expect("the minted session");
+        let conn = MockConnection::new("late").with_close_delay(Duration::from_millis(600));
+        let probe = conn.clone();
+        attach_locked(&late_session, conn).await;
+        drop(late_session);
+        reg.live.lock().unwrap().clear();
+        let first = slow_close_session(Duration::from_millis(200)).await;
+        track(&reg, &first, now_millis());
+
+        let closing = tokio::spawn({
+            let reg = reg.clone();
+            async move { reg.close_all().await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(late);
+        closing.await.expect("close_all joins");
+        assert!(
+            probe.is_closed(),
+            "close_all returned before the late close finished"
+        );
+    }
+
+    /// Guard closes run at most `[mcp] sweep_parallel` at a time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn guard_closes_are_bounded_by_sweep_parallel() {
+        use mtui_hosts::MockConnection;
+
+        let mut config = Config::default();
+        config.mcp_sweep_parallel = 1;
+        let reg = SessionRegistry::new(Arc::new(mtui_core::register_all()), config);
+        let mut probes = Vec::new();
+        let mut servers = Vec::new();
+        for name in ["a", "b"] {
+            let server = reg.try_make_server().expect("http server");
+            let session = reg
+                .live_sessions()
+                .into_iter()
+                .find(|s| s.session().try_lock().is_ok_and(|g| g.targets().is_empty()))
+                .expect("the new session");
+            let conn = MockConnection::new(name).with_close_delay(Duration::from_millis(300));
+            probes.push(conn.clone());
+            attach_locked(&session, conn).await;
+            servers.push(server);
+        }
+        drop(servers);
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        assert_eq!(
+            probes.iter().filter(|p| p.is_closed()).count(),
+            1,
+            "one close at a time"
+        );
+        for probe in &probes {
+            until_closed(probe).await;
+            assert!(probe.is_closed());
+        }
     }
 
     /// Handles are registry-scoped: one registry's handle means nothing to
