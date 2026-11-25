@@ -261,9 +261,22 @@ One-time setup:
 The `crates-io` job requests `id-token: write`, and
 `rust-lang/crates-io-auth-action` swaps the job's OIDC token for a short-lived
 crates.io token that is revoked when the job ends. A crate that does not exist
-yet cannot be configured, so the very first publish of a new crate name needs a
-scoped API token (`publish-new`, with an expiry) exported as
-`CARGO_REGISTRY_TOKEN` and run locally.
+yet cannot be configured, and crates.io refuses to let a Trusted Publishing token
+create one. So the first publish of a new crate name is the **whole workspace**,
+run locally **before the tag is pushed**, from a clean checkout of the tag, with a
+scoped API token (`publish-new` + `publish-update`, crate scopes `suse-mtui` and
+`mtui-*`, a one-day expiry) exported as `CARGO_REGISTRY_TOKEN`:
+
+```sh
+git worktree add ../mtui-tag X.Y.Z   # the tag exists locally, not yet pushed
+cd ../mtui-tag
+CARGO_REGISTRY_TOKEN=… cargo publish --workspace --locked
+```
+
+Push the tag only once all ten crates show `X.Y.Z` on crates.io. The tag's
+`crates-io` job then stops at `already exists on crates.io index` without
+uploading anything. Afterwards add the new crate's Trusted Publishing entry,
+revoke the token, and keep no registry token in GitHub.
 
 ### Release model
 
@@ -303,7 +316,9 @@ stay `mtui`/`mtui-mcp`) and the nine `mtui-*` libraries (`xtask` has
 4. Check the publish locally: `cargo publish --workspace --locked --dry-run`.
 5. Tag the commit (`git tag X.Y.Z`) and push the branch and the tag
    (`git push origin X.Y.x X.Y.Z`). The tag is the bare version; a
-   `v`-prefixed tag is invalid.
+   `v`-prefixed tag is invalid. If the release adds a crate that is not on
+   crates.io yet, publish the workspace locally first (see [One-time maintainer
+   setup](#one-time-maintainer-setup)) and push the tag after.
 6. The tag push drives `.github/workflows/release.yml`: build and package, the
    GitHub release, then, when the gate says so, `cargo publish --workspace
    --locked` in the `crates-io` job.
