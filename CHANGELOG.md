@@ -486,21 +486,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fan-out-capable tool — states each scope's default in one clause instead of
   restating the whole fan-out contract (#597): about 2.7 KB less on every
   `tools/list`. Wording only; the resolver is unchanged.
-- `config show` and `config set` gained help text; the `config_show`/`config_set`
-  MCP tool descriptions are no longer the bare tool name, and `set`'s
-  `attribute`/`value` are described (#597).
 - MCP token nudges, no behaviour change: the docs and example config recommend
   `profile = "core"` for agent clients (36 tools on every request vs 65 in
   `full`), with a `tools_deny = ["updates", "openqa_overview"]` recipe for
   workflows that never use them; the `updates -F`/`--json` helps point at
   `--limit`, and the `get`/`put` tool descriptions are terser wordings of the
   same contracts.
-- `config show` over MCP prints less than at the REPL (#410): the no-argument
-  bulk dump is refused (name attributes explicitly), the operator-local values
-  (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
-  path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
-  everything verbatim as before. No tool schema changed. `config set` of an
-  endpoint URL acknowledges with the userinfo-stripped value.
 - Unbounded listings now crush to a row budget — first-40 + last-10 + top-severity
   anomaly rows, exact-deduped, hard cap 100 — instead of dumping thousands of
   rows into the client's context: `updates` (anomaly: non-`testing` status,
@@ -528,9 +519,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   huge rows; `openqa_overview` per-section caps sum to ~600 rows total.
   **MCP schema note:** additive only — `updates` gains `offset`, `list_refhosts`
   gains `limit`/`offset`; no renames/removals.
-- A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
-  `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
-  `gitea <verb> failed` form; the calls never ran `osc`.
 - `approve`/`reject` on Maintenance requests check the report document's
   `verdict` (and `comment` for `reject`) on TeReGen v2 instead of the
   `SUMMARY:`/`comment:` lines of the qam.suse.de text log, which mtui no longer
@@ -889,49 +877,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The exported `people.testers` entry reports the real OS and kernel on macOS
   (`macOS-27.2 (26B123)`, `27.2.0`). If the OS or kernel cannot be detected, mtui
   leaves out those fields instead of sending `Unknown-None` / `Unknown`.
-- `openqa_overview` no longer reports every version as FAILED "Not a valid
-  version" when the openQA job-group list is large (#762). The openQA response
-  cap is now 64 MiB (openqa.suse.de answers about 19 MB), a job-group lookup or
-  openQA query failure shows as `ERROR` with its cause, a version without a job
-  group shows as missing, and the list is fetched once for both sections.
+- `openqa_overview`: a job-group lookup or openQA query failure shows as
+  `ERROR` with its cause, a version without a job group shows as missing, and
+  the list is fetched once for both sections (#762).
 - Report document writes (`commit`, `approve`, `report_section_write`, ...) are no
   longer refused against a TeReGen that serves `new_issues`: the vendored
   report schema now includes it, so loading no longer flags schema drift.
-- `export` on a kernel update downloads the openQA install and LTP logs again:
-  every one was refused as an "unsafe export path component" because the
-  openQA base URL ends in `/`.
-- Unlocking a lock that someone else removed in the meantime reports it
-  released instead of failing with an SFTP "No such file" error.
 - A released pool claim (`unlock --pool`) is no longer written back by a
   later `reboot`.
-- `get`/`put` no longer report the previous transfer's `ok` or `FAILED` for a
-  host disabled since then.
-- `put` of an unreadable local file fails on every host instead of printing
-  nothing and succeeding.
-- `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
-  download no longer fails on every host; the result line names
-  `downloads/<dir>/*.<host>`.
-- `reload_products` fails, naming the host, when the products cannot be
-  re-read, instead of printing the previously recorded product as reloaded.
-- The openQA overview no longer reports a build whose package name contains
-  `+` (e.g. `libsigc++2`) as passed: the build was sent unencoded, so openQA
-  matched no jobs.
-- `regenerate` no longer waits for, and may report success on, a regeneration
-  TeReGen refused with a JSON error body lacking an `error` key.
-- Gitea review comments reach the PR when the owner or repository name
-  contains `pulls`.
-- A TeReGen error body over 2 KiB, or an update whose rpm output lacks its end
-  marker, can no longer crash mtui on a multi-byte character.
-- An invalid endpoint URL in the config file, and a failed `refhosts.yml`
-  download, no longer write the URL's `user:password@` to the log.
+- A TeReGen error body over 2 KiB can no longer crash mtui on a multi-byte
+  character.
 - Audit records now carry the client's W3C `traceparent` when it arrives on
   the wire (`params._meta`): the server read the typed params `meta`, which
   stays empty on receive, so a wire `traceparent` never reached the record.
   The record's `trace` field is now populated from the canonical
   `context.meta` (#413).
-- Session-level `list_refhosts`/`updates` (and the other template-free
-  commands) no longer hold the active template's entry for the call, so a
-  concurrent call on that template no longer fails `template busy` (#666).
 - A teregen `401` names the principal, the `SHA256:…` fingerprint of the key
   that actually signed, and the server that refused, and says which request
   was refused: `/auth/ssh/verify` keeps the five-cause hint, while a write
@@ -953,48 +913,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host claimed by another template, naming the holder, instead of attaching
   it silently; pool selection no longer hands out hosts attached by name
   (#679).
-- `prepare` and `downgrade` abort before locking with the names of every
-  transactional host they cannot resolve a command for — `host (Product
-  version, transactional|non-transactional)` — instead of refusing the whole
-  group with a bare `missing preparer` / `missing downgrader`. The
-  `install`/`uninstall` message spells the key out the same way. `update`
-  resolves every eligible host's updater before its own lock and repo steps,
-  so a missing updater aborts with no lock taken and no repo added or removed —
-  even a host whose repo add would have failed aborts here first. With prepare
-  enabled the prepare step still runs first, so this gate is the first check
-  only under `--noprepare` (#682).
-- `set_timeout` pushes the new window to already-connected hosts instead of
-  only storing it for the next connect, so a timeout raised before a long
-  quiet step (or lowered to fail fast) takes effect immediately. `set_timeout
-  0` is refused: a zero window would give a headless run a deadline of now.
-  Commands aborted by the timeout are now also recorded as timed out,
-  instead of looking like any other failed command (#687).
-- Standalone `set_repo` takes the operation lock before changing repos and
-  releases it afterwards, like `prepare`/`update` do — while another owner
-  holds a host it now refuses (`Hosts locked: …`) instead of adding or
-  removing that host's test repo under them (#665).
 
 - In-band `get`/`put` take the shared gate plus their own template's lock and
   dispatch on a per-call fork instead of holding the exclusive gate and the
   canonical session mutex across the SFTP fan-out, so a transfer on one
   template no longer queues behind the slowest operation anywhere else (#667).
-- A host is detected as transactional only when it has a
-  `transactional-update.conf` and `/` is mounted read-only (from
-  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
-  marked transactional, so `prepare`, `update` and `downgrade` refused it and
-  `set_repo` refreshed inside a new default snapshot. When the mount table is
-  missing or has no `/` entry, the config file decides as before, since taking
-  a transactional host for a standard one would run zypper on a read-only
-  root; any other error reading it fails the probe (#686).
 - `openqa_jobs` reads every page of a build's jobs (keyset paging with
   `before=`, until an empty page) instead of only openQA's first 1000, and no
   longer fails on very large builds because one response exceeded the body
   size limit. Past 10000 jobs, or when paging cannot continue, the newest jobs
   read are listed and a note says older ones may be missing (#643).
-- `load_template`, `reload_openqa`, `export`, `openqa_overview` and
-  `openqa_jobs` send the incident's `project` and `type` to the QEM Dashboard,
-  which now requires them; the dashboard openQA data stopped loading with
-  HTTP 400 (#717).
 - A Manual `export` with no connected host (the template dropped to Manual on
   failing install jobs and autoconnect attached nothing) now writes what needs
   no host: `testing.openqa` from the cached install results and the
@@ -1010,10 +938,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   invalid ("trailing characters"). An unknown key whose value only a generic
   JSON parse rejects (an out-of-range number such as `1e400`, a lone surrogate)
   is dropped like any other unknown key, but without the dropped-key warnings.
-- `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
-  (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
-  release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
-  when there is none.
 - `put` (REPL and MCP) no longer opens the destination for truncation, which
   followed a symlink planted at the upload name and wrote through a hardlink to
   another file. The file is staged in a private directory next to the
@@ -1028,22 +952,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   being ignored. A lost reply to the final rename is reported as "may or may not
   have been published" and is not retried. A cancelled upload can leave a
   private `.mtui-upload-*` directory behind.
-- An empty or unparseable `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock`
-  (left by a claim that died between creating the file and writing its line)
-  no longer reads as a free host, which wedged it: every claim retried against
-  it and reported the host as claimed by an unknown owner, `unlock --force`
-  did nothing, and a stale reap never fired. It is now an invalid lock file:
-  `list_locks` reports it as such, `lock` and pool claims refuse with an error
-  naming the host and the file and how to clear it, `unlock --force` (`--pool`
-  for the pool claim) removes it, and a plain `unlock` leaves it alone. The
-  `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
-  file's modification time because it has no timestamp of its own; a missing or
-  future modification time never reaps. A lock line holding non-UTF-8 bytes or
-  an empty user is invalid the same way, instead of being read leniently. A
-  file that reads empty may be another tester's claim between its create and its
-  write, so mtui re-reads one it cannot prove is older than five seconds for up
-  to five seconds before calling it invalid, and the error says how long ago the
-  file was modified.
+- An empty `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock` may be another
+  tester's claim between its create and its write, so mtui re-reads one it
+  cannot prove is older than five seconds for up to five seconds before calling
+  it invalid, and the error says how long ago the file was modified.
 - An SFTP request that fails with an ordinary status (file not found,
   permission denied, an exclusive create that lost the race) no longer makes
   mtui drop its cached SFTP session and replay the request. An exclusive create
@@ -1052,24 +964,81 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   another tester's. Reads, appends, truncating writes and requests that never
   reached the server still retry once on a new session after the cached one
   fails.
-- A template can reattach to its own pool claim on a host after mtui restarts:
-  a claim recording the same user and request is adopted whatever PID it
-  records, instead of the host being skipped as busy. The existing claim is
-  left as it is, so its timestamp is not refreshed.
 - Kernel `export` no longer lets one job's install log or LTP result overwrite
   another's when both map to the same file name: every such job now keeps its
   own file, with `-job-<id>` inserted before the extension (for example
   `h-zypper-x86_64-job-41.log`). File names no job collides on are unchanged,
   and files from earlier exports are not deleted.
-- A repository URL that embeds credentials (`https://user:token@host/…`) is
-  still sent to `zypper` exactly as given, but its userinfo no longer reaches
-  logs, prompts, errors or the per-host command log: the `Adding repo` /
-  `Removing repo` lines, the failed-removal message, a rejected-URL error, the
-  command-timeout prompt and error, and the command and output stored for
-  `showlog`, `export` and the report all show `https://***@host/…` instead.
-  Output that merely echoes such a URL (a zypper error line) is masked the same
-  way. Only a `scheme://…@` authority is recognised: a password printed on its
-  own, or carried in a URL path or query, is not.
+- `report_file_read` now honours `[mcp] max_input_bytes` mid-line: a file with a
+  line longer than the cap used to be read whole before the cap applied, so it
+  could return far more than the budget. The read now stops at the cap, cutting
+  that line, and `total_lines` counts the lines read so far; the notice says the
+  remaining size is unknown.
+- `approve -r` and `reject --reviewer` no longer publish the report when the
+  action is then refused: the reviewer and document checks, the Slack gate, the
+  backend client, the PR-hash gate and the Gitea and OBS assignment checks now
+  run before the reviewer is recorded and uploaded (#685). Only the OBS verdict
+  check still follows the upload, as it reads the uploaded document.
+- `approve` on Gitea now refuses the LGTM if the PR head moved after the hash
+  check, instead of approving a head nobody looked at (#685).
+- `reject --reviewer` and `request_review` now refuse a report that loaded with
+  a stale Gitea hash (`load_template --force-continue`), as `commit` and
+  `export` already did, instead of publishing it; `request_review` refuses
+  before it posts to Slack (#685).
+- `-T/--template`, `unload`, `switch`, `regenerate <RRID>` and the MCP
+  `template=` argument accept the short RRID spelling (`S:M:…`, `S:S:…`,
+  `S:P:…`). mtui reports and records the canonical id. A short id passed to
+  `regenerate` can no longer skip the uncommitted-edits guard (#680).
+- Templates loaded in one `mtui`/`mtui-mcp` process, and the sessions of one
+  `mtui-mcp` server, no longer share the operation lock on a common refhost: a
+  second template's `run`/`update`/`install`/`prepare` now waits for (or, at the
+  default `lock_wait = 0`, refuses on) the first one's hold instead of
+  re-stamping it, and its abort no longer deletes that lockfile, so their
+  `zypper` transactions are serialised (#670).
+- `export` writes one install log per openQA flavor and rewrites it in place, so
+  repeated exports no longer add timestamped copies that `commit` uploads. The
+  document's `testing.openqa.install` scenarios now name the flavor too.
+- `export` now writes the `openqa_overview` results (single incidents,
+  aggregated updates, build checks) into `testing.openqa`, fetching them when
+  `openqa_overview` has not run in this session; previously only
+  `openqa_overview --export` did. A failed fetch prints a warning and the export
+  continues without those rows.
+
+### Security
+
+- The SSH client stack is updated to `russh` 0.65.4, fixing three client
+  advisories: `GHSA-ppq4-8rhp-9xrq` (a malicious server could grow the
+  client's memory without bound before authentication), `GHSA-66vf-xq4p-pg7q`
+  (a host key and signature that do not match the negotiated host-key
+  algorithm were accepted) and `GHSA-7qgr-cjxw-6vjf` (channel-open replies
+  were accepted for channels that were not being opened). `ssh-key` moves to
+  0.7.0-rc.12 with it, and `rsa` and `pkcs1` to their stable releases; `rsa`
+  0.10.0 fixes `RUSTSEC-2023-0071` (CVE-2023-49092, the Marvin timing side
+  channel), whose advisory ignore is dropped.
+
+## [26.3.6] - 2026-11-09
+
+### Added
+
+- Published on crates.io as `suse-mtui` (`cargo install suse-mtui`); the
+  binaries are still `mtui`/`mtui-mcp`.
+
+### Fixed
+
+- A command that prints nothing for about 60 seconds no longer loses its SSH
+  session and returns `exit -1`: the link now carries keepalives, so only
+  `connection_timeout` decides when a quiet command is aborted (#683).
+- A command whose SSH session is lost before it reports an exit status or
+  signal now says so in its stderr (`mtui: SSH session to <host> lost after
+  <N.N>s; …`) instead of returning a bare `exit -1` (#683).
+- `mtui-mcp`'s `initialize` and `server/discover` replies now report
+  `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
+  version (#657).
+- `load_template` given a short RRID (`S:M:…`) now reports the template under
+  its canonical id, in both the success and the failure line (#680).
+- A repeated `add_host` no longer replaces a host a test-target slot already
+  has (losing its command log and `update` record) or re-takes its pool claim,
+  and `add_host -t` no longer attaches reference hosts nobody named (#678).
 - Automatic `export` now refuses install-log filenames derived from dashboard
   metadata that contain a path separator or control character (or are an
   absolute path), before fetching or writing anything, so a hostile dashboard
@@ -1082,11 +1051,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bot is (`auth.test` failed, or returned no or a blank user ID), instead of
   carrying on without excluding the bot's own `+1`; `request_review` likewise
   rejects a blank bot user ID.
-- `report_file_read` now honours `[mcp] max_input_bytes` mid-line: a file with a
+- `testreport_read` now honours `[mcp] max_input_bytes` mid-line: a file with a
   line longer than the cap used to be read whole before the cap applied, so it
   could return far more than the budget. The read now stops at the cap, cutting
-  that line, and `total_lines` counts the lines read so far; the notice says the
+  that line, and `line_count` counts the lines read so far; the notice says the
   remaining size is unknown.
+- A template can reattach to its own pool claim on a host after mtui restarts:
+  a claim recording the same user and request is adopted whatever PID it
+  records, instead of the host being skipped as busy. The existing claim is
+  left as it is, so its timestamp is not refreshed.
+- A repository URL that embeds credentials (`https://user:token@host/…`) is
+  still sent to `zypper` exactly as given, but its userinfo no longer reaches
+  logs, prompts, errors or the per-host command log: the `Adding repo` /
+  `Removing repo` lines, the failed-removal message, a rejected-URL error, the
+  command-timeout prompt and error, and the command and output stored for
+  `showlog`, `export` and the report all show `https://***@host/…` instead.
+  Output that merely echoes such a URL (a zypper error line) is masked the same
+  way. Only a `scheme://…@` authority is recognised: a password printed on its
+  own, or carried in a URL path or query, is not.
 - The MCP `get` tool now applies `[mcp] max_input_bytes` while reading each
   remote file, instead of downloading the whole file per host and clipping it
   afterwards, so a large file can no longer exhaust memory before the cap
@@ -1095,70 +1077,122 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   during the read), and a server that reports none now fails the call naming the
   host rather than being read without a bound. `max_input_bytes = 0` still reads
   everything.
-- A repeated `add_host` no longer replaces a host a test-target slot already
-  has (losing its command log and `update` record) or re-takes its pool claim,
-  and `add_host -t` no longer attaches reference hosts nobody named (#678).
-- `approve -r` and `reject --reviewer` no longer publish the report when the
-  action is then refused: the reviewer and document checks, the Slack gate, the
-  backend client, the PR-hash gate and the Gitea and OBS assignment checks now
-  run before the reviewer is recorded and uploaded (#685). Only the OBS verdict
-  check still follows the upload, as it reads the uploaded document.
-- `approve` on Gitea now refuses the LGTM if the PR head moved after the hash
-  check, instead of approving a head nobody looked at (#685).
-- `reject --reviewer` and `request_review` now refuse a report that loaded with
-  a stale Gitea hash (`load_template --force-continue`), as `commit` and
-  `export` already did, instead of publishing it; `request_review` refuses
-  before it posts to Slack (#685).
-- A command that prints nothing for about 60 seconds no longer loses its SSH
-  session and returns `exit -1`: the link now carries keepalives, so only
-  `connection_timeout` decides when a quiet command is aborted (#683).
-- A command whose SSH session is lost before it reports an exit status or
-  signal now says so in its stderr (`mtui: SSH session to <host> lost after
-  <N.N>s; …`) instead of returning a bare `exit -1` (#683).
-- `mtui-mcp`'s `initialize` and `server/discover` replies now report
-  `serverInfo` as `mtui-mcp` with its own version instead of rmcp's name and
-  version (#657).
-- `load_template` given a short RRID (`S:M:…`) now reports the template under
-  its canonical id, in both the success and the failure line (#680).
-- `-T/--template`, `unload`, `switch`, `regenerate <RRID>` and the MCP
-  `template=` argument accept the short RRID spelling (`S:M:…`, `S:S:…`,
-  `S:P:…`). mtui reports and records the canonical id. A short id passed to
-  `regenerate` can no longer skip the uncommitted-edits guard (#680).
+- An SFTP request that fails with an ordinary status (file not found,
+  permission denied, an exclusive create that lost the race) no longer makes
+  mtui drop its cached SFTP session and replay the request. A create, truncate
+  or append whose reply is lost is likewise no longer replayed on a fresh
+  session: the timeout is returned as it happened, so the lock layer can
+  inspect the host instead of mistaking its own file for another tester's.
+  Read-only requests still retry once on a new session after a session failure.
+  mtui drop its cached SFTP session and replay the request. An exclusive create
+  whose reply is lost is returned as a timeout instead of being replayed, so
+  the lock layer can inspect the host instead of mistaking its own file for
+  another tester's. Reads, appends, truncating writes and requests that never
+  reached the server still retry once on a new session after the cached one
+  fails.
+- An empty or unparseable `/var/lock/mtui.lock` or `/var/lock/mtui-pool.lock`
+  (left by a claim that died between creating the file and writing its line)
+  no longer reads as a free host, which wedged it: every claim retried against
+  it and reported the host as claimed by an unknown owner, `unlock --force`
+  did nothing, and a stale reap never fired. It is now an invalid lock file:
+  `list_locks` reports it as such, `lock` and pool claims refuse with an error
+  naming the host and the file and how to clear it, `unlock --force` (`--pool`
+  for the pool claim) removes it, and a plain `unlock` leaves it alone. The
+  `[lock] stale_age` / `pool_stale_age` reap applies too, measured from the
+  file's modification time because it has no timestamp of its own; a missing or
+  future modification time never reaps. A lock line holding non-UTF-8 bytes or
+  an empty user is invalid the same way, instead of being read leniently.
+- `--version` (`mtui` and `mtui-mcp`) no longer names an unrelated tag
+  (`archive/python-main-…`) as the build ref on `main`; it shows the nearest
+  release tag of the same `MAJOR.MINOR` series, or the 12-character commit SHA
+  when there is none.
+- A host is detected as transactional only when it has a
+  `transactional-update.conf` and `/` is mounted read-only (from
+  `/proc/self/mounts`). A read-write SLES 16 host carrying the config file was
+  marked transactional, so `prepare`, `update` and `downgrade` refused it and
+  `set_repo` refreshed inside a new default snapshot. When the mount table is
+  missing or has no `/` entry, the config file decides as before, since taking
+  a transactional host for a standard one would run zypper on a read-only
+  root; any other error reading it fails the probe (#686).
+- Standalone `set_repo` takes the operation lock before changing repos and
+  releases it afterwards, like `prepare`/`update` do — while another owner
+  holds a host it now refuses (`Hosts locked: …`) instead of adding or
+  removing that host's test repo under them (#665).
+- `set_timeout` pushes the new window to already-connected hosts instead of
+  only storing it for the next connect, so a timeout raised before a long
+  quiet step (or lowered to fail fast) takes effect immediately. `set_timeout
+  0` is refused: a zero window would give a headless run a deadline of now.
+  Commands aborted by the timeout are now also recorded as timed out,
+  instead of looking like any other failed command (#687).
+- `prepare` and `downgrade` abort before locking with the names of every
+  transactional host they cannot resolve a command for — `host (Product
+  version, transactional|non-transactional)` — instead of refusing the whole
+  group with a bare `missing preparer` / `missing downgrader`. The
+  `install`/`uninstall` message spells the key out the same way. `update`
+  resolves every eligible host's updater before its own lock and repo steps,
+  so a missing updater aborts with no lock taken and no repo added or removed —
+  even a host whose repo add would have failed aborts here first. With prepare
+  enabled the prepare step still runs first, so this gate is the first check
+  only under `--noprepare` (#682).
+- Session-level `list_refhosts`/`updates` (and the other template-free
+  commands) no longer hold the active template's entry for the call, so a
+  concurrent call on that template no longer fails `template busy` (#666).
+- `export` on a kernel update downloads the openQA install and LTP logs again:
+  every one was refused as an "unsafe export path component" because the
+  openQA base URL ends in `/`.
+- Unlocking a lock that someone else removed in the meantime reports it
+  released instead of failing with an SFTP "No such file" error.
+- `get`/`put` no longer report the previous transfer's `ok` or `FAILED` for a
+  host disabled since then.
+- `put` of an unreadable local file fails on every host instead of printing
+  nothing and succeeding.
+- `get <dir>/` creates its local `downloads/<dir>/` directory, so a folder
+  download no longer fails on every host; the result line names
+  `downloads/<dir>/*.<host>`.
+- `reload_products` fails, naming the host, when the products cannot be
+  re-read, instead of printing the previously recorded product as reloaded.
+- The openQA overview no longer reports a build whose package name contains
+  `+` (e.g. `libsigc++2`) as passed: the build was sent unencoded, so openQA
+  matched no jobs.
+- `regenerate` no longer waits for, and may report success on, a regeneration
+  TeReGen refused with a JSON error body lacking an `error` key.
+- Gitea review comments reach the PR when the owner or repository name
+  contains `pulls`.
+- An update whose rpm output lacks its end marker can no longer crash mtui on a
+  multi-byte character.
+- An invalid endpoint URL in the config file, and a failed `refhosts.yml`
+  download, no longer write the URL's `user:password@` to the log.
+- `openqa_overview` no longer reports every version as FAILED "Not a valid
+  version" when the openQA job-group list is large (#762): the openQA response
+  cap is now 64 MiB (openqa.suse.de answers about 19 MB).
+
+## [26.3.5] - 2026-10-27
+
+### Fixed
+
+- `load_template`, `reload_openqa`, `export`, `openqa_overview` and
+  `openqa_jobs` send the incident's `project` and `type` to the QEM Dashboard,
+  which now requires them; the dashboard openQA data stopped loading with
+  HTTP 400 (#717).
+
+## [26.3.4] - 2026-10-10
+
+### Fixed
+
 - A `lock -c <text>` reservation now survives `run`, `update`, `install` and
   `prepare` on the host: they no longer rewrite it without its comment or
   release it when they finish, so only `unlock` (or `unlock --force`) removes it
   (#651).
-- Templates loaded in one `mtui`/`mtui-mcp` process, and the sessions of one
-  `mtui-mcp` server, no longer share the operation lock on a common refhost: a
-  second template's `run`/`update`/`install`/`prepare` now waits for (or, at the
-  default `lock_wait = 0`, refuses on) the first one's hold instead of
-  re-stamping it, and its abort no longer deletes that lockfile, so their
-  `zypper` transactions are serialised (#670).
 - The install logs `export` downloads from openQA no longer have every line
   break doubled.
-- `export` writes one install log per openQA flavor and rewrites it in place, so
-  repeated exports no longer add timestamped copies that `commit` uploads. The
-  document's `testing.openqa.install` scenarios now name the flavor too.
-- `export` now writes the `openqa_overview` results (single incidents,
-  aggregated updates, build checks) into `testing.openqa`, fetching them when
-  `openqa_overview` has not run in this session; previously only
-  `openqa_overview --export` did. A failed fetch prints a warning and the export
-  continues without those rows.
-- Session-level MCP tools (`whoami`, `list_templates`,
-  `list_refhosts`, `updates`, `config show`) no longer take the active
-  template's per-RRID lock: they hold the registry gate shared with no
-  per-RRID lock and dispatch on a per-call fork, so a slow one (e.g. `updates`
-  network I/O) no longer serialises the commands acting on that template
-  behind the session mutex (#603, #613). `command_lock` gates on
-  `addresses_template` like the background-job resolver, so the two cannot
-  disagree about whether a command addresses a template. `set_log_level`
-  addresses no template either but mutates the session log sink, so it takes
-  the exclusive gate and runs on the canonical session (#613).
-- `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
-  an MCP client that opens with `server/discover` at that revision connects
-  instead of being refused with `-32022` (#591). HTTP still declines it, since
-  rmcp serves that revision statelessly and would tear down mtui's per-client
-  session on every request.
+- A failed OBS/IBS `assign`/`unassign`/`approve`/`reject`/`comment` reports
+  `obs <verb> failed: …` instead of `osc <verb> failed: …`, matching the
+  `gitea <verb> failed` form; the calls never ran `osc`.
+
+## [26.3.3] - 2026-09-15
+
+### Fixed
+
 - Transport failures from every datasource on the shared HTTP client (OBS/IBS,
   Gitea, Slack, TeReGen, QEM Dashboard, oqa-search, refhosts) now name their
   cause —
@@ -1200,6 +1234,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rendering per-property descriptions show one. **MCP schema note:** each
   array property gains a `description` equal to its `items.description`;
   `items` keeps its copy (#545).
+- `commit` (and the `approve`/`request_review` paths that commit the
+  testreport) now reports what failed and why — `svn <subcommand> failed:
+  <svn stderr>` (stderr capped at 1 KB, cut marked `…[truncated]`) —
+  instead of the empty `Test report for  does not exist`
+  that hid every `svn` failure behind the checkout-missing text (#607).
 - `updates -F` now serves `Products`, `SRCRPMs`, `Bugs` and `Creator` from the
   TeReGen queue listing; only `Package-Streams`, `Issues` and `Comments` remain
   unavailable (#415).
@@ -1210,18 +1249,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the host is reachable instead. The contended arm names the lock's owner,
   marks the caller's own user, and states that `unlock --force` releases the
   whole group of every loaded template (#544).
+- `config show` over MCP prints less than at the REPL (#410): the no-argument
+  bulk dump is refused (name attributes explicitly), the operator-local values
+  (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
+  path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
+  everything verbatim as before. No tool schema changed. `config set` of an
+  endpoint URL acknowledges with the userinfo-stripped value.
+- `config show` and `config set` gained help text; the `config_show`/`config_set`
+  MCP tool descriptions are no longer the bare tool name, and `set`'s
+  `attribute`/`value` are described.
+- `whoami` and `set_log_level` no longer take the active template's per-RRID
+  lock over MCP, and slow session-level I/O (`updates`, `list_refhosts`,
+  `list_templates`, `config show`) no longer holds the canonical session mutex
+  across the dispatch: they run on a per-call fork like a scoped one-template
+  call, so they neither serialise against commands acting on the active
+  template nor head-of-line-block a scoped resolve behind their own network
+  I/O. `set_log_level` mutates the session's log sink, which a fork discards,
+  so it still dispatches on the canonical session. Tool names, arguments and
+  schemas are unchanged.
 
-### Security
+## [26.3.2] - 2026-09-04
 
-- The SSH client stack is updated to `russh` 0.65.4, fixing three client
-  advisories: `GHSA-ppq4-8rhp-9xrq` (a malicious server could grow the
-  client's memory without bound before authentication), `GHSA-66vf-xq4p-pg7q`
-  (a host key and signature that do not match the negotiated host-key
-  algorithm were accepted) and `GHSA-7qgr-cjxw-6vjf` (channel-open replies
-  were accepted for channels that were not being opened). `ssh-key` moves to
-  0.7.0-rc.12 with it, and `rsa` and `pkcs1` to their stable releases; `rsa`
-  0.10.0 fixes `RUSTSEC-2023-0071` (CVE-2023-49092, the Marvin timing side
-  channel), whose advisory ignore is dropped.
+### Fixed
+
+- `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
+  an MCP client that opens with `server/discover` at that revision connects
+  instead of being refused with `-32022` (#591). HTTP still declines it, since
+  rmcp serves that revision statelessly and would tear down mtui's per-client
+  session on every request.
 
 ## [26.3.1] - 2026-09-02
 
