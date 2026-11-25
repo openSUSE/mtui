@@ -10,6 +10,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- MCP `put` takes `hosts`, a list of connected hostnames, and writes only to
+  those, as `get` already did. An unknown or disabled name refuses the call
+  before anything is written, and the reply lists only the hosts written.
+  Without `hosts` it still writes to every enabled host. `put` also writes to
+  a host whose operation lock another owner holds, because an upload is not a
+  zypper transaction; its description and the MCP docs now say so, and that
+  `hosts` or `set_host_state` is how to leave such a host out (#849). `get`
+  now refuses a named disabled host before reading anything, where it used to
+  read the other hosts first; the message is unchanged. **MCP schema note:**
+  additive only — a new optional `hosts` on `put`.
 - SLES 16 hosts with a read-only root can now be prepared, updated,
   downgraded, installed and uninstalled. They use SL Micro's
   `transactional-update` commands and checks, and reboot into the new snapshot

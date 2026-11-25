@@ -807,6 +807,32 @@ impl HostsGroup {
         data: &[u8],
         remote: &Path,
     ) -> BTreeMap<String, std::result::Result<(), String>> {
+        self.sftp_put_bytes_where(data, remote, |_t| true).await
+    }
+
+    /// Like [`sftp_put_bytes`](Self::sftp_put_bytes), to only the named hosts;
+    /// unknown names are silently skipped, as in
+    /// [`sftp_read_selected`](Self::sftp_read_selected).
+    pub async fn sftp_put_bytes_selected(
+        &mut self,
+        data: &[u8],
+        remote: &Path,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, std::result::Result<(), String>> {
+        self.sftp_put_bytes_where(data, remote, |t| names.contains(t.hostname()))
+            .await
+    }
+
+    /// Shared implementation for the in-memory upload fan-outs.
+    async fn sftp_put_bytes_where<S>(
+        &mut self,
+        data: &[u8],
+        remote: &Path,
+        select: S,
+    ) -> BTreeMap<String, std::result::Result<(), String>>
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
         use std::sync::Mutex;
 
         // One allocation shared across hosts — the actions::sftp_put_all
@@ -820,7 +846,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("FileUpload"),
-            |_t| true,
+            select,
             |t| {
                 let shared = std::sync::Arc::clone(&shared);
                 let remote = remote.to_path_buf();

@@ -296,6 +296,14 @@ destination the REPL `put` uses. `filename` must be a bare name (no path
 separators); with `source` it defaults to the basename of the path you named.
 A payload above `[mcp] max_input_bytes` is refused outright: truncating an
 upload would corrupt it. Any host failure fails the call with the host named.
+Pass `hosts` (a list of connected hostnames) to write to a subset; unknown or
+disabled names refuse the call before anything is written, and the reply lists
+only the hosts written.
+
+`put` neither takes nor checks the operation lock (`/var/lock/mtui.lock`): it
+writes to a host even when another owner holds that host's lock, because an
+upload is not a zypper transaction. To leave such a host out, name the others
+in `hosts`, or disable it with `set_host_state` first.
 
 `source` is an absolute path of a file on the machine running `mtui-mcp`, so the
 bytes never pass through the model. It works on both transports and is off
