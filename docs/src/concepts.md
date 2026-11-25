@@ -103,7 +103,7 @@ command out across all of them.
   spreading load across interchangeable refhosts.
 - If the chosen host fails to connect, mtui automatically **tries another
   candidate** from the same slot; only when *every* candidate for a slot is
-  unreachable or claimed does `add_host` name the slot and why in its result and
+  unreachable, claimed or locked does `add_host` name the slot and why in its result and
   leave that slot unconnected.
 - A host the update workflow cannot drive counts as a failed draw, and the slot
   moves on to a sibling: one whose key has no command set (`no command set for
@@ -116,6 +116,11 @@ command out across all of them.
   `load_template` shows no unserved-slot lines; it prints `skipped <host>:
   <reason>` for each host refused this way, including a pool host whose slot a
   sibling then served. A refused host's `refhosts.yml` drift is still printed.
+- A pool-drawn host whose live operation lock another owner holds (another
+  mtui process of yours included) is a failed draw as well, checked at the
+  same point, after a stale lock is reaped: its slot moves on to a sibling,
+  and the reason reads `operation lock held by <user> since <time>`. A named
+  host is attached regardless.
 - Under fan-out, each test-target slot draws a **distinct** free host from the
   shared pool, arbitrated in-process so two templates never collide on the same
   host. When every candidate for a slot is busy, the claim **queues** on the

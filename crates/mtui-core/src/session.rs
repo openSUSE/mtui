@@ -332,6 +332,11 @@ pub(crate) enum HostFailure {
         gap: CommandSetGap,
         drift: Option<Vec<String>>,
     },
+    /// A pool-drawn host whose live operation lock another owner holds.
+    OperationLocked {
+        by: String,
+        since: String,
+    },
 }
 
 impl HostFailure {
@@ -342,14 +347,26 @@ impl HostFailure {
             Self::ClaimedBy(None) => "claimed remotely".to_owned(),
             Self::ClaimFailed => "pool claim failed".to_owned(),
             Self::Unusable { gap, .. } => gap.to_string(),
+            Self::OperationLocked { by, since } => {
+                format!("operation lock held by {by} since {since}")
+            }
+        }
+    }
+
+    /// Whether attach refused the host rather than failing to take it, so
+    /// the refusal is named even when a sibling served its slot.
+    fn is_refusal(&self) -> bool {
+        match self {
+            Self::Unusable { .. } | Self::OperationLocked { .. } => true,
+            Self::Unreachable | Self::ClaimedBy(_) | Self::ClaimFailed => false,
         }
     }
 }
 
-/// Each host refused as [`HostFailure::Unusable`], once and sorted by host,
+/// Each host attach refused ([`HostFailure::is_refusal`]), once and sorted by host,
 /// whether it failed as a primary or named host (`failures`) or as a backup
 /// sibling (`unserved`): a primary appears in both.
-fn refused_unusable<'a>(
+fn refused_hosts<'a>(
     failures: &'a [(String, HostFailure)],
     unserved: &'a [Unserved],
 ) -> Vec<(&'a str, &'a HostFailure)> {
@@ -357,7 +374,7 @@ fn refused_unusable<'a>(
     let refused: std::collections::BTreeMap<&str, &HostFailure> = failures
         .iter()
         .chain(backups)
-        .filter(|(_, f)| matches!(f, HostFailure::Unusable { .. }))
+        .filter(|(_, f)| f.is_refusal())
         .map(|(h, f)| (h.as_str(), f))
         .collect();
     refused.into_iter().collect()
@@ -1546,9 +1563,9 @@ impl Session {
         self.show_refused(&failures, &unserved);
     }
 
-    /// Prints `skipped <host>: <reason>` for each host refused as unusable.
+    /// Prints `skipped <host>: <reason>` for each host attach refused.
     fn show_refused(&mut self, failures: &[(String, HostFailure)], unserved: &[Unserved]) {
-        for (host, failure) in refused_unusable(failures, unserved) {
+        for (host, failure) in refused_hosts(failures, unserved) {
             self.display.println(
                 &self
                     .display
@@ -1629,6 +1646,7 @@ impl Session {
                 package_meta,
                 store_ref,
                 pool_claims_ref.contains(host),
+                pool_claims_ref.contains(host) && pool_primaries.contains(host),
                 require_command_set,
                 holders_ref,
                 injected_ref.get(host).map(|c| c.clone_box()),
@@ -1689,7 +1707,7 @@ impl Session {
         connect_failures.sort_by(|a, b| a.0.cmp(&b.0));
         // A refused host's product drift is shown, not recorded: the host is
         // not part of the report.
-        for (host, failure) in refused_unusable(&connect_failures, &unserved) {
+        for (host, failure) in refused_hosts(&connect_failures, &unserved) {
             if let HostFailure::Unusable {
                 drift: Some(lines), ..
             } = failure
@@ -1773,7 +1791,8 @@ impl Session {
     /// One path shared by the concurrent initial batch and the sequential
     /// backup-refhost fallback
     /// ([`connect_pool_backups`](Self::connect_pool_backups)). All inputs are
-    /// plain data, so the returned future stays `Send`.
+    /// plain data, so the returned future stays `Send`. A `from_pool` host is
+    /// refused under another owner's live operation lock.
     #[allow(clippy::too_many_arguments)]
     async fn connect_one(
         config: &Config,
@@ -1784,6 +1803,7 @@ impl Session {
         package_meta: &PackageMeta,
         store: Option<&Refhosts>,
         is_pool_claim: bool,
+        from_pool: bool,
         require_command_set: bool,
         holders: &OpLockHolders,
         injected: Option<Box<dyn Connection>>,
@@ -1813,6 +1833,25 @@ impl Session {
                     warn!(host = %host, %gap, "skipping host");
                     let drift = Self::verify_target_products(store, &target);
                     return Err((host, HostFailure::Unusable { gap, drift }));
+                }
+                // A pool draw has siblings; a named host is attached regardless.
+                if from_pool {
+                    match target.foreign_operation_lock().await {
+                        Ok(None) => {}
+                        Ok(Some(owner)) => {
+                            warn!(host = %host, by = %owner.by, since = %owner.since, "operation lock held elsewhere; skipping");
+                            return Err((
+                                host,
+                                HostFailure::OperationLocked {
+                                    by: owner.by,
+                                    since: owner.since,
+                                },
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(host = %host, error = %e, "operation lock unreadable; keeping host");
+                        }
+                    }
                 }
                 if let Err(failure) = Self::lock_connected_target(
                     &mut target,
@@ -1861,7 +1900,7 @@ impl Session {
     ///
     /// `primary_failures` carries why each of `attempted_initial` was dropped.
     /// Every retried slot that ends without a host is returned as [`Unserved`],
-    /// and every sibling refused as [`HostFailure::Unusable`] is returned with
+    /// and every sibling attach refused ([`HostFailure::is_refusal`]) is returned with
     /// its reason, whatever became of its slot. `injected` and
     /// `require_command_set` are as for
     /// [`connect_one`](Self::connect_one).
@@ -2005,6 +2044,7 @@ impl Session {
                     &package_meta,
                     store.as_ref(),
                     true, // backup hosts are always pool claims
+                    true,
                     require_command_set,
                     &holders,
                     injected.get(&chosen).map(|c| c.clone_box()),
@@ -2021,7 +2061,7 @@ impl Session {
                     Err((host, failure)) => {
                         // A served or budget-cut slot drops its failures, so
                         // a refusal is kept apart to still be named.
-                        if matches!(failure, HostFailure::Unusable { .. }) {
+                        if failure.is_refusal() {
                             refused.push((host.clone(), failure.clone()));
                         }
                         slot_failures.push((host, failure));
@@ -4577,7 +4617,7 @@ mod tests {
 
         assert!(unserved.is_empty(), "{unserved:?}");
         assert_eq!(s.targets().names(), vec![rw.to_owned()]);
-        let named: Vec<&str> = refused_unusable(&failures, &unserved)
+        let named: Vec<&str> = refused_hosts(&failures, &unserved)
             .into_iter()
             .map(|(h, _)| h)
             .collect();
@@ -4716,6 +4756,345 @@ mod tests {
             );
             assert!(!holds_a_lock(c), "{h} was locked");
         }
+    }
+
+    /// An operation-lock line written by `user` as `pid`, `age` seconds ago.
+    fn op_lock_line(user: &str, pid: u32, age: u64) -> Vec<u8> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{}:{user}:{pid}", now - age).into_bytes()
+    }
+
+    /// A host with a command set whose operation lock file holds `lock`.
+    fn locked_host(host: &str, lock: Vec<u8>) -> MockConnection {
+        crate::commands::testkit::product_host(host, "SLES", "15", "6", false)
+            .with_file(mtui_hosts::TARGET_LOCK_PATH, lock)
+    }
+
+    /// A host with a command set and no lock.
+    fn free_host(host: &str) -> MockConnection {
+        crate::commands::testkit::product_host(host, "SLES", "15", "6", false)
+    }
+
+    /// Draws `primary` from a slot of `candidates` in a fresh pool session
+    /// and returns the session, the arbiter and what the attach reported.
+    async fn draw_pool_primary(
+        conns: &[(&str, MockConnection)],
+        primary: &str,
+    ) -> (
+        tempfile::TempDir,
+        Session,
+        &'static HostArbiter,
+        Vec<Unserved>,
+        Vec<(String, HostFailure)>,
+    ) {
+        let (refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        for (h, c) in conns {
+            s.inject_mock_connection(h, c.clone());
+        }
+        let candidates: Vec<String> = conns.iter().map(|(h, _)| (*h).to_owned()).collect();
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &candidates)],
+            &[primary],
+        );
+        let (unserved, failures) = s
+            .connect_and_add_hosts(
+                vec![primary.to_owned()],
+                rrid,
+                &std::collections::HashSet::from([primary.to_owned()]),
+            )
+            .await;
+        (refhosts_dir, s, arbiter, unserved, failures)
+    }
+
+    /// A pool draw whose primary another owner's live operation lock holds
+    /// goes to a sibling; the primary is neither claimed nor relocked.
+    #[tokio::test]
+    async fn pool_host_under_a_foreign_operation_lock_yields_its_slot_to_a_sibling() {
+        let (held, free) = ("held-primary.invalid", "free-sibling.invalid");
+        let lock = op_lock_line("otheruser", 99, 60);
+        let held_conn = locked_host(held, lock.clone());
+        let free_conn = free_host(free);
+
+        let (_dir, s, arbiter, unserved, failures) = draw_pool_primary(
+            &[(held, held_conn.clone()), (free, free_conn.clone())],
+            held,
+        )
+        .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![free.to_owned()]);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].0, held);
+        assert!(
+            failures[0]
+                .1
+                .render()
+                .starts_with("operation lock held by otheruser since "),
+            "{failures:?}"
+        );
+        assert_eq!(arbiter.owner_of(held), None);
+        assert!(!s.metadata().base().pool_claims.contains(held));
+        assert!(
+            held_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_none()
+        );
+        assert_eq!(
+            held_conn.file_contents(mtui_hosts::TARGET_LOCK_PATH),
+            Some(lock)
+        );
+        assert!(
+            free_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_some(),
+            "the sibling's claim must be observable, or the check above proves nothing"
+        );
+    }
+
+    /// The same user's lock from another mtui process is foreign: this
+    /// session could not take that host's operation lock either.
+    #[tokio::test]
+    async fn pool_host_locked_by_another_process_of_ours_is_skipped() {
+        let user = Config::default().session_user;
+        let (held, free) = ("own-user-primary.invalid", "own-user-sibling.invalid");
+        let held_conn = locked_host(held, op_lock_line(&user, std::process::id() + 1, 60));
+
+        let (_dir, s, _arbiter, _unserved, failures) =
+            draw_pool_primary(&[(held, held_conn.clone()), (free, free_host(free))], held).await;
+
+        assert_eq!(s.targets().names(), vec![free.to_owned()]);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            held_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_none()
+        );
+    }
+
+    /// A lock this process holds is no reason to skip the host.
+    #[tokio::test]
+    async fn pool_host_under_our_own_operation_lock_attaches() {
+        let user = Config::default().session_user;
+        let (mine, other) = ("own-lock-primary.invalid", "own-lock-sibling.invalid");
+        let conn = locked_host(mine, op_lock_line(&user, std::process::id(), 60));
+
+        let (_dir, s, _arbiter, unserved, failures) =
+            draw_pool_primary(&[(mine, conn.clone()), (other, free_host(other))], mine).await;
+
+        assert!(unserved.is_empty() && failures.is_empty(), "{failures:?}");
+        assert_eq!(s.targets().names(), vec![mine.to_owned()]);
+        assert!(conn.file_contents(mtui_hosts::POOL_LOCK_PATH).is_some());
+    }
+
+    /// A stale foreign lock is reaped on connect, so its host is drawn.
+    #[tokio::test]
+    async fn pool_host_under_a_stale_foreign_lock_is_reaped_and_attached() {
+        let (stale, other) = ("stale-primary.invalid", "stale-sibling.invalid");
+        let conn = locked_host(stale, op_lock_line("otheruser", 99, 2 * 86_400));
+
+        let (_dir, s, _arbiter, unserved, failures) =
+            draw_pool_primary(&[(stale, conn.clone()), (other, free_host(other))], stale).await;
+
+        assert!(unserved.is_empty() && failures.is_empty(), "{failures:?}");
+        assert_eq!(s.targets().names(), vec![stale.to_owned()]);
+        assert!(conn.file_contents(mtui_hosts::TARGET_LOCK_PATH).is_none());
+        assert!(conn.file_contents(mtui_hosts::POOL_LOCK_PATH).is_some());
+    }
+
+    /// An operation lock that cannot be read does not skip a pool draw, as it
+    /// does not fail the connect.
+    #[tokio::test]
+    async fn pool_host_with_an_unreadable_operation_lock_attaches() {
+        let (host, other) = ("unreadable-primary.invalid", "unreadable-sibling.invalid");
+        let conn = free_host(host).with_open_error(mtui_hosts::TARGET_LOCK_PATH);
+
+        let (_dir, s, _arbiter, unserved, failures) =
+            draw_pool_primary(&[(host, conn), (other, free_host(other))], host).await;
+
+        assert!(unserved.is_empty() && failures.is_empty(), "{failures:?}");
+        assert_eq!(s.targets().names(), vec![host.to_owned()]);
+    }
+
+    /// With every candidate under a foreign lock the slot is unserved, its
+    /// line names the holder per host, and no claim is left anywhere.
+    #[tokio::test]
+    async fn pool_slot_with_every_candidate_locked_names_the_holder() {
+        let (first, second) = ("locked-first.invalid", "locked-second.invalid");
+        let first_conn = locked_host(first, op_lock_line("otheruser", 99, 60));
+        let second_conn = locked_host(second, op_lock_line("thirduser", 98, 60));
+
+        let (_dir, s, arbiter, unserved, _failures) = draw_pool_primary(
+            &[(first, first_conn.clone()), (second, second_conn.clone())],
+            first,
+        )
+        .await;
+
+        assert_eq!(unserved.len(), 1, "{unserved:?}");
+        let line = unserved[0].render();
+        assert!(
+            line.starts_with("unserved slot slot: no candidate connected (")
+                && line.contains(&format!("{first}: operation lock held by otheruser since "))
+                && line.contains(&format!(
+                    "{second}: operation lock held by thirduser since "
+                )),
+            "{line}"
+        );
+        assert!(s.targets().is_empty());
+        assert!(s.metadata().base().pool_claims.is_empty());
+        assert_eq!(arbiter.owner_of(first), None);
+        assert_eq!(arbiter.owner_of(second), None);
+        assert!(
+            first_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_none()
+        );
+        assert!(
+            second_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_none()
+        );
+    }
+
+    /// The backup step skips a sibling under a foreign lock for the next
+    /// one, and names it though the slot is served.
+    #[tokio::test]
+    async fn backup_skips_a_locked_sibling() {
+        use crate::commands::testkit::product_host;
+
+        let (ro, held, free) = (
+            "ro-backup-primary.invalid",
+            "held-backup.invalid",
+            "free-backup.invalid",
+        );
+        let held_conn = locked_host(held, op_lock_line("otheruser", 99, 60));
+
+        let (_dir, s, arbiter, unserved, failures) = draw_pool_primary(
+            &[
+                (ro, product_host(ro, "SLES", "15", "6", true)),
+                (held, held_conn.clone()),
+                (free, free_host(free)),
+            ],
+            ro,
+        )
+        .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![free.to_owned()]);
+        assert_eq!(arbiter.owner_of(held), None);
+        assert!(
+            held_conn
+                .file_contents(mtui_hosts::POOL_LOCK_PATH)
+                .is_none()
+        );
+        let named: Vec<String> = refused_hosts(&failures, &unserved)
+            .into_iter()
+            .map(|(h, f)| format!("{h}: {}", f.render()))
+            .collect();
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert!(
+            named[0].starts_with(&format!("{held}: operation lock held by otheruser since ")),
+            "{named:?}"
+        );
+        assert_eq!(named[1], format!("{ro}: {SLES15_RO_REFUSAL}"));
+    }
+
+    /// A host named explicitly attaches under a foreign operation lock: only
+    /// a pool draw is skipped for it.
+    #[tokio::test]
+    async fn named_host_under_a_foreign_operation_lock_still_attaches() {
+        let (_refhosts_dir, mut s, arbiter, owner, _rrid) = pool_session(1, 0);
+        wire_pool(&mut s, arbiter, &owner, &[], &[]);
+        let host = "named-locked.invalid";
+        let lock = op_lock_line("otheruser", 99, 60);
+        let conn = locked_host(host, lock.clone());
+        s.inject_mock_connection(host, conn.clone());
+
+        let refused = s.add_named_hosts(vec![host.to_owned()]).await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        assert_eq!(s.targets().names(), vec![host.to_owned()]);
+        assert_eq!(conn.file_contents(mtui_hosts::TARGET_LOCK_PATH), Some(lock));
+        assert!(
+            conn.file_contents(mtui_hosts::POOL_LOCK_PATH).is_some(),
+            "a named host is claimed like a pool draw, so only the draw rule can tell them apart"
+        );
+    }
+
+    /// A template's named host attaches under a foreign operation lock too:
+    /// it is no pool draw, though `load_template` connects it with the draws.
+    #[tokio::test]
+    async fn template_named_host_under_a_foreign_operation_lock_still_attaches() {
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let host = "template-named-locked.invalid";
+        let (mut s, buf) = locking_session(config, &[host], &[]);
+        s.inject_mock_connection(host, locked_host(host, op_lock_line("otheruser", 99, 60)));
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        assert_eq!(s.targets().names(), vec![host.to_owned()]);
+        assert!(buf.contents().is_empty(), "{:?}", buf.contents());
+    }
+
+    /// `load_template` names a pool host it skipped for a foreign lock, with
+    /// the holder, when a sibling served its slot.
+    #[tokio::test]
+    async fn load_template_names_a_pool_host_skipped_for_a_foreign_lock() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let store = Session::build_refhosts_store(&config)
+            .await
+            .expect("fixture inventory");
+        let (_, slots, _) = Session::pool_select(
+            &store,
+            &[tp.to_owned()],
+            test_arbiter(),
+            &("probe".to_owned(), "SUSE:Maintenance:9:9".to_owned()),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
+        let candidates: Vec<String> = slots.values().next().expect("a slot").clone();
+        assert!(
+            candidates.len() >= 2,
+            "a slot needs a sibling: {candidates:?}"
+        );
+        let primary = candidates[0].clone();
+        let (mut s, buf) = locking_session(config, &[], &[tp]);
+        s.shuffle = no_shuffle;
+        for h in slots.values().flatten() {
+            let conn = product_host(h, "SLES", "15", "5", false);
+            let conn = if *h == primary {
+                conn.with_file(
+                    mtui_hosts::TARGET_LOCK_PATH,
+                    op_lock_line("otheruser", 99, 60),
+                )
+            } else {
+                conn
+            };
+            s.inject_mock_connection(h, conn);
+        }
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        let names = s.targets().names();
+        assert!(!names.contains(&primary), "{names:?}");
+        assert!(names.contains(&candidates[1]), "{names:?}");
+        let out = buf.contents();
+        assert!(
+            out.contains(&format!(
+                "skipped {primary}: operation lock held by otheruser since "
+            )),
+            "{out:?}"
+        );
     }
 
     /// `add_host`'s pool draw names a refused primary even when a sibling

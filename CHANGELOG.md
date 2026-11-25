@@ -584,6 +584,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A pool draw no longer attaches a reference host whose operation lock
+  (`/var/lock/mtui.lock`) another owner holds, including another mtui process
+  of the same user. `load_template` and `add_host` without `-t` used to attach
+  it, after which `run` refused it with `could not lock: <host>` and the update
+  flows failed with `Hosts locked: …`. The host is now skipped before its pool
+  claim is written and its slot goes to a sibling, in the first draw and in the
+  backup step alike. A slot no sibling serves is named with the reason
+  `<host>: operation lock held by <user> since <time>`, and `load_template` and
+  `add_host` print `skipped <host>: operation lock held by <user> since <time>`
+  for a skipped host whose slot a sibling served. A stale lock is still reaped
+  on connect first, and a host named with `add_host -t` or in the template
+  attaches as before (#850).
 - `regenerate` calls only a 409 a refusal. A 400 or a 5xx from TeReGen was
   reported as `Regeneration refused: HTTP 500` with a hint to retry with
   `--force` or `--ignore-inconsistent`, which cannot lift it. It now says

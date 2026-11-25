@@ -47,14 +47,17 @@ your SSH agent, the `IdentityFile` entries of `~/.ssh/config` or `~/.ssh/id_*`.
 
 Yes, but the locks are **advisory and fail-fast by default**. Every mtui on the
 fleet writes the same `timestamp:user:pid[:comment]` layout, so sessions see one
-another's claims — a host held by someone else is *skipped*, and an
-install/update aborts with "Hosts locked" rather than waiting. Raise
+another's claims — a pool draw skips a host whose pool claim or live
+operation lock someone else holds (another mtui process of yours included), and
+an install/update aborts with "Hosts locked" rather than waiting. Raise
 `[lock] wait` (default `0`) to poll for a busy host during pool arbitration;
 `install`/`update` still refuse at once on a host someone else already holds.
 Naming a held host explicitly (`add_host -t`) is refused with the holder's
 RRID instead of attaching it, and a fresh remote claim blocks `-t` with no
 override on that template: have the holding template run
-`unlock --pool --force -t <host>`, or wait for the stale reap.
+`unlock --pool --force -t <host>`, or wait for the stale reap. A named host under
+another owner's operation lock still attaches, and its lock-taking calls fail
+until that lock is released.
 There are two locks with that layout: the operation lock
 (`/var/lock/mtui.lock`, PID-based, guards serialized zypper transactions) and the
 pool-claim lock (`/var/lock/mtui-pool.lock`, RRID-based). Stale-lock reaping is

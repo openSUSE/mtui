@@ -1669,10 +1669,7 @@ impl HostsGroup {
                             return;
                         }
                     };
-                    let foreign = locked
-                        && target
-                            .lock_mut()
-                            .is_some_and(|l| !l.is_invalid() && !l.owned_here().unwrap_or(false));
+                    let foreign = locked && target.lock_mut().is_some_and(|l| l.held_elsewhere());
                     if foreign {
                         let hostname = target.hostname().to_owned();
                         let lock = target.lock_mut().expect("foreign implies a built lock");
