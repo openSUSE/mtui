@@ -19,6 +19,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `openqa_jobs`. **MCP schema note:** no schema changes; a call that still
   sends one of these keys now fails.
 
+### Fixed
+
+- The `downgrade` row that `downgrade`, and `update`'s automatic rollback,
+  append to `/var/log/mtui.log` now names only the packages a downgrade
+  command was sent for on that host. A host a cancel stopped between packages,
+  or one with no earlier version of some package, no longer gets a row listing
+  packages it never downgraded. A host that downgraded every package gets the
+  same row as before (#864).
+
 ## [26.4.1] - 2026-11-25
 
 ### Added

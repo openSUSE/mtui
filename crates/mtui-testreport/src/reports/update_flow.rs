@@ -2330,8 +2330,9 @@ async fn downgrade_body(
         .map(|t| t.hostname().to_owned())
         .collect();
 
-    // Hosts a downgrade command was dispatched to: only these get a history row.
-    let mut dispatched: BTreeSet<String> = BTreeSet::new();
+    // Hosts a downgrade command was dispatched to, each with the packages it
+    // was sent for: only these get a history row, naming only those packages.
+    let mut dispatched: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     // Non-transactional hosts: per-package `zypper downgrade`, gated on the
     // package being installed (present in `versions`).
@@ -2375,7 +2376,12 @@ async fn downgrade_body(
         }
         if !cmd.is_empty() {
             targets.run(Command::PerHost(cmd.clone())).await;
-            dispatched.extend(cmd.keys().cloned());
+            for hn in cmd.keys() {
+                dispatched
+                    .entry(hn.clone())
+                    .or_default()
+                    .push(package.clone());
+            }
             // Only the hosts that ran this command: a host outside `cmd` (e.g.
             // a dead-probe one) still carries a stale `-1` that would trip the
             // timeout gate and cancel the healthy hosts' rollback. Scoped
@@ -2397,13 +2403,19 @@ async fn downgrade_body(
 
     // Transactional hosts: downgrade ALL packages in a single transaction.
     let mut combined = BTreeMap::new();
+    let mut combined_packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for hn in &transactional_hosts {
         let Some(host_versions) = versions.get(hn) else {
             continue;
         };
-        let specs: Vec<String> = packages
+        let sent: Vec<String> = packages
             .iter()
-            .filter_map(|p| host_versions.get(p).map(|v| format!("{p}={v}")))
+            .filter(|p| host_versions.contains_key(*p))
+            .cloned()
+            .collect();
+        let specs: Vec<String> = sent
+            .iter()
+            .map(|p| format!("{p}={}", host_versions[p]))
             .collect();
         if specs.is_empty() {
             continue;
@@ -2422,12 +2434,13 @@ async fn downgrade_body(
         let vars: HashMap<&str, &str> = [("package", joined_specs.as_str())].into_iter().collect();
         if let Ok(rendered) = doer.render_command(&vars) {
             combined.insert(hn.clone(), rendered);
+            combined_packages.insert(hn.clone(), sent);
         }
     }
     let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
-        dispatched.extend(combined.keys().cloned());
+        dispatched.extend(combined_packages);
         // Same scoping as the per-package loop, and for the same reason.
         let judged = run_checks_where(
             targets,
@@ -2486,7 +2499,13 @@ async fn downgrade_body(
     // Recorded after the run started but *before* the reboot: a transactional
     // host that never comes back cannot be written to afterwards, and that is
     // the host whose state an operator most needs to reconstruct.
-    add_op_history_for(targets, &dispatched, "downgrade", id, packages).await;
+    let mut by_list: BTreeMap<&[String], BTreeSet<String>> = BTreeMap::new();
+    for (host, sent) in &dispatched {
+        by_list.entry(sent).or_default().insert(host.clone());
+    }
+    for (sent, hosts) in by_list {
+        add_op_history_for(targets, &hosts, "downgrade", id, sent).await;
+    }
 
     failures.extend(
         reboot_transactional(targets, healthy_reboot, diagnostics)
@@ -2496,7 +2515,7 @@ async fn downgrade_body(
     );
 
     // Plus the left-out hosts the verdict may still count as rolled back.
-    let ran: BTreeSet<String> = dispatched.into_iter().chain(candidates).collect();
+    let ran: BTreeSet<String> = dispatched.into_keys().chain(candidates).collect();
     let left_out: BTreeSet<String> = repo_failed
         .keys()
         .filter(|h| !ran.contains(*h))
@@ -5820,7 +5839,7 @@ mod tests {
         assert!(rebooted(&h1), "{:?}", h1.fired_commands());
         assert_eq!(err.completed(), ["h1"], "{err:?}");
         assert_eq!(downgrade_events(&h1), ["downgrade:pkg-a pkg-b"]);
-        assert_eq!(downgrade_events(&h2).len(), 1, "h2 downgraded pkg-a");
+        assert_eq!(downgrade_events(&h2), ["downgrade:pkg-a"]);
         assert!(downgrade_events(&h3).is_empty(), "h3 ran no downgrade");
     }
 
@@ -9149,6 +9168,32 @@ mod tests {
             "{:?}",
             downgrade_events(&h2)
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_downgrade_row_names_only_the_packages_sent_to_that_host() {
+        // h2 and h4 have no earlier pkg-b, so no command is sent for it there.
+        let all = "pkg-a = 1.0-1\npkg-b = 1.0-1\npkg-c = 1.0-1\n";
+        let partial = "pkg-a = 1.0-1\npkg-c = 1.0-1\n";
+        let (t1, h1) = sles_target("h1", all);
+        let (t2, h2) = sles_target("h2", partial);
+        let (t3, h3) = slmicro_target("h3", all, 0);
+        let (t4, h4) = slmicro_target("h4", partial, 0);
+        let mut group = HostsGroup::new(vec![t1, t2, t3, t4], false);
+
+        let _ = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned(), "pkg-c".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert_eq!(downgrade_events(&h1), ["downgrade:pkg-a pkg-b pkg-c"]);
+        assert_eq!(downgrade_events(&h2), ["downgrade:pkg-a pkg-c"]);
+        assert_eq!(downgrade_events(&h3), ["downgrade:pkg-a pkg-b pkg-c"]);
+        assert_eq!(downgrade_events(&h4), ["downgrade:pkg-a pkg-c"]);
     }
 
     #[tokio::test]
