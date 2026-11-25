@@ -680,7 +680,7 @@ async fn read_from_server(
     }
     if named.iter().all(|e| e.dir.is_none()) {
         return Err(refuse(format!(
-            "{name} exists only on the server; this teregen cannot serve it (needs T15)"
+            "{name} exists only on the server; TeReGen has no endpoint for a single server-only file"
         )));
     }
     let Some(dir) = server_dirs(rel, install_logs)

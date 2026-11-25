@@ -1741,7 +1741,8 @@ async fn a_missing_file_is_told_apart_from_a_server_only_one() {
     )
     .await;
     assert!(
-        msg.contains("b.log exists only on the server") && msg.contains("T15"),
+        msg.contains("b.log exists only on the server")
+            && msg.contains("no endpoint for a single server-only file"),
         "{msg}"
     );
 
@@ -1752,7 +1753,7 @@ async fn a_missing_file_is_told_apart_from_a_server_only_one() {
     )
     .await;
     assert!(
-        msg.contains("no such file") && !msg.contains("T15"),
+        msg.contains("no such file") && !msg.contains("no endpoint"),
         "{msg}"
     );
 }
