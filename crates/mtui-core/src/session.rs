@@ -353,10 +353,7 @@ fn refused_unusable<'a>(
     failures: &'a [(String, HostFailure)],
     unserved: &'a [Unserved],
 ) -> Vec<(&'a str, &'a HostFailure)> {
-    let backups = unserved.iter().flat_map(|u| match u {
-        Unserved::Unconnectable { failures, .. } => failures.as_slice(),
-        _ => &[],
-    });
+    let backups = unserved.iter().flat_map(Unserved::host_failures);
     let refused: std::collections::BTreeMap<&str, &HostFailure> = failures
         .iter()
         .chain(backups)
@@ -394,6 +391,19 @@ pub(crate) enum Unserved {
 }
 
 impl Unserved {
+    /// The hosts this line gives a reason for, with that reason.
+    fn host_failures(&self) -> &[(String, HostFailure)] {
+        match self {
+            Self::Unconnectable { failures, .. } => failures,
+            // `BudgetSpent` names its hosts without a reason.
+            Self::NoRefhost { .. }
+            | Self::NoArchRefhost { .. }
+            | Self::InventoryUnavailable
+            | Self::Busy { .. }
+            | Self::BudgetSpent { .. } => &[],
+        }
+    }
+
     /// The one-line, human-facing reason.
     pub(crate) fn render(&self) -> String {
         match self {
@@ -2167,13 +2177,10 @@ impl Session {
         let (more_unserved, failures) = self
             .connect_and_add_hosts(wanted, &rrid, &pool_primaries)
             .await;
-        // A refused host whose slot a sibling served is in no unserved line.
+        // Name each refused host whose reason no unserved line gives.
         let named: std::collections::HashSet<&str> = more_unserved
             .iter()
-            .flat_map(|u| match u {
-                Unserved::Unconnectable { failures, .. } => failures.as_slice(),
-                _ => &[],
-            })
+            .flat_map(Unserved::host_failures)
             .map(|(h, _)| h.as_str())
             .collect();
         let unnamed: Vec<_> = failures
@@ -4853,6 +4860,63 @@ mod tests {
 
         assert!(refused.is_empty(), "{refused:?}");
         assert_eq!(s.targets().names(), vec![host.to_owned()]);
+    }
+
+    /// A host with `transactional-update.conf` whose mount table has no `/`
+    /// entry, so its root mode is unknown.
+    fn unknown_root_host(host: &str, name: &str, baseversion: &str) -> MockConnection {
+        crate::commands::testkit::product_host(host, name, baseversion, "0", true)
+            .with_file("/proc/self/mounts", "/dev/vda3 /home btrfs rw 0 0\n")
+    }
+
+    /// While an update is loaded, a SLES 16 host of unknown root mode is
+    /// refused by that name, and an SL Micro one, which has no read-write
+    /// variant, attaches.
+    #[tokio::test]
+    async fn unknown_root_sles16_is_refused_while_an_update_is_loaded() {
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let mut s = Session::new(config, false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let (sles, micro) = ("sles16-unknown.invalid", "slmicro-unknown.invalid");
+        s.inject_mock_connection(sles, unknown_root_host(sles, "SLES", "16.1"));
+        s.inject_mock_connection(micro, unknown_root_host(micro, "SL-Micro", "6.1"));
+
+        let refused = s
+            .add_named_hosts(vec![sles.to_owned(), micro.to_owned()])
+            .await;
+
+        let reasons: Vec<_> = refused
+            .iter()
+            .map(|(h, f)| (h.as_str(), f.render()))
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![(
+                sles,
+                "no command set for SLES 16.1, transactional-update.conf but root mode unknown"
+                    .to_owned()
+            )]
+        );
+        assert_eq!(s.targets().names(), vec![micro.to_owned()]);
+    }
+
+    /// With nothing loaded a SLES 16 host of unknown root mode attaches.
+    #[tokio::test]
+    async fn unknown_root_sles16_attaches_with_nothing_loaded() {
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let mut s = Session::new(config, false);
+        assert!(s.metadata().id().is_empty(), "nothing must be loaded");
+        let host = "sles16-unknown-unloaded.invalid";
+        s.inject_mock_connection(host, unknown_root_host(host, "SLES", "16.1"));
+
+        let refused = s.add_named_hosts(vec![host.to_owned()]).await;
+
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(
+            s.targets()
+                .get(host)
+                .is_some_and(|t| t.transactional_state() == mtui_hosts::Transactional::Assumed)
+        );
     }
 
     /// Hosts whose key has a command set attach as before, a transactional SL

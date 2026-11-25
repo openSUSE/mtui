@@ -407,7 +407,8 @@ and nothing is written there.
   no reference host covers, every candidate claimed by another RRID, no
   candidate connected (unreachable, claimed remotely, or refused because the
   update workflow cannot drive it: `no command set for <Product version>, <root
-  mode>` with the root mode as detected, such as `transactional`, an
+  mode>` with the root mode as detected, such as `transactional` or
+  `transactional-update.conf but root mode unknown`, an
   unrecognised product, or an unreadable base product), the retry budget
   spent, or the refhosts inventory unavailable. The call still
   returns `Ok` in that case, so these lines are the signal to check.
@@ -417,7 +418,7 @@ and nothing is written there.
   and `put`. `load_template` prints no unserved-slot lines, but prints
   `skipped <host>: <reason>` for each host it refused this way, including a
   pool host whose slot a sibling then served. `add_host` prints the same line
-  for a refused host that no unserved-slot line names.
+  for a refused host whose reason no unserved-slot line gives.
 - `export` emits one `WARNING:` line per host whose install-result block it
   left unverified in the report: `WARNING: no package of this update is tracked
   for <host>...` when the host tracks none (for example, the update ships

@@ -281,7 +281,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   lock is written; the first `update` used to be the first to say so. The
   reason names the problem: `no command set for <Product version>, <root
   mode>` (for example `no command set for SLES 15-SP6, transactional`; the
-  root mode is as detected), `unrecognised product opensuse-leap 15.6`, `base product unreadable
+  root mode is as detected, and a SLES 16 host whose root mode is unknown reads
+  `no command set for SLES 16.1, transactional-update.conf but root mode
+  unknown`), `unrecognised product opensuse-leap 15.6`, `base product unreadable
   (/etc/products.d/baseproduct is missing or dangling)`, or `base product SLES
   has no version`. A pool-drawn host counts as a failed draw and its slot goes
   to a sibling; `add_host` names a slot no sibling serves. `add_host -t` and a

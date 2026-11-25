@@ -543,7 +543,8 @@ pub enum CommandSetGap {
         /// The base product's name.
         name: String,
     },
-    /// A known release whose key no action or check table serves.
+    /// A known release with no key the tables serve: no table has it, or the
+    /// root mode is undecided and so yields no key.
     NoCommandSet(HostProductKey),
 }
 
@@ -3396,7 +3397,11 @@ mod tests {
 
     /// A target whose parsed system is `base`, with `dangling_base` and
     /// `transactional` as given.
-    fn target_with_base(base: SystemProduct, dangling_base: bool, transactional: bool) -> Target {
+    fn target_with_base(
+        base: SystemProduct,
+        dangling_base: bool,
+        transactional: impl Into<mtui_hosts::Transactional>,
+    ) -> Target {
         let conn = MockConnection::new("h1");
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -3408,7 +3413,8 @@ mod tests {
 
     /// `missing_command_set` must follow the tables, not a key list of its
     /// own. It walks the release space `get_release` produces, every one- and
-    /// two-digit release plus the empty one and sample non-numeric ones: the
+    /// two-digit release plus the empty one and sample non-numeric ones, in
+    /// each of the three root states: the
     /// nine action and check tables must agree on each key, which is what lets
     /// one role stand for all of them, and the predicate must agree with them.
     #[test]
@@ -3432,8 +3438,13 @@ mod tests {
             .chain(["", "SP", "x1", "1-", "YUM", "slmicro"].map(str::to_owned));
         let (mut served, mut refused) = (0, 0);
         for release in releases {
-            for transactional in [false, true] {
-                let key = format!("({release:?}, {transactional})");
+            for state in [
+                mtui_hosts::Transactional::No,
+                mtui_hosts::Transactional::Yes,
+                mtui_hosts::Transactional::Assumed,
+            ] {
+                let transactional = state.is_transactional();
+                let key = format!("({release:?}, {state:?})");
                 let tables = roles
                     .iter()
                     .filter(|&&role| reg.doer(role, &release, transactional).is_ok())
@@ -3452,10 +3463,23 @@ mod tests {
                     n if n.chars().count() < 2 => SystemProduct::new("SLES", n, "x86_64"),
                     n => SystemProduct::new("SLES", format!("{n}.1"), "x86_64"),
                 };
-                let t = target_with_base(base, false, transactional);
+                let t = target_with_base(base, false, state);
                 assert_eq!(t.system().get_release().ok(), Some(release.clone()));
-                let has = tables > 0;
-                assert_eq!(missing_command_set(&t).is_none(), has, "{key}");
+                // Only SL Micro, with no read-write variant, decides an unknown root mode.
+                let decided = state != mtui_hosts::Transactional::Assumed || release == "slmicro";
+                let has = tables > 0 && decided;
+                let gap = missing_command_set(&t);
+                assert_eq!(gap.is_none(), has, "{key}");
+                if let Some(CommandSetGap::NoCommandSet(k)) = &gap {
+                    let mode = match state {
+                        mtui_hosts::Transactional::No => ", non-transactional",
+                        mtui_hosts::Transactional::Yes => ", transactional",
+                        mtui_hosts::Transactional::Assumed => {
+                            ", transactional-update.conf but root mode unknown"
+                        }
+                    };
+                    assert!(k.to_string().ends_with(mode), "{key}: {k}");
+                }
                 if has { served += 1 } else { refused += 1 }
             }
         }
@@ -3479,6 +3503,15 @@ mod tests {
                     mtui_hosts::Transactional::Yes,
                 )),
                 "no command set for SLES 15-SP6, transactional",
+            ),
+            (
+                target_with_base(sles("16.1"), false, mtui_hosts::Transactional::Assumed),
+                CommandSetGap::NoCommandSet(HostProductKey::new(
+                    "SLES",
+                    "16.1",
+                    mtui_hosts::Transactional::Assumed,
+                )),
+                "no command set for SLES 16.1, transactional-update.conf but root mode unknown",
             ),
             (
                 // A dangling `baseproduct` falls back to the link's stem with
