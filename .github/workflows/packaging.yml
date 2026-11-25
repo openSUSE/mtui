@@ -38,7 +38,7 @@ jobs:
       # Build correctness is already covered by the ci.yml jobs; the scope
       # here (and in xtask/tests/packaging.rs, its fast local counterpart)
       # is the metadata the publish itself requires. Uploads nothing —
-      # publishing stays an explicit manual act. No Rust target cache either:
+      # publishing runs from release.yml. No Rust target cache either:
       # without a verify build cargo does no compilation, only manifest
       # validation plus tarball assembly, so a cache restore would cost more
       # than it saves.

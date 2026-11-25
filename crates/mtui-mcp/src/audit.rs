@@ -43,7 +43,8 @@
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
 //!   `content`/`content_b64`,
 //!   `report_section_write`/`report_issue_write`/`report_field_write`
-//!   `value`) never land verbatim either: each records `{bytes, sha256}` over
+//!   `value`, `report_new_issue_write` `title`/`comment`) never land verbatim
+//!   either: each records `{bytes, sha256}` over
 //!   the original string, so a credentials file or SSH key uploaded via `put`
 //!   is correlatable without being persisted.
 //!
@@ -724,7 +725,7 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 ///   `config_set` on the MCP surface: no current tool routes here, but any
 ///   future credential-carrying tool must redact the same way.
 /// * File-body payloads — `put` `content`/`content_b64`,
-///   `report_section_write`/`report_issue_write` `value`,
+///   `report_section_write`/`report_issue_write`/`report_field_write` `value`,
 ///   `report_new_issue_write` `title`/`comment`. Each records
 ///   `{bytes, sha256}` over the original string: correlatable across the file
 ///   and OTLP bodies without persisting a credentials file or SSH key.

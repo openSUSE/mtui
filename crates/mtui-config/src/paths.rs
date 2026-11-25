@@ -56,7 +56,9 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// The per-user XDG config file path (`$XDG_CONFIG_HOME/mtui/mtui.toml`,
-/// falling back to `~/.config/mtui` per the XDG spec), if resolvable.
+/// falling back to `~/.config/mtui` per the XDG spec; on macOS the
+/// `directories` crate resolves `~/Library/Application Support/mtui`), if
+/// resolvable.
 #[must_use]
 fn xdg_config_file() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(CONFIG_FILE))

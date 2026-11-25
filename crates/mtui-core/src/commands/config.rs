@@ -337,9 +337,10 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
 /// Shows or sets runtime configuration values.
 ///
 /// `config show [attr ...]` prints the current values (all when none named).
-/// `config set <attr> <value>` validates at least as strictly as config-file
-/// loading, so it cannot store a value the file would reject. Self-describing,
-/// so it runs once ([`Scope::Single`]).
+/// `config set <attr> <value>` parses booleans and numbers (a number the loader
+/// requires to be positive must be) but stores URLs, tokens and other strings,
+/// `ssh_strict_host_key_checking` included, as given. Self-describing, so it
+/// runs once ([`Scope::Single`]).
 pub struct ConfigCmd;
 
 #[async_trait]

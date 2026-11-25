@@ -628,7 +628,7 @@ pub struct Config {
     /// (per-version, group×version and per-log fan-out). Kept below
     /// [`Self::max_parallel`] to stay polite toward the shared hosts.
     pub max_oqa_parallel: u64,
-    /// SSH host-key checking policy (`auto_add`, `strict`, `warn`, ...).
+    /// SSH host-key checking policy (`auto_add`, `warn`, `reject`).
     pub ssh_strict_host_key_checking: String,
 
     // [refhosts]
@@ -728,11 +728,12 @@ pub struct Config {
     /// tail with a notice so one large result (a fan-out `run`) cannot dwarf the
     /// client's context. `0` disables the cap. Default 100_000.
     pub mcp_max_output_bytes: usize,
-    /// Upper bound (bytes) on how much of a report file a `report_file_read`
-    /// call reads. Unlike `mcp_max_output_bytes` this bounds
-    /// the *source* read, so a huge file cannot exhaust memory while a caller
-    /// pages through it via `offset`/`limit`; reads past it truncate with a
-    /// notice, never refuse. `0` disables the cap. Default 10_000_000.
+    /// Upper bound (bytes) on input the MCP server reads into memory: a
+    /// `report_file_read` call, a `get` read (per host), and a `put` payload.
+    /// Unlike `mcp_max_output_bytes` this bounds the *source* read, so a huge
+    /// file cannot exhaust memory while a caller pages through it via
+    /// `offset`/`limit`; reads past it truncate with a notice, while a `put`
+    /// payload over it is refused. `0` disables the cap. Default 10_000_000.
     pub mcp_max_input_bytes: usize,
     /// Upper bound (bytes) on an inbound HTTP request body the `--transport http`
     /// MCP server buffers before rejecting it (413), so an unauthenticated
