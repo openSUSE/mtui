@@ -24,9 +24,9 @@ use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::reload;
+use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::args::{McpArgs, Transport};
 use crate::provider::{LogLevelControl, SessionProvider, SessionRegistry, StdioProvider};
@@ -56,7 +56,7 @@ pub async fn run() -> anyhow::Result<()> {
 /// Serve the tool surface over stdio (one process == one client).
 ///
 /// stdout is the JSON-RPC transport — logging goes to stderr only.
-async fn serve_stdio(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Result<()> {
+async fn serve_stdio(args: &McpArgs, log_level: Option<LogLevelControl>) -> anyhow::Result<()> {
     let config = args.resolve_config();
     probe_audit_sink(&config).await?;
     let otel = init_otel_exporter(&config).await;
@@ -187,7 +187,7 @@ async fn wait_for_shutdown(
 ///
 /// Returns an error if the TCP listener cannot bind `--host:--port`, or if the
 /// server loop fails for a reason other than Ctrl-C.
-async fn serve_http(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Result<()> {
+async fn serve_http(args: &McpArgs, log_level: Option<LogLevelControl>) -> anyhow::Result<()> {
     let config = args.resolve_config();
     probe_audit_sink(&config).await?;
     // OTLP probe before serving; sessions minted below clone the global.
@@ -204,8 +204,7 @@ async fn serve_http(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Resul
          (session cap + idle-TTL enforced; rmcp keep-alive pinned)"
     );
 
-    let registry = Arc::new(register_all());
-    let sessions = SessionRegistry::new(registry, config).with_log_level(log_level);
+    let sessions = http_sessions(config, log_level);
 
     // No-op when session_idle_timeout == 0.
     let sweeper_cancel = CancellationToken::new();
@@ -233,6 +232,20 @@ async fn serve_http(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Resul
         otel.shutdown().await;
     }
     Ok(())
+}
+
+/// The [`SessionRegistry`] `serve_http` mints its per-client sessions from,
+/// each wired to the process log level when there is a control to wire.
+#[doc(hidden)]
+pub fn http_sessions(
+    config: mtui_config::Config,
+    log_level: Option<LogLevelControl>,
+) -> SessionRegistry {
+    let sessions = SessionRegistry::new(Arc::new(register_all()), config);
+    match log_level {
+        Some(control) => sessions.with_log_level(control),
+        None => sessions,
+    }
 }
 
 /// The production streamable-HTTP app: rmcp's [`StreamableHttpService`] mounted
@@ -321,32 +334,28 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
 }
 
 /// Install a minimal stderr `tracing` subscriber and return the control that
-/// `set_log_level` changes its level through.
+/// `set_log_level` changes its level through, or `None` when the subscriber
+/// could not be installed.
 ///
 /// Writes to **stderr** because stdout carries the MCP JSON-RPC stream;
 /// `-d/--debug` and `RUST_LOG` select the startup level, ANSI follows the
 /// resolved [`ColorMode`]. No spinner-aware writer, unlike the REPL's.
 ///
-/// The level is the **server's**: one filter per process, so under
+/// The stderr level is the **server's**: one filter per process, so under
 /// `--transport http` a `set_log_level` from any client changes it for every
 /// session. A reload replaces the whole filter, as in the REPL — per-target
 /// `RUST_LOG` directives are discarded, and the event format is unchanged.
-fn init_tracing(debug: bool, color: ColorMode) -> LogLevelControl {
-    use tracing_subscriber::layer::SubscriberExt as _;
-    use tracing_subscriber::util::SubscriberInitExt as _;
+/// The OTLP tracing diagnostics keep the startup filter.
+fn init_tracing(debug: bool, color: ColorMode) -> Option<LogLevelControl> {
     let (filter, notice) = startup_filter(debug);
-    let (filter, control) = reloadable_log_filter(filter);
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(color.resolve());
     // The diagnostics layer no-ops when OTLP is off and drops (with a
     // counter, never refusing) when full; exporter/HTTP-stack targets are
     // excluded inside the layer to break the feedback loop.
-    let _ = tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt)
-        .with(crate::otel::OtelDiagLayer)
-        .try_init();
+    let (diag_filter, _) = startup_filter(debug);
+    let control = install_log_subscriber(filter, fmt, diag_filter, crate::otel::OtelDiagLayer);
     if let Some(notice) = notice {
         // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
         // this (typically `RUST_LOG=hyper_util=debug`) enables no `mtui_*`
@@ -357,18 +366,40 @@ fn init_tracing(debug: bool, color: ColorMode) -> LogLevelControl {
     control
 }
 
-/// Wrap `filter` in a reload layer, returning it with the [`LogLevelControl`]
-/// that swaps it for [`runtime_directives`] at a new level.
+/// Install the global subscriber: `log` behind a reloadable `log_filter`,
+/// `diag` behind the fixed `diag_filter`. Returns the [`LogLevelControl`] that
+/// swaps `log_filter` for [`runtime_directives`] at a new level, or `None` when
+/// a global subscriber is already installed and a control would reload nothing.
+///
+/// The filters are per layer, so a client's `set_log_level` reaches only the
+/// stderr log: it can neither silence the operator's OTLP diagnostics nor
+/// flood their best-effort queue.
 #[doc(hidden)]
-pub fn reloadable_log_filter(
-    filter: EnvFilter,
-) -> (reload::Layer<EnvFilter, Registry>, LogLevelControl) {
-    let (layer, handle) = reload::Layer::new(filter);
-    // Best-effort: a reload after the subscriber was dropped is ignored.
-    let control: LogLevelControl = Arc::new(move |level| {
+pub fn install_log_subscriber<L, D>(
+    log_filter: EnvFilter,
+    log: L,
+    diag_filter: EnvFilter,
+    diag: D,
+) -> Option<LogLevelControl>
+where
+    L: Layer<Registry> + Send + Sync + 'static,
+    D: Layer<Registry> + Send + Sync + 'static,
+{
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    let (log_filter, handle) = reload::Layer::new(log_filter);
+    let layers = vec![
+        log.with_filter(log_filter).boxed(),
+        diag.with_filter(diag_filter).boxed(),
+    ];
+    tracing_subscriber::registry()
+        .with(layers)
+        .try_init()
+        .ok()?;
+    Some(Arc::new(move |level| {
+        // Fails only once the subscriber is dropped, and a global one never is.
         let _ = handle.reload(EnvFilter::new(runtime_directives(level)));
-    });
-    (layer, control)
+    }))
 }
 
 /// The filter a runtime `set_log_level` installs: [`level_directive`], plus
@@ -440,10 +471,14 @@ fn default_directives(debug: bool) -> String {
 /// it skips — resolving twice reports each of them twice.
 async fn build_stdio_server(
     config: mtui_config::Config,
-    log_level: LogLevelControl,
+    log_level: Option<LogLevelControl>,
 ) -> (McpServer, Arc<McpSession>) {
     let registry = Arc::new(register_all());
-    let provider = StdioProvider::new(config).with_log_level(log_level);
+    let provider = StdioProvider::new(config);
+    let provider = match log_level {
+        Some(control) => provider.with_log_level(control),
+        None => provider,
+    };
     let session = provider.get_or_create("<default>").await;
     (McpServer::new(registry, Arc::clone(&session)), session)
 }
@@ -580,7 +615,7 @@ mod tests {
     async fn build_stdio_server_wires_the_synthesised_surface() {
         // The tools capability is only advertised once the handler is wired.
         let (server, _session) =
-            build_stdio_server(args(&[]).resolve_config(), Arc::new(|_| {})).await;
+            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {}))).await;
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
@@ -593,7 +628,7 @@ mod tests {
         let recorder = Arc::clone(&seen);
         let (_server, session) = build_stdio_server(
             args(&[]).resolve_config(),
-            Arc::new(move |level| recorder.lock().unwrap().push(level)),
+            Some(Arc::new(move |level| recorder.lock().unwrap().push(level))),
         )
         .await;
 
@@ -605,10 +640,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_stdio_server_without_a_control_refuses_set_log_level() {
+        let (_server, session) = build_stdio_server(args(&[]).resolve_config(), None).await;
+
+        let err = session
+            .run_command(&register_all(), "set_log_level", &["warning".to_owned()])
+            .await
+            .expect_err("no subscriber to reload, so nothing may claim a change");
+        assert!(
+            err.to_string().contains("no runtime log-level control"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
     async fn build_stdio_server_returns_a_closeable_session() {
         // `close()` with no loaded template is a harmless no-op.
         let (_server, session) =
-            build_stdio_server(args(&[]).resolve_config(), Arc::new(|_| {})).await;
+            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {}))).await;
         session.close().await;
     }
 

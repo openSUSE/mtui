@@ -72,4 +72,4 @@ pub use transfer_tools::{dispatch_transfer_tool, transfer_tool_descriptors};
 #[cfg(feature = "mcp")]
 mod runner;
 #[cfg(feature = "mcp")]
-pub use runner::{http_app, reloadable_log_filter, run};
+pub use runner::{http_app, http_sessions, install_log_subscriber, run};
