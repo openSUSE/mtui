@@ -54,7 +54,7 @@ pub struct Args {
     #[arg(short = 's', long = "sut", value_name = "HOSTS")]
     pub sut: Vec<Sut>,
 
-    /// Override config `mtui.connection_timeout` (seconds).
+    /// Override config `connection.connection_timeout` (seconds).
     // Range-rejected at 0: the file loader guards this key with
     // `validated_positive!`, so the CLI must not express a 0 the file refuses.
     #[arg(

@@ -15,7 +15,7 @@ Options:
           Cumulatively override the default hosts from the template (format: `hostname,hostname2`). May be given more than once
 
   -w, --connection-timeout <SECONDS>
-          Override config `mtui.connection_timeout` (seconds)
+          Override config `connection.connection_timeout` (seconds)
 
       --reboot-timeout <SECONDS>
           Override config `connection.reboot_timeout`: the backoff base (seconds) for post-reboot reconnect retries

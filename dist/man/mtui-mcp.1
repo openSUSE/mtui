@@ -13,7 +13,7 @@ MCP server for mtui (tools synthesised from the command registry)
 Override config `mtui.template_dir`
 .TP
 \fB\-w\fR, \fB\-\-connection\-timeout\fR \fI<SECONDS>\fR
-Override config `mtui.connection_timeout` (seconds)
+Override config `connection.connection_timeout` (seconds)
 .TP
 \fB\-d\fR, \fB\-\-debug\fR
 Enable debugging output
@@ -56,7 +56,7 @@ http: Serve over streamable HTTP. One process serves many isolated clients
 .RE
 .TP
 \fB\-\-host\fR \fI<ADDR>\fR [default: 127.0.0.1]
-Bind address for `\-\-transport http` (default: 127.0.0.1). Ignored under stdio. Loopback only — rmcp\*(Aqs DNS\-rebinding guard rejects non\-loopback hosts
+Bind address for `\-\-transport http` (default: 127.0.0.1). Ignored under stdio. rmcp\*(Aqs DNS\-rebinding guard answers 403 to any request whose `Host` header is not loopback, so keep the listener on loopback
 .TP
 \fB\-\-port\fR \fI<PORT>\fR [default: 8000]
 Bind port for `\-\-transport http` (default: 8000). Ignored under stdio

@@ -21,7 +21,7 @@ Options:
           Cumulatively override the default hosts from the template (format: `hostname,hostname2`). May be given more than once
 
   -w, --connection-timeout <SECONDS>
-          Override config `mtui.connection_timeout` (seconds)
+          Override config `connection.connection_timeout` (seconds)
 
       --reboot-timeout <SECONDS>
           Override config `connection.reboot_timeout`: the backoff base (seconds) for post-reboot reconnect retries
@@ -78,7 +78,7 @@ Options:
           Override config `mtui.template_dir`
 
   -w, --connection-timeout <SECONDS>
-          Override config `mtui.connection_timeout` (seconds)
+          Override config `connection.connection_timeout` (seconds)
 
   -d, --debug
           Enable debugging output
@@ -112,7 +112,7 @@ Options:
           [default: stdio]
 
       --host <ADDR>
-          Bind address for `--transport http` (default: 127.0.0.1). Ignored under stdio. Loopback only — rmcp's DNS-rebinding guard rejects non-loopback hosts
+          Bind address for `--transport http` (default: 127.0.0.1). Ignored under stdio. rmcp's DNS-rebinding guard answers 403 to any request whose `Host` header is not loopback, so keep the listener on loopback
           
           [default: 127.0.0.1]
 
