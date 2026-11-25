@@ -19,6 +19,7 @@ pub mod repo_url;
 pub mod report_document;
 pub mod rpmver;
 pub mod rrid;
+pub mod sanitize;
 pub mod shellquote;
 pub mod system;
 pub mod test;
