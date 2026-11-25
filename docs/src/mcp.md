@@ -686,7 +686,7 @@ report, by name and server directory.
 
 - Parameters: `template` (optional).
 - Returns `{ "id", "files": [{"path","name","size","server"}], "server_only":
-  [{"name","dir","origin","size","at"}] }`, plus `"server_error"` when the
+  [{"name","dir","path","origin","size","at"}] }`, plus `"server_error"` when the
   server listing failed. `files` are the local regular files, sorted by `path`
   (report-directory-relative; subdirectories and symlinks are skipped).
   `server` is `{ "dir", "origin", "size", "at" }` for the server copy
@@ -694,8 +694,10 @@ report, by name and server directory.
   `uploaded`; `dir` is `uploads`, `install_logs` or `build_checks`, `null` from
   a server that does not say), or `null` when it has none; sizes differ until
   `commit` uploads. `server_only` lists server files with no local copy, one per
-  `dir` when several directories hold the same name; `report_file_read` can
-  read them.
+  `dir` when several directories hold the same name. `path` is the path
+  `report_file_read` reads that copy from, or `null` when no path does: a
+  same-named copy in `uploads` is read in place of the `install_logs` one, and
+  a copy from a server that names no `dir` cannot be read on its own.
 - A failed server listing (not found, still generating, unreachable) never
   fails the call: the local list is returned with `server_error` set.
 
