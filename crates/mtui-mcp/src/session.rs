@@ -1144,7 +1144,10 @@ impl McpSession {
             let left = deadline.saturating_duration_since(Instant::now());
             let unit = async {
                 let mut report = entry.lock().await;
-                report.release_pool_claims().await;
+                // Half the remainder, so a hung release still leaves the close a share.
+                for host in report.release_pool_claims(left / 2).await {
+                    tracing::warn!("still releasing the pool claim on {host}");
+                }
                 // Plain disconnect: no reboot/poweroff on an eviction, unlike
                 // the REPL `quit` bootarg, and per-host outcomes are irrelevant.
                 let _ = report.base_mut().targets.close(None).await;
@@ -2342,6 +2345,48 @@ mod tests {
 
         // Release the abandoned close so its task unwinds.
         gate.notify_waiters();
+    }
+
+    /// A pool-claim release that never returns must leave the close its share
+    /// of the budget: the healthy sibling is still closed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_with_timeout_closes_hosts_after_a_hung_pool_release() {
+        use mtui_hosts::{HostsGroup, MockConnection, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::TargetState;
+
+        let hung =
+            MockConnection::new("hung-host").with_sftp_session_delay(Duration::from_secs(3600));
+        let good = MockConnection::new("good-host");
+        let hung_target =
+            Target::with_connection("hung-host", TargetState::Enabled, Box::new(hung));
+        let good_target =
+            Target::with_connection("good-host", TargetState::Enabled, Box::new(good.clone()));
+
+        let sess = McpSession::new(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+            report.base_mut().targets = HostsGroup::new(vec![hung_target, good_target], false);
+            report.base_mut().pool_claims.insert("hung-host".to_owned());
+            report.base_mut().pool_claims.insert("good-host".to_owned());
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active("SUSE:Maintenance:1:1");
+        }
+
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            sess.close_with_timeout(Duration::from_millis(400)),
+        )
+        .await
+        .expect("close_with_timeout did not return in time");
+
+        assert!(
+            good.is_closed(),
+            "healthy host closed despite the hung release"
+        );
     }
 
     /// Nor must a session mutex held for the whole duration, as an exclusive

@@ -31,8 +31,9 @@ fn close_timeout() -> Duration {
 /// including hosts attached while nothing was loaded) it releases the pool
 /// claims, then closes the group per the optional positional
 /// `bootarg ∈ {reboot, poweroff}` (`poweroff` → shell `halt`), or just
-/// disconnects. Each close runs under [`HOST_CLOSE_TIMEOUT`] so a hung host never
-/// blocks exit, and one that fails or straggles is named. It then flips
+/// disconnects. The release and the close each run under [`HOST_CLOSE_TIMEOUT`]
+/// so a hung host never blocks exit, and one still releasing, failing or
+/// straggling is named. It then flips
 /// [`Session::request_exit`](crate::Session::request_exit).
 ///
 /// A report whose document holds uncommitted edits is named in a warning, never
@@ -101,7 +102,10 @@ impl Command for Quit {
                 ));
             }
             // Best-effort, and a no-op without pooling.
-            report.release_pool_claims().await;
+            for host in report.release_pool_claims(timeout).await {
+                let secs = timeout.as_secs();
+                tracing::warn!("still releasing the pool claim on {host} after {secs} seconds");
+            }
 
             // Snapshotted before the close so a straggling group can still be
             // named per host.
@@ -137,13 +141,14 @@ impl Command for Quit {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+    use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
     use crate::commands::testkit::{
-        empty_session, fake_report, matches, session_with_hosts, session_with_targets, target_with,
+        empty_session, fake_report, log_capture, matches, session_with_hosts, session_with_targets,
+        target_with,
     };
 
     /// Override for [`close_timeout`] in milliseconds; `u64::MAX` means the
@@ -457,5 +462,67 @@ mod tests {
 
         gate.notify_waiters();
         CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);
+    }
+
+    /// A pool claim the report's own RRID owns, in the lock wire format.
+    fn own_pool_claim(rrid: &str) -> Vec<u8> {
+        let me = mtui_config::Config::default().session_user;
+        format!("1700000000:{me}:1:mtui pool {rrid} [{rrid}]").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn quit_bounds_a_pool_claim_release_that_hangs() {
+        let _guard = CLOSE_TIMEOUT_LOCK.lock().await;
+        CLOSE_TIMEOUT_MS.store(50, Ordering::SeqCst);
+
+        let rrid = "SUSE:Maintenance:1:1";
+        let healthy =
+            MockConnection::new("healthy").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));
+        let mut healthy_target =
+            Target::with_connection("healthy", TargetState::Enabled, Box::new(healthy.clone()));
+        healthy_target.set_rrid(rrid);
+        let dead = target_with("dead", |c| {
+            c.with_sftp_session_delay(Duration::from_secs(3600))
+        });
+        let (mut session, _buf) = session_with_targets(rrid, vec![dead, healthy_target]);
+        let claims = &mut session.metadata_mut().base_mut().pool_claims;
+        claims.insert("dead".to_owned());
+        claims.insert("healthy".to_owned());
+
+        log_capture::start();
+        let args = matches(&Quit, &[]);
+        // Catches a release with no budget: quit then never returns.
+        tokio::time::timeout(Duration::from_secs(5), Quit.call(&mut session, &args))
+            .await
+            .expect("quit must return despite the hung release")
+            .expect("quit ok");
+        let logged: Vec<String> = log_capture::take()
+            .into_iter()
+            .filter_map(|c| c.message)
+            .collect();
+        CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);
+
+        assert!(session.should_exit());
+        assert!(
+            healthy.file_contents(POOL_LOCK_PATH).is_none(),
+            "healthy: pool claim released"
+        );
+        // Catches a teardown that skips the close after a timed-out release.
+        assert!(healthy.is_closed(), "healthy: still closed");
+        assert!(
+            logged.contains(&"still disconnecting from dead after 0 seconds".to_owned()),
+            "dead: the close was still attempted: {logged:?}"
+        );
+        // Exact lines: catches naming no host, every claimed host, or a healthy
+        // one a serial release never reached.
+        let releasing: Vec<&String> = logged
+            .iter()
+            .filter(|m| m.starts_with("still releasing"))
+            .collect();
+        assert_eq!(
+            releasing,
+            vec!["still releasing the pool claim on dead after 0 seconds"],
+            "only the hung host is named"
+        );
     }
 }
