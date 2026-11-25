@@ -121,31 +121,52 @@ async fn init_otel_exporter(
 }
 
 /// Resolves when the process receives a termination signal (Ctrl-C or, on unix,
-/// SIGTERM).
+/// SIGTERM or SIGHUP).
 ///
-/// Raced against the transport's `waiting()` future so a SIGTERM or Ctrl-C
-/// triggers the same graceful teardown as a clean stdin EOF. SIGKILL cannot be
-/// caught; the pool-claim stale-reap (`[lock] pool_stale_age`) covers that.
+/// Raced against the transport's `waiting()` future so a SIGTERM, SIGHUP or
+/// Ctrl-C triggers the same graceful teardown as a clean stdin EOF. SIGKILL
+/// cannot be caught; the stale-reap (`[lock] stale_age` / `pool_stale_age`)
+/// covers that.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut term = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot install SIGTERM handler; Ctrl-C only");
-                let _ = tokio::signal::ctrl_c().await;
-                return;
-            }
+        // Each on its own: one that cannot be installed must not cost the others.
+        let install = |kind: SignalKind, name: &str| {
+            signal(kind)
+                .inspect_err(|e| tracing::warn!(error = %e, "cannot install the {name} handler"))
+                .ok()
         };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-        }
+        wait_for_shutdown(
+            install(SignalKind::terminate(), "SIGTERM"),
+            install(SignalKind::hangup(), "SIGHUP"),
+        )
+        .await;
     }
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Resolves on Ctrl-C or on whichever of `term` / `hup` was installed.
+#[cfg(unix)]
+async fn wait_for_shutdown(
+    mut term: Option<tokio::signal::unix::Signal>,
+    mut hup: Option<tokio::signal::unix::Signal>,
+) {
+    async fn recv(signal: Option<&mut tokio::signal::unix::Signal>) {
+        match signal {
+            Some(signal) => {
+                signal.recv().await;
+            }
+            None => std::future::pending().await,
+        }
+    }
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        () = recv(term.as_mut()) => {}
+        () = recv(hup.as_mut()) => {}
     }
 }
 
@@ -457,6 +478,61 @@ mod tests {
                 "the probe creates it as restrictively as a record would"
             );
         }
+    }
+
+    /// Raises `raised` once `shutdown` is parked, and requires it to resolve.
+    /// The caller's own handler for `raised` replaces the default (fatal)
+    /// action first, so a broken `shutdown` fails instead of killing the binary.
+    #[cfg(unix)]
+    async fn resolves_on(
+        shutdown: impl Future<Output = ()> + Send + 'static,
+        raised: nix::sys::signal::Signal,
+    ) {
+        let mut shutdown = tokio::spawn(shutdown);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut shutdown)
+                .await
+                .is_err(),
+            "shutdown must wait for a signal"
+        );
+        nix::sys::signal::raise(raised).expect("raise");
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .unwrap_or_else(|_| panic!("shutdown must resolve on {raised}"))
+            .expect("task joins");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial(signal)]
+    async fn shutdown_signal_resolves_on_sighup() {
+        use tokio::signal::unix::{SignalKind, signal};
+        let _guard = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+        resolves_on(shutdown_signal(), nix::sys::signal::Signal::SIGHUP).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial(signal)]
+    async fn shutdown_signal_resolves_on_sigterm() {
+        use tokio::signal::unix::{SignalKind, signal};
+        let _guard = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        resolves_on(shutdown_signal(), nix::sys::signal::Signal::SIGTERM).await;
+    }
+
+    /// A handler that could not be installed must not cost the other one.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial(signal)]
+    async fn shutdown_waits_on_whichever_handler_installed() {
+        use nix::sys::signal::Signal;
+        use tokio::signal::unix::{SignalKind, signal};
+        let _hup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+        let _term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let hup = signal(SignalKind::hangup()).ok();
+        resolves_on(wait_for_shutdown(None, hup), Signal::SIGHUP).await;
+        let term = signal(SignalKind::terminate()).ok();
+        resolves_on(wait_for_shutdown(term, None), Signal::SIGTERM).await;
     }
 
     #[tokio::test]
