@@ -83,6 +83,14 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
         })
     };
 
+    let hosts_prop = || {
+        json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Subset of connected hostnames; unknown or disabled names refuse the call.",
+        })
+    };
+
     let get = ToolDescriptor {
         name: "get".to_owned(),
         description: format!(
@@ -99,14 +107,7 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
                     "remote",
                     json!({ "type": "string", "description": "Absolute path of the file on the reference hosts." }),
                 ),
-                (
-                    "hosts",
-                    json!({
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Subset of connected hostnames; unknown or disabled names refuse the call.",
-                    }),
-                ),
+                ("hosts", hosts_prop()),
                 ("template", template_prop()),
             ],
             &["remote"],
@@ -124,8 +125,10 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
              passing through the call, `filename` defaults to its basename, and the reply \
              carries `source` {{path, bytes, sha256}}. Payloads above [mcp] \
              max_input_bytes are refused, not truncated. Any host failure fails the \
-             call, naming the host. With no template loaded, acts on the hosts added \
-             with add_host. {TEMPLATE_NOTE}"
+             call, naming the host. `hosts` limits the write to a subset. Writes even \
+             where another owner holds the operation lock (an upload is not a zypper \
+             transaction); leave such a host out with `hosts` or set_host_state. With \
+             no template loaded, acts on the hosts added with add_host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -148,6 +151,7 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
                         "description": "Absolute path of a file on the mtui-mcp server, inside an [mcp] put_dirs directory; uploaded byte for byte without passing through the call. Exactly one of content/content_b64/source.",
                     }),
                 ),
+                ("hosts", hosts_prop()),
                 ("template", template_prop()),
             ],
             &[],
@@ -211,29 +215,7 @@ async fn dispatch_transfer_tool_inner(
             let remote = opt_str(kwargs, "remote")?
                 .ok_or_else(|| refuse("`remote` is required"))?
                 .to_owned();
-            let hosts = match kwargs.get("hosts") {
-                None | Some(Value::Null) => None,
-                Some(Value::Array(items)) => {
-                    if items.is_empty() {
-                        return Err(refuse("hosts must name at least one connected host"));
-                    }
-                    let mut names = BTreeSet::new();
-                    for item in items {
-                        let Some(s) = item.as_str() else {
-                            return Err(refuse(format!(
-                                "hosts entries must be strings, got {item}"
-                            )));
-                        };
-                        names.insert(s.to_owned());
-                    }
-                    Some(names)
-                }
-                Some(other) => {
-                    return Err(refuse(format!(
-                        "hosts must be an array of strings, got {other}"
-                    )));
-                }
-            };
+            let hosts = opt_hosts(kwargs)?;
             transfer_get(session, &remote, hosts, template, ran_under).await
         }
         "put" => {
@@ -264,10 +246,72 @@ async fn dispatch_transfer_tool_inner(
                     .ok_or_else(|| refuse("`filename` is required: `source` has no file name"))?,
                 (None, _) => return Err(refuse("`filename` is required unless `source` is given")),
             };
-            transfer_put(session, &filename, payload, template, ran_under).await
+            let hosts = opt_hosts(kwargs)?;
+            transfer_put(session, &filename, payload, hosts, template, ran_under).await
         }
         other => Err(refuse(format!("unknown transfer tool: {other}"))),
     }
+}
+
+/// The `hosts` selection, `None` when absent/null.
+fn opt_hosts(kwargs: &Map<String, Value>) -> Result<Option<BTreeSet<String>>, McpCommandError> {
+    match kwargs.get("hosts") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => {
+            if items.is_empty() {
+                return Err(refuse("hosts must name at least one connected host"));
+            }
+            let mut names = BTreeSet::new();
+            for item in items {
+                let Some(s) = item.as_str() else {
+                    return Err(refuse(format!("hosts entries must be strings, got {item}")));
+                };
+                names.insert(s.to_owned());
+            }
+            Ok(Some(names))
+        }
+        Some(other) => Err(refuse(format!(
+            "hosts must be an array of strings, got {other}"
+        ))),
+    }
+}
+
+/// Refuses a selection naming an unknown or disabled host, before any
+/// transfer; `disabled_tail` says what the disabled hosts did not get.
+fn check_hosts(
+    targets: &mtui_hosts::HostsGroup,
+    names: &BTreeSet<String>,
+    disabled_tail: &str,
+) -> Result<(), McpCommandError> {
+    let known = targets.names();
+    let unknown: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !known.iter().any(|k| k == n))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(refuse(format!(
+            "unknown host(s): {} (connected: {})",
+            unknown.join(", "),
+            known.join(", ")
+        )));
+    }
+    let disabled: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| {
+            targets
+                .get(n)
+                .is_some_and(|t| t.state() == mtui_types::TargetState::Disabled)
+        })
+        .collect();
+    if !disabled.is_empty() {
+        return Err(refuse(format!(
+            "host(s) disabled, {disabled_tail}: {}",
+            disabled.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// `Some(trimmed value)` for a present string field, `None` when absent/null.
@@ -447,22 +491,8 @@ async fn transfer_get(
 
     let outcome = {
         let targets = call_session.get_mut().targets_mut();
-        let known: BTreeSet<String> = targets.names().into_iter().collect();
         if let Some(ref names) = hosts {
-            // Unknown names refuse before any transfer; a named host absent from
-            // the map (disabled) is refused after.
-            let unknown: Vec<&str> = names
-                .iter()
-                .map(String::as_str)
-                .filter(|n| !known.contains(*n))
-                .collect();
-            if !unknown.is_empty() {
-                return Err(refuse(format!(
-                    "unknown host(s): {} (connected: {})",
-                    unknown.join(", "),
-                    known.iter().cloned().collect::<Vec<_>>().join(", ")
-                )));
-            }
+            check_hosts(targets, names, "no content returned")?;
         }
         let map = match hosts {
             Some(ref names) => {
@@ -478,22 +508,6 @@ async fn transfer_get(
         drop(call_session);
         drop(scope);
 
-        // A requested host with no outcome was disabled: diagnose that before the
-        // generic empty-map refusal, or an all-named-disabled call is
-        // misdescribed as "no enabled hosts".
-        if let Some(ref names) = hosts {
-            let missing: Vec<&str> = names
-                .iter()
-                .map(String::as_str)
-                .filter(|n| !map.contains_key(*n))
-                .collect();
-            if !missing.is_empty() {
-                return Err(refuse(format!(
-                    "host(s) disabled, no content returned: {}",
-                    missing.join(", ")
-                )));
-            }
-        }
         if map.is_empty() {
             return Err(refuse(
                 "no enabled hosts connected — load a template with hosts, add_host, or \
@@ -706,6 +720,7 @@ async fn transfer_put(
     session: &McpSession,
     filename: &str,
     payload: PutPayload,
+    hosts: Option<BTreeSet<String>>,
     template: Option<&str>,
     ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
@@ -762,10 +777,16 @@ async fn transfer_put(
     // Destination from the call session's report — the same source the REPL
     // `put` uses — so a `target_tempdir` of another loaded report cannot leak in.
     let remote = call_session_mut.metadata().target_wd(&[filename]);
-    let map = call_session_mut
-        .targets_mut()
-        .sftp_put_bytes(&payload, &remote)
-        .await;
+    let targets = call_session_mut.targets_mut();
+    let map = match hosts {
+        Some(ref names) => {
+            check_hosts(targets, names, "nothing written")?;
+            targets
+                .sftp_put_bytes_selected(&payload, &remote, names)
+                .await
+        }
+        None => targets.sftp_put_bytes(&payload, &remote).await,
+    };
     // Release the call session (the fork's entry guard, or the canonical
     // session mutex) and then the gate before formatting — both only guarded
     // the fan-out, and the rest works on owned data.
@@ -2397,6 +2418,189 @@ mod tests {
         assert!(
             h2.sftp_ops().is_empty(),
             "disabled host must not be touched"
+        );
+    }
+
+    fn put_count(handle: &MockConnection) -> usize {
+        handle
+            .sftp_ops()
+            .iter()
+            .filter(|op| matches!(op, MockSftpOp::PutBytes { .. }))
+            .count()
+    }
+
+    /// Three enabled mock hosts h1, h2, h3; returns their handles.
+    async fn three_hosts(session: &McpSession, tmp: &tempfile::TempDir) -> [MockConnection; 3] {
+        let conns = [
+            MockConnection::new("h1"),
+            MockConnection::new("h2"),
+            MockConnection::new("h3"),
+        ];
+        let handles = conns.clone();
+        let targets = conns
+            .into_iter()
+            .zip(["h1", "h2", "h3"])
+            .map(|(c, h)| enabled(h, c))
+            .collect();
+        load_with_targets(session, tmp, RRID, targets).await;
+        handles
+    }
+
+    #[tokio::test]
+    async fn put_hosts_subset_writes_only_the_named_hosts() {
+        let (session, tmp) = session_with(|_| {});
+        let [h1, h2, h3] = three_hosts(&session, &tmp).await;
+
+        let v = call(
+            &session,
+            "put",
+            json!({ "filename": "f", "content": "x", "hosts": ["h1", "h3"] }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(v["hosts"], json!({ "h1": "ok", "h3": "ok" }), "{v}");
+        assert_eq!((put_count(&h1), put_count(&h2), put_count(&h3)), (1, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn put_without_hosts_writes_every_enabled_host() {
+        let (session, tmp) = session_with(|_| {});
+        let [h1, h2, h3] = three_hosts(&session, &tmp).await;
+
+        let v = call(&session, "put", json!({ "filename": "f", "content": "x" }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            v["hosts"],
+            json!({ "h1": "ok", "h2": "ok", "h3": "ok" }),
+            "{v}"
+        );
+        assert_eq!((put_count(&h1), put_count(&h2), put_count(&h3)), (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn put_unknown_host_refused_and_nothing_transferred() {
+        let (session, tmp) = session_with(|_| {});
+        let [h1, h2, h3] = three_hosts(&session, &tmp).await;
+
+        let err = call(
+            &session,
+            "put",
+            json!({ "filename": "f", "content": "x", "hosts": ["h1", "nope"] }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.stderr
+                .contains("unknown host(s): nope (connected: h1, h2, h3)"),
+            "{}",
+            err.stderr
+        );
+        for h in [&h1, &h2, &h3] {
+            assert!(h.sftp_ops().is_empty(), "refusal must precede any transfer");
+        }
+    }
+
+    /// The refusal precedes the fan-out, so the enabled host named alongside
+    /// is not written either.
+    #[tokio::test]
+    async fn put_explicitly_named_disabled_host_refused_before_any_write() {
+        let m1 = MockConnection::new("h1");
+        let m2 = MockConnection::new("h2");
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let (session, tmp) = session_with(|_| {});
+        load_with_targets(
+            &session,
+            &tmp,
+            RRID,
+            vec![
+                enabled("h1", m1),
+                Target::with_connection("h2", TargetState::Disabled, Box::new(m2)),
+            ],
+        )
+        .await;
+
+        let err = call(
+            &session,
+            "put",
+            json!({ "filename": "f", "content": "x", "hosts": ["h1", "h2"] }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.stderr.contains("host(s) disabled") && err.stderr.contains("h2"),
+            "{}",
+            err.stderr
+        );
+        assert_eq!((put_count(&h1), put_count(&h2)), (0, 0));
+    }
+
+    /// A JSON array sent as a string is refused like any other non-array
+    /// `hosts`, by both tools.
+    #[tokio::test]
+    async fn hosts_as_a_json_encoded_string_is_refused_by_get_and_put() {
+        let (session, tmp) = session_with(|_| {});
+        let [h1, h2, h3] = three_hosts(&session, &tmp).await;
+
+        for (tool, kwargs) in [
+            (
+                "put",
+                json!({ "filename": "f", "content": "x", "hosts": "[\"h1\", \"h3\"]" }),
+            ),
+            (
+                "get",
+                json!({ "remote": "/f", "hosts": "[\"h1\", \"h3\"]" }),
+            ),
+        ] {
+            let err = call(&session, tool, kwargs).await.unwrap_err();
+            assert!(
+                err.stderr
+                    .contains("hosts must be an array of strings, got \"["),
+                "{tool}: {}",
+                err.stderr
+            );
+        }
+        for h in [&h1, &h2, &h3] {
+            assert!(h.sftp_ops().is_empty(), "refusal must precede any transfer");
+        }
+    }
+
+    /// `put` writes regardless of the operation lock: an upload is not a
+    /// zypper transaction. The `lock_selected` probe proves the fixture is a
+    /// foreign hold; the lock line must survive the upload untouched.
+    #[tokio::test]
+    async fn put_writes_to_a_host_whose_operation_lock_a_foreign_owner_holds() {
+        use mtui_hosts::{LockOutcome, TARGET_LOCK_PATH};
+
+        let foreign_line = b"1700000000:alice:4242:busy".to_vec();
+        let m1 = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, foreign_line.clone());
+        let h1 = m1.clone();
+        let (session, tmp) = session_with(|c| c.session_user = "bob".to_owned());
+        load_with_targets(&session, &tmp, RRID, vec![enabled("h1", m1)]).await;
+        {
+            let mut guard = session.session().lock().await;
+            let names: BTreeSet<String> = ["h1".to_owned()].into();
+            let outcome = guard.targets_mut().lock_selected("probe", &names).await;
+            assert!(
+                matches!(outcome.get("h1"), Some(LockOutcome::Contended(_))),
+                "fixture must be a foreign lock: {outcome:?}"
+            );
+        }
+
+        let v = call(&session, "put", json!({ "filename": "f", "content": "x" }))
+            .await
+            .unwrap();
+
+        assert_eq!(v["hosts"], json!({ "h1": "ok" }), "{v}");
+        assert_eq!(put_count(&h1), 1);
+        assert_eq!(
+            h1.file_contents(TARGET_LOCK_PATH),
+            Some(foreign_line),
+            "the foreign lock must be left as it was"
         );
     }
 
