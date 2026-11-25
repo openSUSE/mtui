@@ -302,6 +302,34 @@ pub(crate) fn server_dirs(rel: &str, install_logs: &Path) -> &'static [&'static 
     }
 }
 
+/// The report path whose server fallback reads the copy of `name` in `dir`,
+/// given every server copy as `(name, dir)`. `None` when no path reaches it: a
+/// same-named copy in a preferred directory answers each one, the server named
+/// no directory, or `name` is not a single path component.
+pub(crate) fn server_read_path(
+    name: &str,
+    dir: Option<&str>,
+    listed: &[(&str, Option<&str>)],
+    install_logs: &Path,
+) -> Option<String> {
+    let dir = dir.filter(|_| !name.contains('/'))?;
+    let candidates = [
+        CHECKERS_LOG.to_owned(),
+        format!("{BUILD_CHECKS}/{name}"),
+        format!("{RESULTS}/{name}"),
+        format!("{}/{name}", install_logs.to_string_lossy()),
+    ];
+    candidates
+        .into_iter()
+        .filter(|p| p != CHECKERS_LOG || name == CHECKERS_LOG)
+        .find(|p| {
+            server_dirs(p, install_logs)
+                .iter()
+                .find(|d| listed.contains(&(name, Some(**d))))
+                .is_some_and(|d| *d == dir)
+        })
+}
+
 /// What [`resolve_local`] found at an allowed path.
 #[derive(Debug)]
 pub(crate) enum LocalLookup {

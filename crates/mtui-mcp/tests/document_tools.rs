@@ -1504,7 +1504,8 @@ async fn files_merge_local_and_server_entries_by_name() {
     assert_eq!(
         out["server_only"],
         json!([{
-            "name": "b.log", "dir": null, "origin": "uploaded", "size": 3, "at": 1_700_000_000,
+            "name": "b.log", "dir": null, "path": null, "origin": "uploaded", "size": 3,
+            "at": 1_700_000_000,
         }])
     );
     assert!(out.get("server_error").is_none());
@@ -1580,6 +1581,89 @@ async fn an_install_log_reports_the_committed_server_copy() {
 
     assert_eq!(out["files"][0]["server"]["dir"], "uploads");
     assert_eq!(out["server_only"], json!([]));
+}
+
+/// The best copy is chosen by directory, not by where the listing puts it, and
+/// a copy with no `dir` ranks behind every copy that names one.
+#[tokio::test]
+async fn the_reported_server_copy_does_not_depend_on_listing_order() {
+    let dirless = artifact("h1.log", 3, "pipeline");
+    let pipeline = artifact_in("h1.log", "pipeline", "install_logs");
+    let committed = artifact_in("h1.log", "uploaded", "uploads");
+    for (artifacts, want) in [
+        (json!([committed.clone(), pipeline.clone()]), "uploads"),
+        (json!([dirless.clone(), pipeline]), "install_logs"),
+        (json!([dirless, committed]), "uploads"),
+    ] {
+        let server = MockServer::start().await;
+        let f = Files::new(&server).await;
+        f.write("install_logs/h1.log", "x");
+        f.serve_artifacts(&server, 200, json!({"id": f.id, "artifacts": artifacts}))
+            .await;
+
+        let out = call(&f.session, "report_files", json!({})).await;
+
+        assert_eq!(out["files"][0]["server"]["dir"], want, "{artifacts}");
+    }
+}
+
+/// Each server-only copy names the path `report_file_read` reads it back
+/// from, or null when that path would read a preferred same-named copy.
+#[tokio::test]
+async fn a_server_only_copy_names_the_path_that_reads_it() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("x.log", "pipeline", "install_logs"),
+            artifact_in("x.log", "uploaded", "uploads"),
+            artifact_in("y.log", "pipeline", "install_logs"),
+            artifact_in("c.log", "pipeline", "build_checks"),
+            artifact_in("checkers.log", "uploaded", "uploads"),
+            artifact("d.log", 3, "pipeline"),
+        ]}),
+    )
+    .await;
+    f.serve_file(&server, "install_logs", "y.log", "pipeline\n")
+        .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    let listed: Vec<(&str, &Value, &Value)> = out["server_only"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), &e["dir"], &e["path"]))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "c.log",
+                &json!("build_checks"),
+                &json!("build_checks/c.log")
+            ),
+            ("checkers.log", &json!("uploads"), &json!("checkers.log")),
+            ("d.log", &Value::Null, &Value::Null),
+            ("x.log", &json!("install_logs"), &Value::Null),
+            ("x.log", &json!("uploads"), &json!("results/x.log")),
+            (
+                "y.log",
+                &json!("install_logs"),
+                &json!("install_logs/y.log")
+            ),
+        ]
+    );
+
+    let read = call(
+        &f.session,
+        "report_file_read",
+        json!({"path": "install_logs/y.log"}),
+    )
+    .await;
+    assert_eq!(read["content"], "pipeline\n");
 }
 
 #[tokio::test]

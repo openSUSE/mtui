@@ -815,6 +815,40 @@ mod tests {
         assert_eq!(root_cause(&SelfRef).as_deref(), Some("cycle"));
     }
 
+    #[test]
+    fn new_gives_the_patient_client_the_patient_read_timeout() {
+        let client = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+        assert_eq!(client.patient_read_timeout, PATIENT_READ_TIMEOUT);
+    }
+
+    /// The patient client is built with its own read timeout, not the shared
+    /// one: here the patient budget is the *shorter*, so only it can time out.
+    #[tokio::test]
+    async fn patient_client_uses_the_patient_read_timeout() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(600)))
+            .mount(&server)
+            .await;
+        let client = HttpClient::with_read_timeouts(
+            VerifyPolicy::Default(true),
+            Duration::from_secs(5),
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        let err = client
+            .patient()
+            .unwrap()
+            .get(server.uri())
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.is_timeout(), "{err:?}");
+    }
+
     /// [`HttpClient::openqa_transport`] must not follow a redirect: it would
     /// forward `X-API-Key`/`X-API-Hash` to whatever `Location` says, off-origin
     /// — reqwest strips only `Authorization`/`Cookie`/`Proxy-Authorization` on

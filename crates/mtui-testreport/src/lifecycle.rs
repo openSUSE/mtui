@@ -389,6 +389,35 @@ async fn regenerate_via_teregen(
     }
 }
 
+// Mirrors `TeReGen::wait_for_template`'s poll budget: a `generating`
+// refusal is bounded, not immediate.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Calls `fetch` again every [`POLL_INTERVAL`] while TeReGen answers that it is
+/// generating or busy, until [`POLL_TIMEOUT`] has passed.
+async fn fetch_while_busy<T, F, Fut>(
+    mut fetch: F,
+) -> Result<T, mtui_datasources::teregen::TeregenV2Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, mtui_datasources::teregen::TeregenV2Error>>,
+{
+    use mtui_datasources::teregen::TeregenV2Error;
+
+    let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+    loop {
+        match fetch().await {
+            Err(TeregenV2Error::Generating | TeregenV2Error::Busy)
+                if tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Loads a report from the teregen v2 JSON document.
 ///
 /// Fetches `config.teregen_api_v2`'s document for `rrid`, conditional on
@@ -407,28 +436,13 @@ async fn load_via_document(
     trpath: &std::path::Path,
     prev_etag: Option<&str>,
 ) -> Result<(), String> {
-    use mtui_datasources::teregen::{DocumentFetch, TeregenV2, TeregenV2Error};
-
-    // Mirrors `TeReGen::wait_for_template`'s poll budget: a `generating`
-    // refusal is bounded, not immediate.
-    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-    const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    use mtui_datasources::teregen::{DocumentFetch, TeregenV2};
 
     let client = TeregenV2::new(config, &config.teregen_api_v2)
         .map_err(|e| format!("building the teregen v2 client failed: {e}"))?;
     let rrid_str = rrid.to_string();
 
-    let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
-    let fetch = loop {
-        match client.fetch_document(&rrid_str, prev_etag).await {
-            Err(TeregenV2Error::Generating | TeregenV2Error::Busy)
-                if tokio::time::Instant::now() < deadline =>
-            {
-                tokio::time::sleep(POLL_INTERVAL).await;
-            }
-            other => break other,
-        }
-    };
+    let fetch = fetch_while_busy(|| client.fetch_document(&rrid_str, prev_etag)).await;
 
     let document = match fetch {
         Ok(DocumentFetch::Fresh { document, etag, .. }) => {
@@ -583,6 +597,36 @@ mod ingest_tests {
         let msg = document_fetch_message(TeregenV2Error::Invalid(doc_err));
         assert!(msg.starts_with(&pointer), "{msg}");
         assert!(!msg.starts_with("the document failed to parse"), "{msg}");
+    }
+
+    /// A server that never stops generating, or never finishes committing, is
+    /// given up on after ten minutes of polling, with its own refusal.
+    #[tokio::test(start_paused = true)]
+    async fn the_busy_poll_gives_up_after_ten_minutes() {
+        for busy in [TeregenV2Error::Generating, TeregenV2Error::Busy] {
+            let calls = std::cell::Cell::new(0u32);
+            let start = tokio::time::Instant::now();
+            let fetch = || {
+                calls.set(calls.get() + 1);
+                let answer = match busy {
+                    TeregenV2Error::Generating => TeregenV2Error::Generating,
+                    _ => TeregenV2Error::Busy,
+                };
+                async move { Err::<(), _>(answer) }
+            };
+            let out = tokio::time::timeout(
+                std::time::Duration::from_secs(3600),
+                fetch_while_busy(fetch),
+            )
+            .await
+            .expect("the poll must end on its own");
+            assert_eq!(
+                std::mem::discriminant(&out.unwrap_err()),
+                std::mem::discriminant(&busy)
+            );
+            assert_eq!(start.elapsed(), std::time::Duration::from_secs(600));
+            assert_eq!(calls.get(), 121);
+        }
     }
 
     #[tokio::test]

@@ -17,6 +17,19 @@ use crate::command::Command;
 use crate::error::CommandError;
 use crate::session::Session;
 
+/// Awaits `work` unless `cancel` fires first; `None` on a cancel. A reply that
+/// is ready when the cancel lands wins: it was collected before the stop.
+pub(crate) async fn unless_cancelled<F: std::future::Future>(
+    cancel: &tokio_util::sync::CancellationToken,
+    work: F,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        out = work => Some(out),
+        () = cancel.cancelled() => None,
+    }
+}
+
 /// The wall-clock budget for remote work over an established link whose peer may
 /// have vanished (`remove_host`'s close fan-out, `unlock --force`,
 /// `reload_products`): [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT).
@@ -894,6 +907,27 @@ mod tests {
 
     fn cmd() -> clap::Command {
         add_hosts_arg(clap::Command::new("t").no_binary_name(true))
+    }
+
+    /// A reply already in hand outranks a cancel that lands with it; repeated
+    /// because an unbiased `select!` picks either branch at random.
+    #[tokio::test]
+    async fn a_ready_reply_outranks_a_simultaneous_cancel() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        for _ in 0..64 {
+            assert_eq!(unless_cancelled(&cancel, async { 7 }).await, Some(7));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancel_abandons_a_pending_reply() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        assert_eq!(
+            unless_cancelled(&cancel, std::future::pending::<()>()).await,
+            None
+        );
     }
 
     #[test]

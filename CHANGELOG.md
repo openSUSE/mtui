@@ -31,6 +31,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `run`'s description (its help and its MCP tool description) now says that
   package transactions belong in `install`/`uninstall`, where the removal check
   applies (#873).
+- Two changes that 26.4.1 shipped without a note. `regenerate` counts any 2xx
+  reply from TeReGen as an enqueued job, whatever its body: a 2xx whose JSON
+  body carried an `error` key, or a non-`202` 2xx without a JSON object body,
+  was read as a refusal. Library: `mtui_datasources::RegenOutcome` has a new
+  public field, `failed` (a request TeReGen answered with an error status
+  other than 409), so code building it with a struct literal must name it or
+  use `..Default::default()`.
 
 ### Removed
 
@@ -58,6 +65,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   candidates are claimed by another RRID as `unserved slot <slot>: all <n>
   candidates claimed (<host> by <RRID>, …) or already serving another slot
   (<hosts>)` (#880, #882).
+- `regenerate --no-wait` no longer prints `Regeneration job ? enqueued` when
+  TeReGen names no job id, or a non-id value, in its reply; it says
+  `Regeneration job enqueued for <id> (TeReGen named no job id)`. A string job
+  id is printed without JSON quotes and stripped of terminal control
+  sequences (#863).
+- MCP: each `report_files` `server_only` entry carries the `path` that
+  `report_file_read` reads that copy from, or null when no path does: a
+  same-named file in `uploads` is read in place of the pipeline's
+  `install_logs` copy, and a server that names no `dir` has no endpoint for a
+  single file. The description claimed every such file could be read.
+  **MCP schema note:** additive only — a `path` key in `server_only` entries,
+  and the `report_files` tool description names it (#863).
 - `remove_host`, `unload`, `quit`, and a reload of an already-loaded update
   (`load_template`, `regenerate`) no longer report a clean teardown when
   something was left on a host. The reply now carries one `warning: <host>: …`

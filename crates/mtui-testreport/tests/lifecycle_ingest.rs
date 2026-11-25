@@ -25,6 +25,8 @@ use mtui_types::{UpdateID, Workflow};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use crate::log_capture::capture_events_async;
+
 /// A maintenance/OBS RRID — `tr_factory` routes it to `ObsReport`, whose
 /// `check_hash` is constant `Ok`, so these cases never touch Gitea.
 const MAINT_RRID: &str = "SUSE:Maintenance:1:2";
@@ -991,18 +993,29 @@ async fn make_testreport_slfo_regenerate_request_failure_abandons_the_load() {
     config.teregen_api = failing.uri();
     let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
+    let mut report = None;
+    let events = capture_events_async(async {
+        report = Some(
+            make_testreport(
+                &update,
+                config,
+                UpdateKind::Auto,
+                true,
+                true,
+                Some(&prompter),
+                false,
+            )
+            .await,
+        );
+    })
     .await;
 
-    assert!(!report.is_loaded());
+    assert!(!report.expect("ran").is_loaded());
+    assert!(
+        events.contains("Regeneration request failed: TeReGen answered 500"),
+        "{events}"
+    );
+    assert!(!events.contains("did not finish"), "{events}");
 }
 
 /// A regenerate job that finishes but whose document reload fails (here 404)

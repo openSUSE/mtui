@@ -19,7 +19,7 @@ use mtui_types::report_document::{Section, SectionWriteError};
 use serde_json::{Map, Value, json};
 
 use crate::report_files::{
-    LocalLookup, list_local, read_bytes, resolve_local, server_dirs, stream_read,
+    LocalLookup, list_local, read_bytes, resolve_local, server_dirs, server_read_path, stream_read,
 };
 use crate::session::{
     CallScope, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, ScopeSlot,
@@ -306,7 +306,9 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
              `results/` and `checkers.log` — each with its report-relative `path`, `name` and \
              `size`. `server` is the matching teregen artifact (`dir`, `origin`, `size`, `at`), or \
              null when the server has none; sizes differ until `commit` uploads. `server_only` \
-             lists server files with no local copy, each with its `dir`: report_file_read can read them. A failed server \
+             lists server files with no local copy, each with its `dir` and the `path` \
+             report_file_read reads it from: null when a same-named copy in a preferred directory \
+             answers every such path, or the server names no `dir`. A failed server \
              listing leaves the local list and sets `server_error`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(vec![("template", template_prop())], &[]),
@@ -714,12 +716,17 @@ async fn report_files(
         .filter(|e| !shadowed(e))
         .map(|e| ((e.name.as_str(), e.dir.as_deref()), e))
         .collect();
+    let listed: Vec<(&str, Option<&str>)> = server
+        .iter()
+        .map(|e| (e.name.as_str(), e.dir.as_deref()))
+        .collect();
     let server_only: Vec<Value> = by_key
         .iter()
-        .map(|((name, _), e)| {
+        .map(|((name, dir), e)| {
             json!({
                 "name": name,
                 "dir": e.dir,
+                "path": server_read_path(name, *dir, &listed, &install_logs),
                 "origin": e.origin.as_str(),
                 "size": e.size,
                 "at": e.at,
