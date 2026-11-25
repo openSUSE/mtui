@@ -1715,7 +1715,7 @@ expression: pretty
         },
         "status": {
           "default": "testing",
-          "description": "filter by status (default: testing); use 'all' for every status",
+          "description": "filter by status (default: testing); use 'all' for every status; the unassigned default and --assignee/--mine/--all-assignees apply to testing only",
           "type": "string"
         }
       },

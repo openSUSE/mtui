@@ -716,7 +716,7 @@ Options:
           print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON
 
       --status <STATUS>
-          filter by status (default: testing); use 'all' for every status
+          filter by status (default: testing); use 'all' for every status; the unassigned default and --assignee/--mine/--all-assignees apply to testing only
           
           [default: testing]
 
