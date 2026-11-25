@@ -134,7 +134,7 @@ members = ["crates/*", "xtask"]
 default-members = [".", "crates/*", "xtask"]
 
 [workspace.package]
-version = "26.4.0"
+version = "26.5.0"
 edition = "2024"
 rust-version = "1.96"
 repository = "https://github.com/openSUSE/mtui"
@@ -204,16 +204,16 @@ indexmap = "2"
 ini = { package = "rust-ini", version = "0.21" }
 # dev / test
 insta = "1"
-mtui-cli = { version = "=26.4.0", path = "crates/mtui-cli" }
-mtui-config = { version = "=26.4.0", path = "crates/mtui-config" }
-mtui-core = { version = "=26.4.0", path = "crates/mtui-core" }
-mtui-datasources = { version = "=26.4.0", path = "crates/mtui-datasources" }
-mtui-hosts = { version = "=26.4.0", path = "crates/mtui-hosts" }
-mtui-mcp = { version = "=26.4.0", path = "crates/mtui-mcp", default-features = false }
-mtui-testreport = { version = "=26.4.0", path = "crates/mtui-testreport" }
-mtui-tui = { version = "=26.4.0", path = "crates/mtui-tui" }
+mtui-cli = { version = "=26.5.0", path = "crates/mtui-cli" }
+mtui-config = { version = "=26.5.0", path = "crates/mtui-config" }
+mtui-core = { version = "=26.5.0", path = "crates/mtui-core" }
+mtui-datasources = { version = "=26.5.0", path = "crates/mtui-datasources" }
+mtui-hosts = { version = "=26.5.0", path = "crates/mtui-hosts" }
+mtui-mcp = { version = "=26.5.0", path = "crates/mtui-mcp", default-features = false }
+mtui-testreport = { version = "=26.5.0", path = "crates/mtui-testreport" }
+mtui-tui = { version = "=26.5.0", path = "crates/mtui-tui" }
 # internal crates (path deps)
-mtui-types = { version = "=26.4.0", path = "crates/mtui-types" }
+mtui-types = { version = "=26.5.0", path = "crates/mtui-types" }
 # optional desktop notifications (feature `notify`). Pure-Rust
 # freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
 # the single-static-binary / no-Python-runtime contract. Best-effort + headless
