@@ -698,6 +698,9 @@ async fn read_from_server(
         .map_err(|e| match e {
             TeregenV2Error::NotFound => missing(),
             TeregenV2Error::Generating => refuse("the report is generating; retry shortly"),
+            TeregenV2Error::Busy => {
+                refuse("the server is committing an earlier upload; retry shortly")
+            }
             other => refuse(format!("failed to read {rel} from the server: {other}")),
         })
 }

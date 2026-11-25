@@ -1562,6 +1562,22 @@ async fn a_failed_server_listing_keeps_the_local_list() {
     assert_eq!(out["files"][0]["server"], Value::Null);
     assert_eq!(out["server_only"], json!([]));
     assert!(
+        out["server_error"].as_str().unwrap().contains("committing"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn a_generating_server_listing_says_so() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("install_logs/a.log", "x");
+    f.serve_artifacts(&server, 503, json!({"error": "generating"}))
+        .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert!(
         out["server_error"].as_str().unwrap().contains("generating"),
         "{out}"
     );
@@ -1959,6 +1975,32 @@ async fn a_report_that_is_generating_asks_for_a_retry() {
     )
     .await;
     assert!(msg.contains("generating") && msg.contains("retry"), "{msg}");
+}
+
+#[tokio::test]
+async fn a_busy_server_is_not_reported_as_generating() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("h1.log", "uploaded", "uploads")]}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{}/artifacts/uploads/h1.log", f.id)))
+        .respond_with(ResponseTemplate::new(503).set_body_json(json!({"error": "busy"})))
+        .mount(&server)
+        .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/h1.log"}),
+    )
+    .await;
+    assert!(msg.contains("committing") && msg.contains("retry"), "{msg}");
+    assert!(!msg.contains("generating"), "{msg}");
 }
 
 #[tokio::test]

@@ -423,7 +423,9 @@ async fn load_via_document(
     let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
     let fetch = loop {
         match client.fetch_document(&rrid_str, prev_etag).await {
-            Err(TeregenV2Error::Generating) if tokio::time::Instant::now() < deadline => {
+            Err(TeregenV2Error::Generating | TeregenV2Error::Busy)
+                if tokio::time::Instant::now() < deadline =>
+            {
                 tokio::time::sleep(POLL_INTERVAL).await;
             }
             other => break other,
@@ -483,6 +485,9 @@ fn document_fetch_message(e: mtui_datasources::teregen::TeregenV2Error) -> Strin
         TeregenV2Error::NotFound => "no document yet — run `regenerate` first".to_owned(),
         TeregenV2Error::Stale => "the server's document is stale — run `regenerate`".to_owned(),
         TeregenV2Error::Generating => "the server is still generating this document".to_owned(),
+        TeregenV2Error::Busy => {
+            "the server is committing an earlier upload; retry shortly".to_owned()
+        }
         TeregenV2Error::RejectedId { detail } => format!("the server rejects this id: {detail}"),
         TeregenV2Error::Invalid(doc_err) => doc_err.to_string(),
         other => other.to_string(),
@@ -546,6 +551,10 @@ mod ingest_tests {
         assert_eq!(
             document_fetch_message(TeregenV2Error::Generating),
             "the server is still generating this document"
+        );
+        assert_eq!(
+            document_fetch_message(TeregenV2Error::Busy),
+            "the server is committing an earlier upload; retry shortly"
         );
         assert_eq!(
             document_fetch_message(TeregenV2Error::RejectedId {
@@ -645,6 +654,37 @@ mod ingest_tests {
 
         assert_eq!(report.base().document.as_ref().unwrap().id, RRID_STR);
         assert_eq!(report.base().path.as_deref(), Some(trpath.as_path()));
+    }
+
+    /// The same backoff for the commit guard's `503 busy`: it is transient too.
+    #[tokio::test]
+    async fn load_via_document_retries_past_a_single_busy_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(
+                ResponseTemplate::new(503).set_body_json(serde_json::json!({"error": "busy"})),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let trpath = dir.path().join("log");
+        let config = config_for(&server);
+        let mut report: Box<dyn TestReport + Send + Sync> =
+            Box::new(ObsReport::new(config.clone()));
+        load_via_document(&mut report, &rrid(), &config, &trpath, None)
+            .await
+            .unwrap();
+
+        assert_eq!(report.base().document.as_ref().unwrap().id, RRID_STR);
     }
 
     #[tokio::test]
