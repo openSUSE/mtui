@@ -416,7 +416,8 @@ and nothing is written there.
   none attached. With nothing loaded it attaches such a host for `run`, `get`
   and `put`. `load_template` prints no unserved-slot lines, but prints
   `skipped <host>: <reason>` for each host it refused this way, including a
-  pool host whose slot a sibling then served.
+  pool host whose slot a sibling then served. `add_host` prints the same line
+  for a refused host that no unserved-slot line names.
 - `export` emits one `WARNING:` line per host whose install-result block it
   left unverified in the report: `WARNING: no package of this update is tracked
   for <host>...` when the host tracks none (for example, the update ships
