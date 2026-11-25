@@ -36,7 +36,7 @@ pub struct McpArgs {
     #[arg(short = 't', long = "template-dir", value_name = "DIR")]
     template_dir: Option<PathBuf>,
 
-    /// Override config `mtui.connection_timeout` (seconds).
+    /// Override config `connection.connection_timeout` (seconds).
     // The value_parser range rejects 0 at parse time: the config-file loader
     // guards this key too, so the CLI must not express what the file refuses.
     #[arg(
@@ -75,8 +75,8 @@ pub struct McpArgs {
     pub(crate) transport: Transport,
 
     /// Bind address for `--transport http` (default: 127.0.0.1). Ignored under
-    /// stdio. Loopback only — rmcp's DNS-rebinding guard rejects non-loopback
-    /// hosts.
+    /// stdio. rmcp's DNS-rebinding guard answers 403 to any request whose
+    /// `Host` header is not loopback, so keep the listener on loopback.
     #[arg(long = "host", value_name = "ADDR", default_value = "127.0.0.1")]
     pub(crate) host: String,
 
