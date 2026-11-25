@@ -23,8 +23,8 @@ The config file is resolved in this order:
    XDG file therefore wins over `/etc` on shared keys.
 
 **Command-line flags** are the highest-precedence layer, applied on top of every
-file: `-t/--template-dir`, `-w/--connection-timeout`, `--reboot-timeout`,
-`--reboot-retries` (`mtui` only), `-g/--gitea-token` and `--ssl-verify`.
+file: `-t/--template-dir`, `-w/--connection-timeout`, `--reboot-timeout`
+and `--reboot-retries` (both `mtui` only), `-g/--gitea-token` and `--ssl-verify`.
 
 Loading is **lenient** and never hard-fails:
 
@@ -33,8 +33,8 @@ Loading is **lenient** and never hard-fails:
 - A file that fails to parse as TOML, or holds a value of the wrong type, is
   logged at `ERROR` and skipped **whole**; its options take their defaults.
 - A value check — a zero where a positive number is required, an invalid
-  `install_logs`, a relative `put_dirs` entry — rejects only that key, logs it at
-  `ERROR`, and keeps the rest of the file.
+  `install_logs` — rejects only that key, logs it at `ERROR`, and keeps the rest
+  of the file. A relative `put_dirs` entry is dropped on its own, with an error.
 - Unknown keys are ignored without a warning.
 
 `~` is expanded to your home directory in path-valued options, except in the
@@ -228,7 +228,7 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `pool_reap_stale` | bool | `true` | On a pool claim attempt, force-remove a pre-existing pool claim older than `pool_stale_age`, regardless of owner. The only automatic recovery for a claim orphaned by an uncatchable exit (SIGKILL/panic/power loss). |
 | `pool_stale_age` | seconds | `86400` | Age beyond which a pool claim is stale and reapable. `0` disables pool-claim reaping. |
 | `pi_autolock` | bool | `true` | When testing a Product Increment (PI), lock each refhost as it connects while the report is loaded, released on unload/quit. |
-| `wait` | seconds | `0` | Queueing budget for a busy host, for a pool claim and for a foreign operation lock (`install`/`update`). `0` fails fast. |
+| `wait` | seconds | `0` | Queueing budget for pool arbitration: `0` fails fast on a busy host. It also applies when an operation-lock create loses a race to another tester; a host already held by someone else when `install`/`update` probe it is refused at once. |
 | `wait_poll` | seconds (>0) | `15` | Poll interval while waiting for a busy lock to free. |
 
 ### `[mcp]`

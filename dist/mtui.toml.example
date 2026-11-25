@@ -123,8 +123,9 @@
 # When testing a Product Increment (PI), lock each refhost as it connects while
 # the report is loaded; released on unload/quit.
 # pi_autolock = true
-# Queueing budget, in seconds, for a busy host: a pool claim or a foreign
-# operation lock. 0 fails fast.
+# Queueing budget, in seconds, for pool arbitration; also used when an
+# operation-lock create loses a race to another tester. 0 fails fast. A host
+# already held by someone else when install/update probe it is refused at once.
 # wait = 0
 # Poll interval (seconds) while waiting for a busy lock to free.
 # wait_poll = 15

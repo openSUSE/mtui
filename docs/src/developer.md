@@ -305,7 +305,8 @@ Common issues:
 cargo +nightly fuzz run <target>
 ```
 
-CI runs the targets with ClusterFuzzLite on pull requests and in a weekly batch.
+CI runs the targets with ClusterFuzzLite on pull requests (docs-only changes are
+skipped) and on pushes to `main`, plus a weekly batch.
 
 ## Documentation
 

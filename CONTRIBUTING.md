@@ -106,11 +106,12 @@ convenience.
 
 ## Merging
 
-Mergify merges a PR with a rebase once all of these hold: two approving
-reviews and no requested changes, every check green including
-`codecov/project` (target 81%), linear history, and neither the
-`acceptance-tests-needed` nor the `not-ready` label. The `merge-fast` label
-skips the approval requirement.
+Mergify merges a PR with a rebase when the PR targets `main`, has linear
+history, carries neither the `acceptance-tests-needed` nor the `not-ready`
+label, and has no failing or pending check, with `codecov/project` (target 81%)
+reporting success. The merge also needs two approving reviews, no
+changes-requested review and no outstanding review request. The `merge-fast`
+label skips those three review conditions, not the checks.
 
 ## Changelog
 
