@@ -21,8 +21,9 @@ Yes. Set `template_dir` under `[mtui]` in your config file, or export
 Yes. Load more than one testreport and each is a *template* in the session:
 `list_templates` shows the loaded set and `switch` changes the active one. A
 command that acts on a template takes its scope from the command: read/annotate
-commands (`list_*`, `show_*`, `openqa_*`, `export`, `checkout`, `comment`, …) cover
-every loaded template, and the rest act on the active one (session-level commands
+commands (`list_*` other than `list_products`, `show_*`, `openqa_*`, `export`,
+`checkout`, `comment`, …) cover every loaded template, and the rest act on the
+active one (session-level commands
 such as `list_templates`, `updates` or `config` take no template flag). Scope a
 call with `-T <RRID>`/`--template <RRID>`, or fan out with `--all-templates`.
 Under fan-out each template gets its own `=== <RRID> ===` banner. See
@@ -48,8 +49,8 @@ Yes, but the locks are **advisory and fail-fast by default**. Every mtui on the
 fleet writes the same `timestamp:user:pid[:comment]` layout, so sessions see one
 another's claims — a host held by someone else is *skipped*, and an
 install/update aborts with "Hosts locked" rather than waiting. Raise
-`[lock] wait` (default `0`) to poll for a busy host, both during pool
-arbitration and before `install`/`update` give up on a foreign operation lock.
+`[lock] wait` (default `0`) to poll for a busy host during pool arbitration;
+`install`/`update` still refuse at once on a host someone else already holds.
 Naming a held host explicitly (`add_host -t`) is refused with the holder's
 RRID instead of attaching it, and a fresh remote claim blocks `-t` with no
 override on that template: have the holding template run
@@ -148,8 +149,8 @@ When the loaded report's metadata names no package versions, `prepare` and
 `list_packages -w` and the report metadata; a host the fan-out cannot build a
 command for (unresolvable release, no matching template) likewise fails the
 run by name. That includes a SLES 16 host whose root mode could not be
-determined, reported as `missing preparer (…, transactional-update.conf but
-root mode unknown)`.
+determined, reported as `missing preparer: <host> (<product version>,
+transactional-update.conf but root mode unknown)`.
 
 When a host action completes on some hosts and fails on others, the command prints
 `<verb> completed on <hosts>` for the hosts it completed on before it reports the
@@ -199,11 +200,12 @@ its products could not be read; it was excluded from the update`, or `<host>:
 this update has no repository to add; it was excluded from the update`.
 
 These exclusions cover the automatic rollback too. When a host that was patched
-then fails its check, or a reachable host does not come back from its reboot,
-the rollback reaches only the hosts the patch was dispatched to, so an excluded
+then fails its check, or a reachable host's reboot does not take effect, the
+rollback reaches only the hosts the patch was dispatched to, so an excluded
 host gets no lock, repository change, downgrade, history row or reboot from it.
-When a peer's patch never ran, nothing is rolled back: the hosts the update
-completed on get the same finishing steps as a successful run instead.
+When a peer's patch never ran, or a host does not reconnect after its reboot,
+nothing is rolled back: the hosts the update completed on get the same finishing
+steps as a successful run instead.
 
 `prepare -u` fails such a host by name too, on any report: no test repository
 would be added to it, so its install would draw only on the repositories it
@@ -256,7 +258,9 @@ mtui.
 Under the loaded report's directory, in `template_dir/<RRID>/install_logs/`. The
 file names depend on the workflow: a Manual export writes `<host>.log` (one file
 per refhost), an Auto export `<distri>_<version>_<arch>[_<flavor>].log` (one per
-openQA job), and a Kernel export `<host>-zypper-<arch>.log`. The `install_logs`
+openQA job), and a Kernel export `<host>-zypper-<arch>.log`, where `<host>` is the
+last segment of the openQA instance URL and jobs that would write the same name
+get `-job-<id>` inserted before the extension. The `install_logs`
 sub-directory name is configurable under `[mtui]`; see
 [Configuration](configuration.md).
 

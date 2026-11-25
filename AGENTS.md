@@ -200,9 +200,9 @@ next actionable task before working on a subsystem.
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
   REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `switch`)
-  are deny-listed, as are `config_set`, `teregen_login` and `get`/`put`, which
-  are re-served under the same names as hand-written in-band transfer tools
-  (#434) — a deny-listed command may be
+  are deny-listed, as are `config_set` and `teregen_login`, and `get`/`put`
+  (which are re-served under the same names as hand-written in-band transfer
+  tools, #434) — a deny-listed command may be
   replaced by a richer hand-written tool (`edit` → the `report_*` tools is
   the same pattern). The deny-list ∩ registry is consistency-tested and drift is
   warned about at boot. Local process execution and terminal launching have no
@@ -318,8 +318,9 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   `.snap` file with the **test-binary** name, which is now `it` for every crate —
   so snapshot files are `it__<module>__<name>.snap`. A new snapshot test's file
   lands with that prefix automatically; don't hand-name it otherwise.
-- **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
-  integration fixture); unit tests must run offline and fast.
+- **Gate real hosts/containers** behind `#[ignore]` + an env flag (sshd
+  integration fixture; these run locally only); unit tests must run offline and
+  fast.
 - **Capturing `tracing` output: install the subscriber globally, scope the
   sink.** `tracing::subscriber::set_default`'s guard is thread-local, but
   callsite *interest* is cached **process-wide**: a callsite first reached from a

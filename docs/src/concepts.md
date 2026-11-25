@@ -39,7 +39,7 @@ When more than one template is loaded, a command has one of three scopes:
   one in the REPL, or the sole loaded one — and refuse rather than guess when
   several are loaded headlessly and none is named.
 - **Active** — commands that act on the active template in the REPL
-  (`list_products`, `reload_products`, `set_timeout`). A headless caller with
+  (`list_products`, `reload_products`, `set_host_state`, `set_timeout`). A headless caller with
   several templates loaded and none named fans out instead, because there is no
   active template to address.
 
@@ -65,9 +65,10 @@ a loaded template with **no connected host** is skipped with a warning rather th
 counted as a failure — so an unscoped `lock`/`run`/… still succeeds on the
 templates that do have hosts. If *every* template is host-less the command ran
 nowhere and fails with "No refhosts defined". With `-t <host>`, a template that
-owns none of the named hosts is skipped with a warning, while a template that
-owns a named host that is disconnected fails; if no template owns the host, the
-result is again "No refhosts defined". A `-T`-scoped call keeps single-template
+owns none of the named hosts is skipped with a warning; a template that owns at
+least one of them is dispatched, and fails for any other named host that is not
+connected in it. If no template owns any named host, the result is again "No
+refhosts defined". A `-T`-scoped call keeps single-template
 error behaviour.
 
 When a host action completes on some hosts and fails on others, the command
