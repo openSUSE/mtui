@@ -14,9 +14,10 @@
 use mtui_config::options::Config;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{TeReGen, VerifyPolicy};
+use mtui_datasources::{RegenOutcome, TeReGen, VerifyPolicy};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
+use mtui_types::sanitize::sanitize_external;
 use mtui_types::{UpdateID, Workflow};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -136,6 +137,9 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
     report
 }
 
+/// The cap on TeReGen's text in a log line, the same as `regenerate` shows.
+const REASON_LIMIT: Option<usize> = Some(500);
+
 /// Switches an auto load to [`Workflow::Manual`], arming the deferred autoconnect
 /// when the caller asked for one. The composition root wires the arbiter first,
 /// so `refhosts_from_tp` draws one host per slot.
@@ -224,7 +228,7 @@ pub async fn make_testreport(
         }
         HashCheck::Failed(e) => {
             error!("Gitea API call failed");
-            info!(error = %e, "TestReport isn't loaded");
+            info!(error = %sanitize_external(&e, REASON_LIMIT), "TestReport isn't loaded");
             return Ok(Box::new(null_with_error(
                 checkout_config,
                 format!("Gitea API call failed: {e}"),
@@ -422,11 +426,17 @@ async fn regenerate_via_teregen(
         return Ok(None);
     }
     if let Some(err) = &outcome.error {
-        error!("Regeneration refused: {err}");
+        error!(
+            "Regeneration refused: {}",
+            sanitize_external(err, REASON_LIMIT)
+        );
         return Ok(None);
     }
     if let Some(failed) = &outcome.failed {
-        error!("Regeneration request failed: {failed}");
+        error!(
+            "Regeneration request failed: {}",
+            sanitize_external(failed, REASON_LIMIT)
+        );
         return Ok(None);
     }
     info!("Regeneration job {:?} enqueued for {}", outcome.job, rrid);
@@ -435,15 +445,7 @@ async fn regenerate_via_teregen(
         return Err(LoadCancelled::Regeneration);
     }
     if !outcome.ok {
-        let detail = outcome
-            .minion_error
-            .as_deref()
-            .map(|e| format!(": {e}"))
-            .unwrap_or_default();
-        error!(
-            "Regeneration did not finish (state={}){detail}",
-            outcome.state.as_deref().unwrap_or("unknown")
-        );
+        error!("{}", unfinished_message(&outcome));
         return Ok(None);
     }
 
@@ -452,7 +454,10 @@ async fn regenerate_via_teregen(
 
     if let Err(e) = load_via_document(&mut fresh, &rrid, config, trpath, prev_etag, cancel).await {
         let reason = e.into_failure()?;
-        error!("Reload after regeneration failed: {reason}");
+        error!(
+            "Reload after regeneration failed: {}",
+            sanitize_external(&reason, REASON_LIMIT)
+        );
         return Ok(None);
     }
 
@@ -469,6 +474,19 @@ async fn regenerate_via_teregen(
 /// while the job was unfinished, so a job that failed is reported as the failure.
 fn cancelled_job_wait(outcome: &mtui_datasources::RegenOutcome, stopped: bool) -> bool {
     !outcome.ok && stopped && outcome.state.as_deref() != Some("failed")
+}
+
+/// The log line for a regeneration job that did not finish.
+fn unfinished_message(outcome: &RegenOutcome) -> String {
+    let detail = outcome
+        .minion_error
+        .as_deref()
+        .map(|e| format!(": {}", sanitize_external(e, REASON_LIMIT)))
+        .unwrap_or_default();
+    format!(
+        "Regeneration did not finish (state={}){detail}",
+        sanitize_external(outcome.state.as_deref().unwrap_or("unknown"), REASON_LIMIT)
+    )
 }
 
 // Mirrors `TeReGen::wait_for_template`'s poll budget: a `generating`
@@ -550,7 +568,7 @@ async fn load_via_document(
         Ok(live) => {
             let drift = mtui_types::report_document::schema_drift(&live);
             if let Some(drift) = &drift {
-                warn!(%drift, "teregen's report schema differs from this mtui's; writes are refused");
+                warn!(drift = %sanitize_external(drift, REASON_LIMIT), "teregen's report schema differs from this mtui's; writes are refused");
             }
             drift
         }
@@ -1177,5 +1195,26 @@ mod ingest_tests {
         assert!(!cancelled_job_wait(&ended("failed"), true));
         assert!(cancelled_job_wait(&ended("active"), true));
         assert!(!cancelled_job_wait(&ended("active"), false));
+    }
+
+    /// Both fields are TeReGen's text: a job that never finishes leaves the
+    /// state at whatever was last polled.
+    #[test]
+    fn unfinished_message_sanitizes_and_caps_the_state_and_error() {
+        let long = "x".repeat(600);
+        let outcome = RegenOutcome {
+            state: Some(format!("run\u{9b}2Jning\u{202e}{long}")),
+            minion_error: Some(format!("boom\u{1b}[31m!{long}")),
+            ..Default::default()
+        };
+        let mark = mtui_types::sanitize::TRUNCATION_MARK;
+        assert_eq!(
+            unfinished_message(&outcome),
+            format!(
+                "Regeneration did not finish (state=running{}{mark}): boom!{}{mark}",
+                "x".repeat(493),
+                "x".repeat(495)
+            )
+        );
     }
 }

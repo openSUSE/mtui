@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_testreport::{LoadCancelled, LoadContext, UpdateKind, make_testreport};
+use mtui_types::sanitize::TRUNCATION_MARK;
 use mtui_types::{UpdateID, Workflow};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1118,4 +1119,220 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails_document() {
         !report.is_loaded(),
         "a finished job whose reload fails abandons the load"
     );
+}
+
+// --- TeReGen's text reaching the log ---
+
+/// Server text carrying a C1 CSI introducer (with its parameters), a bidi
+/// override, and a tail long enough to pass the log's cap; [`READABLE`] is the
+/// start of what survives sanitizing it.
+fn hostile() -> String {
+    format!("bad \u{9b}2J\u{202e}reason{}", "x".repeat(600))
+}
+const READABLE: &str = "bad reason";
+
+fn assert_sanitized(events: &str, expected: &str) {
+    assert!(events.contains(expected), "{events:?}");
+    assert!(!events.contains('\u{9b}'), "{events:?}");
+    assert!(!events.contains('\u{202e}'), "{events:?}");
+    assert!(events.contains(TRUNCATION_MARK), "{events:?}");
+    assert!(!events.contains(&"x".repeat(500)), "{events:?}");
+}
+
+/// Drives a stale SLFO load into `regenerate_via_teregen` against `v1` (the
+/// regenerate API) and returns every log line it emitted.
+async fn regenerate_events(v1: &MockServer) -> String {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut config, _gitea, _teregen, update) =
+        slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
+    config.teregen_api = v1.uri();
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
+    capture_events_async(async {
+        let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+            .await
+            .expect("not cancelled");
+        assert!(!report.is_loaded());
+    })
+    .await
+}
+
+#[tokio::test]
+async fn regeneration_refusal_is_sanitized_in_the_log() {
+    let v1 = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(serde_json::json!({"error": hostile()})),
+        )
+        .mount(&v1)
+        .await;
+
+    let events = regenerate_events(&v1).await;
+    assert_sanitized(&events, &format!("Regeneration refused: {READABLE}"));
+}
+
+#[tokio::test]
+async fn regeneration_request_failure_is_sanitized_in_the_log() {
+    let v1 = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(serde_json::json!({"error": hostile()})),
+        )
+        .mount(&v1)
+        .await;
+
+    let events = regenerate_events(&v1).await;
+    assert_sanitized(
+        &events,
+        &format!(
+            "Regeneration request failed: TeReGen answered 500 Internal Server Error: {READABLE}"
+        ),
+    );
+}
+
+#[tokio::test]
+async fn regeneration_minion_error_is_sanitized_in_the_log() {
+    let v1 = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 1})))
+        .mount(&v1)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{SLFO_RRID}/status")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"minion_state": "failed", "minion_error": hostile()}),
+        ))
+        .mount(&v1)
+        .await;
+
+    let events = regenerate_events(&v1).await;
+    assert_sanitized(
+        &events,
+        &format!("Regeneration did not finish (state=failed): {READABLE}"),
+    );
+}
+
+#[tokio::test]
+async fn reload_after_regeneration_failure_is_sanitized_in_the_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut config, gitea, _teregen, update) =
+        slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
+    let teregen = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{SLFO_RRID}")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(slfo_gitea_document(
+                SLFO_RRID,
+                &format!("{}/pulls/1", gitea.uri()),
+                "stalesha",
+            )),
+        )
+        .up_to_n_times(1)
+        .mount(&teregen)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{SLFO_RRID}")))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(serde_json::json!({"error": hostile()})),
+        )
+        .mount(&teregen)
+        .await;
+    mount_v1_regenerate(&teregen, SLFO_RRID, "finished").await;
+    config.teregen_api = teregen.uri();
+    config.teregen_api_v2 = teregen.uri();
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
+
+    let events = capture_events_async(async {
+        let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+            .await
+            .expect("not cancelled");
+        assert!(!report.is_loaded());
+    })
+    .await;
+    assert_sanitized(
+        &events,
+        &format!("Reload after regeneration failed: the server rejects this id: {READABLE}"),
+    );
+}
+
+#[tokio::test]
+async fn schema_drift_is_sanitized_in_the_log() {
+    let teregen = MockServer::start().await;
+    serve_document(&teregen, MAINT_RRID, maintenance_document(MAINT_RRID)).await;
+    let mut schema: serde_json::Value =
+        serde_json::from_str(mtui_types::report_document::SCHEMA_JSON).unwrap();
+    schema[hostile()] = serde_json::json!(true);
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(schema))
+        .mount(&teregen)
+        .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.teregen_api_v2 = teregen.uri();
+    let update = UpdateID::parse(MAINT_RRID).unwrap();
+
+    let events = capture_events_async(async {
+        make_testreport(
+            &update,
+            config,
+            UpdateKind::Kernel,
+            false,
+            LoadContext::default(),
+        )
+        .await
+        .expect("not cancelled");
+    })
+    .await;
+    assert_sanitized(&events, &format!("drift=/{READABLE}x"));
+}
+
+/// The Gitea error names the PR API URL, which is the document's
+/// `update.origin.api` as TeReGen sent it.
+#[tokio::test]
+async fn gitea_failure_is_sanitized_in_the_log() {
+    let gitea = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&gitea)
+        .await;
+    let teregen = MockServer::start().await;
+    serve_document(
+        &teregen,
+        SLFO_RRID,
+        slfo_gitea_document(
+            SLFO_RRID,
+            &format!("{}/pulls/1\u{9b}2J\u{202e}", gitea.uri()),
+            "sha",
+        ),
+    )
+    .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.gitea_url = gitea.uri();
+    config.teregen_api_v2 = teregen.uri();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let events = capture_events_async(async {
+        let report = make_testreport(
+            &update,
+            config,
+            UpdateKind::Auto,
+            false,
+            LoadContext::default(),
+        )
+        .await
+        .expect("not cancelled");
+        assert!(!report.is_loaded());
+    })
+    .await;
+    let line = events
+        .lines()
+        .find(|l| l.contains("TestReport isn't loaded") && l.contains("error="))
+        .unwrap_or_else(|| panic!("{events:?}"));
+    assert!(line.contains("/pulls/1 returned status 500"), "{line:?}");
+    assert!(!line.contains(['\u{9b}', '\u{202e}']), "{line:?}");
 }
