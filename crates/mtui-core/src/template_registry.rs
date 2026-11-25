@@ -143,7 +143,7 @@ impl TemplateRegistry {
     ///
     /// The bounded teardown the REPL `quit` runs:
     /// [`release_pool_claims`](mtui_testreport::TestReport::release_pool_claims)
-    /// then [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)` under
+    /// then [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)`, each under
     /// `remove_close_timeout`. Only then is the entry dropped and, if active, the
     /// pointer repointed, so a reader never sees a half-torn-down active report.
     /// A no-op if `rrid` is absent. Returns per-host failures and stragglers.
@@ -162,7 +162,9 @@ impl TemplateRegistry {
         if let Some(entry) = self.entries.get(rrid).cloned() {
             let mut report = entry.lock().await;
             // Before disconnecting; a no-op without pooling.
-            report.release_pool_claims().await;
+            for host in report.release_pool_claims(timeout).await {
+                tracing::warn!("still releasing the pool claim on {host}");
+            }
             // So a straggler can still be named per host.
             let hosts = report.base_mut().targets.names();
             let close = report.base_mut().targets.close(None);

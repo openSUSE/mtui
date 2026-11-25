@@ -325,27 +325,44 @@ pub trait TestReport {
     /// Drops this report's arbiter ownership and removes its remote pool locks.
     ///
     /// Best-effort
-    /// [`Target::pool_unlock`](mtui_hosts::Target::pool_unlock) with
-    /// `force = false` (so a claim owned by another template is left alone) for
+    /// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
+    /// with `force = false` (so a claim owned by another template is left alone) for
     /// every claimed host, then clears the in-process claim set and drops
     /// ownership via
     /// [`HostArbiter::release_owner`](mtui_hosts::HostArbiter::release_owner).
     ///
+    /// The remote releases fan out concurrently under `budget`, so a host that
+    /// stops answering costs at most `budget` and never holds up the others.
+    /// The in-process state is cleared regardless. Returns the claimed hosts
+    /// whose release had not finished when the budget ran out, sorted.
+    ///
     /// Idempotent, and a no-op when pool selection was never used.
-    async fn release_pool_claims(&mut self) {
+    async fn release_pool_claims(&mut self, budget: std::time::Duration) -> Vec<String> {
         let base = self.base_mut();
-        // Snapshot so the `pool_claims` borrow ends before the `&mut` target calls.
-        let claims: Vec<String> = base.pool_claims.iter().cloned().collect();
-        for host in claims {
-            if let Some(target) = base.targets.get_mut(&host) {
-                target.pool_unlock(false).await;
-            }
-        }
+        let claims: BTreeSet<String> = base
+            .pool_claims
+            .iter()
+            .filter(|host| base.targets.contains(host))
+            .cloned()
+            .collect();
+        let collected = std::sync::Mutex::new(std::collections::BTreeMap::new());
+        let _ = tokio::time::timeout(
+            budget,
+            base.targets
+                .pool_unlock_collecting(false, &claims, &collected),
+        )
+        .await;
+        let finished = collected.into_inner().unwrap_or_else(|e| e.into_inner());
+        let unfinished = claims
+            .into_iter()
+            .filter(|host| !finished.contains_key(host))
+            .collect();
         base.pool_claims.clear();
         base.slot_candidates.clear();
         if let (Some(arbiter), Some(owner)) = (base.arbiter.as_ref(), base.owner.as_ref()) {
             arbiter.release_owner(owner);
         }
+        unfinished
     }
 
     /// Releases one host's in-process arbiter claim and prunes it from the
@@ -753,6 +770,7 @@ pub enum HashCheck {
 mod tests {
     use super::*;
     use mtui_config::options::Config;
+    use std::time::Duration;
 
     fn config() -> Config {
         Config::default()
@@ -1165,7 +1183,7 @@ mod tests {
             .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
         let mut r = MetaReport { base };
 
-        r.release_pool_claims().await;
+        r.release_pool_claims(Duration::from_secs(5)).await;
 
         assert!(r.base().pool_claims.is_empty());
         assert!(r.base().slot_candidates.is_empty());
@@ -1180,8 +1198,8 @@ mod tests {
         let mut r = MetaReport {
             base: TestReportBase::new(config()),
         };
-        r.release_pool_claims().await;
-        r.release_pool_claims().await; // idempotent second call
+        r.release_pool_claims(Duration::from_secs(5)).await;
+        r.release_pool_claims(Duration::from_secs(5)).await; // idempotent second call
         assert!(r.base().pool_claims.is_empty());
         assert!(r.base().arbiter.is_none());
     }
