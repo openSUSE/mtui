@@ -16,13 +16,15 @@ higher ones; `mtui-core` is the composition root that wires everything together.
 | `mtui-types` | Domain types + the error hierarchy. Pure, sync, no I/O. Includes the typed `report_document` model of the JSON-native TeReGen report (schema v1.0). |
 | `mtui-config` | TOML config + XDG path resolution. |
 | `mtui-hosts` | SSH/SFTP (russh), the `Target`/`HostsGroup` model, locks, the pool arbiter. Async. |
-| `mtui-datasources` | Shared HTTP; refhosts resolve/search/verify; the openQA/QEM/Gitea/OBS/oqa-search clients. Async. |
+| `mtui-datasources` | Shared HTTP; refhosts resolve/search/verify; the openQA/QEM/Gitea/OBS/oqa-search/TeReGen/Slack clients. Async. |
 | `mtui-testreport` | Testreport lifecycle (TeReGen v2 document ingest/upload) and the update workflow (actions/checks/export). |
 | `mtui-core` | The `Command` trait + registry, `Session`, the dispatch engine, and the wiring that ties the crates together. |
-| `mtui` (root) | Facade package owning `src/bin/{mtui,mtui-mcp}.rs` behind the `cli`/`mcp` features; its integration tests are in `tests/it.rs`. |
+| `suse-mtui` (root) | Facade package (binaries `mtui` and `mtui-mcp`) owning `src/bin/{mtui,mtui-mcp}.rs` behind the `cli`/`mcp` features; its integration tests are in `tests/it.rs`. |
 | `mtui-tui` | The report-document editor: a walker over the report JSON Schema, the form model built on it, and the ratatui screen. Pure and sync; depends only on `mtui-types`, so neither the MCP server nor a `--no-default-features` build compiles ratatui. |
 | `mtui-cli` | The reedline REPL library, including the terminal handover around the `mtui-tui` editor. |
 | `mtui-mcp` | The rmcp server library. |
+| `xtask` | Developer tasks run as `cargo xtask`: generated docs, completions and man pages, release tarballs, and the TeReGen corpus survey, schema check, login and write probes. Not published. |
+| `fuzz/` | cargo-fuzz harness over the untrusted-input parsers. A detached workspace that needs nightly, so it never affects the MSRV, `Cargo.lock` or stable CI. |
 
 ## The command registry is the single source of truth
 
@@ -37,7 +39,8 @@ consumers iterate that **one** registry:
 
 So adding, renaming, or removing a command updates the REPL, the docs, and the MCP
 tool surface together — they cannot drift. See [MCP server](mcp.md) for the
-deny-list that keeps REPL-only commands off the wire.
+deny-list that keeps REPL-only commands, `config_set` and `teregen_login` off
+the wire; `get` and `put` are re-served as in-band transfer tools.
 
 ## Session state, not globals
 
@@ -84,6 +87,10 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
 - **Remote-lock wire format** — one line, `timestamp:user:pid[:comment]`, shared
   by the operation lock and the pool-claim lock (see
   [Workflow concepts](concepts.md#locking)).
+- **Remote history format** — one `timestamp:user:field1[:field2…]` line
+  appended to `/var/log/mtui.log` on each enabled host with `sftp_append`
+  (append-only, so concurrent testers on one host never clobber one another),
+  and read back by `list_history`.
 - **MCP tool names/schemas** — downstream LLM configs depend on them; the
   synthesised, slimmed schemas are snapshot-tested.
 - **openQA `BUILD` query string** — `:{type}:{number}:{package}`
@@ -103,10 +110,10 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
 
 ## Deliberate design choices
 
-- **TOML config**, not INI.
+- **TOML config.**
 - **Native OBS/IBS API** for the QAM review workflow, not an `osc` subprocess.
-- **Two static binaries** (`mtui`, `mtui-mcp`), no runtime interpreter or
-  virtualenv to install.
+- **Two static binaries** (`mtui`, `mtui-mcp`), no runtime interpreter to
+  install.
 - **Async I/O** (`tokio`) with true parallel host fan-out.
 - **Git-vs-OBS is decided per update, from the report document, not from the RRID.**
   The RRID's shape cannot tell an IBS request number from a Gitea PR number.
