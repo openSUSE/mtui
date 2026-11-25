@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::TeReGenError;
 use mtui_datasources::teregen::{DocumentFetch, RegenRequest, TeregenV2, TeregenV2Error};
-use mtui_testreport::UpdateKind;
+use mtui_testreport::{LoadCancelled, UpdateKind};
 use mtui_types::report_document::ReportDocument;
 use mtui_types::{UpdateID, Workflow};
 use serde_json::Value;
@@ -214,7 +214,7 @@ impl Command for Regenerate {
             .display
             .println(&format!("Template for {rrid_str} regenerated — reloading"));
         let previously_active = session.templates.active_rrid().map(str::to_owned);
-        reload(session, &rrid_str, kernel).await;
+        reload(session, &rrid_str, kernel).await?;
         // `repoints_active` leaves the reloaded RRID active unconditionally, so
         // announce it whenever that actually moved the pointer away from what
         // was active before — the reload's own output otherwise gives no hint.
@@ -316,7 +316,8 @@ async fn server_has_tester_content(client: &TeregenV2, rrid: &str) -> Result<boo
 /// regen-reload. The kind comes from a loaded report whose RRID matches `rrid`
 /// ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`]),
 /// falling back to `kernel_hint` for a standalone RRID with no workflow to read.
-async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
+/// A cancel while the reload waits for TeReGen is [`CommandError::Cancelled`].
+async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) -> CommandResult {
     let loaded_matches = session
         .metadata()
         .rrid()
@@ -349,12 +350,18 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
         Ok(u) => u,
         Err(e) => {
             info!("Skipping reload of {rrid}: could not parse RRID: {e}");
-            return;
+            return Ok(());
         }
     };
 
     // `false`: reloading a template TeReGen just regenerated, not one it refused.
-    session.load_update(&update, false, kind, false).await;
+    session
+        .load_update(&update, false, kind, false)
+        .await
+        .map_err(|e: LoadCancelled| {
+            CommandError::Cancelled(format!("regenerated {rrid}, but reloading it: {e}"))
+        })?;
+    Ok(())
 }
 
 /// Reports the `--no-wait` enqueue outcome.
@@ -699,6 +706,43 @@ mod tests {
         assert!(
             !out.contains("is now the active template"),
             "regenerating the already-active template must not announce a move: {out}"
+        );
+    }
+
+    /// A cancel that lands while the reload waits for TeReGen's document is
+    /// `Cancelled`, naming the regeneration that did complete.
+    #[tokio::test]
+    async fn a_cancel_during_the_reload_is_cancelled() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{rrid}")))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        let tmp = tempfile::tempdir().unwrap();
+        session.config = config_for(&server);
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.cancel_token().cancel();
+
+        let args = matches(&Regenerate, &["--discard-authored"]);
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Regenerate.call(&mut session, &args),
+        )
+        .await
+        .expect("the reload must observe the cancel")
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "cancelled: regenerated {rrid}, but reloading it: stopped waiting for \
+                 TeReGen's document; nothing was loaded"
+            )
         );
     }
 

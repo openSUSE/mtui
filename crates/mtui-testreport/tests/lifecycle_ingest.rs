@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 
 use mtui_config::options::Config;
-use mtui_testreport::{UpdateKind, make_testreport};
+use mtui_testreport::{LoadCancelled, LoadContext, UpdateKind, make_testreport};
 use mtui_types::{UpdateID, Workflow};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -210,6 +210,15 @@ fn scripted_prompter(script: &'static [(&'static str, &'static str)]) -> mtui_ho
     }))
 }
 
+/// An interactive REPL load answering through `prompter`.
+fn repl(prompter: &mtui_hosts::Prompter) -> LoadContext<'_> {
+    LoadContext {
+        is_repl: true,
+        prompter: Some(prompter),
+        ..LoadContext::default()
+    }
+}
+
 /// A `200` document response loads via `apply_document`: only the scratch
 /// directory is created, holding neither `log` nor `metadata.json`.
 #[tokio::test]
@@ -235,11 +244,10 @@ async fn make_testreport_ingest_200_applies_document_without_a_checkout() {
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(report.is_loaded(), "a 200 document should load the report");
     assert_eq!(report.id(), MAINT_RRID);
@@ -278,11 +286,10 @@ async fn make_testreport_ingest_404_yields_null_report_with_p3_d5_text() {
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded());
     assert_eq!(
@@ -311,11 +318,10 @@ async fn make_testreport_ingest_409_yields_null_report_with_p3_d5_text() {
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded());
     assert_eq!(
@@ -347,11 +353,10 @@ async fn make_testreport_ingest_400_yields_null_report_with_p3_d5_text() {
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded());
     assert_eq!(
@@ -390,11 +395,10 @@ async fn make_testreport_ingest_503_then_404_retries_before_failing() {
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded());
     assert_eq!(
@@ -446,16 +450,9 @@ async fn make_testreport_ingest_gitea_mismatch_regenerates_and_reloads_via_docum
 
     let prompter = scripted_prompter(&[("Regenerate", "y")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Kernel,
-        false,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Kernel, false, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(
         report.is_loaded(),
@@ -497,11 +494,10 @@ async fn make_testreport_ingest_gitea_mismatch_noninteractive_declines_and_yield
         config,
         UpdateKind::Kernel,
         false,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded());
     assert_eq!(
@@ -548,7 +544,15 @@ async fn make_testreport_auto_no_install_jobs_downgrades_to_manual_document() {
     let (config, _teregen, dashboard, update) = maintenance_session(tmp.path().to_path_buf()).await;
     mount_dashboard_no_results(&dashboard, "24993").await;
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert_eq!(report.id(), DASHBOARD_RRID);
     assert_eq!(
@@ -571,7 +575,15 @@ async fn make_testreport_auto_with_install_jobs_stays_auto_no_connect_document()
     let (config, _teregen, dashboard, update) = maintenance_session(tmp.path().to_path_buf()).await;
     mount_dashboard_with_install(&dashboard, "24993").await;
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert_eq!(
         report.workflow(),
@@ -599,11 +611,10 @@ async fn make_testreport_kernel_does_not_autoconnect_document() {
         config,
         UpdateKind::Kernel,
         true,
-        false,
-        None,
-        false,
+        LoadContext::default(),
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert_eq!(report.workflow(), Workflow::Kernel);
     assert!(
@@ -620,8 +631,15 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect_document() {
     let (config, _teregen, dashboard, update) = maintenance_session(tmp.path().to_path_buf()).await;
     mount_dashboard_no_results(&dashboard, "24993").await;
 
-    let report =
-        make_testreport(&update, config, UpdateKind::Auto, false, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        false,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert_eq!(report.workflow(), Workflow::Manual);
     assert!(!report.base().autoconnect_pending);
@@ -641,17 +659,27 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode_document() {
         config.clone(),
         UpdateKind::Auto,
         false,
-        true,
-        None,
-        false,
+        LoadContext {
+            is_repl: true,
+            ..LoadContext::default()
+        },
     )
-    .await;
+    .await
+    .expect("not cancelled");
     assert!(
         repl.base().targets.is_repl(),
         "REPL load must yield an is_repl targets group"
     );
 
-    let head = make_testreport(&update, config, UpdateKind::Auto, false, false, None, false).await;
+    let head = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        false,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
     assert!(
         !head.base().targets.is_repl(),
         "headless load must keep a non-interactive targets group"
@@ -704,7 +732,15 @@ async fn make_testreport_slfo_obs_document_is_refused() {
     config.teregen_api_v2 = teregen.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert!(!report.is_loaded(), "slfo + obs must not load");
     let reason = report.base().load_error.as_deref().expect("a load_error");
@@ -726,7 +762,15 @@ async fn make_testreport_slfo_hash_match_loads_document() {
     mount_dashboard_with_install(&dashboard, "7819").await;
     point_dashboard(&mut config, &dashboard);
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert!(report.is_loaded(), "matching hash should load the report");
     assert_eq!(report.id(), SLFO_RRID);
@@ -743,7 +787,15 @@ async fn make_testreport_slfo_missing_token_yields_null_document() {
         slfo_session(tmp.path().to_path_buf(), "deadbeef", "deadbeef").await;
     config.gitea_token.clear();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert!(
         !report.is_loaded(),
@@ -765,7 +817,15 @@ async fn make_testreport_slfo_hash_mismatch_yields_null_document() {
     let (config, _gitea, _teregen, update) =
         slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
 
     assert!(
         !report.is_loaded(),
@@ -793,16 +853,9 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale_document() {
 
     let prompter = scripted_prompter(&[("Regenerate", "n"), ("Force continue", "y")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(
         report.is_loaded(),
@@ -835,7 +888,18 @@ async fn make_testreport_slfo_noninteractive_force_continue_keeps_stale_document
         .await;
     config.teregen_api = regenerate.uri();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, true).await;
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        LoadContext {
+            force_continue: true,
+            ..LoadContext::default()
+        },
+    )
+    .await
+    .expect("not cancelled");
 
     assert!(
         report.is_loaded(),
@@ -859,11 +923,13 @@ async fn make_testreport_slfo_interactive_force_continue_arg_ignored_when_prompt
         config,
         UpdateKind::Auto,
         true,
-        true,
-        Some(&prompter),
-        true,
+        LoadContext {
+            force_continue: true,
+            ..repl(&prompter)
+        },
     )
-    .await;
+    .await
+    .expect("not cancelled");
 
     assert!(
         !report.is_loaded(),
@@ -886,16 +952,9 @@ async fn make_testreport_slfo_mismatch_decline_keeps_scratch_dir_document() {
     std::fs::write(logs.join("x.log"), "kept").unwrap();
     let prompter = scripted_prompter(&[("Regenerate", "n"), ("Force continue", "n")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(!report.is_loaded(), "declining both abandons the load");
     assert_eq!(report.id(), "");
@@ -921,16 +980,9 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual_document()
     config.teregen_api = refusing.uri();
     let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(
         !report.is_loaded(),
@@ -952,21 +1004,42 @@ async fn make_testreport_slfo_regenerate_job_unfinished_keeps_scratch_dir_docume
     let rrid_dir = tmp.path().join(SLFO_RRID);
     let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(!report.is_loaded(), "an unfinished job abandons the load");
     assert!(
         rrid_dir.exists(),
         "the scratch directory must survive an accepted regenerate"
+    );
+}
+
+/// A cancel during the stale-template regeneration ends the load as cancelled,
+/// without falling back to the force-continue question.
+#[tokio::test]
+async fn make_testreport_slfo_regenerate_cancelled_ends_the_load_as_cancelled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut config, _gitea, _teregen, update) =
+        slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
+    let running = MockServer::start().await;
+    mount_v1_regenerate(&running, SLFO_RRID, "active").await;
+    config.teregen_api = running.uri();
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "y")]);
+    let ctx = repl(&prompter);
+    ctx.cancel.cancel();
+
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        make_testreport(&update, config, UpdateKind::Auto, true, ctx),
+    )
+    .await
+    .expect("the cancel must end the job wait");
+
+    assert!(
+        matches!(out, Err(LoadCancelled::Regeneration)),
+        "{:?}",
+        out.err()
     );
 }
 
@@ -996,16 +1069,9 @@ async fn make_testreport_slfo_regenerate_request_failure_abandons_the_load() {
     let mut report = None;
     let events = capture_events_async(async {
         report = Some(
-            make_testreport(
-                &update,
-                config,
-                UpdateKind::Auto,
-                true,
-                true,
-                Some(&prompter),
-                false,
-            )
-            .await,
+            make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+                .await
+                .expect("not cancelled"),
         );
     })
     .await;
@@ -1044,16 +1110,9 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails_document() {
     config.teregen_api_v2 = teregen.uri();
     let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        true,
-        Some(&prompter),
-        false,
-    )
-    .await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, repl(&prompter))
+        .await
+        .expect("not cancelled");
 
     assert!(
         !report.is_loaded(),

@@ -219,7 +219,8 @@ next actionable task before working on a subsystem.
   gating strands remote locks exactly when a cancel needs them released).
   Long serial flows poll `targets.cancel_requested()` at their own boundaries
   (`downgrade`'s non-transactional per-package loop, `prepare --installed`'s
-  pre- and post-probe checkpoints, the `update` step sequence) — but **never
+  pre- and post-probe checkpoints, the `update` step sequence; a template
+  load's TeReGen waits watch the session token itself) — but **never
   past a point of no return**: `update`
   makes its last check before dispatching the patch command, and the
   post-failure rollback runs under `HostsGroup::suspend_cancellation` (its own

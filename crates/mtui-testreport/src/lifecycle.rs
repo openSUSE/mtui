@@ -18,6 +18,7 @@ use mtui_datasources::{TeReGen, VerifyPolicy};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
 use mtui_types::{UpdateID, Workflow};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
@@ -72,6 +73,61 @@ enum StaleHash {
     Abandon,
 }
 
+/// The caller's side of a load: whether it can be prompted, the
+/// non-interactive stale-hash answer, and the token that stops its waits.
+/// The default is a headless load that declines a stale hash.
+#[derive(Default)]
+pub struct LoadContext<'a> {
+    /// The session is the interactive REPL.
+    pub is_repl: bool,
+    /// The REPL's prompter; `Some` only in interactive mode.
+    pub prompter: Option<&'a Prompter>,
+    /// The non-interactive answer to the stale-hash "force continue" question.
+    pub force_continue: bool,
+    /// Stops the load's TeReGen waits.
+    pub cancel: CancellationToken,
+}
+
+/// A load that [`LoadContext::cancel`] stopped while it waited for TeReGen,
+/// by what it was waiting for; nothing was loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LoadCancelled {
+    /// The wait for the report document.
+    #[error("stopped waiting for TeReGen's document; nothing was loaded")]
+    Document,
+    /// The wait for a stale template's regeneration, which TeReGen keeps running.
+    #[error(
+        "stopped waiting for TeReGen to regenerate the stale template; nothing was \
+         loaded, and the requested regeneration continues on the server"
+    )]
+    Regeneration,
+}
+
+/// Why [`load_via_document`] did not load the report.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+enum LoadError {
+    #[error(transparent)]
+    Cancelled(#[from] LoadCancelled),
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<String> for LoadError {
+    fn from(reason: String) -> Self {
+        Self::Failed(reason)
+    }
+}
+
+impl LoadError {
+    /// The failure's reason, or the cancel as the `Err` to propagate.
+    fn into_failure(self) -> Result<String, LoadCancelled> {
+        match self {
+            Self::Cancelled(cancelled) => Err(cancelled),
+            Self::Failed(reason) => Ok(reason),
+        }
+    }
+}
+
 /// A [`NullReport`] carrying the reason its load failed, so
 /// `Session::load_update` can surface *why* rather than "could not load".
 fn null_with_error(config: Config, reason: String) -> NullReport {
@@ -111,19 +167,23 @@ fn downgrade_to_manual(base: &mut TestReportBase, autoconnect: bool) {
 /// **only** when `autoconnect` is `true` **and** the auto load downgraded to
 /// `MANUAL` — never on the auto happy path, never for the kernel kind.
 ///
-/// `force_continue` is the non-interactive escape hatch for a stale hash
+/// `ctx.force_continue` is the non-interactive escape hatch for a stale hash
 /// (`handle_stale_hash`): when `is_repl && prompter.is_some()`, the REPL's own
 /// "Force continue loading template ?" prompt governs and this is ignored;
 /// otherwise it takes the prompt's place. `false` abandons the load.
+///
+/// # Errors
+///
+/// [`LoadCancelled`] when `ctx.cancel` fires while the load waits for TeReGen
+/// (the busy-document poll or a stale-template regeneration). Every other
+/// failure is a [`NullReport`], as above.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
     kind: UpdateKind,
     autoconnect: bool,
-    is_repl: bool,
-    prompter: Option<&Prompter>,
-    force_continue: bool,
-) -> Box<dyn TestReport + Send + Sync> {
+    ctx: LoadContext<'_>,
+) -> Result<Box<dyn TestReport + Send + Sync>, LoadCancelled> {
     let template_dir = config.template_dir.clone();
     let max_parallel = config.max_parallel as usize;
     let mut report = tr_factory(update, config);
@@ -136,12 +196,19 @@ pub async fn make_testreport(
 
     // The document is the source of the model; nothing is checked out — only
     // the scratch directory is created.
-    let loaded: Result<(), String> =
-        load_via_document(&mut report, &rrid, &checkout_config, &trpath, None).await;
-
-    if let Err(reason) = loaded {
+    if let Err(e) = load_via_document(
+        &mut report,
+        &rrid,
+        &checkout_config,
+        &trpath,
+        None,
+        &ctx.cancel,
+    )
+    .await
+    {
+        let reason = e.into_failure()?;
         info!("TestReport isn't loaded");
-        return Box::new(null_with_error(checkout_config, reason));
+        return Ok(Box::new(null_with_error(checkout_config, reason)));
     }
 
     // `read` is sync and `check_hash` async, so the Gitea token + template-hash
@@ -153,15 +220,15 @@ pub async fn make_testreport(
                  set GITEA_TOKEN in your environment, or add a [gitea] token \
                  entry to ~/.mtuirc.";
             error!("{msg}");
-            return Box::new(null_with_error(checkout_config, msg.to_owned()));
+            return Ok(Box::new(null_with_error(checkout_config, msg.to_owned())));
         }
         HashCheck::Failed(e) => {
             error!("Gitea API call failed");
             info!(error = %e, "TestReport isn't loaded");
-            return Box::new(null_with_error(
+            return Ok(Box::new(null_with_error(
                 checkout_config,
                 format!("Gitea API call failed: {e}"),
-            ));
+            )));
         }
         HashCheck::Mismatch { .. } => {
             let prev_etag = report.base().document_etag.clone();
@@ -169,12 +236,10 @@ pub async fn make_testreport(
                 update,
                 &checkout_config,
                 &trpath,
-                is_repl,
-                prompter,
-                force_continue,
+                &ctx,
                 prev_etag.as_deref(),
             )
-            .await
+            .await?
             {
                 StaleHash::Regenerated(fresh) => report = fresh,
                 StaleHash::ForceContinue => {
@@ -187,12 +252,12 @@ pub async fn make_testreport(
                     );
                 }
                 StaleHash::Abandon => {
-                    return Box::new(null_with_error(
+                    return Ok(Box::new(null_with_error(
                         checkout_config,
                         "template hash mismatch (stale checkout); regeneration \
                          declined or unavailable"
                             .to_owned(),
-                    ));
+                    )));
                 }
             }
         }
@@ -250,37 +315,36 @@ pub async fn make_testreport(
 
     // The session is the single source of truth for REPL-vs-headless: the group
     // is built headless and reconciled here, once, never toggled afterwards.
-    report.base_mut().targets.set_is_repl(is_repl);
+    report.base_mut().targets.set_is_repl(ctx.is_repl);
     report.base_mut().targets.set_max_parallel(max_parallel);
 
-    report
+    Ok(report)
 }
 
 /// Handles a stale template hash: log, offer TeReGen regeneration, then the
 /// manual force-continue fallback.
 ///
-/// Returns the [`StaleHash`] outcome.
+/// Returns the [`StaleHash`] outcome, or [`LoadCancelled`] when the
+/// regeneration wait was cancelled.
 ///
 /// `prompter` is `Some` only in interactive mode, so every prompt is gated on
 /// `is_repl && prompter.is_some()` and otherwise takes the non-interactive
 /// answer — **except** the force-continue question, whose non-interactive
-/// default is `force_continue_arg`. It reaches exactly the outcome the REPL's
+/// default is `ctx.force_continue`. It reaches exactly the outcome the REPL's
 /// "y" answer does ([`StaleHash::ForceContinue`]) and nothing else. The
 /// `regenerate` question stays interactive-only.
 async fn handle_stale_hash(
     update: &UpdateID,
     config: &Config,
     trpath: &std::path::Path,
-    is_repl: bool,
-    prompter: Option<&Prompter>,
-    force_continue_arg: bool,
+    ctx: &LoadContext<'_>,
     prev_etag: Option<&str>,
-) -> StaleHash {
+) -> Result<StaleHash, LoadCancelled> {
     let rrid = update.id.clone();
     error!("Invalid Gitea hash");
     warn!("TestReport hash differs from the Gitea PR; the template is stale");
 
-    let regenerate = match (is_repl, prompter) {
+    let regenerate = match (ctx.is_repl, ctx.prompter) {
         (true, Some(p)) => {
             p.confirm("Regenerate the template now via TeReGen? [y/N]: ", false)
                 .await
@@ -289,8 +353,10 @@ async fn handle_stale_hash(
     };
 
     if regenerate {
-        if let Some(fresh) = regenerate_via_teregen(update, config, trpath, prev_etag).await {
-            return StaleHash::Regenerated(fresh);
+        if let Some(fresh) =
+            regenerate_via_teregen(update, config, trpath, prev_etag, &ctx.cancel).await?
+        {
+            return Ok(StaleHash::Regenerated(fresh));
         }
         warn!("Regeneration failed; falling back to manual handling");
     } else {
@@ -300,21 +366,21 @@ async fn handle_stale_hash(
         );
     }
 
-    // Manual fallback: non-interactive falls through to `force_continue_arg`.
-    let force_continue = match (is_repl, prompter) {
+    // Manual fallback: non-interactive falls through to `ctx.force_continue`.
+    let force_continue = match (ctx.is_repl, ctx.prompter) {
         (true, Some(p)) => {
             p.confirm("Force continue loading template ? [y/N]: ", false)
                 .await
         }
-        _ => force_continue_arg,
+        _ => ctx.force_continue,
     };
     if force_continue {
         warn!("Template is loaded, but hash differs");
-        return StaleHash::ForceContinue;
+        return Ok(StaleHash::ForceContinue);
     }
 
     // Declined: abandon the load; the scratch directory stays.
-    StaleHash::Abandon
+    Ok(StaleHash::Abandon)
 }
 
 /// Regenerates a stale template via TeReGen, then reloads it by re-fetching the
@@ -323,13 +389,15 @@ async fn handle_stale_hash(
 ///
 /// Returns the freshly loaded, hash-verified report, or `None` so the caller
 /// falls back to the manual force/decline handling. Any TeReGen failure, reload
-/// failure, or *still*-failing hash is a `None`.
+/// failure, or *still*-failing hash is a `None`. A `cancel` that stops the job
+/// wait or the reload is [`LoadCancelled`].
 async fn regenerate_via_teregen(
     update: &UpdateID,
     config: &Config,
     trpath: &std::path::Path,
     prev_etag: Option<&str>,
-) -> Option<Box<dyn TestReport + Send + Sync>> {
+    cancel: &CancellationToken,
+) -> Result<Option<Box<dyn TestReport + Send + Sync>>, LoadCancelled> {
     let rrid = update.id.clone();
     info!("Waiting for the template to be regenerated ...");
 
@@ -338,55 +406,78 @@ async fn regenerate_via_teregen(
         Err(e) => {
             error!("TeReGen unreachable; cannot regenerate");
             info!(error = %e, "could not build TeReGen client");
-            return None;
+            return Ok(None);
         }
     };
+    let mut stopped = false;
     let outcome = teregen
-        .regenerate_and_wait(&rrid.to_string(), true, false, || false)
+        .regenerate_and_wait(&rrid.to_string(), true, false, || {
+            stopped |= cancel.is_cancelled();
+            stopped
+        })
         .await;
 
     if outcome.unreachable {
         error!("TeReGen unreachable; cannot regenerate");
-        return None;
+        return Ok(None);
     }
     if let Some(err) = &outcome.error {
         error!("Regeneration refused: {err}");
-        return None;
+        return Ok(None);
     }
     if let Some(failed) = &outcome.failed {
         error!("Regeneration request failed: {failed}");
-        return None;
+        return Ok(None);
     }
     info!("Regeneration job {:?} enqueued for {}", outcome.job, rrid);
 
+    if cancelled_job_wait(&outcome, stopped) {
+        return Err(LoadCancelled::Regeneration);
+    }
     if !outcome.ok {
-        let detail = outcome
-            .minion_error
-            .as_deref()
-            .map(|e| format!(": {e}"))
-            .unwrap_or_default();
+        let detail = failure_detail(outcome.minion_error.as_deref());
         error!(
             "Regeneration did not finish (state={}){detail}",
             outcome.state.as_deref().unwrap_or("unknown")
         );
-        return None;
+        return Ok(None);
     }
 
     // A still-failing hash on the fresh template is a reload failure.
     let mut fresh = tr_factory(update, config.clone());
 
-    if let Err(e) = load_via_document(&mut fresh, &rrid, config, trpath, prev_etag).await {
-        error!("Reload after regeneration failed: {e}");
-        return None;
+    if let Err(e) = load_via_document(&mut fresh, &rrid, config, trpath, prev_etag, cancel).await {
+        let reason = e.into_failure()?;
+        error!("Reload after regeneration failed: {reason}");
+        return Ok(None);
     }
 
     match fresh.check_hash().await {
-        HashCheck::Ok => Some(fresh),
+        HashCheck::Ok => Ok(Some(fresh)),
         other => {
             error!("Reload after regeneration failed: hash still not verified ({other:?})");
-            None
+            Ok(None)
         }
     }
+}
+
+/// Whether a job wait that `stopped` saw a cancel in ended as cancelled: only
+/// while the job was unfinished, so a job that failed is reported as the failure.
+fn cancelled_job_wait(outcome: &mtui_datasources::RegenOutcome, stopped: bool) -> bool {
+    !outcome.ok && stopped && outcome.state.as_deref() != Some("failed")
+}
+
+/// `": <minion error>"`, without control characters since it is server text
+/// bound for the terminal, or empty when TeReGen named none.
+fn failure_detail(minion_error: Option<&str>) -> String {
+    minion_error
+        .map(|e| {
+            format!(
+                ": {}",
+                e.chars().filter(|c| !c.is_control()).collect::<String>()
+            )
+        })
+        .unwrap_or_default()
 }
 
 // Mirrors `TeReGen::wait_for_template`'s poll budget: a `generating`
@@ -395,10 +486,11 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Calls `fetch` again every [`POLL_INTERVAL`] while TeReGen answers that it is
-/// generating or busy, until [`POLL_TIMEOUT`] has passed.
+/// generating or busy, until [`POLL_TIMEOUT`] has passed or `cancel` fires.
 async fn fetch_while_busy<T, F, Fut>(
+    cancel: &CancellationToken,
     mut fetch: F,
-) -> Result<T, mtui_datasources::teregen::TeregenV2Error>
+) -> Result<Result<T, mtui_datasources::teregen::TeregenV2Error>, LoadCancelled>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, mtui_datasources::teregen::TeregenV2Error>>,
@@ -411,9 +503,13 @@ where
             Err(TeregenV2Error::Generating | TeregenV2Error::Busy)
                 if tokio::time::Instant::now() < deadline =>
             {
-                tokio::time::sleep(POLL_INTERVAL).await;
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return Err(LoadCancelled::Document),
+                    () = tokio::time::sleep(POLL_INTERVAL) => {}
+                }
             }
-            other => return other,
+            other => return Ok(other),
         }
     }
 }
@@ -428,21 +524,23 @@ where
 /// the poll budget [`TeReGen::wait_for_template`] uses (5s / 600s) before
 /// refusing. On success, applies the document (see
 /// [`crate::ingest::apply_document`]), creates the scratch directory, and
-/// derives `update_repos`.
+/// derives `update_repos`. A `cancel` during that poll is
+/// [`LoadError::Cancelled`].
 async fn load_via_document(
     report: &mut Box<dyn TestReport + Send + Sync>,
     rrid: &mtui_types::RequestReviewID,
     config: &Config,
     trpath: &std::path::Path,
     prev_etag: Option<&str>,
-) -> Result<(), String> {
+    cancel: &CancellationToken,
+) -> Result<(), LoadError> {
     use mtui_datasources::teregen::{DocumentFetch, TeregenV2};
 
     let client = TeregenV2::new(config, &config.teregen_api_v2)
         .map_err(|e| format!("building the teregen v2 client failed: {e}"))?;
     let rrid_str = rrid.to_string();
 
-    let fetch = fetch_while_busy(|| client.fetch_document(&rrid_str, prev_etag)).await;
+    let fetch = fetch_while_busy(cancel, || client.fetch_document(&rrid_str, prev_etag)).await?;
 
     let document = match fetch {
         Ok(DocumentFetch::Fresh { document, etag, .. }) => {
@@ -450,9 +548,11 @@ async fn load_via_document(
             document
         }
         Ok(DocumentFetch::NotModified) => {
-            return Err("the server's document is unchanged since the last load".to_owned());
+            return Err("the server's document is unchanged since the last load"
+                .to_owned()
+                .into());
         }
-        Err(e) => return Err(document_fetch_message(e)),
+        Err(e) => return Err(document_fetch_message(e).into()),
     };
 
     report.base_mut().schema_drift = match client.fetch_schema().await {
@@ -614,12 +714,14 @@ mod ingest_tests {
                 };
                 async move { Err::<(), _>(answer) }
             };
+            let never = CancellationToken::new();
             let out = tokio::time::timeout(
                 std::time::Duration::from_secs(3600),
-                fetch_while_busy(fetch),
+                fetch_while_busy(&never, fetch),
             )
             .await
-            .expect("the poll must end on its own");
+            .expect("the poll must end on its own")
+            .expect("nothing cancelled the poll");
             assert_eq!(
                 std::mem::discriminant(&out.unwrap_err()),
                 std::mem::discriminant(&busy)
@@ -627,6 +729,42 @@ mod ingest_tests {
             assert_eq!(start.elapsed(), std::time::Duration::from_secs(600));
             assert_eq!(calls.get(), 121);
         }
+    }
+
+    /// A cancel during the busy poll ends it at once, not after the pending
+    /// sleep or the ten-minute budget.
+    #[tokio::test(start_paused = true)]
+    async fn a_cancel_stops_the_busy_poll_mid_sleep() {
+        let cancel = CancellationToken::new();
+        let calls = std::cell::Cell::new(0u32);
+        let start = tokio::time::Instant::now();
+        let fetch = || {
+            calls.set(calls.get() + 1);
+            async { Err::<(), _>(TeregenV2Error::Generating) }
+        };
+        let canceller = async {
+            tokio::time::sleep(std::time::Duration::from_secs(7)).await;
+            cancel.cancel();
+        };
+
+        let (out, ()) = tokio::join!(fetch_while_busy(&cancel, fetch), canceller);
+
+        assert_eq!(out.unwrap_err(), LoadCancelled::Document);
+        assert_eq!(start.elapsed(), std::time::Duration::from_secs(7));
+        assert_eq!(calls.get(), 2);
+    }
+
+    /// An answer already fetched is returned as it is, cancel or not.
+    #[tokio::test]
+    async fn a_cancelled_poll_still_returns_the_answer_in_hand() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let out = fetch_while_busy(&cancel, || async { Err::<(), _>(TeregenV2Error::NotFound) })
+            .await
+            .expect("a real answer outranks the cancel");
+
+        assert!(matches!(out, Err(TeregenV2Error::NotFound)));
     }
 
     #[tokio::test]
@@ -646,10 +784,14 @@ mod ingest_tests {
             &config,
             std::path::Path::new("/nonexistent/log"),
             None,
+            &CancellationToken::new(),
         )
         .await
         .unwrap_err();
-        assert_eq!(err, "no document yet — run `regenerate` first");
+        assert_eq!(
+            err,
+            LoadError::Failed("no document yet — run `regenerate` first".to_owned())
+        );
     }
 
     #[tokio::test]
@@ -669,10 +811,14 @@ mod ingest_tests {
             &config,
             std::path::Path::new("/nonexistent/log"),
             None,
+            &CancellationToken::new(),
         )
         .await
         .unwrap_err();
-        assert!(err.starts_with('/'), "{err}");
+        assert!(
+            matches!(&err, LoadError::Failed(m) if m.starts_with('/')),
+            "{err:?}"
+        );
     }
 
     /// The bounded backoff: a `503` followed by a `200` must be
@@ -695,9 +841,16 @@ mod ingest_tests {
 
         let config = config_for(&server);
         let mut report = obs_report(&config);
-        load_via_document(&mut report, &rrid(), &config, &trpath, None)
-            .await
-            .unwrap();
+        load_via_document(
+            &mut report,
+            &rrid(),
+            &config,
+            &trpath,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.base().document.as_ref().unwrap().id, RRID_STR);
         assert_eq!(report.base().path.as_deref(), Some(trpath.as_path()));
@@ -722,9 +875,16 @@ mod ingest_tests {
         let trpath = dir.path().join("log");
         let config = config_for(&server);
         let mut report = obs_report(&config);
-        load_via_document(&mut report, &rrid(), &config, &trpath, None)
-            .await
-            .unwrap();
+        load_via_document(
+            &mut report,
+            &rrid(),
+            &config,
+            &trpath,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.base().document.as_ref().unwrap().id, RRID_STR);
     }
@@ -740,9 +900,16 @@ mod ingest_tests {
 
         let config = config_for(&server);
         let mut report = obs_report(&config);
-        load_via_document(&mut report, &rrid(), &config, &trpath, None)
-            .await
-            .unwrap();
+        load_via_document(
+            &mut report,
+            &rrid(),
+            &config,
+            &trpath,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         assert!(rrid_dir.is_dir());
         assert!(!trpath.exists());
@@ -763,9 +930,16 @@ mod ingest_tests {
         let config = config_for(&server);
         let mut report = obs_report(&config);
 
-        load_via_document(&mut report, &rrid(), &config, &dir.path().join("log"), None)
-            .await
-            .expect("the load never fails because of the schema");
+        load_via_document(
+            &mut report,
+            &rrid(),
+            &config,
+            &dir.path().join("log"),
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("the load never fails because of the schema");
         report.base().schema_drift.clone()
     }
 
@@ -831,9 +1005,11 @@ mod ingest_tests {
         config.teregen_api = server.uri();
         let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
 
-        let fresh = regenerate_via_teregen(&update, &config, &trpath, None)
-            .await
-            .expect("regenerate + reload succeeds");
+        let fresh =
+            regenerate_via_teregen(&update, &config, &trpath, None, &CancellationToken::new())
+                .await
+                .unwrap()
+                .expect("regenerate + reload succeeds");
         assert_eq!(fresh.base().document.as_ref().unwrap().id, RRID_STR);
     }
 
@@ -859,7 +1035,162 @@ mod ingest_tests {
         config.teregen_api = server.uri();
         let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
 
-        let fresh = regenerate_via_teregen(&update, &config, &trpath, Some("\"prev\"")).await;
-        assert!(fresh.is_none());
+        let fresh = regenerate_via_teregen(
+            &update,
+            &config,
+            &trpath,
+            Some("\"prev\""),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(fresh, Ok(None)));
+    }
+
+    /// A cancel during the regeneration job wait stops it as cancelled, rather
+    /// than waiting out the job or falling back to the manual handling.
+    #[tokio::test]
+    async fn regenerate_via_teregen_stops_on_a_cancel_during_the_job_wait() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{RRID_STR}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 1})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}/status")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"minion_state": "active"})),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(&server);
+        config.teregen_api = server.uri();
+        let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            regenerate_via_teregen(&update, &config, &dir.path().join("log"), None, &cancel),
+        )
+        .await
+        .expect("the cancel must end the job wait");
+
+        assert!(matches!(out, Err(LoadCancelled::Regeneration)));
+    }
+
+    /// A cancel while the reload after a finished job waits out a generating
+    /// document is cancelled, not a reload failure.
+    #[tokio::test]
+    async fn regenerate_via_teregen_stops_on_a_cancel_during_the_reload() {
+        let server = MockServer::start().await;
+        mount_v1_regenerate_finished(&server).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(&server);
+        config.teregen_api = server.uri();
+        let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            regenerate_via_teregen(&update, &config, &dir.path().join("log"), None, &cancel),
+        )
+        .await
+        .expect("the cancel must end the reload's busy poll");
+
+        assert!(matches!(out, Err(LoadCancelled::Document)));
+    }
+
+    /// Answers `active` and cancels `0` as it does, so the cancel follows the
+    /// poll it answers by construction.
+    struct CancelOnAnswer(CancellationToken);
+
+    impl wiremock::Respond for CancelOnAnswer {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            self.0.cancel();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"minion_state": "active"}))
+        }
+    }
+
+    /// A cancel that arrives during the job wait, after a first poll found the
+    /// job running, stops it as cancelled at that poll.
+    #[tokio::test]
+    async fn regenerate_via_teregen_stops_on_a_cancel_arriving_mid_wait() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{RRID_STR}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 1})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}/status")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"minion_state": "active"})),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        let cancel = CancellationToken::new();
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}/status")))
+            .respond_with(CancelOnAnswer(cancel.clone()))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(&server);
+        config.teregen_api = server.uri();
+        let update = mtui_types::UpdateID::parse(RRID_STR).unwrap();
+
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            regenerate_via_teregen(&update, &config, &dir.path().join("log"), None, &cancel),
+        )
+        .await
+        .expect("the cancel must end the job wait");
+
+        assert!(
+            matches!(out, Err(LoadCancelled::Regeneration)),
+            "{:?}",
+            out.err()
+        );
+        let polls = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path().ends_with("/status"))
+            .count();
+        assert_eq!(polls, 2);
+    }
+
+    /// A job that failed after the wait saw a cancel is reported as the
+    /// failure; only an unfinished job is cancelled.
+    #[test]
+    fn a_failed_job_outranks_a_cancel_seen_during_the_wait() {
+        let ended = |state: &str| mtui_datasources::RegenOutcome {
+            state: Some(state.to_owned()),
+            ..Default::default()
+        };
+
+        assert!(!cancelled_job_wait(&ended("failed"), true));
+        assert!(cancelled_job_wait(&ended("active"), true));
+        assert!(!cancelled_job_wait(&ended("active"), false));
+    }
+
+    #[test]
+    fn failure_detail_drops_control_characters() {
+        assert_eq!(failure_detail(Some("bad\u{1b}[2J\nthing")), ": bad[2Jthing");
+        assert_eq!(failure_detail(None), "");
     }
 }

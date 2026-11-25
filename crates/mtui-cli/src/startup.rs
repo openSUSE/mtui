@@ -18,7 +18,8 @@ use mtui_types::Workflow;
 /// `args.update()` (`-a`/`-k`) loads via [`Session::load_update`], autoconnecting
 /// iff no `--sut` override was given; an empty RRID back means a null report for
 /// an explicitly requested update, so it breaks with [`ExitStatus::Failure`]
-/// rather than entering an empty REPL. Each `--sut` entry then dispatches
+/// rather than entering an empty REPL; a cancelled load breaks with
+/// [`ExitStatus::Interrupted`]. Each `--sut` entry then dispatches
 /// `add_host <fragment>`, logging any failure and continuing.
 ///
 /// Returns [`ControlFlow::Continue`] when the session is ready for the REPL, or
@@ -37,9 +38,18 @@ pub async fn seed_session(
             _ => UpdateKind::Auto,
         };
         // `false`: this call always has a REPL prompter, which handles a stale hash.
-        let rrid = session
+        let rrid = match session
             .load_update(&update.id, autoconnect, kind, false)
-            .await;
+            .await
+        {
+            Ok(rrid) => rrid,
+            // Seeding runs before SIGINT is armed, so only a caller's own token
+            // can fire here.
+            Err(cancelled) => {
+                tracing::warn!(update = %update.id, "loading the requested update was cancelled: {cancelled}");
+                return ControlFlow::Break(ExitStatus::Interrupted);
+            }
+        };
         if rrid.is_empty() {
             // The load path already logged "does not exist".
             tracing::error!(update = %update.id, "requested update could not be loaded");
@@ -136,6 +146,32 @@ mod tests {
         a.auto_review_id = Some("SUSE:Maintenance:99999:99999".parse().unwrap());
         let flow = seed_session(&registry, &mut session, &a).await;
         assert_eq!(flow, ControlFlow::Break(ExitStatus::Failure));
+    }
+
+    /// A load cancelled while it waits for TeReGen exits as interrupted, not
+    /// as a failed load.
+    #[tokio::test]
+    async fn explicit_update_cancelled_while_loading_exits_interrupted() {
+        let registry = register_all();
+        let (mut session, _buf) = session_with_buffer();
+        let generating = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        session.config.teregen_api_v2 = format!("http://{}", generating.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut conn in generating.incoming().flatten() {
+                let _ = conn.read(&mut [0u8; 4096]);
+                let _ = conn.write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        session.cancel_token().cancel();
+        let mut a = args();
+        a.auto_review_id = Some("SUSE:Maintenance:99999:99999".parse().unwrap());
+
+        let flow = seed_session(&registry, &mut session, &a).await;
+
+        assert_eq!(flow, ControlFlow::Break(ExitStatus::Interrupted));
     }
 
     /// A `--sut` host that cannot connect is logged and skipped; seeding still

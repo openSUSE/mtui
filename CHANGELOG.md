@@ -67,6 +67,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A Ctrl-C or MCP `job_cancel` now stops `load_template` while it waits for
+  TeReGen — to finish generating the document or to regenerate a stale
+  template — instead of only after the wait of up to ten minutes ends. The
+  command fails as cancelled and loads nothing; a cancel during the
+  regeneration says that the requested regeneration continues on the server,
+  and a regeneration job that fails is still reported as the failure.
+  `regenerate` still treats a cancel during its own wait as success, but a
+  cancel during its reload of the finished template now fails the command as
+  cancelled, noting that the regeneration completed (#868).
 - A failed `update` no longer says the test update repositories are left on a
   host where the update script already removed them, and neither does the
   `warning:` line a later `remove_host`, `unload`, `quit` or reload prints.
