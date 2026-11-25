@@ -543,8 +543,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `unknown attribute: openqa_install_distri` instead of printing a no-op value,
   `config set openqa_install_distri <value>` answers `unknown or read-only
   attribute`, and `config show` with no argument now lists 38 attributes
-  instead of 39. An existing `mtui.toml` still carrying `[openqa] distri`
-  keeps loading without error — no config edit is required.
+  instead of 39. Scripts that call `config set openqa_install_distri` now
+  fail. An existing `mtui.toml` still carrying `[openqa] distri` keeps loading
+  without error — no config edit is required.
 - Packaging: the `mtui` and `mtui-mcp` packages (deb, rpm, OBS) no longer
   recommend `subversion`.
 - The `mtui-vim-plugin` subpackage and `dist/vim-plugin/` (the text report
@@ -559,6 +560,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `--connection-timeout` (both binaries) is documented as overriding
+  `connection.connection_timeout`, the table the key lives in, not
+  `mtui.connection_timeout`. The MCP `--host` help now says the bind address is
+  not restricted, while rmcp's DNS-rebinding guard answers 403 to a request
+  whose `Host` header is not loopback. Man pages and completions are
+  regenerated.
+- MCP: `report_file_read` on a file that exists only on the server now says
+  TeReGen has no endpoint for a single server-only file, where it cited an
+  internal ticket id. `commit` likewise ends its note about the legacy log
+  view lagging behind the uploaded document without the ticket id.
 - `update`'s automatic rollback reaches only the patched hosts it can repair.
   A host the update excluded (its products compose none of the update's
   packages, no repository of the update reaches it, or its test update
