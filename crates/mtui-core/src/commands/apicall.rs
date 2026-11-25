@@ -11,12 +11,13 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::obs::{gates_on_report_document, oscrc};
 use mtui_datasources::teregen::{TeregenAuth, TeregenV2};
-use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
+use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen, TeReGenError};
 use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::command::{Command, Scope};
 use crate::commands::commit::{ReviewAction, prepare_reviewer};
 use crate::commands::support::{require_update, template_completion, uncommitted_report_guard};
+use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -107,6 +108,12 @@ pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError>
         .http_client()
         .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
     Ok(TeReGen::with_client(http, &session.config.teregen_api))
+}
+
+/// A failed TeReGen v1 read as one line safe to print: TeReGen's own `error`
+/// text is external, so it is stripped of terminal controls and bounded.
+pub(crate) fn teregen_failure(e: &TeReGenError) -> String {
+    sanitize_external(&e.to_string(), Some(500))
 }
 
 /// Builds an authenticated teregen v2 write client for `commit`'s document

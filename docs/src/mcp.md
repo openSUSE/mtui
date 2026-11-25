@@ -473,10 +473,13 @@ and nothing is written there.
   ask it and answers `No checker results for <id> (TeReGen serves checker
   results for SLFO ids only)`. For an SLFO id, `No checker results for <id>`
   means TeReGen answered with an empty list. A lookup that failed fails the
-  tool with `Checker lookup for <id>: TeReGen fetch failed: …`, naming the
-  cause: TeReGen unreachable, an error status, or a body that is not JSON or
-  carries no `checkers` array. A 404 is one of them: TeReGen answers it when
-  it could not fetch the runs from SMELT or does not know the update.
+  tool with `Checker lookup for <id>: TeReGen …`, naming the cause: TeReGen
+  unreachable, a body that is not JSON or carries no `checkers` array, or an
+  error status with TeReGen's own reason, as in `TeReGen answered 404 Not
+  Found: SMELT does not know update …`. A 404 is TeReGen's "nothing to give";
+  a 502 or 504 means SMELT failed or timed out, so the results are unknown.
+  TeReGen's text is stripped of terminal control sequences and cut to 500
+  characters.
 
 ## Report document tools
 

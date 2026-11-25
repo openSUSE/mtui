@@ -360,15 +360,39 @@ pub enum QemDashboardError {
 ///
 /// Reads are best-effort by default: a fetch failure folds to `None` so a
 /// hiccup never aborts a command. The `try_*` reads surface it as
-/// [`Fetch`](Self::Fetch), so a caller can tell an empty successful response
-/// apart from a transport/status/JSON failure.
+/// [`Fetch`](Self::Fetch) or [`Status`](Self::Status), so a caller can tell an
+/// empty successful response apart from a transport/status/JSON failure.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TeReGenError {
-    /// A TeReGen fetch failed: a transport error, a non-2xx status, or a
-    /// malformed JSON body. Carries a sanitized description (never the raw URL).
+    /// A TeReGen fetch failed: a transport error or a malformed JSON body.
+    /// Carries a sanitized description (never the raw URL).
     #[error("TeReGen fetch failed: {0}")]
     Fetch(String),
+
+    /// TeReGen answered with a non-2xx status.
+    ///
+    /// `error` is the string `error` of a JSON-object body, verbatim apart from
+    /// the length cap: it is external text, so a caller must sanitize it before
+    /// display. Any other body (proxy HTML, an empty body, a validator's
+    /// `{"errors": […]}`) yields `None` and is never echoed.
+    #[error("{}", status_display(*status, error.as_deref()))]
+    Status {
+        /// The HTTP status code.
+        status: u16,
+        /// TeReGen's own explanation, when it gave one.
+        error: Option<String>,
+    },
+}
+
+/// `"TeReGen answered {status}"`, then `": {error}"` when TeReGen gave a reason.
+fn status_display(status: u16, error: Option<&str>) -> String {
+    let status = reqwest::StatusCode::from_u16(status)
+        .map_or_else(|_| status.to_string(), |s| s.to_string());
+    match error {
+        Some(error) => format!("TeReGen answered {status}: {error}"),
+        None => format!("TeReGen answered {status}"),
+    }
 }
 
 /// Render the trailing `" (retry after Ns)"` clause of

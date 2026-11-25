@@ -1,16 +1,17 @@
 //! A read-only-plus-one-write client for the TeReGen Report API
 //! (`qam.suse.de/api/v1`).
 //!
-//! TeReGen serves the generated test-report data over HTTP: the decoded
-//! `metadata.json` plus template status. mtui prefers it as the **source of
-//! truth** for report metadata (priority, deadline, review groups,
-//! product-composer routing, …), falling back to the locally checked-out
-//! `metadata.json` when the API is unreachable or doesn't carry a field.
+//! The v1 API serves the live queue and per-report status: the update queue,
+//! SMELT's checker runs, the template's Minion job state and the regenerate
+//! write. The report itself is the v2 document ([`document`]), not anything
+//! served here.
 //!
 //! Most reads are best-effort: any failure returns `None` so a TeReGen hiccup
 //! never breaks the surrounding command. Two exceptions:
-//! [`updates`](TeReGen::updates) returns a `Result`, so its caller can tell a
-//! genuinely-empty queue apart from an unreachable TeReGen; and the write
+//! [`updates`](TeReGen::updates) and [`checkers`](TeReGen::checkers) return a
+//! `Result`, so their caller can tell a genuinely-empty answer apart from an
+//! unreachable or failing TeReGen, and name the status and reason TeReGen
+//! gave; and the write
 //! [`regenerate`](TeReGen::regenerate) returns `None` only when TeReGen is
 //! *unreachable*, `{"error": …}` when the server *refuses*.
 //!
@@ -37,6 +38,8 @@ use crate::http::{
 pub mod auth;
 pub mod document;
 pub mod tokens;
+
+use document::MAX_DETAIL_LEN;
 
 pub use auth::{AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
@@ -258,10 +261,11 @@ impl TeReGen {
     /// GET `path`, surfacing failures as `Err`.
     ///
     /// The fallible sibling of [`get`](Self::get): failures become
-    /// [`TeReGenError::Fetch`] instead of `None`, so a caller can distinguish
-    /// "unreachable" from a genuinely-empty successful response. The description
-    /// is URL-free because every `reqwest::Error` is converted to [`HttpError`]
-    /// — which strips the URL — before it is stringified (#431).
+    /// [`TeReGenError`] instead of `None`, so a caller can distinguish a failed
+    /// lookup from a genuinely-empty successful response. The descriptions are
+    /// URL-free because every `reqwest::Error` is converted to [`HttpError`]
+    /// — which strips the URL — before it is stringified (#431), and the log line
+    /// for an error status names the status alone, never the body.
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let qs = build_query_string(query);
@@ -275,11 +279,18 @@ impl TeReGen {
             tracing::debug!("TeReGen GET {path} failed: {e}");
             TeReGenError::Fetch(e.to_string())
         })?;
-        let response = response.error_for_status().map_err(|e| {
-            let e = HttpError::from(e);
-            tracing::debug!("TeReGen GET {path} failed: {e}");
-            TeReGenError::Fetch(e.to_string())
-        })?;
+        let status = response.status();
+        if status.is_client_error() || status.is_server_error() {
+            tracing::debug!("TeReGen GET {path} failed: HTTP {status}");
+            let error = match read_body_capped(response, MAX_API_BODY).await {
+                Ok(bytes) => error_text(&bytes),
+                Err(_) => None,
+            };
+            return Err(TeReGenError::Status {
+                status: status.as_u16(),
+                error,
+            });
+        }
         let bytes = read_body_capped(response, MAX_API_BODY)
             .await
             .map_err(|e| {
@@ -316,12 +327,14 @@ impl TeReGen {
     ///
     /// # Errors
     ///
-    /// Returns [`TeReGenError::Fetch`] on a transport failure, a non-2xx
-    /// status, a body that is not JSON, or one without a `checkers` array, so
+    /// Returns [`TeReGenError::Status`] for a non-2xx answer, carrying
+    /// TeReGen's own `error` text, and [`TeReGenError::Fetch`] for a transport
+    /// failure, a body that is not JSON, or one without a `checkers` array, so
     /// the caller can tell a failed lookup apart from none. A 404 is no
-    /// exception: TeReGen answers it for an id it serves no checker results for
-    /// (every non-SLFO id), and for an SLFO id whose runs it could not fetch
-    /// from SMELT or does not know.
+    /// exception: TeReGen answers it, with its reason, when it has no checker
+    /// results to give (every non-SLFO id, or an SLFO id SMELT does not know);
+    /// a 502 or 504 means SMELT failed or timed out, so the results are
+    /// unknown.
     pub async fn checkers(&self, rrid: &str) -> Result<Vec<CheckerRun>, TeReGenError> {
         let body = self
             .try_get(&format!("reports/{rrid}/checkers"), &[])
@@ -344,9 +357,11 @@ impl TeReGen {
     ///
     /// # Errors
     ///
-    /// Returns [`TeReGenError::Fetch`] on any transport/status/JSON failure, so
-    /// the caller can tell an unreachable TeReGen apart from an empty queue.
-    /// `Ok(None)` is a successful response whose body carried no `updates` key.
+    /// Returns [`TeReGenError::Status`] for a non-2xx answer (502/504 when SMELT
+    /// failed or timed out, with TeReGen's own `error` text) and
+    /// [`TeReGenError::Fetch`] for a transport or JSON failure, so the caller
+    /// can tell a failing TeReGen apart from an empty queue. `Ok(None)` is a
+    /// successful response whose body carried no `updates` key.
     pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Result<Option<Value>, TeReGenError> {
         let mut params: Vec<(&str, String)> = Vec::new();
         for (name, value) in [
@@ -545,6 +560,14 @@ impl TeReGen {
             ..Default::default()
         }
     }
+}
+
+/// The string `error` of a JSON-object body, cut to [`MAX_DETAIL_LEN`] on a
+/// char boundary. Anything else (HTML, empty, no string `error`) is `None`.
+fn error_text(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(bytes).ok()?;
+    let text = value.get("error")?.as_str().filter(|t| !t.is_empty())?;
+    Some(text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned())
 }
 
 /// The comma-joined top-level key names of a JSON object, for a schema-drift
@@ -950,9 +973,150 @@ mod tests {
                 .mount(&server)
                 .await;
             let err = client(&server).checkers(RRID).await.unwrap_err();
-            let TeReGenError::Fetch(msg) = &err;
-            assert!(msg.contains(expected), "{status}: {msg}");
+            assert!(matches!(err, TeReGenError::Status { error: None, .. }));
+            assert!(err.to_string().contains(expected), "{status}: {err}");
         }
+    }
+
+    /// Mounts one `GET` answer for `p`, expected to be hit once: wiremock answers
+    /// an unmatched path with a 404 of its own.
+    async fn serve(p: &str, response: ResponseTemplate) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn checkers_path() -> String {
+        format!("/reports/{RRID}/checkers")
+    }
+
+    /// The statuses TeReGen answers for a failed SMELT lookup, with the body
+    /// shapes it sends: the `error` text must reach the caller.
+    #[tokio::test]
+    async fn checkers_status_carries_teregens_reason() {
+        for (status, text) in [
+            (404, "SMELT does not know update SUSE:SLFO:1.2:5702"),
+            (502, "SMELT checker lookup failed: SMELT is unreachable"),
+            (504, "SMELT checker lookup timed out"),
+        ] {
+            let server = serve(
+                &checkers_path(),
+                ResponseTemplate::new(status).set_body_json(json!({"error": text})),
+            )
+            .await;
+            let err = client(&server).checkers(RRID).await.unwrap_err();
+            let TeReGenError::Status { status: got, error } = &err else {
+                panic!("{status}: expected Status, got {err:?}");
+            };
+            assert_eq!(*got, status);
+            assert_eq!(error.as_deref(), Some(text));
+        }
+    }
+
+    /// Only a JSON object with a string `error` is trusted as TeReGen's reason;
+    /// a proxy's HTML, an empty body and a validator's `{"errors": […]}` are
+    /// not, and the raw body is never rendered.
+    #[tokio::test]
+    async fn checkers_status_without_a_reason_never_echoes_the_body() {
+        for (status, response) in [
+            (
+                502,
+                ResponseTemplate::new(502).set_body_string("<html>proxy secret-marker</html>"),
+            ),
+            (503, ResponseTemplate::new(503)),
+            (
+                400,
+                ResponseTemplate::new(400).set_body_json(
+                    json!({"errors": [{"message": "secret-marker"}], "status": 400}),
+                ),
+            ),
+            (
+                500,
+                ResponseTemplate::new(500).set_body_json(json!({"error": 7})),
+            ),
+        ] {
+            let server = serve(&checkers_path(), response).await;
+            let err = client(&server).checkers(RRID).await.unwrap_err();
+            assert!(
+                matches!(&err, TeReGenError::Status { status: s, error: None } if *s == status),
+                "{status}: {err:?}"
+            );
+            let shown = err.to_string();
+            assert!(!shown.contains("secret-marker"), "{status}: {shown}");
+            assert!(!shown.contains(':'), "a reason was invented: {shown}");
+        }
+    }
+
+    /// The reason is bounded, and cut on a char boundary.
+    #[tokio::test]
+    async fn status_reason_is_capped_on_a_char_boundary() {
+        // One ASCII byte shifts every 3-byte `€`, so the cap lands mid-char.
+        let text = format!("x{}", "€".repeat(5000));
+        let server = serve(
+            &checkers_path(),
+            ResponseTemplate::new(502).set_body_json(json!({"error": text})),
+        )
+        .await;
+        let err = client(&server).checkers(RRID).await.unwrap_err();
+        let TeReGenError::Status {
+            error: Some(error), ..
+        } = &err
+        else {
+            panic!("expected a reason, got {err:?}");
+        };
+        assert!(error.len() <= MAX_DETAIL_LEN, "{} bytes", error.len());
+        assert_eq!(error.len(), MAX_DETAIL_LEN - 1);
+        assert!(text.starts_with(error.as_str()));
+    }
+
+    #[tokio::test]
+    async fn updates_status_carries_teregens_reason() {
+        let server = serve(
+            "/updates",
+            ResponseTemplate::new(502)
+                .set_body_json(json!({"error": "SMELT update queue lookup failed"})),
+        )
+        .await;
+        let err = client(&server)
+            .updates(&UpdatesQuery::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                TeReGenError::Status { status: 502, error: Some(e) }
+                    if e == "SMELT update queue lookup failed"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "TeReGen answered 502 Bad Gateway: SMELT update queue lookup failed"
+        );
+    }
+
+    /// The DEBUG line for an error status names the status, never the body or
+    /// the URL.
+    #[tokio::test]
+    async fn status_log_line_names_the_status_only() {
+        let server = serve(
+            &checkers_path(),
+            ResponseTemplate::new(502).set_body_json(json!({"error": "secret-marker"})),
+        )
+        .await;
+        let logs = capture_logs(|| async {
+            let _ = client(&server).checkers(RRID).await;
+        })
+        .await;
+        let line = failure_line(&logs, "TeReGen GET");
+        assert!(line.contains("502"), "{line}");
+        assert!(!line.contains("secret-marker"), "{line}");
+        assert!(!line.contains(" for url ("), "{line}");
     }
 
     // --- updates: query-param rules ---
@@ -1135,7 +1299,7 @@ mod tests {
             .updates(&UpdatesQuery::default())
             .await
             .unwrap_err();
-        assert!(matches!(err, TeReGenError::Fetch(_)));
+        assert!(matches!(err, TeReGenError::Status { status: 500, .. }));
     }
 
     /// `try_get`'s `send` arm: both the log line and the `Fetch` string it
