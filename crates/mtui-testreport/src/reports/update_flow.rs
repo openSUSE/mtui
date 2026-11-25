@@ -27,6 +27,7 @@ use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::actions::ActionCommands;
+use crate::update_workflow::actions::downgrade::TRANSACTIONAL_ROLLBACK;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic};
 use crate::update_workflow::{CheckProvider, DoerProvider, Role, UpdateError, WorkflowRegistry};
 
@@ -134,8 +135,9 @@ pub enum UpdateFailure {
     /// rollback leaves the excluded hosts alone.
     Excluded(UpdateError),
     /// One or more hosts' test update repository genuinely failed to
-    /// register (a verified `zypper ar` failure, a failed `rr`, or the
-    /// unknown-cmd safeguard) after the `RepoOp::Add` fan-out. Each such host
+    /// register (a verified `zypper ar` failure, a failed `rr`, the
+    /// unknown-cmd safeguard, or a failed refresh on a read-only-root host)
+    /// after the `RepoOp::Add` fan-out. Each such host
     /// is excluded, its partial add undone, and its lock released before the
     /// patch is dispatched to its peers; when every eligible host failed,
     /// nothing was dispatched at all.
@@ -308,10 +310,23 @@ where
         // that landed during the run phase: it would abort the rollback at
         // package 0 and leave exactly the half-applied state it undoes.
         let token = targets.suspend_cancellation();
+        // A failed check stops every reboot, so no host booted its patch.
+        let after_patch = match failure {
+            UpdateFailure::Check(..) => AfterPatch::NotRebooted,
+            _ => AfterPatch::MaybeRebooted,
+        };
         // Best-effort: a failed downgrade must never bury the original
         // update error, so its result is logged and diagnosed, not returned.
-        if let Err(de) =
-            perform_downgrade_for(targets, hosts, report, &pkgs, id.as_deref(), diagnostics).await
+        if let Err(de) = perform_downgrade_for(
+            targets,
+            hosts,
+            report,
+            &pkgs,
+            id.as_deref(),
+            Some(after_patch),
+            diagnostics,
+        )
+        .await
         {
             warn!(error = %de, "rollback downgrade failed");
             let unrestored: Vec<&str> = hosts
@@ -795,7 +810,8 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
 /// the patch (`Add`/`Remove`/`UnknownCommand` — the repo genuinely did not
 /// register, or the unknown-cmd safeguard already force-unlocked the target)
 /// and hosts that stay in but degrade (`Refresh` — the repo registered, only
-/// its metadata may be stale).
+/// its metadata may be stale). A transactional host's failed refresh blocks:
+/// the patch would chain on whatever snapshot is still the default.
 ///
 /// `Some(Ok(_))` — every `RepoOutcome` — and `None` are both
 /// benign and produce nothing: `None` covers a report with no RRID yet and
@@ -812,7 +828,9 @@ fn repo_add_failures(
             continue;
         };
         match target.last_repo() {
-            Some(Err(RepoFailure::Refresh { .. })) => degraded.push(host.clone()),
+            Some(Err(RepoFailure::Refresh { .. })) if !target.transactional() => {
+                degraded.push(host.clone());
+            }
             Some(Err(err)) => blocking.push(UpdateError::new(err.to_string(), host.clone())),
             Some(Ok(_)) | None => {}
         }
@@ -1433,8 +1451,7 @@ async fn prepare_body(
     }
 
     // One entry per enabled host; `--installed` narrows a host's own entry.
-    // One `transactional-update` call is one snapshot, and N calls between
-    // reboots leave all but the last inactive (#501).
+    // One package call per host, chained on the refresh: one snapshot, one reboot, all or nothing.
     let mut lists: BTreeMap<String, Vec<String>> = targets
         .targets()
         .filter(|t| t.state() == mtui_types::TargetState::Enabled && in_scope(t.hostname()))
@@ -1971,7 +1988,108 @@ pub async fn perform_downgrade(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     let every_host: BTreeSet<String> = targets.names().into_iter().collect();
-    perform_downgrade_for(targets, &every_host, report, packages, id, diagnostics).await
+    perform_downgrade_for(
+        targets,
+        &every_host,
+        report,
+        packages,
+        id,
+        None,
+        diagnostics,
+    )
+    .await
+}
+
+/// Whether a failed update's run phase rebooted the hosts it rolls back.
+#[derive(Clone, Copy)]
+enum AfterPatch {
+    /// No host was rebooted after this run's patch, so the booted snapshot
+    /// predates it; one an earlier run booted into the update is still caught
+    /// by the verdict's `required` versions.
+    NotRebooted,
+    /// A host may have booted into its patch.
+    MaybeRebooted,
+}
+
+/// How a [`TRANSACTIONAL_ROLLBACK`] ended on a host.
+#[derive(Clone, Copy)]
+enum ResetOutcome {
+    /// Exit `0`: the staged default was replaced by the booted snapshot.
+    Dropped,
+    /// The booted snapshot already was the default.
+    NothingStaged,
+    /// Anything else: a staged snapshot may still be the default.
+    Failed,
+}
+
+impl ResetOutcome {
+    fn of(target: &mtui_hosts::Target) -> Self {
+        // snapper's message when the running snapshot already is the default.
+        const ALREADY_DEFAULT: &str = "already default snapshot";
+        match target.lastexit() {
+            Some(0) => Self::Dropped,
+            Some(code)
+                if code > 0
+                    && (target.lasterr().contains(ALREADY_DEFAULT)
+                        || target.lastout().contains(ALREADY_DEFAULT)) =>
+            {
+                Self::NothingStaged
+            }
+            _ => Self::Failed,
+        }
+    }
+
+    /// What the reset left, as the end of a sentence saying what was not run.
+    fn clause(self) -> String {
+        match self {
+            Self::Dropped => ": staged snapshot dropped".to_owned(),
+            Self::NothingStaged => ": nothing was staged".to_owned(),
+            Self::Failed => format!(
+                ", and `{TRANSACTIONAL_ROLLBACK}` failed: a staged snapshot could remain, and a \
+                 reboot could activate it"
+            ),
+        }
+    }
+}
+
+/// The transactional members of `hosts` whose last repository step failed.
+/// Such a step may have left a staged snapshot from before as the default.
+fn transactional_repo_failures(
+    targets: &HostsGroup,
+    hosts: &BTreeSet<String>,
+) -> BTreeMap<String, RepoFailure> {
+    targets
+        .targets()
+        .filter(|t| t.transactional() && hosts.contains(t.hostname()))
+        .filter_map(|t| match t.last_repo() {
+            Some(Err(err)) => Some((t.hostname().to_owned(), err.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Runs [`TRANSACTIONAL_ROLLBACK`] on `hosts`, so the booted snapshot is the
+/// default again, and returns how it ended on each.
+async fn reset_default_snapshot<'a>(
+    targets: &mut HostsGroup,
+    hosts: impl IntoIterator<Item = &'a String>,
+) -> BTreeMap<String, ResetOutcome> {
+    let reset: BTreeMap<String, String> = hosts
+        .into_iter()
+        .map(|h| (h.clone(), TRANSACTIONAL_ROLLBACK.to_owned()))
+        .collect();
+    if !reset.is_empty() {
+        targets.run(Command::PerHost(reset.clone())).await;
+    }
+    reset
+        .into_keys()
+        .map(|h| {
+            let outcome = targets
+                .get(&h)
+                .map_or(ResetOutcome::Failed, ResetOutcome::of);
+            (h, outcome)
+        })
+        .collect()
 }
 
 /// [`perform_downgrade`] restricted to `hosts`: the reboot map, the operation
@@ -1983,12 +2101,20 @@ pub async fn perform_downgrade(
 /// repositories removed and its packages moved to the release versions, and
 /// its contended lock or dead probe would fail the rollback of the peers that
 /// need it.
+///
+/// A transactional host whose repository step failed is not downgraded but
+/// gets [`TRANSACTIONAL_ROLLBACK`], so nothing staged stays the default
+/// snapshot. `rollback` is `Some` only for that rollback. Under
+/// [`AfterPatch::NotRebooted`], a host whose removal succeeded and only the
+/// refresh failed, and whose reset worked, goes to the verdict like a
+/// downgraded host; every other such host is named as not downgraded.
 async fn perform_downgrade_for(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
     report: &dyn SetRepo,
     packages: &[String],
     id: Option<&str>,
+    rollback: Option<AfterPatch>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     // Return before locking or touching repos. Also keeps the probe template
@@ -2026,6 +2152,7 @@ async fn perform_downgrade_for(
         packages,
         reboot,
         id,
+        rollback,
         diagnostics,
     )
     .await;
@@ -2045,6 +2172,7 @@ async fn downgrade_body(
     packages: &[String],
     reboot: BTreeMap<String, String>,
     id: Option<&str>,
+    rollback: Option<AfterPatch>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     targets
@@ -2054,18 +2182,55 @@ async fn downgrade_body(
     // Per-host failures (repo removal + per-package/combined checks) are
     // aggregated at the end, so a downgrade failure surfaces rather than only
     // being logged.
+    // A failed `rr` can mask a failed refresh, so any repo failure counts: the
+    // downgrade would chain on whatever snapshot is still the default.
+    let repo_failed = transactional_repo_failures(targets, hosts);
     let mut failures: Vec<UpdateError> =
         host_command_failures(targets, "failed to remove issue repo")
             .into_iter()
-            .filter(|e| e.host.as_ref().is_some_and(|h| hosts.contains(h)))
+            .filter(|e| {
+                e.host
+                    .as_ref()
+                    .is_some_and(|h| hosts.contains(h) && !repo_failed.contains_key(h))
+            })
             .collect();
+    let reset = reset_default_snapshot(targets, repo_failed.keys()).await;
+    // Left out, but possibly back at the pre-patch state; the verdict decides.
+    let mut candidates: BTreeSet<String> = BTreeSet::new();
+    let mut repo_errors: Vec<UpdateError> = Vec::new();
+    for (host, err) in &repo_failed {
+        let outcome = reset[host];
+        let what = format!("{err}; no downgrade was run{}", outcome.clause());
+        // `Refresh` is recorded only when the `rr` before it succeeded.
+        let candidate = matches!(rollback, Some(AfterPatch::NotRebooted))
+            && matches!(err, RepoFailure::Refresh { .. })
+            && !matches!(outcome, ResetOutcome::Failed);
+        if candidate {
+            warn!(host = %host, "{what}");
+            diagnostics.push(Diagnostic::degradation(format!("{host}: {what}")));
+            candidates.insert(host.clone());
+        } else {
+            error!(host = %host, "{what}");
+            repo_errors.push(UpdateError::new(what, host.clone()));
+        }
+    }
+    failures.extend(repo_errors.iter().cloned());
+    // A host whose repo step failed ran no downgrade command, so it gets no row.
+    let recorded: BTreeSet<String> = hosts
+        .iter()
+        .filter(|h| !repo_failed.contains_key(*h))
+        .cloned()
+        .collect();
 
     // Discover each host's available downgrade versions, keeping the highest
     // per package.
     let joined = quote_args(packages);
     let list_map = {
         let mut m = BTreeMap::new();
-        for target in targets.targets().filter(|t| hosts.contains(t.hostname())) {
+        for target in targets
+            .targets()
+            .filter(|t| hosts.contains(t.hostname()) && !repo_failed.contains_key(t.hostname()))
+        {
             let Some((release, transactional)) = host_key(target) else {
                 continue;
             };
@@ -2126,18 +2291,27 @@ async fn downgrade_body(
         // reconstructing what was done to a refhost matters most. Record the
         // row before returning — the site below is unreachable from here, so
         // there is no double write.
-        add_op_history_for(targets, hosts, "downgrade", id, packages).await;
-        return Err(UpdateError::new(
-            "package version probe failed",
-            dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
-        ));
+        add_op_history_for(targets, &recorded, "downgrade", id, packages).await;
+        if repo_errors.is_empty() {
+            return Err(UpdateError::new(
+                "package version probe failed",
+                dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
+            ));
+        }
+        let probes = dead_probes
+            .iter()
+            .map(|h| UpdateError::new("package version probe failed", h.clone()));
+        return aggregate_failures("downgrade", repo_errors.into_iter().chain(probes).collect());
     }
 
     // hostname -> { package -> highest available version }. A dead probe's
     // (empty / partial) output must not feed the version map.
     let mut versions: HashMap<String, HashMap<String, String>> = HashMap::new();
     for target in targets.targets() {
-        if dead_probes.contains(target.hostname()) || !hosts.contains(target.hostname()) {
+        if dead_probes.contains(target.hostname())
+            || !hosts.contains(target.hostname())
+            || repo_failed.contains_key(target.hostname())
+        {
             continue;
         }
         let host_versions = parse_downgrade_versions(target.lastout());
@@ -2152,8 +2326,8 @@ async fn downgrade_body(
         .map(|t| t.hostname().to_owned())
         .collect();
 
-    // Hosts a downgrade command was dispatched to.
-    let mut ran: BTreeSet<String> = BTreeSet::new();
+    // Hosts a downgrade command was dispatched to, or whose staged update was dropped.
+    let mut ran: BTreeSet<String> = candidates;
 
     // Non-transactional hosts: per-package `zypper downgrade`, gated on the
     // package being installed (present in `versions`).
@@ -2308,7 +2482,7 @@ async fn downgrade_body(
     // Recorded after the run started but *before* the reboot: a transactional
     // host that never comes back cannot be written to afterwards, and that is
     // the host whose state an operator most needs to reconstruct.
-    add_op_history_for(targets, hosts, "downgrade", id, packages).await;
+    add_op_history_for(targets, &recorded, "downgrade", id, packages).await;
 
     failures.extend(
         reboot_transactional(targets, healthy_reboot, diagnostics)
@@ -2317,7 +2491,12 @@ async fn downgrade_body(
             .map(reboot_error),
     );
 
-    let not_downgraded = downgrade_verdict(targets, hosts, &dead_probes).await;
+    let left_out: BTreeSet<String> = repo_failed
+        .keys()
+        .filter(|h| !ran.contains(*h))
+        .cloned()
+        .collect();
+    let not_downgraded = downgrade_verdict(targets, hosts, &dead_probes, &left_out).await;
 
     // A cancel cuts only the non-transactional per-package loop short.
     let verified = ran.iter().filter(|h| {
@@ -2385,11 +2564,13 @@ async fn downgrade_body(
 /// flags a package only when the report carries a `required` version, so on a
 /// standalone `downgrade` an unmeasured host yields the same empty map a
 /// completed rollback does, and logging `done` over it would restate #451's
-/// silent success one layer up. Those hosts are named at WARN instead.
+/// silent success one layer up. Those hosts are named at WARN instead, as are
+/// `left_out`, the hosts whose repository step failed and were never probed.
 async fn downgrade_verdict(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
     probe_dead: &BTreeSet<String>,
+    left_out: &BTreeSet<String>,
 ) -> BTreeMap<String, Vec<String>> {
     targets.query_versions_selected(hosts).await;
 
@@ -2427,11 +2608,18 @@ async fn downgrade_verdict(
              downgraded there and their package state is unverified"
         );
     }
+    if !left_out.is_empty() {
+        warn!(
+            hosts = %left_out.iter().cloned().collect::<Vec<_>>().join(", "),
+            "the repository step failed on these hosts, so they were not probed or \
+             downgraded and their package state is unverified"
+        );
+    }
 
     if not_downgraded.is_empty() {
         // Only when every host was measured: a dead probe leaves this map empty
         // for the same reason a completed rollback does.
-        if probe_dead.is_empty() {
+        if probe_dead.is_empty() && left_out.is_empty() {
             tracing::info!("done");
         }
     } else {
@@ -2694,18 +2882,36 @@ pub async fn perform_update(
         let failed: BTreeSet<String> = blocking.iter().filter_map(|e| e.host.clone()).collect();
         warn!(
             hosts = %failed.iter().cloned().collect::<Vec<_>>().join(", "),
-            "test update repository failed to register; excluding from the patch"
+            "test update repository failed to register or refresh; excluding from the patch"
         );
-        for e in &blocking {
-            diagnostics.push(Diagnostic::degradation(e.to_string()));
-        }
         // Undo the partial add and release the lock while it is still scoped
         // to these hosts — `eligible` shrinks right after, and the lock scope
         // must shrink with it or these hosts strand a lock nobody releases.
         targets
             .fanout_set_repo_for(&failed, RepoOp::Remove, report)
             .await;
+        // A successful undo refresh already made a snapshot off the booted one the default.
+        let undo_failed = transactional_repo_failures(targets, &failed);
+        let reset = reset_default_snapshot(targets, undo_failed.keys()).await;
         warn_on_unlock_failures("update", &targets.unlock_selected(&failed).await);
+        let blocking: Vec<UpdateError> = blocking
+            .into_iter()
+            .map(|mut e| {
+                if let Some(host) = e.host.as_deref()
+                    && let Some(undo) = undo_failed.get(host)
+                {
+                    e.reason = format!(
+                        "{}; undoing the add failed too ({undo}){}",
+                        e.reason,
+                        reset[host].clause()
+                    );
+                }
+                e
+            })
+            .collect();
+        for e in &blocking {
+            diagnostics.push(Diagnostic::degradation(e.to_string()));
+        }
         eligible.retain(|h| !failed.contains(h));
         excluded.extend(blocking);
         if eligible.is_empty() {
@@ -3284,7 +3490,7 @@ mod tests {
 
     use mtui_config::options::Config;
     use mtui_hosts::{
-        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, MockSftpOp,
+        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, MockEvent, MockSftpOp,
         TARGET_LOCK_PATH, Target,
     };
     use mtui_types::enums::TargetState;
@@ -3827,9 +4033,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_installed_only_runs_one_transaction_per_transactional_host() {
-        // #501. Per-package `transactional-update pkg in` opens one snapshot
-        // each, so every package but the last stays inactive after the reboot
-        // while the flow reports success. One call, one snapshot.
+        // #501. One call per host: one snapshot, one reboot, all or nothing.
         //
         // The host carries BOTH requested packages, so a per-package loop over
         // its own narrowed list would still dispatch twice — the narrowing is
@@ -3859,7 +4063,7 @@ mod tests {
         );
         assert_eq!(
             cmds.iter()
-                .filter(|c| c.starts_with("transactional-update -n pkg in -l"))
+                .filter(|c| c.starts_with("transactional-update --continue -n pkg in -l"))
                 .count(),
             1,
             "one transaction, not one per package: {cmds:?}"
@@ -3902,7 +4106,7 @@ mod tests {
             handle.commands()
         );
         assert_eq!(
-            install_args(&handle, "transactional-update -n pkg in -l"),
+            install_args(&handle, "transactional-update --continue -n pkg in -l"),
             ["pkg-a".to_owned()].into_iter().collect::<BTreeSet<_>>(),
             "pkg-b is not installed on this host, so it must not be requested"
         );
@@ -4266,7 +4470,7 @@ mod tests {
         let cmds = handle.commands();
         let mut installs = cmds
             .iter()
-            .filter(|c| c.starts_with("transactional-update -n pkg in -l"));
+            .filter(|c| c.starts_with("transactional-update --continue -n pkg in -l"));
         let cmd = installs
             .next()
             .unwrap_or_else(|| panic!("no prepare command was dispatched: {cmds:?}"));
@@ -4438,7 +4642,7 @@ mod tests {
         // Arms the negative below: a capture that recorded nothing would make
         // "the warning is absent" unfailable.
         assert!(
-            logs.contains("transactional-update -n pkg in"),
+            logs.contains("transactional-update --continue -n pkg in"),
             "nothing captured: {logs}"
         );
         // "There is no composition" is not "the composition does not describe
@@ -4472,7 +4676,7 @@ mod tests {
             !handle
                 .commands()
                 .iter()
-                .any(|c| c.starts_with("transactional-update -n pkg in")),
+                .any(|c| c.starts_with("transactional-update --continue -n pkg in")),
             "nothing to install: {:?}",
             handle.commands()
         );
@@ -4557,7 +4761,7 @@ mod tests {
             !handle
                 .commands()
                 .iter()
-                .any(|c| c.starts_with("transactional-update -n pkg in")),
+                .any(|c| c.starts_with("transactional-update --continue -n pkg in")),
             "nothing may be dispatched: {:?}",
             handle.commands()
         );
@@ -4665,7 +4869,7 @@ mod tests {
         let cmds = handle.commands();
         let prepare = cmds
             .iter()
-            .find(|c| c.starts_with("transactional-update -n pkg in -l"))
+            .find(|c| c.starts_with("transactional-update --continue -n pkg in -l"))
             .unwrap_or_else(|| panic!("no embedded prepare: {cmds:?}"));
         let got: BTreeSet<String> = prepare
             .split_whitespace()
@@ -5369,7 +5573,7 @@ mod tests {
         assert!(
             !h2.commands()
                 .iter()
-                .any(|c| c.starts_with("transactional-update -n pkg in")),
+                .any(|c| c.starts_with("transactional-update --continue -n pkg in")),
             "{:?}",
             h2.commands()
         );
@@ -5457,7 +5661,7 @@ mod tests {
     /// and whose combined downgrade then exits `1`.
     fn slmicro_target_failing_its_downgrade(hostname: &str) -> (Target, MockConnection) {
         let combined_cmd = format!(
-            "transactional-update -n pkg in --force-resolution --oldpackage -y {}",
+            "transactional-update --continue -n pkg in --force-resolution --oldpackage -y {}",
             quote_args(&["pkg-a=1.0-1"])
         );
         let conn = MockConnection::new(hostname)
@@ -6808,7 +7012,7 @@ mod tests {
             .commands()
             .iter()
             // Anchored: the updater script body contains `pkg in` too.
-            .filter(|c| c.starts_with("transactional-update -n pkg in -l"))
+            .filter(|c| c.starts_with("transactional-update --continue -n pkg in -l"))
             .count();
         assert_eq!(
             installs,
@@ -9055,7 +9259,8 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
 
         let hosts: BTreeSet<String> = group.names().into_iter().collect();
-        let not_downgraded = downgrade_verdict(&mut group, &hosts, &BTreeSet::new()).await;
+        let not_downgraded =
+            downgrade_verdict(&mut group, &hosts, &BTreeSet::new(), &BTreeSet::new()).await;
 
         assert_eq!(
             not_downgraded.get("h1").map(Vec::as_slice),
@@ -9082,7 +9287,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
 
         let hosts: BTreeSet<String> = group.names().into_iter().collect();
-        let _ = downgrade_verdict(&mut group, &hosts, &BTreeSet::new()).await;
+        let _ = downgrade_verdict(&mut group, &hosts, &BTreeSet::new(), &BTreeSet::new()).await;
 
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
@@ -9106,7 +9311,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
 
         let hosts: BTreeSet<String> = group.names().into_iter().collect();
-        let _ = downgrade_verdict(&mut group, &hosts, &BTreeSet::new()).await;
+        let _ = downgrade_verdict(&mut group, &hosts, &BTreeSet::new(), &BTreeSet::new()).await;
 
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
@@ -9130,7 +9335,8 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let hosts: BTreeSet<String> = group.names().into_iter().collect();
-        let not_downgraded = downgrade_verdict(&mut group, &hosts, &BTreeSet::new()).await;
+        let not_downgraded =
+            downgrade_verdict(&mut group, &hosts, &BTreeSet::new(), &BTreeSet::new()).await;
 
         assert!(not_downgraded.contains_key("h1"), "{not_downgraded:?}");
         assert!(not_downgraded.contains_key("h2"), "{not_downgraded:?}");
@@ -9147,7 +9353,8 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
 
         let hosts: BTreeSet<String> = group.names().into_iter().collect();
-        let not_downgraded = downgrade_verdict(&mut group, &hosts, &BTreeSet::new()).await;
+        let not_downgraded =
+            downgrade_verdict(&mut group, &hosts, &BTreeSet::new(), &BTreeSet::new()).await;
 
         assert!(not_downgraded.is_empty(), "{not_downgraded:?}");
         let p = &group.get("h1").unwrap().packages()[0];
@@ -9632,17 +9839,17 @@ mod tests {
         // thing standing between the caller and "it all worked" is that both
         // degradations are in `diagnostics`. The failing command is the repo
         // fan-out's trailing refresh, which is the last thing to touch
-        // `last*` before `host_command_failures` reads it.
-        const REFRESH: &str = "transactional-update --continue --non-interactive run zypper \
-                               --gpg-auto-import-keys -n ref";
+        // `last*` before `host_command_failures` reads it. Only the cleanup's
+        // refresh, the third, fails: a failed add refresh excludes the host.
         let conn = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_response(
-                "transactional-update -n pkg in -l  pkg-a",
+                "transactional-update --continue -n pkg in -l  pkg-a",
                 CommandLog::new("", "", "zypper: dependency problem", 1, 0),
             )
-            .with_response(
-                REFRESH,
+            .with_response_from(
+                TRANSACTIONAL_REFRESH,
+                3,
                 CommandLog::new("", "", "repo refresh failed", 1, 0),
             )
             .with_changing_boot_id();
@@ -9707,7 +9914,7 @@ mod tests {
         let conn = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_response(
-                "transactional-update -n pkg in -l  pkg-a",
+                "transactional-update --continue -n pkg in -l  pkg-a",
                 CommandLog::new("", "", "zypper: dependency problem", 1, 0),
             )
             .with_changing_boot_id();
@@ -9873,6 +10080,7 @@ mod tests {
             let (t, handle) = transactional_target("h1", product, "");
             let mut group = HostsGroup::new(vec![t], false);
 
+            // `NoopRepo` runs no refresh: this pins the package command alone.
             perform_prepare(
                 &mut group,
                 &NoopRepo,
@@ -9887,7 +10095,7 @@ mod tests {
 
             assert_eq!(
                 commands_but_boot_probes(&handle),
-                vec!["transactional-update -n pkg in -l  pkg-a"],
+                vec!["transactional-update --continue -n pkg in -l  pkg-a"],
                 "{product:?}"
             );
             assert!(
@@ -9935,18 +10143,18 @@ mod tests {
             );
             assert!(
                 cmds.iter().any(|c| c
-                    == "transactional-update --continue --non-interactive run \
+                    == "transactional-update --non-interactive run \
                         zypper --gpg-auto-import-keys -n ref"),
                 "{product:?}: the refresh runs inside a snapshot: {cmds:?}"
             );
             assert!(
                 cmds.iter()
-                    .any(|c| c == "transactional-update -n pkg in -l  pkg-a"),
+                    .any(|c| c == "transactional-update --continue -n pkg in -l  pkg-a"),
                 "{product:?}: the prepare step: {cmds:?}"
             );
             let patch = slmicro_patch_command();
             assert!(
-                patch.contains("transactional-update -n pkg in -l -y -t patch"),
+                patch.contains("transactional-update --continue -n pkg in -l -y -t patch"),
                 "{patch}"
             );
             assert!(cmds.contains(&patch), "{product:?}: the patch: {cmds:?}");
@@ -10002,6 +10210,810 @@ mod tests {
         }
     }
 
+    const TRANSACTIONAL_REFRESH: &str = "transactional-update --non-interactive run zypper \
+                                         --gpg-auto-import-keys -n ref";
+
+    #[tokio::test]
+    async fn a_transactional_operation_refreshes_from_the_booted_snapshot_and_chains_on_it() {
+        for op in ["prepare", "update", "downgrade"] {
+            let (t, handle) = slmicro_target("h1", "pkg-a = 1.0-1\n", 0);
+            let mut group = HostsGroup::new(vec![t], false);
+            let report = report_with_rrid();
+            let packages = report.get_package_list();
+            let mut diagnostics = Vec::new();
+            let res = match op {
+                "prepare" => {
+                    perform_prepare(
+                        &mut group,
+                        &report,
+                        &packages,
+                        false,
+                        false,
+                        false,
+                        &mut diagnostics,
+                    )
+                    .await
+                }
+                "update" => perform_update(
+                    &mut group,
+                    &report,
+                    &packages,
+                    "42",
+                    "7",
+                    None,
+                    false,
+                    false,
+                    &mut diagnostics,
+                )
+                .await
+                .map_err(|e| e.error().clone()),
+                _ => {
+                    perform_downgrade(&mut group, &report, &packages, None, &mut diagnostics).await
+                }
+            };
+            assert!(res.is_ok(), "{op}: {res:?}");
+
+            // A boot-id probe brackets every reboot, so it splits the log into
+            // the stretches that share one snapshot chain.
+            let mut refreshed = false;
+            let mut staged = false;
+            let mut pkg_commands = 0;
+            for c in handle.commands() {
+                if c == "cat /proc/sys/kernel/random/boot_id" {
+                    refreshed = false;
+                    staged = false;
+                } else if c == TRANSACTIONAL_REFRESH {
+                    assert!(
+                        !staged,
+                        "{op}: a refresh between a package command and its reboot"
+                    );
+                    refreshed = true;
+                } else if c.contains(" pkg ") {
+                    assert!(
+                        refreshed && c.contains("transactional-update --continue -n pkg "),
+                        "{op}: {c}"
+                    );
+                    staged = true;
+                    pkg_commands += 1;
+                } else {
+                    assert!(!c.contains("transactional-update"), "{op}: {c}");
+                }
+            }
+            assert!(pkg_commands > 0, "{op}: {:?}", handle.commands());
+        }
+    }
+
+    /// A target whose refresh answers exit `1` from its `nth` run on, every
+    /// other command passing with `stdout`; SL Micro 6.0 when `transactional`,
+    /// SLES 15.5 otherwise.
+    fn refresh_failing_target(
+        hostname: &str,
+        transactional: bool,
+        stdout: &str,
+        nth: usize,
+    ) -> (Target, MockConnection) {
+        let refresh = if transactional {
+            TRANSACTIONAL_REFRESH
+        } else {
+            "zypper -n ref"
+        };
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", stdout, "", 0, 0))
+            .with_response_from(
+                refresh,
+                nth,
+                CommandLog::new(refresh, "", "repo refresh failed", 1, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        let product = if transactional {
+            SystemProduct::new("SL-Micro", "6.0", "x86_64")
+        } else {
+            SystemProduct::new("SLES", "15.5", "x86_64")
+        };
+        t.set_system(System::new(product, BTreeSet::new(), false), transactional);
+        (t, handle)
+    }
+
+    fn ran_a_package_command(handle: &MockConnection) -> bool {
+        handle.commands().iter().any(|c| c.contains(" pkg "))
+    }
+
+    #[tokio::test]
+    async fn a_transactional_host_whose_refresh_failed_is_not_patched() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = refresh_failing_target("h1", true, "", 1);
+        let (t2, h2) = refresh_failing_target("h2", false, "", 1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::RepoAdd(e)) = res else {
+            panic!("h1 is excluded: {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h1"), "{e:?}");
+        assert!(e.reason.contains("refreshing repos failed"), "{e:?}");
+        assert!(!ran_a_package_command(&h1), "{:?}", h1.commands());
+        assert_eq!(
+            resets(&h1),
+            1,
+            "the undo's refresh failed too: {:?}",
+            h1.commands()
+        );
+        let events = h1.events();
+        let at = |event: &MockEvent| events.iter().position(|e| e == event);
+        let reset = at(&MockEvent::Command(TRANSACTIONAL_ROLLBACK.to_owned()));
+        let unlock = at(&MockEvent::Sftp(MockSftpOp::Remove(
+            TARGET_LOCK_PATH.into(),
+        )));
+        assert!(
+            reset.is_some() && reset < unlock,
+            "the reset runs under the host's lock: {events:?}"
+        );
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        assert!(
+            h2.commands().contains(&zypper_patch_command(&packages)),
+            "a read-write host still patches on stale metadata: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h2.commands()
+                .iter()
+                .any(|c| c.contains("transactional-update")),
+            "{:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_excluded_host_whose_undo_refreshed_gets_no_reset() {
+        // The undo's refresh made a snapshot off the booted one the default.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                TRANSACTIONAL_REFRESH,
+                CommandLog::new(TRANSACTIONAL_REFRESH, "", "failed", 1, 0),
+            )
+            .with_response_from(
+                TRANSACTIONAL_REFRESH,
+                2,
+                CommandLog::new(TRANSACTIONAL_REFRESH, "", "", 0, 0),
+            )
+            .with_changing_boot_id();
+        let h1 = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::RepoAdd(e)) = res else {
+            panic!("h1 is excluded: {res:?}");
+        };
+        assert_eq!(
+            e.reason,
+            "refreshing repos failed: transactional-update --non-interactive run zypper \
+             --gpg-auto-import-keys -n ref"
+        );
+        assert_eq!(resets(&h1), 0, "{:?}", h1.commands());
+    }
+
+    #[tokio::test]
+    async fn an_excluded_host_whose_undo_failed_says_what_its_reset_did() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        for (reset, says) in [
+            (
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "", 0, 0),
+                "): staged snapshot dropped",
+            ),
+            (already_default(), "): nothing was staged"),
+            (
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "tukit: lock held", 1, 0),
+                "), and `transactional-update -n rollback` failed: a staged snapshot could \
+                 remain, and a reboot could activate it",
+            ),
+        ] {
+            let (t, h1) = repo_failing_target("h1", TRANSACTIONAL_REFRESH, 1, reset);
+            let mut group = HostsGroup::new(vec![t], false);
+            let mut diagnostics = Vec::new();
+
+            let res = perform_update(
+                &mut group,
+                &report,
+                &packages,
+                "42",
+                "7",
+                None,
+                true,
+                false,
+                &mut diagnostics,
+            )
+            .await;
+
+            let Err(UpdateFailure::RepoAdd(e)) = res else {
+                panic!("h1 is excluded: {res:?}");
+            };
+            assert!(
+                e.reason
+                    .contains("; undoing the add failed too (refreshing repos failed: ")
+                    && e.reason.ends_with(says),
+                "{says}: {e:?}"
+            );
+            assert!(
+                degradations(&diagnostics).iter().any(|t| t.ends_with(says)),
+                "{says}: {diagnostics:?}"
+            );
+            assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+            assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transactional_host_whose_refresh_failed_is_not_downgraded() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = refresh_failing_target("h1", true, "pkg-a = 1.0-1\n", 1);
+        let (t2, h2) = refresh_failing_target("h2", false, "pkg-a = 1.0-1\n", 1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_downgrade(&mut group, &report, &packages, None, &mut Vec::new())
+            .await
+            .expect_err("h1 was not downgraded");
+
+        assert!(
+            err.reason.contains(
+                "h1: refreshing repos failed: transactional-update --non-interactive run \
+                 zypper --gpg-auto-import-keys -n ref; no downgrade was run: staged snapshot dropped"
+            ),
+            "{err:?}"
+        );
+        assert!(!err.completed().contains(&"h1".to_owned()), "{err:?}");
+        assert!(!ran_a_package_command(&h1), "{:?}", h1.commands());
+        assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        assert!(
+            h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "a read-write host still downgrades: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h2.commands()
+                .iter()
+                .any(|c| c.contains("transactional-update")),
+            "{:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_tells_a_dropped_staged_snapshot_from_none_and_from_a_failed_reset() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        for (reset, says) in [
+            (
+                CommandLog::new(
+                    TRANSACTIONAL_ROLLBACK,
+                    "Rollback to snapshot 7...",
+                    "",
+                    0,
+                    0,
+                ),
+                "no downgrade was run: staged snapshot dropped",
+            ),
+            (
+                already_default(),
+                "no downgrade was run: nothing was staged",
+            ),
+            (
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "tukit: lock held", 1, 0),
+                "a staged snapshot could remain, and a reboot could activate it",
+            ),
+        ] {
+            let (t, h1) = repo_failing_target("h1", TRANSACTIONAL_REFRESH, 1, reset);
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_downgrade(&mut group, &report, &packages, None, &mut Vec::new())
+                .await
+                .expect_err("h1 was not downgraded");
+
+            assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+            assert!(err.reason.ends_with(says), "{says}: {err:?}");
+            assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+            assert!(!ran_a_package_command(&h1), "{:?}", h1.commands());
+            assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transactional_host_whose_repo_removal_failed_is_not_downgraded() {
+        // A failed `rr` is recorded first and hides whether the refresh after it worked.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, h1) = repo_failing_target("h1", MICRO_REPO_REMOVAL, 1, already_default());
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_downgrade(&mut group, &report, &packages, None, &mut Vec::new())
+            .await
+            .expect_err("h1 was not downgraded");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason
+                .starts_with("removing repo https://example/micro failed"),
+            "{err:?}"
+        );
+        assert!(!ran_a_package_command(&h1), "{:?}", h1.commands());
+        assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+    }
+
+    #[tokio::test]
+    async fn a_host_the_reset_put_back_counts_as_completed_once_the_verdict_accepts_it() {
+        // h1's refresh failed but its reset left the booted snapshot the
+        // default; h2's reset failed, so the result is an error with `completed`.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        for (reset, says) in [
+            (
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "", 0, 0),
+                "no downgrade was run: staged snapshot dropped",
+            ),
+            (
+                already_default(),
+                "no downgrade was run: nothing was staged",
+            ),
+        ] {
+            let (t1, h1) = repo_failing_target("h1", TRANSACTIONAL_REFRESH, 1, reset);
+            let (t2, _) = repo_failing_target(
+                "h2",
+                TRANSACTIONAL_REFRESH,
+                1,
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "tukit: lock held", 1, 0),
+            );
+            let (t3, _) = sles_target("h3", "pkg-a = 1.0-1\n");
+            let mut group = HostsGroup::new(vec![t1, t2, t3], false);
+            let hosts = names(&["h1", "h2", "h3"]);
+            let mut diagnostics = Vec::new();
+
+            let err = perform_downgrade_for(
+                &mut group,
+                &hosts,
+                &report,
+                &packages,
+                None,
+                Some(AfterPatch::NotRebooted),
+                &mut diagnostics,
+            )
+            .await
+            .expect_err("h2 was not downgraded");
+
+            assert_eq!(err.completed(), ["h1", "h3"], "{says}: {err:?}");
+            assert!(
+                degradations(&diagnostics)
+                    .iter()
+                    .any(|t| t.starts_with("h1: refreshing repos failed") && t.ends_with(says)),
+                "{says}: {diagnostics:?}"
+            );
+            assert!(!has_downgrade_row(&h1), "only a reset ran on h1");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reset_does_not_complete_a_host_whose_repo_removal_failed() {
+        // The `rr` runs on the booted root, so the issue repository is still there.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _) = repo_failing_target(
+            "h1",
+            MICRO_REPO_REMOVAL,
+            1,
+            CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "", 0, 0),
+        );
+        let (t3, _) = sles_target("h3", "pkg-a = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![t1, t3], false);
+
+        let err = perform_downgrade_for(
+            &mut group,
+            &names(&["h1", "h3"]),
+            &report,
+            &packages,
+            None,
+            Some(AfterPatch::NotRebooted),
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("h1's issue repository is still configured");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert_eq!(
+            err.reason,
+            "removing repo https://example/micro failed; no downgrade was run: staged snapshot \
+             dropped"
+        );
+        assert_eq!(err.completed(), ["h3"], "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_reset_does_not_complete_a_host_still_at_the_update_version() {
+        // An earlier run booted h1 into the update, so dropping this run's
+        // staged snapshot leaves it there; the verdict must catch it.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let query = format!(
+            "rpm -q --queryformat \"%{{Name}} %{{Version}}-%{{Release}}\n\" {}",
+            quote_args(&packages)
+        );
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response_from(
+                TRANSACTIONAL_REFRESH,
+                1,
+                CommandLog::new(TRANSACTIONAL_REFRESH, "", "failed", 1, 0),
+            )
+            .with_response(
+                query.clone(),
+                CommandLog::new(&query, "pkg-a 2.0-1\n", "", 0, 0),
+            )
+            .with_changing_boot_id();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t1.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(Some("2.0-1")).unwrap();
+        t1.set_packages(vec![pkg]);
+        let (t3, _) = sles_target("h3", "pkg-a = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![t1, t3], false);
+        let mut diagnostics = Vec::new();
+
+        let err = perform_downgrade_for(
+            &mut group,
+            &names(&["h1", "h3"]),
+            &report,
+            &packages,
+            None,
+            Some(AfterPatch::NotRebooted),
+            &mut diagnostics,
+        )
+        .await
+        .expect_err("h1 is still at the update's version");
+
+        assert_eq!(err.reason, "downgrade not completed");
+        assert_eq!(err.completed(), ["h3"], "{err:?}");
+        assert!(
+            !degradations(&diagnostics)
+                .iter()
+                .any(|t| t.contains("restored")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_whose_every_probe_died_completes_no_host_it_left_out() {
+        // No verdict runs on that path, so nothing it left out was checked.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        for with_unrestored in [false, true] {
+            let (t1, _) = repo_failing_target(
+                "h1",
+                TRANSACTIONAL_REFRESH,
+                1,
+                CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "", 0, 0),
+            );
+            let (t2, _, _) = sles_target_with_probe_exit("h2", &packages, 7);
+            let mut targets = vec![t1, t2];
+            if with_unrestored {
+                let (t3, _) = repo_failing_target(
+                    "h3",
+                    TRANSACTIONAL_REFRESH,
+                    1,
+                    CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "tukit: lock held", 1, 0),
+                );
+                targets.push(t3);
+            }
+            let hosts: BTreeSet<String> = targets.iter().map(|t| t.hostname().to_owned()).collect();
+            let mut group = HostsGroup::new(targets, false);
+
+            let err = perform_downgrade_for(
+                &mut group,
+                &hosts,
+                &report,
+                &packages,
+                None,
+                Some(AfterPatch::NotRebooted),
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("h2's probe died");
+
+            assert!(err.completed().is_empty(), "{with_unrestored}: {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_whose_every_probe_died_still_names_the_host_its_refresh_left_out() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = refresh_failing_target("h1", true, "pkg-a = 1.0-1\n", 1);
+        let (t2, h2, _) = sles_target_with_probe_exit("h2", &packages, 7);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_downgrade(&mut group, &report, &packages, None, &mut Vec::new())
+            .await
+            .expect_err("nothing was downgraded");
+
+        assert!(
+            err.reason.contains("h1: refreshing repos failed")
+                && err.reason.contains("h2: package version probe failed"),
+            "{err:?}"
+        );
+        assert!(!has_downgrade_row(&h1), "h1 ran nothing");
+        assert!(
+            has_downgrade_row(&h2),
+            "h2's repo removal is still recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_withholds_done_while_a_refresh_left_a_host_out() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = refresh_failing_target("h1", true, "pkg-a = 1.0-1\n", 1);
+        let (t2, h2) = sles_target("h2", "pkg-a = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let (res, logs) = capture_logs(perform_downgrade(
+            &mut group,
+            &report,
+            &packages,
+            None,
+            &mut Vec::new(),
+        ))
+        .await;
+
+        res.expect_err("h1 was not downgraded");
+        assert!(!logs.lines().any(|l| l == "done"), "{logs}");
+        let left_out = logs
+            .lines()
+            .find(|l| l.contains("the repository step failed on these hosts"))
+            .unwrap_or_else(|| panic!("no warning about the host left out: {logs}"));
+        assert!(left_out.contains("h1"), "{left_out}");
+        assert!(
+            !logs
+                .lines()
+                .any(|l| l.contains("no package version probe answered")),
+            "h1 was never probed: {logs}"
+        );
+        assert!(!has_downgrade_row(&h1), "h1 ran nothing");
+        assert!(has_downgrade_row(&h2), "h2 was downgraded");
+    }
+
+    /// The micro repository's removal, as the SL report runs it.
+    const MICRO_REPO_REMOVAL: &str = "zypper -n rr https://example/micro";
+
+    /// What `transactional-update -n rollback` answers when nothing was staged.
+    fn already_default() -> CommandLog {
+        CommandLog::new(
+            TRANSACTIONAL_ROLLBACK,
+            "",
+            "Active snapshot is already default snapshot.\nERROR: Rollback to snapshot 7 failed!",
+            1,
+            0,
+        )
+    }
+
+    /// An SL Micro 6.0 host whose `failing` command exits `1` from its `nth`
+    /// run on, whose reset answers `reset`, and whose other commands pass.
+    fn repo_failing_target(
+        hostname: &str,
+        failing: &str,
+        nth: usize,
+        reset: CommandLog,
+    ) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response_from(failing, nth, CommandLog::new(failing, "", "failed", 1, 0))
+            .with_response(TRANSACTIONAL_ROLLBACK, reset)
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// [`repo_failing_target`] whose refresh fails from its second run (the
+    /// rollback's) on, and whose reset exits `reset_exit`.
+    fn rollback_refresh_failing_target(
+        hostname: &str,
+        reset_exit: i16,
+    ) -> (Target, MockConnection) {
+        repo_failing_target(
+            hostname,
+            TRANSACTIONAL_REFRESH,
+            2,
+            CommandLog::new(TRANSACTIONAL_ROLLBACK, "", "rollback failed", reset_exit, 0),
+        )
+    }
+
+    /// `handle`'s commands that are `transactional-update -n rollback`.
+    fn resets(handle: &MockConnection) -> usize {
+        handle
+            .commands()
+            .iter()
+            .filter(|c| *c == TRANSACTIONAL_ROLLBACK)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_rollback_whose_refresh_failed_drops_the_unbooted_staged_update() {
+        // A failed check reboots no host, so h1 still runs the snapshot from
+        // before its patch: making it the default again restores h1.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = rollback_refresh_failing_target("h1", 0);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h2's patch failed");
+
+        assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+        assert!(
+            !h1.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h1.commands()
+        );
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        let texts = degradations(&diagnostics);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("h1: refreshing repos failed")
+                    && t.ends_with("no downgrade was run: staged snapshot dropped")),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("rollback also failed")),
+            "h1 is restored: {texts:?}"
+        );
+        assert!(!has_downgrade_row(&h1), "only a reset ran on h1");
+    }
+
+    #[tokio::test]
+    async fn a_rollback_whose_reset_failed_says_the_update_may_still_activate() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = rollback_refresh_failing_target("h1", 1);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h2's patch failed");
+
+        assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+        assert!(!rebooted(&h1), "{:?}", h1.fired_commands());
+        let texts = degradations(&diagnostics);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("automatic rollback also failed")
+                    && t.contains(
+                        "a staged snapshot could remain, and a reboot could activate it"
+                    )
+                    && t.contains("h1 may be left partly updated")),
+            "{texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rollback_after_a_reboot_does_not_claim_the_reset_restored_the_host() {
+        // h1 rebooted into its patch before h2's reboot was found not taken.
+        let report = report_with_rrid();
+        let (t1, h1) = rollback_refresh_failing_target("h1", 0);
+        let (t2, _) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h2's reboot did not take");
+
+        assert!(
+            rebooted(&h1),
+            "the patch's reboot: {:?}",
+            h1.fired_commands()
+        );
+        assert_eq!(resets(&h1), 1, "{:?}", h1.commands());
+        let texts = degradations(&diagnostics);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("automatic rollback also failed")
+                    && t.contains("no downgrade was run: staged snapshot dropped")
+                    && t.contains("h1")),
+            "{texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rollback_resets_no_snapshot_on_a_read_write_host() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = refresh_failing_target("h1", false, "pkg-a = 1.0-1\n", 2);
+        let (t2, _, _) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("h2's patch failed");
+
+        assert!(
+            !h1.commands()
+                .iter()
+                .any(|c| c.contains("transactional-update")),
+            "{:?}",
+            h1.commands()
+        );
+        assert!(
+            h1.commands().iter().any(|c| c.contains("--oldpackage")),
+            "{:?}",
+            h1.commands()
+        );
+    }
+
     #[tokio::test]
     async fn perform_install_keeps_zypper_on_a_read_write_sles_16_host() {
         let (t, handle) = sles16_read_write_target("h1");
@@ -10037,7 +11049,7 @@ mod tests {
 
         assert_eq!(
             commands_but_boot_probes(&ro_handle),
-            vec!["transactional-update -n pkg in -l  pkg-a"]
+            vec!["transactional-update --continue -n pkg in -l  pkg-a"]
         );
         assert!(rebooted(&ro_handle), "h1's snapshot must be activated");
         assert_eq!(rw_handle.commands(), vec!["zypper -n in -y -l  pkg-a"]);
@@ -11423,7 +12435,7 @@ mod tests {
             assert_eq!(
                 downgrades,
                 [
-                    "transactional-update -n pkg in --force-resolution --oldpackage -y \
+                    "transactional-update --continue -n pkg in --force-resolution --oldpackage -y \
                      'pkg-a=1.0-1' 'pkg-b=2.0-1'"
                 ],
                 "{product:?}: one combined transactional downgrade: {cmds:?}"
@@ -11677,7 +12689,7 @@ mod tests {
             .map(|h| {
                 (
                     h.to_owned(),
-                    "transactional-update -n pkg in -l  pkg-a".to_owned(),
+                    "transactional-update --continue -n pkg in -l  pkg-a".to_owned(),
                 )
             })
             .collect();
@@ -11766,7 +12778,7 @@ mod tests {
         // reboot into the failed transaction, and the failure is reported
         // rather than leaving a skipped reboot behind an `Ok`.
         let combined_cmd = format!(
-            "transactional-update -n pkg in --force-resolution --oldpackage -y {}",
+            "transactional-update --continue -n pkg in --force-resolution --oldpackage -y {}",
             quote_args(&["pkg-a=1.0-1"])
         );
         let conn = MockConnection::new("h1")

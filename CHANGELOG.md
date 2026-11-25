@@ -290,6 +290,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- On SL Micro and SLES 16 hosts with a read-only root, a failed repository
+  step leaves the host out instead of building on whatever snapshot was
+  staged before. Where transactional-update reports a failed refresh (5.5 and
+  later, e.g. SLES 16), `update` now fails on that host with the repository
+  failure instead of patching it with a degradation; older ones (SL Micro
+  6.0/6.1) do not report a failed `zypper ref`, and the operation goes on from
+  the refresh snapshot as before. A failed refresh or repository removal also
+  leaves the host out of `downgrade` and of `update`'s rollback, not
+  rebooted. A host left out there, and one `update` excluded whose repository
+  undo failed too, gets `transactional-update -n rollback`, which makes the
+  booted snapshot the default again and, on success, schedules a
+  re-registration check for the host's next boot. A read-write host still
+  goes on with stale metadata (#845).
 - `updates -G` takes the bare name (`qam-sle`) or the review login
   (`qam-sle-review`) and sends every group in one query, where it sent one per
   group and merged the answers: TeReGen serves the union of a repeated
@@ -592,6 +605,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- On SL Micro and SLES 16 hosts with a read-only root, the package commands
+  of `prepare`, `update` and `downgrade` now build on the snapshot their
+  repository refresh just made instead of discarding it, so a signing key the
+  refresh imported is kept. Each of these operations now starts from the
+  booted snapshot, so a staged snapshot that was never booted (a failed
+  `prepare` or `downgrade`, or another tester's failed transaction) is dropped
+  instead of being activated by the next reboot; `install` and `uninstall`
+  also branch off the booted snapshot. transactional-update's "has been
+  created from a different base" warning moves from the package command to
+  the refresh that drops such a snapshot, which includes the one `update`'s
+  own repository cleanup leaves, so it is normal on the first refresh after an
+  update. `update`'s rollback of a host whose patch passed, but which a peer's
+  failure kept from rebooting, no longer boots it into the update it reported
+  undoing (#845).
 - The REPL tears down on `SIGHUP` and `SIGTERM` the way `quit` does: it
   releases the pool claims and the operation locks and disconnects the hosts,
   then exits with 129 or 143. A command running at the time is cancelled at

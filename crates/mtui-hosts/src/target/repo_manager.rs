@@ -321,7 +321,7 @@ impl<'a> RepoManager<'a> {
     ///
     /// Every path but the two bails below finishes with a refresh so later
     /// operations see the freshly (un)registered repos: `zypper -n ref`, or
-    /// `transactional-update --continue --non-interactive run zypper
+    /// `transactional-update --non-interactive run zypper
     /// --gpg-auto-import-keys -n ref` on a transactional (read-only-root) host,
     /// where a plain `zypper ref` of a not-yet-trusted signed repo would fail
     /// importing the key into the read-only rpmdb. A failed refresh is also
@@ -475,8 +475,9 @@ impl<'a> RepoManager<'a> {
         // must go through transactional-update so zypper gets a writable rpmdb
         // in a snapshot (activated by the reboot the prepare/update flow already
         // performs) and can import a not-yet-trusted repo key non-interactively.
+        // No `--continue`: it branches off the booted snapshot, dropping any staged leftover.
         let ref_cmd = if self.target.transactional() {
-            "transactional-update --continue --non-interactive run \
+            "transactional-update --non-interactive run \
              zypper --gpg-auto-import-keys -n ref"
         } else {
             "zypper -n ref"
@@ -1006,7 +1007,7 @@ mod tests {
     // --- run_zypper: transactional refresh routing -------------------------
 
     #[tokio::test]
-    async fn transactional_host_routes_ref_through_transactional_update() {
+    async fn transactional_refresh_branches_off_the_booted_snapshot() {
         let micro = product("SL-Micro", "6-1");
         let (mut t, conn) = target_with(system_of(micro.clone(), &[]), true);
         let mut repos = BTreeMap::new();
@@ -1018,7 +1019,7 @@ mod tests {
         assert_eq!(
             cmds.last().map(String::as_str),
             Some(
-                "transactional-update --continue --non-interactive run \
+                "transactional-update --non-interactive run \
                  zypper --gpg-auto-import-keys -n ref"
             )
         );
@@ -1058,7 +1059,7 @@ mod tests {
         assert_eq!(
             conn.commands().last().map(String::as_str),
             Some(
-                "transactional-update --continue --non-interactive run \
+                "transactional-update --non-interactive run \
                  zypper --gpg-auto-import-keys -n ref"
             )
         );
@@ -1234,8 +1235,8 @@ mod tests {
 
         // The `ar` succeeds but the trailing `ref` fails: a distinct variant
         // from a masked `ar` failure, since a consumer treats the two
-        // differently (Refresh is a degradation, not an exclusion — see
-        // `update_flow::repo_add_failures`).
+        // differently (on a read-write host Refresh is a degradation, not an
+        // exclusion — see `update_flow::repo_add_failures`).
         let sles = product("SLES", "15-SP5");
         let conn = MockConnection::new("host1.example.com").with_response(
             "zypper -n ref",

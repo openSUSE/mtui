@@ -204,7 +204,7 @@ mod tests {
         // exit-code rule nor `host_command_failures`' stderr rule (ignored by
         // the reboot gate) can see — only the markers.
         let err = transactional_update(args_for(
-            "transactional-update -n pkg in -l  pkg-a",
+            "transactional-update --continue -n pkg in -l  pkg-a",
             "",
             "System management is locked",
             0,
@@ -215,7 +215,7 @@ mod tests {
 
         // The other two markers reach it on a clean exit too.
         let err = transactional_update(args_for(
-            "transactional-update -n pkg in -l  pkg-a",
+            "transactional-update --continue -n pkg in -l  pkg-a",
             "choose (c): c",
             "",
             0,
@@ -223,7 +223,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.reason, "Dependency Error");
         let err = transactional_update(args_for(
-            "transactional-update -n pkg in -l  pkg-a",
+            "transactional-update --continue -n pkg in -l  pkg-a",
             "",
             "Error: boom",
             0,
@@ -241,7 +241,7 @@ mod tests {
         // feeds the flow.
         assert!(
             transactional_update(args_for(
-                "transactional-update -n pkg in -l  pkg-a",
+                "transactional-update --continue -n pkg in -l  pkg-a",
                 "",
                 "1 issue found. see the log",
                 0,
@@ -260,7 +260,7 @@ mod tests {
         // check while the flow still fails the host.
         assert!(
             transactional_update(args_for(
-                "transactional-update -n pkg in -l  pkg-a",
+                "transactional-update --continue -n pkg in -l  pkg-a",
                 "",
                 "",
                 1,
@@ -359,7 +359,7 @@ mod tests {
         let slmicro_fn =
             prepare_check("slmicro", true).expect("the slmicro key has a prepare check");
         let err = slmicro_fn(args_for(
-            "transactional-update -n pkg in -l  pkg-a",
+            "transactional-update --continue -n pkg in -l  pkg-a",
             "",
             "System management is locked",
             0,

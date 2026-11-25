@@ -21,7 +21,7 @@ mod timeout;
 
 use std::path::Path;
 
-pub use mock::{MockConnection, MockSftpOp};
+pub use mock::{MockConnection, MockEvent, MockSftpOp};
 pub use sftp_session::SftpSession;
 #[cfg(feature = "shell")]
 pub use shell::ShellChannel;

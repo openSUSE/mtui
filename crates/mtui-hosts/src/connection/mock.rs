@@ -95,6 +95,15 @@ pub enum MockSftpOp {
     Mtime(PathBuf),
 }
 
+/// A command or SFTP operation, as [`MockConnection::events`] interleaves them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockEvent {
+    /// A command passed to `run`.
+    Command(String),
+    /// An SFTP operation.
+    Sftp(MockSftpOp),
+}
+
 /// A scriptable, in-memory [`Connection`] implementation for tests.
 ///
 /// Construct with [`MockConnection::new`], script responses with the `with_*`
@@ -105,6 +114,8 @@ pub struct MockConnection {
     hostname: String,
     /// Per-command scripted outcomes.
     responses: HashMap<String, Outcome>,
+    /// See [`with_response_from`](Self::with_response_from).
+    responses_from: HashMap<String, (usize, Outcome)>,
     /// Fallback outcome when a command has no scripted response.
     default: Outcome,
     /// See [`with_run_delay`](Self::with_run_delay).
@@ -148,6 +159,8 @@ pub struct MockConnection {
     fired: Arc<Mutex<Vec<String>>>,
     /// SFTP operations observed, in order.
     sftp_ops: Arc<Mutex<Vec<MockSftpOp>>>,
+    /// Commands and SFTP operations in the one order they arrived.
+    events: Arc<Mutex<Vec<MockEvent>>>,
     /// Batched SFTP session opens, shared across `Clone`s so a test observes
     /// every one regardless of which handle opened it.
     sftp_sessions: Arc<Mutex<usize>>,
@@ -216,6 +229,7 @@ impl MockConnection {
         Self {
             hostname: hostname.into(),
             responses: HashMap::new(),
+            responses_from: HashMap::new(),
             default: Outcome::Ok(CommandLog::new("", "", "", 0, 0)),
             run_delay: std::time::Duration::ZERO,
             active: true,
@@ -232,6 +246,7 @@ impl MockConnection {
             last_reconnect_args: Arc::new(Mutex::new(None)),
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
+            events: Arc::new(Mutex::new(Vec::new())),
             sftp_sessions: Arc::new(Mutex::new(0)),
             sftp_session_delay: std::time::Duration::ZERO,
             cancel_on_sftp_session: None,
@@ -363,6 +378,20 @@ impl MockConnection {
     #[must_use]
     pub fn with_response(mut self, command: impl Into<String>, log: CommandLog) -> Self {
         self.responses.insert(command.into(), Outcome::Ok(log));
+        self
+    }
+
+    /// Scripts `log` for the `nth` (1-based) and every later run of `command`;
+    /// earlier runs keep their other response.
+    #[must_use]
+    pub fn with_response_from(
+        mut self,
+        command: impl Into<String>,
+        nth: usize,
+        log: CommandLog,
+    ) -> Self {
+        self.responses_from
+            .insert(command.into(), (nth, Outcome::Ok(log)));
         self
     }
 
@@ -631,6 +660,12 @@ impl MockConnection {
         self.sftp_ops.lock().expect("mock sftp lock").clone()
     }
 
+    /// Returns the commands and SFTP operations so far, interleaved in order.
+    #[must_use]
+    pub fn events(&self) -> Vec<MockEvent> {
+        self.events.lock().expect("mock events lock").clone()
+    }
+
     /// Returns how many batched SFTP sessions were opened.
     ///
     /// The handshake-count oracle: a multi-read probe (`parse_system`) that
@@ -642,6 +677,10 @@ impl MockConnection {
     }
 
     fn record_sftp(&self, op: MockSftpOp) {
+        self.events
+            .lock()
+            .expect("mock events lock")
+            .push(MockEvent::Sftp(op.clone()));
         self.sftp_ops.lock().expect("mock sftp lock").push(op);
     }
 
@@ -820,10 +859,18 @@ impl Connection for MockConnection {
     }
 
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
-        self.issued
-            .lock()
-            .expect("mock issued lock")
-            .push(command.to_owned());
+        // Counted under the push's lock, before any await, so concurrent runs
+        // on clones each see their own index.
+        let runs = {
+            let mut issued = self.issued.lock().expect("mock issued lock");
+            let runs = issued.iter().filter(|c| *c == command).count();
+            issued.push(command.to_owned());
+            self.events
+                .lock()
+                .expect("mock events lock")
+                .push(MockEvent::Command(command.to_owned()));
+            runs + 1
+        };
 
         if !self.run_delay.is_zero() {
             tokio::time::sleep(self.run_delay).await;
@@ -838,7 +885,10 @@ impl Connection for MockConnection {
             return Ok(CommandLog::new(command, format!("boot-{n}\n"), "", 0, 0));
         }
 
-        let outcome = self.responses.get(command).unwrap_or(&self.default);
+        let outcome = match self.responses_from.get(command) {
+            Some((nth, later)) if runs >= *nth => later,
+            _ => self.responses.get(command).unwrap_or(&self.default),
+        };
         match outcome {
             Outcome::Ok(log) => Ok(log.clone()),
             #[cfg(test)]
