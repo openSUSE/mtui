@@ -83,7 +83,8 @@ pub fn run() -> anyhow::Result<()> {
 
     // Installed before `seed_session`, so hosts connected during `-a` seeding
     // already carry the SSH command-timeout question ("keep waiting? [Y/n]").
-    session.set_prompter(mtui_hosts::Prompter::stdin());
+    let terminating = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    session.set_prompter(repl::terminal_prompter(Arc::clone(&terminating)));
 
     // A failed explicit update exits here rather than entering an empty REPL.
     if let ControlFlow::Break(code) = runtime.block_on(seed_session(&registry, &mut session, &args))
@@ -94,13 +95,13 @@ pub fn run() -> anyhow::Result<()> {
     // Shared so the reedline-owned tab completer reads the same live session the
     // loop dispatches against (see `Repl`).
     let session = Arc::new(Mutex::new(session));
-    let mut repl = Repl::new(registry, session);
+    let mut repl = Repl::new(registry, session, terminating);
 
     let ending = runtime.block_on(repl.run())?;
     let Some(status) = ending.status() else {
         return Ok(());
     };
-    // Force-quit: exactly one destructor, then leave. `into_line_editor` keeps
+    // Force-quit or a teardown on SIGHUP/SIGTERM: exactly one destructor, then leave. `into_line_editor` keeps
     // the blast radius at reedline, which persists its `FileBackedHistory` on
     // drop, without tearing down the whole session graph.
     //

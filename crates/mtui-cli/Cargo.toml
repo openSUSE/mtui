@@ -63,6 +63,11 @@ serial_test.workspace = true
 # Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
 tempfile = "3"
 
+# `raise` delivers SIGHUP to the forwarder test; already in the tree via
+# `mtui-core`.
+[target."cfg(unix)".dev-dependencies]
+nix = { version = "0.32", features = ["signal"] }
+
 [features]
 default = []
 # Desktop toast notifications on start/finish of long operations. No-op when

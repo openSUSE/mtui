@@ -18,15 +18,23 @@
 //! `quit`/`exit` — presses escalate but never *cancel*, since cancelling the
 //! cleanup is what strands the locks (`OnPress`).
 //!
+//! `SIGHUP` and `SIGTERM` ride the same seam (`Interrupt::Terminate`): a
+//! running command is cancelled as by the first Ctrl-C, then the `quit`
+//! teardown runs and the process exits 128 + the signal. The prompt's
+//! `read_line` runs on a blocking thread so a signal there is not stuck behind
+//! a keypress; that read is abandoned, never resumed.
+//!
 //! Tab completion, persistent history + Ctrl-R + inline hint, and the
 //! workflow-aware prompt/highlighter live in the [`Reedline`] builder /
 //! [`MtuiPrompt`] in [`Repl::new`]; the command-timeout prompter is wired at the
 //! composition root, `run()` in `lib.rs`.
 
 use std::ops::ControlFlow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mtui_core::{EngineError, ExitStatus, Registry, Session, dispatch_line};
+use mtui_hosts::{Prompter, Reader};
 use reedline::{
     ColumnarMenu, DefaultHinter, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline,
     ReedlineEvent, ReedlineMenu, Signal, default_emacs_keybindings,
@@ -44,15 +52,47 @@ const COMPLETION_MENU: &str = "completion_menu";
 /// The banner printed once before the first prompt.
 const INTRO: &str = "Maintenance Test Update Installer";
 
-/// How many unread Ctrl-C presses the forwarder queues before coalescing: one
-/// to cancel, one to force-quit, and a third says nothing the second did not.
-const INTERRUPT_QUEUE: usize = 2;
+/// How many unread events the forwarder queues: two Ctrl-C presses (one to
+/// cancel, one to force-quit; a third says nothing the second did not) and
+/// the single termination it forwards.
+const INTERRUPT_QUEUE: usize = 3;
+
+/// What a command-timeout prompt answers once a termination arrived: the
+/// terminal may be gone, and the teardown must not wait on a reply.
+const TERMINATING_ANSWER: &str = "n";
 
 /// The command whose dispatch *is* the session teardown.
 ///
 /// Matched after registry resolution, so its aliases (`exit`, `EOF`) — and any
 /// added later — come along for free.
 const QUIT_COMMAND: &str = "quit";
+
+/// A signal the REPL tears down for before exiting with 128 + its number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Termination {
+    /// `SIGHUP`: the terminal or parent went away.
+    Hangup,
+    /// `SIGTERM`.
+    Terminate,
+}
+
+impl Termination {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Hangup => "SIGHUP",
+            Self::Terminate => "SIGTERM",
+        }
+    }
+}
+
+/// What the signal forwarder delivers to the dispatch loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Interrupt {
+    /// A Ctrl-C (`SIGINT`).
+    Press,
+    /// A signal that ends the session after its teardown.
+    Terminate(Termination),
+}
 
 /// How [`Repl::run`] ended.
 ///
@@ -66,6 +106,9 @@ pub enum ReplExit {
     /// A double Ctrl-C: the caller flushes the history and exits with
     /// [`ReplExit::status`].
     ForceQuit,
+    /// The teardown ran on `SIGHUP`/`SIGTERM`; the caller exits with
+    /// [`ReplExit::status`].
+    Signalled(Termination),
 }
 
 impl ReplExit {
@@ -78,6 +121,8 @@ impl ReplExit {
         match self {
             Self::Normal => None,
             Self::ForceQuit => Some(ExitStatus::Interrupted),
+            Self::Signalled(Termination::Hangup) => Some(ExitStatus::Hangup),
+            Self::Signalled(Termination::Terminate) => Some(ExitStatus::Terminated),
         }
     }
 }
@@ -172,10 +217,13 @@ fn press_policy(registry: &Registry, line: &str) -> OnPress {
 /// `read_line` and dispatch *after* it returns, so neither holds the lock at
 /// once.
 pub struct Repl {
-    line_editor: Reedline,
+    /// `None` only once a signal abandoned the read holding it.
+    line_editor: Option<Reedline>,
     registry: Arc<Registry>,
     session: Arc<Mutex<Session>>,
     prompt: MtuiPrompt,
+    /// Set on the first termination; shared with [`terminal_prompter`].
+    terminating: Arc<AtomicBool>,
 }
 
 impl Repl {
@@ -185,7 +233,11 @@ impl Repl {
     /// bindings), a [`DefaultHinter`], and [`MtuiPrompt`]. The command-timeout
     /// prompter is wired separately at the composition root, `run()` in `lib.rs`.
     #[must_use]
-    pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
+    pub fn new(
+        registry: Arc<Registry>,
+        session: Arc<Mutex<Session>>,
+        terminating: Arc<AtomicBool>,
+    ) -> Self {
         let completer = Box::new(MtuiCompleter::new(
             Arc::clone(&registry),
             Arc::clone(&session),
@@ -218,10 +270,11 @@ impl Repl {
         let prompt = MtuiPrompt::new(Arc::clone(&session));
 
         Self {
-            line_editor,
+            line_editor: Some(line_editor),
             registry,
             session,
             prompt,
+            terminating,
         }
     }
 
@@ -236,14 +289,15 @@ impl Repl {
     /// every SSH `Target`, HTTP client and template on the one path whose job is
     /// to get out now — nothing there blocks today, and leaking keeps it so.
     #[must_use]
-    pub fn into_line_editor(self) -> Reedline {
+    pub fn into_line_editor(self) -> Option<Reedline> {
         let Self {
             line_editor,
             registry,
             session,
             prompt,
+            terminating,
         } = self;
-        std::mem::forget((registry, session, prompt));
+        std::mem::forget((registry, session, prompt, terminating));
         line_editor
     }
 
@@ -277,10 +331,36 @@ impl Repl {
         }
         // Armed before the first prompt, for the whole session — see the
         // forwarder's own note on why that is what makes Ctrl-C deterministic.
-        let mut interrupts = spawn_interrupt_forwarder();
+        let mut interrupts = spawn_interrupt_forwarder(Arc::clone(&self.terminating));
 
         loop {
-            match self.line_editor.read_line(&self.prompt)? {
+            let signal = match self.read_line(&mut interrupts).await {
+                Ok(Ok(signal)) => signal,
+                // The terminal may be gone: tear down before reporting it.
+                Err(error) => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    return after_read_error(&self.registry, &mut session, error, &mut interrupts)
+                        .await;
+                }
+                Ok(Err(termination)) => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    return Ok(terminate(
+                        &self.registry,
+                        &mut session,
+                        termination,
+                        &mut interrupts,
+                        OnPress::Cancel,
+                    )
+                    .await);
+                }
+            };
+            match signal {
                 Signal::Success(line) => {
                     // `shell` attaches an interactive PTY, needing the local TTY
                     // only this REPL owns; the engine shared with headless MCP
@@ -333,6 +413,20 @@ impl Repl {
                         // cooperative stop. Loudly, since this is the one path
                         // that *can* leave locks a clean stop would release.
                         StepOutcome::Escalate => return Ok(on_escalate(on_press)),
+                        StepOutcome::Terminated(termination) => {
+                            let mut session = self
+                                .session
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            return Ok(terminate(
+                                &self.registry,
+                                &mut session,
+                                termination,
+                                &mut interrupts,
+                                on_press,
+                            )
+                            .await);
+                        }
                     }
                 }
                 // Ctrl-C on a partial line: clear it and reprompt, never exit.
@@ -364,10 +458,13 @@ impl Repl {
                     };
                     // Same escape hatch as mid-command; whatever the teardown
                     // had not reached stays claimed/locked.
-                    if outcome == StepOutcome::Escalate {
-                        return Ok(on_escalate(OnPress::EscalateOnly));
+                    match outcome {
+                        StepOutcome::Escalate => return Ok(on_escalate(OnPress::EscalateOnly)),
+                        StepOutcome::Terminated(termination) => {
+                            return Ok(ReplExit::Signalled(termination));
+                        }
+                        StepOutcome::Flow(_) => break,
                     }
-                    break;
                 }
                 // `#[non_exhaustive]`: reprompt on any future signal rather
                 // than crashing the session.
@@ -376,6 +473,139 @@ impl Repl {
         }
 
         Ok(ReplExit::Normal)
+    }
+
+    /// Reads one line on a blocking thread, or the termination that arrived
+    /// first.
+    ///
+    /// On a termination the read is abandoned with the editor in it, so the
+    /// terminal leaves raw mode here; the caller must exit the process rather
+    /// than drop the runtime, which would wait on that read forever.
+    async fn read_line(
+        &mut self,
+        interrupts: &mut mpsc::Receiver<Interrupt>,
+    ) -> anyhow::Result<Result<Signal, Termination>> {
+        let mut editor = self
+            .line_editor
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("line editor lost to an abandoned read"))?;
+        let prompt = self.prompt.clone();
+        let mut read = tokio::task::spawn_blocking(move || {
+            let signal = editor.read_line(&prompt);
+            (editor, signal)
+        });
+        let mut forwarding = true;
+        loop {
+            tokio::select! {
+                biased;
+                event = interrupts.recv(), if forwarding => match event {
+                    Some(Interrupt::Terminate(termination)) => {
+                        if let Err(e) = crossterm::terminal::disable_raw_mode() {
+                            tracing::warn!("cannot leave the terminal's raw mode: {e}");
+                        }
+                        return Ok(Err(termination));
+                    }
+                    // A raw-mode prompt sees Ctrl-C as a key; a stray SIGINT
+                    // here belongs to no dispatch.
+                    Some(Interrupt::Press) => {}
+                    None => forwarding = false,
+                },
+                joined = &mut read => {
+                    let (mut editor, signal) = joined?;
+                    // Saved per line: a later abandoned read never flushes it.
+                    if signal.is_ok()
+                        && let Err(e) = editor.sync_history()
+                    {
+                        tracing::warn!("cannot save the command history: {e}");
+                    }
+                    self.line_editor = Some(editor);
+                    return settle_read(signal, interrupts).map_err(Into::into);
+                }
+            }
+        }
+    }
+}
+
+/// A finished read's outcome: a termination already queued wins over the line,
+/// so neither a `shell`/`edit` line nor a read error from the hangup itself
+/// starts anything first.
+fn settle_read(
+    read: std::io::Result<Signal>,
+    interrupts: &mut mpsc::Receiver<Interrupt>,
+) -> std::io::Result<Result<Signal, Termination>> {
+    if let Some(termination) = pending_termination(interrupts) {
+        return Ok(Err(termination));
+    }
+    read.map(Ok)
+}
+
+/// Runs the `quit` teardown after the line editor failed, then reports the
+/// failure, or the termination that arrived meanwhile.
+async fn after_read_error(
+    registry: &Registry,
+    session: &mut Session,
+    error: anyhow::Error,
+    interrupts: &mut mpsc::Receiver<Interrupt>,
+) -> anyhow::Result<ReplExit> {
+    tracing::warn!("cannot read the next line; releasing pool claims and closing hosts");
+    match step_interruptible(registry, session, "EOF", interrupts, OnPress::EscalateOnly).await {
+        StepOutcome::Escalate => Ok(on_escalate(OnPress::EscalateOnly)),
+        StepOutcome::Terminated(termination) => Ok(ReplExit::Signalled(termination)),
+        StepOutcome::Flow(_) => match pending_termination(interrupts) {
+            Some(termination) => Ok(ReplExit::Signalled(termination)),
+            None => Err(error),
+        },
+    }
+}
+
+/// The REPL's prompter: `stdin`, except that once a termination arrived it
+/// answers "n" without reading, so a command-timeout prompt
+/// cannot keep a hung-up session waiting.
+#[must_use]
+pub fn terminal_prompter(terminating: Arc<AtomicBool>) -> Prompter {
+    Prompter::new(terminating_reader(terminating, Prompter::stdin_reader()))
+}
+
+fn terminating_reader(terminating: Arc<AtomicBool>, inner: Reader) -> Reader {
+    Arc::new(move |text: String| {
+        if terminating.load(Ordering::SeqCst) {
+            return Box::pin(std::future::ready(Ok(TERMINATING_ANSWER.to_owned())));
+        }
+        inner(text)
+    })
+}
+
+/// Drains `interrupts`, returning the first termination among them; presses
+/// from a gap belong to no dispatch and are dropped.
+fn pending_termination(interrupts: &mut mpsc::Receiver<Interrupt>) -> Option<Termination> {
+    let mut termination = None;
+    while let Ok(event) = interrupts.try_recv() {
+        if let Interrupt::Terminate(t) = event {
+            termination.get_or_insert(t);
+        }
+    }
+    termination
+}
+
+/// Ends the session on `termination`: runs the `quit` teardown unless the
+/// dispatch it arrived during (`after`) already was that teardown.
+async fn terminate(
+    registry: &Registry,
+    session: &mut Session,
+    termination: Termination,
+    interrupts: &mut mpsc::Receiver<Interrupt>,
+    after: OnPress,
+) -> ReplExit {
+    if after == OnPress::EscalateOnly {
+        return ReplExit::Signalled(termination);
+    }
+    tracing::warn!(
+        "{} received — releasing pool claims and closing hosts before exiting",
+        termination.name()
+    );
+    match step_interruptible(registry, session, "EOF", interrupts, OnPress::EscalateOnly).await {
+        StepOutcome::Escalate => on_escalate(OnPress::EscalateOnly),
+        StepOutcome::Flow(_) | StepOutcome::Terminated(_) => ReplExit::Signalled(termination),
     }
 }
 
@@ -397,45 +627,99 @@ impl Repl {
 /// this protocol, not to move this call. Only the wiring lives here; the effect
 /// is [`step_interruptible`], tested by injecting on this same channel, since a
 /// real `SIGINT` would take every other test in the shared binary down.
-fn spawn_interrupt_forwarder() -> mpsc::Receiver<()> {
+fn spawn_interrupt_forwarder(terminating: Arc<AtomicBool>) -> mpsc::Receiver<Interrupt> {
     let (tx, rx) = mpsc::channel(INTERRUPT_QUEUE);
+    let forward = Forward { tx, terminating };
     tokio::spawn(async move {
-        // A full queue already holds an unread press (coalesce); a closed one
-        // means the loop is gone and nothing will read again.
-        let forward = |tx: &mpsc::Sender<()>| {
-            !matches!(tx.try_send(()), Err(mpsc::error::TrySendError::Closed(())))
-        };
-        // One long-lived stream, created *before* the first press: a fresh
-        // `ctrl_c()` subscription per press only sees signals arriving after
-        // its first poll, losing one that lands between two calls.
+        // One long-lived stream per signal, created *before* the first press:
+        // a fresh `ctrl_c()` subscription per press only sees signals arriving
+        // after its first poll, losing one that lands between two calls. Each
+        // is installed on its own, so one that cannot be costs no other.
         #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
-            match signal(SignalKind::interrupt()) {
-                Ok(mut sigint) => {
-                    while sigint.recv().await.is_some() {
-                        if !forward(&tx) {
-                            break;
-                        }
-                    }
-                }
-                // Uninstallable: SIGINT keeps its default (fatal) disposition
-                // and retrying would only spin.
-                Err(e) => {
-                    tracing::debug!(error = %e, "no SIGINT handler; Ctrl-C stays fatal");
-                }
-            }
+            let install = |kind: SignalKind, name: &str| {
+                signal(kind)
+                    .inspect_err(|e| {
+                        tracing::debug!(error = %e, "no {name} handler; it keeps its default action");
+                    })
+                    .ok()
+            };
+            forward_signals(
+                forward,
+                install(SignalKind::interrupt(), "SIGINT"),
+                install(SignalKind::hangup(), "SIGHUP"),
+                install(SignalKind::terminate(), "SIGTERM"),
+            )
+            .await;
         }
         // No `SignalKind` off unix; `ctrl_c` is the portable equivalent, at the
         // cost of the re-subscribe window above.
         #[cfg(not(unix))]
         while tokio::signal::ctrl_c().await.is_ok() {
-            if !forward(&tx) {
+            if !forward.press() {
                 break;
             }
         }
     });
     rx
+}
+
+/// Feeds the dispatch loop's queue.
+struct Forward {
+    tx: mpsc::Sender<Interrupt>,
+    terminating: Arc<AtomicBool>,
+}
+
+impl Forward {
+    /// A full queue already holds an unread press (coalesce). `false` once the
+    /// loop is gone and nothing will read again.
+    fn press(&self) -> bool {
+        !matches!(
+            self.tx.try_send(Interrupt::Press),
+            Err(mpsc::error::TrySendError::Closed(_))
+        )
+    }
+
+    /// Forwards only the first termination, and never coalesces it: a lost one
+    /// skips the teardown, while a repeat is ignored downstream and would only
+    /// crowd out the press that force-quits.
+    async fn terminate(&self, termination: Termination) -> bool {
+        if self.terminating.swap(true, Ordering::SeqCst) {
+            return !self.tx.is_closed();
+        }
+        self.tx
+            .send(Interrupt::Terminate(termination))
+            .await
+            .is_ok()
+    }
+}
+
+/// Forwards whichever of the three signals were installed until the loop is gone.
+#[cfg(unix)]
+async fn forward_signals(
+    forward: Forward,
+    mut sigint: Option<tokio::signal::unix::Signal>,
+    mut sighup: Option<tokio::signal::unix::Signal>,
+    mut sigterm: Option<tokio::signal::unix::Signal>,
+) {
+    async fn recv(signal: Option<&mut tokio::signal::unix::Signal>) -> Option<()> {
+        match signal {
+            Some(signal) => signal.recv().await,
+            None => std::future::pending().await,
+        }
+    }
+    loop {
+        let open = tokio::select! {
+            Some(()) = recv(sigint.as_mut()) => forward.press(),
+            Some(()) = recv(sighup.as_mut()) => forward.terminate(Termination::Hangup).await,
+            Some(()) = recv(sigterm.as_mut()) => forward.terminate(Termination::Terminate).await,
+            else => false,
+        };
+        if !open {
+            break;
+        }
+    }
 }
 
 /// What one interruptible dispatch decided. Split from the execution so the
@@ -449,6 +733,8 @@ enum StepOutcome {
     /// A second Ctrl-C arrived while the first cancel was still settling: stop
     /// waiting for the command and force-quit.
     Escalate,
+    /// A termination arrived; the dispatch, if it started, ran to completion.
+    Terminated(Termination),
 }
 
 /// Dispatches one input `line` with Ctrl-C wired to the cancellation seam.
@@ -486,12 +772,17 @@ async fn step_interruptible(
     registry: &Registry,
     session: &mut Session,
     line: &str,
-    interrupts: &mut mpsc::Receiver<()>,
+    interrupts: &mut mpsc::Receiver<Interrupt>,
     on_press: OnPress,
 ) -> StepOutcome {
     // Stale presses, then a token this dispatch owns (both per the contract
-    // above).
-    while interrupts.try_recv().is_ok() {}
+    // above). A termination from the gap skips an ordinary command.
+    let mut terminated = pending_termination(interrupts);
+    if let Some(termination) = terminated
+        && on_press == OnPress::Cancel
+    {
+        return StepOutcome::Terminated(termination);
+    }
 
     session.set_cancel_token(CancellationToken::new());
     // Cloned before `step` borrows the session mutably; clones share state.
@@ -509,14 +800,33 @@ async fn step_interruptible(
             // that would release the pool claims. A press that loses the race
             // stays queued for the next dispatch to drain.
             biased;
-            flow = &mut dispatch => return StepOutcome::Flow(flow),
+            flow = &mut dispatch => return settled(flow, terminated),
             press = interrupts.recv() => press,
         };
-        if press.is_none() {
+        let Some(event) = press else {
             // The forwarder is gone (only when SIGINT cannot be handled at
             // all), so nothing can interrupt this dispatch: see it through
             // instead of spinning on a closed channel.
-            return StepOutcome::Flow((&mut dispatch).await);
+            return settled((&mut dispatch).await, terminated);
+        };
+        if let Interrupt::Terminate(termination) = event {
+            // A repeat never escalates: a hangup often arrives twice.
+            if terminated.is_none() {
+                terminated = Some(termination);
+                if on_press == OnPress::Cancel {
+                    token.cancel();
+                }
+                tracing::warn!(
+                    "{} received — {}",
+                    termination.name(),
+                    match on_press {
+                        OnPress::Cancel =>
+                            "stopping the command at its next checkpoint, then tearing down",
+                        OnPress::EscalateOnly => "finishing the teardown, then exiting",
+                    }
+                );
+            }
+            continue;
         }
         if pressed {
             return StepOutcome::Escalate;
@@ -529,6 +839,11 @@ async fn step_interruptible(
         // exactly-one-`error: `-line contract untouched.
         tracing::warn!("{}", on_press.first_press_notice());
     }
+}
+
+/// A finished dispatch's outcome: a termination that arrived meanwhile wins.
+fn settled(flow: ControlFlow<()>, terminated: Option<Termination>) -> StepOutcome {
+    terminated.map_or(StepOutcome::Flow(flow), StepOutcome::Terminated)
 }
 
 /// Dispatches one input `line` and reports whether the loop should stop.
@@ -868,12 +1183,12 @@ mod tests {
     /// One press, delivered once the probe reports it is parked mid-dispatch. A
     /// probe that never reports panics here rather than pressing into the void,
     /// which would be a green test that never exercised the interrupt.
-    async fn press_once(started: oneshot::Receiver<()>, tx: mpsc::Sender<()>) {
+    async fn press_once(started: oneshot::Receiver<()>, tx: mpsc::Sender<Interrupt>) {
         tokio::time::timeout(BOUND, started)
             .await
             .expect("the probe must report started")
             .expect("the probe's start signal must not be dropped");
-        let _ = tx.send(()).await;
+        let _ = tx.send(Interrupt::Press).await;
     }
 
     fn registry() -> (Registry, Arc<AtomicUsize>) {
@@ -1067,8 +1382,9 @@ mod tests {
         }));
         let (mut s, _buf) = session_with_buffer();
         let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
-        tx.try_send(()).expect("the queue has room");
-        tx.try_send(()).expect("the queue has room for both");
+        tx.try_send(Interrupt::Press).expect("the queue has room");
+        tx.try_send(Interrupt::Press)
+            .expect("the queue has room for both");
 
         // Held at the gate for at least one poll, so an undrained press has
         // every chance to be observed.
@@ -1122,8 +1438,9 @@ mod tests {
             let driver = async move {
                 tokio::task::yield_now().await;
                 let _ = go_tx.send(());
-                tx.try_send(()).expect("the queue has room");
-                tx.try_send(()).expect("the queue has room for both");
+                tx.try_send(Interrupt::Press).expect("the queue has room");
+                tx.try_send(Interrupt::Press)
+                    .expect("the queue has room for both");
             };
             let (outcome, out) = capturing_log(
                 step_interruptible(&r, &mut s, "gate", &mut rx, OnPress::Cancel),
@@ -1168,8 +1485,8 @@ mod tests {
                 .expect("the probe's start signal must not be dropped");
             // The queue holds both, fixing the consumption order however the
             // tasks interleave.
-            let _ = tx.send(()).await;
-            let _ = tx.send(()).await;
+            let _ = tx.send(Interrupt::Press).await;
+            let _ = tx.send(Interrupt::Press).await;
         };
         let (outcome, out) = capturing_log(
             step_interruptible(&r, &mut s, "deaf", &mut rx, OnPress::Cancel),
@@ -1256,7 +1573,7 @@ mod tests {
         // One press while the teardown is parked, then let it finish.
         let driver = async move {
             tokio::task::yield_now().await;
-            let _ = tx.send(()).await;
+            let _ = tx.send(Interrupt::Press).await;
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };
@@ -1297,8 +1614,8 @@ mod tests {
 
         let driver = async move {
             tokio::task::yield_now().await;
-            let _ = tx.send(()).await;
-            let _ = tx.send(()).await;
+            let _ = tx.send(Interrupt::Press).await;
+            let _ = tx.send(Interrupt::Press).await;
         };
         let (outcome, out) = capturing_log(
             step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
@@ -1328,8 +1645,9 @@ mod tests {
         }));
         let (mut s, _buf) = session_with_buffer();
         let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
-        tx.try_send(()).expect("the queue has room");
-        tx.try_send(()).expect("the queue has room for both");
+        tx.try_send(Interrupt::Press).expect("the queue has room");
+        tx.try_send(Interrupt::Press)
+            .expect("the queue has room for both");
 
         let driver = async move {
             tokio::task::yield_now().await;
@@ -1356,6 +1674,302 @@ mod tests {
             Some(mtui_core::ExitStatus::Interrupted)
         );
         assert_eq!(i32::from(mtui_core::ExitStatus::Interrupted), 130);
+    }
+
+    /// SIGHUP/SIGTERM carry 128 + the signal, the status the signal's death
+    /// would have had.
+    #[test]
+    fn a_signalled_exit_status_is_128_plus_the_signal() {
+        assert_eq!(
+            ReplExit::Signalled(Termination::Hangup)
+                .status()
+                .map(i32::from),
+            Some(129)
+        );
+        assert_eq!(
+            ReplExit::Signalled(Termination::Terminate)
+                .status()
+                .map(i32::from),
+            Some(143)
+        );
+    }
+
+    /// A termination mid-command cancels it cooperatively, like the first
+    /// Ctrl-C, and reports the termination once the body has unwound.
+    #[test]
+    fn a_termination_cancels_the_running_command_then_reports_it() {
+        let (started_tx, started_rx) = oneshot::channel();
+        let finished = Arc::new(AtomicBool::new(false));
+        let mut r = Registry::new();
+        r.register(Arc::new(ParkCmd {
+            started: Mutex::new(Some(started_tx)),
+            finished: Arc::clone(&finished),
+        }));
+        let (mut s, _buf) = session_with_buffer();
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+
+        let driver = async move {
+            tokio::time::timeout(BOUND, started_rx)
+                .await
+                .expect("the probe must report started")
+                .expect("the probe's start signal must not be dropped");
+            for _ in 0..2 {
+                let _ = tx.send(Interrupt::Terminate(Termination::Hangup)).await;
+            }
+        };
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "park", &mut rx, OnPress::Cancel),
+            driver,
+        );
+
+        assert_eq!(outcome, StepOutcome::Terminated(Termination::Hangup));
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "the parked body must be polled to completion, not dropped"
+        );
+        assert_eq!(
+            out.matches("SIGHUP received").count(),
+            1,
+            "a repeated hangup neither escalates nor warns twice: {out:?}"
+        );
+    }
+
+    /// A termination from the gap between commands ends the session instead of
+    /// running the next ordinary line.
+    #[test]
+    fn a_termination_from_the_gap_skips_the_next_command() {
+        let (r, runs) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+        tx.try_send(Interrupt::Terminate(Termination::Terminate))
+            .expect("the queue has room");
+
+        let (outcome, _out) = capturing_log(
+            step_interruptible(&r, &mut s, "echo hi", &mut rx, OnPress::Cancel),
+            std::future::ready(()),
+        );
+
+        assert_eq!(outcome, StepOutcome::Terminated(Termination::Terminate));
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "the line was not run");
+    }
+
+    /// A termination during the teardown never cancels it: the teardown is
+    /// what the termination is waiting for.
+    #[test]
+    fn a_termination_during_the_teardown_does_not_cancel_it() {
+        let (go_tx, go_rx) = oneshot::channel();
+        let observed = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut r = Registry::new();
+        r.register(Arc::new(SlowQuitCmd {
+            go: Mutex::new(Some(go_rx)),
+            observed_cancel: Arc::clone(&observed),
+            runs: Arc::clone(&runs),
+        }));
+        let (mut s, _buf) = session_with_buffer();
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+
+        let driver = async move {
+            tokio::task::yield_now().await;
+            let _ = tx.send(Interrupt::Terminate(Termination::Terminate)).await;
+            tokio::task::yield_now().await;
+            let _ = go_tx.send(());
+        };
+        let (outcome, _out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            driver,
+        );
+
+        assert_eq!(outcome, StepOutcome::Terminated(Termination::Terminate));
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "the teardown finished");
+        assert!(!observed.load(Ordering::SeqCst), "and was never cancelled");
+    }
+
+    /// The signal path runs the real `quit` teardown: a held operation lock is
+    /// released and the host disconnected before the REPL exits 128 + signal.
+    #[test]
+    fn a_termination_tears_down_and_releases_the_operation_lock() {
+        use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+
+        let registry = mtui_core::register_all();
+        let (mut s, _buf) = session_with_buffer();
+        let probe = MockConnection::new("h1");
+        let mut target =
+            Target::with_connection("h1", TargetState::Enabled, Box::new(probe.clone()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(target.lock("")).expect("operation lock taken");
+        assert!(probe.file_contents(TARGET_LOCK_PATH).is_some());
+        s.targets_mut().add(target);
+        let (_tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+
+        let exit = rt.block_on(terminate(
+            &registry,
+            &mut s,
+            Termination::Hangup,
+            &mut rx,
+            OnPress::Cancel,
+        ));
+
+        assert_eq!(exit, ReplExit::Signalled(Termination::Hangup));
+        assert!(probe.is_closed(), "the host was disconnected");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "the operation lock was released"
+        );
+    }
+
+    /// Only the first termination is queued, so a hangup that arrives twice
+    /// leaves both slots the force-quit needs for Ctrl-C.
+    #[test]
+    fn a_repeated_termination_leaves_room_for_two_presses() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+        let terminating = Arc::new(AtomicBool::new(false));
+        let forward = Forward {
+            tx,
+            terminating: Arc::clone(&terminating),
+        };
+        rt.block_on(async {
+            for _ in 0..2 {
+                let sent = tokio::time::timeout(BOUND, forward.terminate(Termination::Hangup))
+                    .await
+                    .expect("a termination never waits on a repeat");
+                assert!(sent);
+            }
+        });
+        assert!(forward.press() && forward.press());
+        assert!(terminating.load(Ordering::SeqCst), "the prompter is told");
+        let mut queued = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            queued.push(event);
+        }
+        assert_eq!(
+            queued,
+            [
+                Interrupt::Terminate(Termination::Hangup),
+                Interrupt::Press,
+                Interrupt::Press
+            ]
+        );
+    }
+
+    /// One signal whose handler could not be installed costs no other.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial(signal)]
+    fn the_forwarder_runs_on_whichever_handlers_installed() {
+        use tokio::signal::unix::{SignalKind, signal};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // Replaces SIGHUP's fatal default before the raise.
+            let _guard = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+            let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+            let forward = Forward {
+                tx,
+                terminating: Arc::new(AtomicBool::new(false)),
+            };
+            let sighup = signal(SignalKind::hangup()).ok();
+            tokio::spawn(forward_signals(forward, None, sighup, None));
+            tokio::task::yield_now().await;
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGHUP).expect("raise");
+            let event = tokio::time::timeout(BOUND, rx.recv())
+                .await
+                .expect("the hangup must be forwarded");
+            assert_eq!(event, Some(Interrupt::Terminate(Termination::Hangup)));
+        });
+    }
+
+    /// Once terminating, a command-timeout prompt is answered "no" without
+    /// reading the (possibly gone) terminal; before, it reads as usual.
+    #[test]
+    fn the_prompter_answers_no_once_terminating() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let inner: Reader = {
+            let reads = Arc::clone(&reads);
+            Arc::new(move |_text: String| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Box::pin(std::future::ready(Ok(String::new())))
+            })
+        };
+        let terminating = Arc::new(AtomicBool::new(false));
+        let prompter = Prompter::new(terminating_reader(Arc::clone(&terminating), inner));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        assert_eq!(rt.block_on(prompter.ask("keep waiting?")).unwrap(), "");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        terminating.store(true, Ordering::SeqCst);
+        assert_eq!(rt.block_on(prompter.ask("keep waiting?")).unwrap(), "n");
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "no read once terminating");
+    }
+
+    /// A termination queued before a line wins over it, so a `shell` line
+    /// cannot start an interactive session ahead of the teardown.
+    #[test]
+    fn a_queued_termination_wins_over_the_line_read() {
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+        tx.try_send(Interrupt::Terminate(Termination::Terminate))
+            .expect("the queue has room");
+        let settled = settle_read(Ok(Signal::Success("shell".to_owned())), &mut rx).unwrap();
+        assert_eq!(settled, Err(Termination::Terminate));
+
+        let failed = settle_read(Err(std::io::Error::other("EIO")), &mut rx);
+        assert!(failed.is_err(), "with nothing queued the error stands");
+    }
+
+    /// A failed read (a hung-up terminal can fail it before its SIGHUP is
+    /// seen) still tears down, then reports the error, or the termination
+    /// that arrived meanwhile.
+    #[test]
+    fn a_failed_read_tears_down_before_reporting() {
+        use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+
+        let registry = mtui_core::register_all();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        for queued in [None, Some(Termination::Hangup)] {
+            let (mut s, _buf) = session_with_buffer();
+            let probe = MockConnection::new("h1");
+            let mut target =
+                Target::with_connection("h1", TargetState::Enabled, Box::new(probe.clone()));
+            rt.block_on(target.lock("")).expect("operation lock taken");
+            s.targets_mut().add(target);
+            let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+            if let Some(termination) = queued {
+                tx.try_send(Interrupt::Terminate(termination))
+                    .expect("the queue has room");
+            }
+
+            let exit = rt.block_on(after_read_error(
+                &registry,
+                &mut s,
+                anyhow::anyhow!("EIO"),
+                &mut rx,
+            ));
+
+            match queued {
+                None => assert!(exit.is_err(), "the read error is still reported"),
+                Some(termination) => {
+                    assert_eq!(exit.unwrap(), ReplExit::Signalled(termination));
+                }
+            }
+            assert!(probe.is_closed(), "the host was disconnected");
+            assert!(probe.file_contents(TARGET_LOCK_PATH).is_none());
+        }
     }
 
     /// Only a bare `quit`/`exit`/`EOF` in **command position** is the teardown.
@@ -1411,7 +2025,7 @@ mod tests {
 
         let driver = async move {
             tokio::task::yield_now().await;
-            let _ = tx.send(()).await;
+            let _ = tx.send(Interrupt::Press).await;
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };

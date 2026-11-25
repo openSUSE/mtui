@@ -592,6 +592,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The REPL tears down on `SIGHUP` and `SIGTERM` the way `quit` does: it
+  releases the pool claims and the operation locks and disconnects the hosts,
+  then exits with 129 or 143. A command running at the time is cancelled at
+  its next checkpoint first, like on the first Ctrl-C, and a command-timeout
+  question after the signal is answered no. The same teardown runs when the
+  terminal fails while mtui waits for a command. Before, a closed terminal or
+  a `kill` ended mtui at once and left every lock until `unlock -f` or
+  `[lock] stale_age` (#851).
 - `mtui-mcp` tears down on `SIGHUP` like on `SIGTERM`. Before, a closed
   terminal or parent ended it without releasing its pool claims and operation
   locks (#851).
