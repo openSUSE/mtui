@@ -616,10 +616,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `Log level set to <level>` and changed nothing. The level belongs to the
   server, so under `--transport http` a call from one client changes it for
   every session, and the log still goes to the server's stderr, not to the
-  client. A reload replaces the whole filter, so per-target `RUST_LOG`
-  directives do not survive it, as in the REPL. Where no log-level control is
-  installed, `set_log_level` now fails with `log level unchanged: this process
-  has no runtime log-level control` instead of claiming success (#846).
+  client. The OTLP tracing diagnostics keep the startup level. A reload
+  replaces the whole filter, so per-target `RUST_LOG` directives do not survive
+  it, as in the REPL. Where no log-level control is installed, `set_log_level`
+  now fails with `log level unchanged: this process has no runtime log-level
+  control` instead of claiming success (#846).
 - A pool draw no longer attaches a reference host whose operation lock
   (`/var/lock/mtui.lock`) another owner holds, including another mtui process
   of the same user. `load_template` and `add_host` without `-t` used to attach
