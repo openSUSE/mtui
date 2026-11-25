@@ -578,6 +578,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `updates --status <status>` lists that status. With any status other than
+  `testing` it still sent the testing queue's assignment parameters, and
+  TeReGen answered with the queue in testing, so `--status tested` listed
+  updates that are not tested. The unassigned default and the assignment views
+  belong to `testing` alone, as TeReGen scopes assignment to it, so
+  `--assignee`, `--mine` and `--all-assignees` are now refused with any other
+  status, `--status all` included, before a query is sent. An assignment field
+  requested with another status is refused the same way. **MCP schema note:**
+  only the `updates` `status` description changes.
 - `--connection-timeout` (both binaries) is documented as overriding
   `connection.connection_timeout`, the table the key lives in, not
   `mtui.connection_timeout`. The MCP `--host` help now says the bind address is

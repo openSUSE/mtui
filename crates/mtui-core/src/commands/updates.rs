@@ -63,8 +63,11 @@ const STATUS_ALL: &str = "all";
 ///
 /// The default view is the actionable pickup queue: **unassigned** updates that
 /// are **in testing**. `--assignee`/`--mine`/`--all-assignees` pick another
-/// assignment view (dropping the unassigned default); `--status all` widens to
-/// every status. Session-global, so [`Scope::Single`] rather than a per-template
+/// assignment view (dropping the unassigned default); `--status X` asks for
+/// that status alone and `--status all` for every status. TeReGen scopes
+/// assignment to testing updates, so the assignment views and the unassigned
+/// default exist only for `--status testing`, and the views are refused with
+/// any other status. Session-global, so [`Scope::Single`] rather than a per-template
 /// fan-out — though it may issue one TeReGen query per `--review-group` and
 /// `--mine` login.
 pub struct Updates;
@@ -139,7 +142,11 @@ impl Command for Updates {
                 .long("status")
                 .value_name("STATUS")
                 .default_value("testing")
-                .help("filter by status (default: testing); use 'all' for every status"),
+                .help(
+                    "filter by status (default: testing); use 'all' for every status; \
+                     the unassigned default and --assignee/--mine/--all-assignees \
+                     apply to testing only",
+                ),
         )
         .arg(
             Arg::new("limit")
@@ -254,6 +261,16 @@ impl Command for Updates {
         let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
         let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
         let all_assignees = args.get_flag("all_assignees");
+        if status_arg != "testing"
+            && (all_assignees || args.get_flag("mine") || args.contains_id("assignee"))
+        {
+            return Err(CommandError::Other(
+                "--assignee/--mine/--all-assignees apply to --status testing only: TeReGen \
+                 serves assignment for updates in testing; drop the assignment flag or use \
+                 --status testing"
+                    .to_owned(),
+            ));
+        }
 
         let (assignees, note) = if args.get_flag("mine") {
             // oscrc errors name local files, so headlessly only the fault.
@@ -290,22 +307,21 @@ impl Command for Updates {
         let status_all = status_arg == STATUS_ALL;
         let status = if status_all { None } else { Some(status_arg) };
 
-        // Default view is the unassigned pickup queue; --assignee/--mine and
-        // --all-assignees/--status all opt out of that filter.
-        let chose_other_view = !assignees.is_empty() || all_assignees;
-        let unassigned = !chose_other_view && !status_all;
-        // Show the assignee column whenever assignment is part of the view.
-        let want_assignment = !assignees.is_empty() || unassigned || all_assignees;
+        // Assignment is scoped to testing server-side: sending any assignment
+        // param forces `status=testing`, so any other status asks for none.
+        // The default testing view is the unassigned pickup queue, which
+        // --assignee/--mine/--all-assignees opt out of.
+        let is_testing = status.as_deref() == Some("testing");
+        let unassigned = is_testing && assignees.is_empty() && !all_assignees;
+        let want_assignment = is_testing;
 
         // Without `with_assignment` TeReGen omits assignee/assignees on SLFO
         // rows, so an assignment-derived field would render a false
-        // "unassigned"; forcing it implies status=testing server-side,
-        // contradicting `--status all`.
+        // "unassigned".
         if !want_assignment && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
             return Err(CommandError::Other(format!(
-                "field '{}' needs assignment data, which TeReGen omits under \
-                 '--status all'; drop --status all or pick an assignment view \
-                 (--assignee/--mine/--all-assignees)",
+                "field '{}' needs assignment data, which TeReGen serves for \
+                 --status testing only; use --status testing",
                 spec.canonical
             )));
         }
@@ -2189,6 +2205,94 @@ mod tests {
         );
     }
 
+    /// The query string of the one request `server` received.
+    async fn only_query(server: &MockServer) -> String {
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        requests[0].url.query().unwrap_or_default().to_owned()
+    }
+
+    async fn serving_empty_queue() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// `--status tested` is the plain tested queue. Sending the testing
+    /// queue's assignment params would make TeReGen answer testing instead.
+    #[tokio::test]
+    async fn a_status_other_than_testing_sends_no_assignment_params() {
+        for status in ["tested", "patchinfo_missing"] {
+            let server = serving_empty_queue().await;
+            let (mut session, _buf) = teregen_session(&server);
+            let args = matches(&Updates, &["--status", status]);
+            Updates.call(&mut session, &args).await.unwrap();
+            assert_eq!(only_query(&server).await, format!("status={status}"));
+        }
+    }
+
+    /// `--status all` sends no status and no assignment params either.
+    #[tokio::test]
+    async fn status_all_sends_no_assignment_params() {
+        let server = serving_empty_queue().await;
+        let (mut session, _buf) = teregen_session(&server);
+        Updates
+            .call(&mut session, &matches(&Updates, &["--status", "all"]))
+            .await
+            .unwrap();
+        assert_eq!(only_query(&server).await, "");
+    }
+
+    /// An assignment view asks for testing updates; with another status it
+    /// would be answered with the wrong queue, so it is refused unasked.
+    #[tokio::test]
+    async fn an_assignment_view_with_another_status_is_refused_before_any_request() {
+        for flags in [
+            &["--status", "tested", "--mine"][..],
+            &["--status", "all", "--assignee", "alice"],
+            &["--status", "all", "--all-assignees"],
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let (mut session, buf) = teregen_session(&server);
+            let err = Updates
+                .call(&mut session, &matches(&Updates, flags))
+                .await
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("apply to --status testing only"),
+                "{flags:?}: {msg}"
+            );
+            assert!(buf.contents().is_empty(), "{}", buf.contents());
+        }
+    }
+
+    /// The default view is unchanged: unassigned updates in testing.
+    #[tokio::test]
+    async fn the_default_view_is_the_unassigned_testing_queue() {
+        let server = serving_empty_queue().await;
+        let (mut session, _buf) = teregen_session(&server);
+        Updates
+            .call(&mut session, &matches(&Updates, &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            only_query(&server).await,
+            "status=testing&unassigned=1&with_assignment=1"
+        );
+    }
+
     #[tokio::test]
     async fn assignment_fields_with_status_all_are_refused() {
         // Printing "unassigned" for an SLFO row TeReGen served without
@@ -2210,7 +2314,7 @@ mod tests {
             msg.contains("'Assigned Roles' needs assignment data"),
             "{msg}"
         );
-        assert!(msg.contains("--all-assignees"), "{msg}");
+        assert!(msg.contains("--status testing"), "{msg}");
 
         // The same field in an assignment view is fine (--all-assignees).
         let server2 = MockServer::start().await;
