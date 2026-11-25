@@ -41,7 +41,6 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "teregen_api_v2" => config.teregen_api_v2.clone(),
         "openqa_instance" => config.openqa_instance.clone(),
         "openqa_instance_baremetal" => config.openqa_instance_baremetal.clone(),
-        "openqa_install_distri" => config.openqa_install_distri.clone(),
         // Never verbatim: it would land in scrollback and logs.
         "gitea_token" => {
             if config.gitea_token.is_empty() {
@@ -183,7 +182,7 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
 
 /// The attribute names `show` lists when given none, in a stable order.
 /// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
-const ATTRS: [&str; 39] = [
+const ATTRS: [&str; 38] = [
     "template_dir",
     "session_user",
     "install_logs",
@@ -206,7 +205,6 @@ const ATTRS: [&str; 39] = [
     "teregen_api_v2",
     "openqa_instance",
     "openqa_instance_baremetal",
-    "openqa_install_distri",
     "gitea_token",
     "gitea_url",
     "slack_enabled",
@@ -304,7 +302,6 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "teregen_api_v2" => config.teregen_api_v2 = raw.to_owned(),
         "openqa_instance" => config.openqa_instance = raw.to_owned(),
         "openqa_instance_baremetal" => config.openqa_instance_baremetal = raw.to_owned(),
-        "openqa_install_distri" => config.openqa_install_distri = raw.to_owned(),
         "gitea_token" => config.gitea_token = raw.to_owned(),
         "gitea_url" => config.gitea_url = raw.to_owned(),
         "slack_token" => config.slack_token = raw.to_owned(),
@@ -499,7 +496,6 @@ mod tests {
         assert!(out.contains("teregen_api_v2"));
         assert!(out.contains("openqa_instance"));
         assert!(out.contains("openqa_instance_baremetal"));
-        assert!(out.contains("openqa_install_distri"));
         assert!(out.contains("gitea_token"));
     }
 

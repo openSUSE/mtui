@@ -537,6 +537,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `report_*` and `report_file*` tools. **MCP schema note:** five tools gone.
 - The `[svn] path` config key and the `svn_path` attribute of `config`. An
   `[svn]` table left in `mtui.toml` is ignored, not an error.
+- The dead `[openqa] distri` (`openqa_install_distri`) config key has been
+  dropped. It was loaded and shown by `config` but never read: openQA queries
+  always send `distri=sle`. `config show openqa_install_distri` now fails with
+  `unknown attribute: openqa_install_distri` instead of printing a no-op value,
+  `config set openqa_install_distri <value>` answers `unknown or read-only
+  attribute`, and `config show` with no argument now lists 38 attributes
+  instead of 39. An existing `mtui.toml` still carrying `[openqa] distri`
+  keeps loading without error — no config edit is required.
 - Packaging: the `mtui` and `mtui-mcp` packages (deb, rpm, OBS) no longer
   recommend `subversion`.
 - The `mtui-vim-plugin` subpackage and `dist/vim-plugin/` (the text report

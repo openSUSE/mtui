@@ -57,7 +57,7 @@ config set max_parallel 8
 
 `config` addresses options by flattened attribute names — `session_user`,
 `refhosts_*`, `openqa_instance*`, `target_tempdir`, `lock_*`, `slack_*`, and so
-on — rather than by `[section]` key. `config show` lists 39 attributes and
+on — rather than by `[section]` key. `config show` lists 38 attributes and
 omits `max_oqa_parallel`, the `[mcp]` table and the `[obs]` table.
 `template_dir`, `install_logs`, `refhosts_path` and `target_tempdir` can be
 shown but not `set`.
@@ -141,7 +141,6 @@ Defaults below are the built-in values.
 |-----|------|---------|---------|
 | `openqa` | URL | `https://openqa.suse.de` | openQA instance URL. |
 | `baremetal` | URL | `http://openqa.qam.suse.cz` | Baremetal openQA instance URL. |
-| `distri` | string | `sle` | Accepted and shown by `config`, but not used: openQA queries always send `distri=sle`. |
 
 openQA API credentials (`key`/`secret`, used to sign requests with
 `X-API-Hash`) are **not** part of `mtui.toml`. mtui delegates their discovery
