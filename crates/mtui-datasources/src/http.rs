@@ -30,6 +30,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use mtui_config::SslVerify;
@@ -41,6 +42,10 @@ use crate::error::{HttpError, Result};
 /// connect, 30s to read.
 pub(crate) const HTTP_TIMEOUT: (Duration, Duration) =
     (Duration::from_secs(5), Duration::from_secs(30));
+
+/// The read timeout of the [`HttpClient::patient`] client, for an upstream that
+/// answers only after a slow lookup of its own (TeReGen's SMELT-backed reads).
+pub(crate) const PATIENT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The connect-phase component of [`HTTP_TIMEOUT`].
 const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
@@ -141,10 +146,10 @@ fn disable_insecure_warnings() {
 /// The timeout + TLS-verify posture shared by [`HttpClient::new`] and
 /// [`HttpClient::openqa_transport`], kept in one function so the two clients
 /// cannot drift apart.
-fn base_builder(verify: VerifyPolicy) -> Result<reqwest::ClientBuilder> {
+fn base_builder(verify: VerifyPolicy, read_timeout: Duration) -> Result<reqwest::ClientBuilder> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_TIMEOUT)
+        .read_timeout(read_timeout)
         .pool_max_idle_per_host(default_pool_size());
 
     builder = match verify {
@@ -168,6 +173,9 @@ fn base_builder(verify: VerifyPolicy) -> Result<reqwest::ClientBuilder> {
 #[derive(Debug, Clone)]
 pub struct HttpClient {
     inner: reqwest::Client,
+    verify: VerifyPolicy,
+    patient_read_timeout: Duration,
+    patient: Arc<OnceLock<reqwest::Client>>,
 }
 
 impl HttpClient {
@@ -180,9 +188,37 @@ impl HttpClient {
     /// Returns [`HttpError::CaBundle`] if a configured CA bundle cannot be read
     /// or parsed, or [`HttpError::Request`] if the client fails to build.
     pub fn new(verify: VerifyPolicy) -> Result<Self> {
+        Self::with_read_timeouts(verify, READ_TIMEOUT, PATIENT_READ_TIMEOUT)
+    }
+
+    pub(crate) fn with_read_timeouts(
+        verify: VerifyPolicy,
+        read_timeout: Duration,
+        patient_read_timeout: Duration,
+    ) -> Result<Self> {
         Ok(Self {
-            inner: base_builder(verify)?.build()?,
+            inner: base_builder(verify.clone(), read_timeout)?.build()?,
+            verify,
+            patient_read_timeout,
+            patient: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// The same client with a longer read timeout, for an upstream that answers
+    /// only after a lookup of its own: the shared client's 30 s read timeout
+    /// fires before such a response arrives, whatever a request's own
+    /// `timeout` says. Built on first use and then shared by every clone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpError::CaBundle`] if a configured CA bundle cannot be read
+    /// or parsed, or [`HttpError::Request`] if the client fails to build.
+    pub(crate) fn patient(&self) -> Result<&reqwest::Client> {
+        if let Some(client) = self.patient.get() {
+            return Ok(client);
+        }
+        let built = base_builder(self.verify.clone(), self.patient_read_timeout)?.build()?;
+        Ok(self.patient.get_or_init(|| built))
     }
 
     /// Builds a dedicated `reqwest::Client` for injection into
@@ -201,7 +237,7 @@ impl HttpClient {
     /// Returns [`HttpError::CaBundle`] if a configured CA bundle cannot be read
     /// or parsed, or [`HttpError::Request`] if the client fails to build.
     pub fn openqa_transport(verify: VerifyPolicy) -> Result<reqwest::Client> {
-        Ok(base_builder(verify)?
+        Ok(base_builder(verify, READ_TIMEOUT)?
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .build()?)

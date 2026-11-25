@@ -359,7 +359,15 @@ impl Command for Updates {
         // connections; `buffered` keeps batches in `-G` order. Materialised
         // eagerly: a lazy `map` closure trips a higher-ranked-lifetime limit.
         let futures: Vec<_> = queries.iter().map(|q| teregen.updates(q)).collect();
-        let results: Vec<_> = stream::iter(futures).buffered(4).collect().await;
+        let cancel = session.cancel_token();
+        let results: Vec<_> = tokio::select! {
+            () = cancel.cancelled() => {
+                return Err(CommandError::Cancelled(
+                    "updates cancelled while waiting for TeReGen".to_owned(),
+                ));
+            }
+            results = stream::iter(futures).buffered(4).collect() => results,
+        };
 
         // `Err` (transport/API failure) is surfaced, `Ok(None)` (no `updates`
         // key) skipped: only a *successful* empty result is an empty queue.
@@ -1433,6 +1441,38 @@ mod tests {
             );
             assert!(buf.contents().is_empty(), "{}", buf.contents());
         }
+    }
+
+    /// A cancel while TeReGen is still deciding ends the wait as `Cancelled`.
+    /// The outer timeout is the assertion: an unobserved cancel waits out the
+    /// delay.
+    #[tokio::test]
+    async fn a_cancel_while_waiting_stops_the_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": []}))
+                    .set_delay(std::time::Duration::from_secs(5)),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let cancel = session.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel.cancel();
+        });
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Updates.call(&mut session, &matches(&Updates, &[])),
+        )
+        .await
+        .expect("the wait must observe the cancel")
+        .unwrap_err();
+        assert!(matches!(err, CommandError::Cancelled(_)), "{err:?}");
+        assert!(buf.contents().is_empty(), "{}", buf.contents());
     }
 
     #[tokio::test]

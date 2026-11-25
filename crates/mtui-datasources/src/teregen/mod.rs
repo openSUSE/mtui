@@ -32,7 +32,8 @@ use serde_json::{Value, json};
 
 use crate::error::{HttpError, TeReGenError};
 use crate::http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, VerifyPolicy, read_body_capped,
+    resolve_verify,
 };
 
 pub mod auth;
@@ -265,7 +266,8 @@ impl TeReGen {
     /// lookup from a genuinely-empty successful response. The descriptions are
     /// URL-free because every `reqwest::Error` is converted to [`HttpError`]
     /// — which strips the URL — before it is stringified (#431), and the log line
-    /// for an error status names the status alone, never the body.
+    /// for an error status names the status alone, never the body. Waits up to
+    /// [`SMELT_BACKED_TIMEOUT`], on a client whose read timeout allows it.
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let qs = build_query_string(query);
@@ -273,7 +275,11 @@ impl TeReGen {
             url.push('?');
             url.push_str(&qs);
         }
-        let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
+        let client = self
+            .http
+            .patient()
+            .map_err(|e| TeReGenError::Fetch(e.to_string()))?;
+        let request = client.get(&url).timeout(SMELT_BACKED_TIMEOUT);
         let response = request.send().await.map_err(|e| {
             let e = HttpError::from(e);
             tracing::debug!("TeReGen GET {path} failed: {e}");
@@ -597,6 +603,11 @@ fn build_query_string(params: &[(&str, String)]) -> String {
         .join("&")
 }
 
+/// How long the SMELT-backed reads ([`TeReGen::checkers`], [`TeReGen::updates`])
+/// wait for an answer. TeReGen bounds its own SMELT calls at 10 s to connect plus
+/// 40 s of inactivity, so anything shorter than that cuts its 504 off.
+const SMELT_BACKED_TIMEOUT: Duration = PATIENT_READ_TIMEOUT;
+
 /// Default poll interval for [`TeReGen::wait_for_template`].
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(5);
 /// Default overall wait for [`TeReGen::wait_for_template`].
@@ -721,6 +732,41 @@ mod tests {
         logs.lines()
             .find(|l| l.contains(needle))
             .unwrap_or_else(|| panic!("no {needle:?} line in capture: {logs}"))
+    }
+
+    /// The budget must outlast TeReGen's own SMELT limits (10 s + 40 s), or its
+    /// 504 can never arrive.
+    #[test]
+    fn smelt_backed_timeout_outlasts_teregens_smelt_budget() {
+        assert!(SMELT_BACKED_TIMEOUT >= Duration::from_secs(55));
+    }
+
+    /// The SMELT-backed reads outwait the shared client's read timeout. A
+    /// per-request `timeout` cannot do it: reqwest's client-level read timeout
+    /// still fires first.
+    #[tokio::test]
+    async fn smelt_backed_reads_outwait_the_shared_read_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(checkers_path()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"checkers": []}))
+                    .set_delay(Duration::from_millis(600)),
+            )
+            .mount(&server)
+            .await;
+        let http = HttpClient::with_read_timeouts(
+            VerifyPolicy::Default(false),
+            Duration::from_millis(100),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let c = TeReGen::with_client(http, &server.uri());
+        // Premise: the shared client alone gives up on this server.
+        let slow = format!("{}{}", server.uri(), checkers_path());
+        assert!(c.http.inner().get(slow).send().await.is_err());
+        assert!(c.checkers(RRID).await.unwrap().is_empty());
     }
 
     // --- reads: best-effort JSON decode ---
