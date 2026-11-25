@@ -200,8 +200,9 @@ next actionable task before working on a subsystem.
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
   REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `switch`)
-  are deny-listed, as are `get`/`put`, which are re-served under the same names
-  as hand-written in-band transfer tools (#434) — a deny-listed command may be
+  are deny-listed, as are `config_set`, `teregen_login` and `get`/`put`, which
+  are re-served under the same names as hand-written in-band transfer tools
+  (#434) — a deny-listed command may be
   replaced by a richer hand-written tool (`edit` → the `report_*` tools is
   the same pattern). The deny-list ∩ registry is consistency-tested and drift is
   warned about at boot. Local process execution and terminal launching have no
@@ -305,6 +306,10 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   `set_test_sink` spinner sink) must be serialised with `#[serial(<name>)]`
   (`serial_test`), and tests must not assume per-binary isolation (e.g. no
   asserting on heap-address identity — a freed `Arc` address can be reused).
+  `mtui-core`, `mtui-config` (a single `tests/load.rs`) and `xtask` are the
+  exceptions: their integration tests are per-file, so add one there as a
+  top-level `tests/*.rs`. For `mtui-core` the snapshot prefix is the per-file
+  binary name (`args__…`, `help_listing__…`).
 - **Mock, don't hit the network/hosts:** HTTP via `wiremock`; SSH via a
   `MockConnection` implementing the `Connection` trait; OBS/IBS and every
   other HTTP datasource via `wiremock`.
@@ -354,9 +359,9 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
 - Logging: `tracing` (not `log`); levels configurable via CLI + `RUST_LOG`.
 - Async everywhere I/O happens (`tokio`); keep pure logic (`mtui-types`) sync and
   I/O-free.
-- **Never leak secrets to output or logs.** Secret config fields (currently just
-  `gitea_token`, classified by `is_secret_attr` in the `config` command) are
-  masked (`<set>`) by both `config show` and `config set` — never echo their
+- **Never leak secrets to output or logs.** Secret config fields (currently
+  `gitea_token` and `slack_token`, classified by `is_secret_attr` in the
+  `config` command) are masked (`<set>`) by both `config show` and `config set` — never echo their
   value to the display buffer (it reaches terminal scrollback and MCP output).
   Configured datasource URLs may embed credentials (`scheme://user:pass@host`);
   always run a URL through `sanitize_url` (`mtui_datasources::sanitize_url`,
