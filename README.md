@@ -2,22 +2,21 @@
 
 <img src="docs/assets/logo.svg" align="right" width="130" alt="mtui logo">
 
-An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
-**U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
-a request by RRID, install and test it on reference hosts over SSH in parallel,
-then approve or reject. It drives OBS/IBS and Gitea review workflows and
+mtui — the **M**aintenance **T**est **U**pdate **I**nstaller — is SUSE QE's tool
+for validating maintenance updates: load a request by RRID, install and test it
+on reference hosts over SSH in parallel, then approve or reject. It drives OBS/IBS and Gitea review workflows and
 openQA/QEM; reports load from and upload to TeReGen's v2 API.
 
-mtui is memory-safe, async-native, and distributed as static binaries, while
-preserving the data-format and workflow contracts that keep it interoperable with
-the SUSE maintenance ecosystem.
+mtui is a memory-safe, async-native Rust program distributed as static binaries.
+Its data-format and workflow contracts keep it interoperable with the SUSE
+maintenance ecosystem.
 
 ## Design goals
 
 - **Safety & robustness** — strong types, exhaustive error enums, no interpreter.
 - **Performance** — async I/O (`tokio`), true parallel host fan-out, fast startup.
 - **Distribution** — two static binaries (`mtui`, `mtui-mcp`), no runtime
-  interpreter or virtualenv; generated shell completions and man pages.
+  interpreter; generated shell completions and man pages.
 - **Maintainability** — a Cargo workspace with clean crate boundaries and one
   composition root.
 
@@ -30,11 +29,12 @@ the SUSE maintenance ecosystem.
 ### MCP security boundary
 
 Interactive/REPL-only commands (`shell`, `edit`, `help`, …) are permanently
-deny-listed: MCP synthesis and routing never expose them over stdio or HTTP,
-under every MCP profile, and the deny cannot be reversed with
-`[mcp] tools_allow`. Local process execution and terminal launching are not
-exposed at all — the `lrun` and `terms` commands were removed from mtui
-entirely.
+deny-listed, as are `config_set` and `teregen_login`: MCP synthesis and routing
+never expose them over stdio or HTTP, under every MCP profile, and the deny
+cannot be reversed with `[mcp] tools_allow`. `get` and `put` are deny-listed
+too; the MCP server re-serves them as in-band transfer tools. mtui has no
+command for local process execution or terminal launching, so neither is
+exposed.
 
 MCP profiles reduce the advertised tool surface; they are not authentication or
 authorization. HTTP session isolation is likewise not caller authentication.
@@ -57,18 +57,28 @@ log](docs/src/mcp.md#shipping-the-audit-log).
   until a verdict, and — once enabled — gates `approve` on an acknowledged
   review.
 - openQA / QEM Dashboard integration, incl. an `openqa_overview` (port of
-  `oqa-search`) with `--export` into the testreport.
+  `oqa-search`) with `--export` into the report document
+  (`testing.openqa.extra`), plus `openqa_jobs` and `openqa_summary`.
 - TeReGen-backed maintenance-queue browsing (`updates`) and template
   regeneration (`regenerate`).
 - Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
-  cached) and offline inventory search (`list_refhosts`).
+  cached) and inventory search (`list_refhosts`); `list_refhosts --free` also
+  probes each host's live operation-lock and pool-claim state.
 - Cooperative reference-host locking so concurrent testers can share a fleet: a
   PID-based operation lock (`/var/lock/mtui.lock`) serializing repository
   transactions, and an RRID-based pool claim (`/var/lock/mtui-pool.lock`)
   reserving a host for a template.
-- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`,
-  backed by TeReGen's v2 report document.
-- File transfer (`put`/`get`) over SFTP.
+- Test-report lifecycle: `load_template`, `unload`, `checkout`, `commit`, `edit`,
+  `export`, backed by TeReGen's v2 report document. `edit` with no argument
+  opens the full-screen report-document editor, where testers also file and
+  delete their own bugs.
+- Multi-template sessions: several requests can be loaded at once, commands
+  take `-T/--template` and `--all-templates`, `list_templates` shows what is
+  loaded and `switch` changes the active template.
+- SL Micro and SLES 16 hosts with a read-only root are driven through
+  `transactional-update`.
+- File transfer (`put`/`get`) over SFTP. The MCP server exposes in-band
+  `get`/`put` (including `put source=`) and the `report_*` document tools.
 
 ## Install
 
@@ -82,6 +92,14 @@ only serves MCP clients need not carry the REPL:
 
 The binaries are static, so the packages declare no libc floor and install on
 any x86_64 distro.
+
+Other channels:
+
+- Release tarballs `mtui-<ver>-x86_64-unknown-linux-musl.tar.gz` and
+  `mtui-<ver>-aarch64-apple-darwin.tar.gz`, each with a `.sha256`.
+- `cargo install --locked suse-mtui` installs both binaries.
+- The multi-arch container image `ghcr.io/opensuse/mtui`.
+
 **On openSUSE prefer the OBS package** — it covers every tier-1 arch, not just
 x86_64. See [docs/installation](docs/src/installation.md).
 
@@ -114,8 +132,8 @@ configured via the `[obs]` table (`api_url`, `request_timeout`).
 
 - [User guide](https://opensuse.github.io/mtui/) — installation, configuration, the
   generated command reference, the MCP server, and an FAQ.
-- [`docs/`](docs) — the guide's mdBook source. Build with `mdbook build docs`, or
-  read the Markdown under `docs/src/` directly.
+- [`docs/`](docs) — the guide's mdBook source. Build with `mdbook build docs` (needs
+  `mdbook-linkcheck2`), or read the Markdown under `docs/src/` directly.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
   the definition of done.
 
