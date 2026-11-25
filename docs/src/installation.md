@@ -1,10 +1,16 @@
 # Installation
 
 mtui ships as two static binaries — `mtui` (the REPL) and `mtui-mcp` (the MCP
-server) — with no runtime interpreter or virtualenv. On openSUSE install the
-package from the openSUSE Build Service (OBS); elsewhere take the
-[prebuilt x86_64 packages](#prebuilt-packages-github-releases) from the release
-page, or build from source.
+server) — with no runtime interpreter. The channels are:
+
+- the package from the openSUSE Build Service (OBS), on openSUSE;
+- the release tarballs for `x86_64-unknown-linux-musl` and
+  `aarch64-apple-darwin`, each with a `.sha256`, and the x86_64
+  [`.deb`/`.rpm` packages](#prebuilt-packages-github-releases), all on the
+  release page;
+- [crates.io](#build-from-source) (`cargo install --locked suse-mtui`);
+- the [container image](#container-image);
+- building from source.
 
 ## Requirements
 
@@ -21,8 +27,9 @@ cargo build --release
 
 The root `suse-mtui` facade package exposes a `cli` and an `mcp` feature, both
 **enabled by default**, so a plain `cargo build --release` produces both
-binaries. (`cargo install suse-mtui` still installs the `mtui` binary: the
-crates.io name differs because `mtui` belongs to an unrelated project.)
+binaries. `cargo install --locked suse-mtui` installs both `mtui` and
+`mtui-mcp` (the crates.io name differs because `mtui` belongs to an unrelated
+project).
 `--no-default-features --features cli` (or `mcp`) builds only the
 REPL (or only the MCP server), if you want to skip pulling in the MCP SDK
 (`rmcp`/`axum`) or the REPL's dependencies.
@@ -116,15 +123,20 @@ completions, and man pages into the standard system paths. It builds two package
 
 ## Container image
 
-Every push to `main` and every release tag also ships a multi-arch
+Every push to `main` and every release tag cut on a branch that carries
+`container.yml` (the `26.3.x` branch has no `container.yml` and no
+`Dockerfile`) also ships a multi-arch
 (`linux/amd64`, `linux/arm64`) image with both binaries, built by
 `.github/workflows/container.yml`:
 
-- `ghcr.io/opensuse/mtui:latest` (GA releases), `:<X.Y.Z>`, `:<X.Y>`,
-  `:edge` (main branch). Pre-release tags (`-rcN`) publish only their exact
-  version, never `latest`.
+- `ghcr.io/opensuse/mtui:latest` (GA releases), `:<X.Y.Z>`, `:<X.Y>` (GA
+  releases), `:edge` (main branch). Pre-release tags (`-rcN`) publish only
+  their exact version, never `latest` or `:<X.Y>`.
 - The same tags are mirrored to `registry.opensuse.org/opensuse/mtui` once the
   mirror credentials are wired up (see the workflow).
+- Images are signed with cosign (keyless) and carry a build-provenance
+  attestation; `gh attestation verify oci://ghcr.io/opensuse/mtui:<tag> --repo
+  openSUSE/mtui` checks the attestation.
 
 The image runs as a non-root user (`mtui`, uid 10001) on the openSUSE base with
 an SSH client for debugging; mtui itself speaks SSH through its own stack, never
@@ -232,7 +244,7 @@ the native review backend reads):
 zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
   obs-service-recompress obs-service-set_version obs-service-format_spec_file \
   cargo cargo-packaging
-osc -A ibs whoami        # confirms the `ibs` alias resolves
+osc -A ibs whois         # confirms the `ibs` alias resolves
 ```
 
 The crates.io publish uses **Trusted Publishing**: no registry token is stored.
@@ -326,11 +338,6 @@ The release flow above applies to every branch. Pushing the tag drives
 picks the predecessor by version order across the sibling branches — no
 ancestry needed.
 
-Note: tags `26.3.2`–`26.3.5` predate the automation and have no CHANGELOG
-section. A maintenance release cut from them still resolves its notes base
-by version order, not from the CHANGELOG file, so the missing sections do
-not shift the generated notes' start point.
-
 ### Release recipe (build.suse.de / IBS, project `QA:Maintenance:Test`)
 
 1. **Bump the lockstep version** in the root `Cargo.toml`: `[workspace.package]
@@ -343,7 +350,9 @@ not shift the generated notes' start point.
    This is step 2 of the [release flow](#release-flow).
 
 2. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
-   `git describe --tags` stamps the version into the binaries. The tag goes on
+   `set_version` can fill the spec `Version:`. The binaries' version is always
+   the crate version (`CARGO_PKG_VERSION`); in a git checkout `git describe`
+   adds only a provenance ref to `--version`. The tag goes on
    the release branch, never on `main` (step 5 of the release flow). The
    `_service` `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v`
    but does not require one, and mtui's tags carry none: `26.4.1` becomes
@@ -398,10 +407,14 @@ binaries, completions, man pages, `LICENSE`, `README`) into a
 `mtui-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh
-cargo build --release
-cargo xtask package --version 26.4.1 --target "$(rustc -vV | sed -n 's/host: //p')"
+TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
+cargo build --release --target "$TRIPLE"
+cargo xtask package --version 26.4.1 --target "$TRIPLE"
 # → dist/release/mtui-26.4.1-<target>.tar.gz (+ .sha256)
 ```
+
+`--bin-dir` (default `target/<TRIPLE>/release`) names where the built binaries
+are, and `--out-dir` (default `dist/release`) where the tarball goes.
 
 This tarball is a local convenience only; the OBS build uses the git-tag source
 from `tar_scm`, not this artifact.
