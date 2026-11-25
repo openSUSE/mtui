@@ -968,6 +968,43 @@ async fn make_testreport_slfo_regenerate_job_unfinished_keeps_scratch_dir_docume
     );
 }
 
+/// A regenerate request that fails outright (here 500) abandons the load
+/// without polling for a job that was never enqueued.
+#[tokio::test]
+async fn make_testreport_slfo_regenerate_request_failure_abandons_the_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut config, _gitea, _teregen, update) =
+        slfo_session(tmp.path().to_path_buf(), "freshsha", "stalesha").await;
+    let failing = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({"error": "x"})))
+        .expect(1)
+        .mount(&failing)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/reports/{SLFO_RRID}/status")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&failing)
+        .await;
+    config.teregen_api = failing.uri();
+    let prompter = scripted_prompter(&[("Regenerate", "y"), ("Force continue", "n")]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+        false,
+    )
+    .await;
+
+    assert!(!report.is_loaded());
+}
+
 /// A regenerate job that finishes but whose document reload fails (here 404)
 /// abandons the load.
 #[tokio::test]

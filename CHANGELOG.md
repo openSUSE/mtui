@@ -574,6 +574,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `regenerate` calls only a 409 a refusal. A 400 or a 5xx from TeReGen was
+  reported as `Regeneration refused: HTTP 500` with a hint to retry with
+  `--force` or `--ignore-inconsistent`, which cannot lift it. It now says
+  `Regeneration request for <id> failed: TeReGen answered 500 Internal Server
+  Error: <reason>`, with TeReGen's `error` text, or a validator's messages, and
+  no hint; it still returns success, as it does when TeReGen is unreachable.
+  TeReGen's text is stripped of terminal control sequences. The
+  `--discard-authored` help now says TeReGen itself also refuses when testers
+  filed issues (`new_issues`), besides a verdict or testers. **MCP schema
+  note:** only the `regenerate` `discard_authored` description changes.
 - `report_files` keeps same-named files in different server directories
   apart. It matched server files to local ones by name alone, so a log present
   in both `uploads` and `install_logs` was listed once, a local

@@ -13,7 +13,7 @@
 //! unreachable or failing TeReGen, and name the status and reason TeReGen
 //! gave; and the write
 //! [`regenerate`](TeReGen::regenerate) returns `None` only when TeReGen is
-//! *unreachable*, `{"error": …}` when the server *refuses*.
+//! *unreachable*, and tells a refusal (409) from a failed request.
 //!
 //! The base URL comes from the `[teregen] api` option (default
 //! `https://qam.suse.de/api/v1`), but [`TeReGen::new`] takes it explicitly
@@ -50,6 +50,33 @@ pub use document::{
 };
 pub use tokens::{CachedToken, TokenStore, describe_age};
 
+/// What TeReGen answered to `POST /reports/{id}/regenerate`.
+///
+/// Anything but [`Enqueued`](Self::Enqueued) means no job was started. Only a
+/// 409 is a *refusal* of this request; any other error status is a failed
+/// request, which no flag can lift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RegenRequest {
+    /// `2xx`: the job was enqueued. `job` is the id TeReGen returned, if any.
+    Enqueued {
+        /// The enqueued job id.
+        job: Option<Value>,
+    },
+    /// `409`: TeReGen refuses to regenerate, with its own reason (its `error`
+    /// text, else `HTTP 409`).
+    Refused(String),
+    /// Any other non-2xx status: the request failed. `error` is TeReGen's
+    /// `error` text, else the messages of a validator's `errors` array; either
+    /// is external text, capped but not sanitized.
+    Failed {
+        /// The HTTP status code.
+        status: u16,
+        /// TeReGen's explanation, when it gave one.
+        error: Option<String>,
+    },
+}
+
 /// The result of a regenerate-and-wait attempt (see
 /// [`TeReGen::regenerate_and_wait`]).
 ///
@@ -64,6 +91,9 @@ pub struct RegenOutcome {
     pub unreachable: bool,
     /// The server refused the request (message from its `{"error": …}` body).
     pub error: Option<String>,
+    /// The request failed with an error status other than a refusal: TeReGen's
+    /// status and reason, rendered as one line. No flag can lift it.
+    pub failed: Option<String>,
     /// The final Minion state when the job ran but did not finish.
     pub state: Option<String>,
     /// The Minion error message, when present.
@@ -400,16 +430,17 @@ impl TeReGen {
     /// `ignore_inconsistent` regenerates despite inconsistent metadata (e.g. an
     /// arch list that disagrees with the build).
     ///
-    /// Returns `{"id", "job"}` on success (HTTP 202) or `{"error": …}` when the
-    /// server refuses (HTTP 409: the template already exists or was hand-edited),
-    /// and `None` only when TeReGen is unreachable — so callers can tell
-    /// "refused" apart from "couldn't ask".
+    /// Returns [`RegenRequest::Enqueued`] on success (HTTP 202),
+    /// [`RegenRequest::Refused`] when the server refuses (HTTP 409: the template
+    /// already exists or was hand-edited), [`RegenRequest::Failed`] for any other
+    /// error status, and `None` only when TeReGen is unreachable — so callers can
+    /// tell "refused" and "failed" apart from "couldn't ask".
     pub async fn regenerate(
         &self,
         rrid: &str,
         force_overwrite: bool,
         ignore_inconsistent: bool,
-    ) -> Option<Value> {
+    ) -> Option<RegenRequest> {
         let url = format!("{}/reports/{rrid}/regenerate", self.base);
         let payload = json!({
             "force_overwrite": force_overwrite,
@@ -439,23 +470,20 @@ impl TeReGen {
             .await
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        if let Some(Value::Object(mut map)) = body {
-            // Callers detect a refusal by its `error` key alone.
-            if !status.is_success() && !map.contains_key("error") {
-                map.insert(
-                    "error".to_owned(),
-                    Value::from(format!("HTTP {}", status.as_u16())),
-                );
-            }
-            return Some(Value::Object(map));
+        if status.is_success() {
+            let job = body.as_ref().and_then(|b| b.get("job")).cloned();
+            return Some(RegenRequest::Enqueued { job });
         }
-        // A 202 with no/!JSON body still means "enqueued"; anything else is an
-        // error the caller should surface.
-        if status.as_u16() == 202 {
-            Some(json!({}))
-        } else {
-            Some(json!({ "error": format!("HTTP {}", status.as_u16()) }))
+        let error = body.as_ref().and_then(failure_text);
+        if status == reqwest::StatusCode::CONFLICT {
+            return Some(RegenRequest::Refused(
+                error.unwrap_or_else(|| "HTTP 409".to_owned()),
+            ));
         }
+        Some(RegenRequest::Failed {
+            status: status.as_u16(),
+            error,
+        })
     }
 
     /// Poll [`status`](Self::status) until the latest generate job finishes or
@@ -518,25 +546,33 @@ impl TeReGen {
     where
         F: FnMut() -> bool,
     {
-        let result = self
+        let request = self
             .regenerate(rrid, force_overwrite, ignore_inconsistent)
             .await;
-        let Some(result) = result else {
-            return RegenOutcome {
-                ok: false,
-                unreachable: true,
-                ..Default::default()
-            };
+        let job = match request {
+            None => {
+                return RegenOutcome {
+                    ok: false,
+                    unreachable: true,
+                    ..Default::default()
+                };
+            }
+            Some(RegenRequest::Refused(error)) => {
+                return RegenOutcome {
+                    ok: false,
+                    error: Some(error),
+                    ..Default::default()
+                };
+            }
+            Some(RegenRequest::Failed { status, error }) => {
+                return RegenOutcome {
+                    ok: false,
+                    failed: Some(TeReGenError::Status { status, error }.to_string()),
+                    ..Default::default()
+                };
+            }
+            Some(RegenRequest::Enqueued { job }) => job,
         };
-        if let Some(error) = result.get("error").and_then(Value::as_str) {
-            return RegenOutcome {
-                ok: false,
-                error: Some(error.to_string()),
-                ..Default::default()
-            };
-        }
-
-        let job = result.get("job").cloned();
         let status = self
             .wait_for_template(rrid, DEFAULT_INTERVAL, DEFAULT_TIMEOUT, should_stop)
             .await;
@@ -572,6 +608,26 @@ impl TeReGen {
 fn error_text(bytes: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(bytes).ok()?;
     let text = value.get("error")?.as_str().filter(|t| !t.is_empty())?;
+    Some(text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned())
+}
+
+/// TeReGen's explanation of a failed request, from a JSON body: its string
+/// `error`, else the `message`s of a validator's `errors` array joined with
+/// `; `. Cut to [`MAX_DETAIL_LEN`] on a char boundary.
+fn failure_text(body: &Value) -> Option<String> {
+    let text = match body.get("error").and_then(Value::as_str) {
+        Some(error) => error.to_owned(),
+        None => body
+            .get("errors")?
+            .as_array()?
+            .iter()
+            .filter_map(|e| e.get("message").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("; "),
+    };
+    if text.is_empty() {
+        return None;
+    }
     Some(text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned())
 }
 
@@ -1420,8 +1476,19 @@ mod tests {
 
     // --- regenerate: unreachable vs refused ---
 
+    async fn regenerate_answer(response: ResponseTemplate) -> Option<RegenRequest> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{RRID}/regenerate")))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).regenerate(RRID, false, false).await
+    }
+
     #[tokio::test]
-    async fn regenerate_returns_json_body() {
+    async fn regenerate_sends_its_flags_and_reads_the_job() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(format!("/reports/{RRID}/regenerate")))
@@ -1429,72 +1496,94 @@ mod tests {
                 json!({"force_overwrite": true, "ignore_inconsistent": false}),
             ))
             .respond_with(ResponseTemplate::new(202).set_body_json(json!({"id": RRID, "job": 42})))
-            .mount(&server)
-            .await;
-        let result = client(&server).regenerate(RRID, true, false).await;
-        assert_eq!(result, Some(json!({"id": RRID, "job": 42})));
-    }
-
-    #[tokio::test]
-    async fn regenerate_surfaces_refusal_body() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(format!("/reports/{RRID}/regenerate")))
-            .respond_with(
-                ResponseTemplate::new(409)
-                    .set_body_json(json!({"error": "template was hand-edited"})),
-            )
+            .expect(1)
             .mount(&server)
             .await;
         assert_eq!(
-            client(&server).regenerate(RRID, false, false).await,
-            Some(json!({"error": "template was hand-edited"}))
+            client(&server).regenerate(RRID, true, false).await,
+            Some(RegenRequest::Enqueued {
+                job: Some(json!(42))
+            })
         );
     }
 
     #[tokio::test]
     async fn regenerate_accepts_empty_202() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(format!("/reports/{RRID}/regenerate")))
-            .respond_with(ResponseTemplate::new(202).set_body_string(""))
-            .mount(&server)
-            .await;
         assert_eq!(
-            client(&server).regenerate(RRID, false, false).await,
-            Some(json!({}))
+            regenerate_answer(ResponseTemplate::new(202).set_body_string("")).await,
+            Some(RegenRequest::Enqueued { job: None })
         );
     }
 
+    /// Only a 409 is a refusal, which a flag may lift.
     #[tokio::test]
-    async fn regenerate_non_json_error_maps_to_http_status() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(format!("/reports/{RRID}/regenerate")))
-            .respond_with(ResponseTemplate::new(400).set_body_string("oops"))
-            .mount(&server)
-            .await;
+    async fn regenerate_409_is_a_refusal_with_teregens_reason() {
         assert_eq!(
-            client(&server).regenerate(RRID, false, false).await,
-            Some(json!({"error": "HTTP 400"}))
-        );
-    }
-
-    #[tokio::test]
-    async fn regenerate_error_status_with_another_json_shape_is_still_an_error() {
-        // Without an `error` key a refusal would read as "enqueued".
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(format!("/reports/{RRID}/regenerate")))
-            .respond_with(
-                ResponseTemplate::new(400)
-                    .set_body_json(json!({"errors": [{"message": "bad"}], "status": 400})),
+            regenerate_answer(
+                ResponseTemplate::new(409)
+                    .set_body_json(json!({"error": "template was hand-edited"}))
             )
+            .await,
+            Some(RegenRequest::Refused("template was hand-edited".to_owned()))
+        );
+        assert_eq!(
+            regenerate_answer(ResponseTemplate::new(409).set_body_string("<html>")).await,
+            Some(RegenRequest::Refused("HTTP 409".to_owned()))
+        );
+    }
+
+    /// Any other error status is a failed request, never a refusal: no flag
+    /// lifts a 500.
+    #[tokio::test]
+    async fn regenerate_error_statuses_are_failures() {
+        assert_eq!(
+            regenerate_answer(
+                ResponseTemplate::new(500).set_body_json(json!({"error": "database is down"}))
+            )
+            .await,
+            Some(RegenRequest::Failed {
+                status: 500,
+                error: Some("database is down".to_owned())
+            })
+        );
+        // A validator's body has no `error`; its messages are the reason.
+        assert_eq!(
+            regenerate_answer(ResponseTemplate::new(400).set_body_json(json!({
+                "errors": [{"message": "bad flag", "path": "/x"}, {"message": "worse"}],
+                "status": 400
+            })))
+            .await,
+            Some(RegenRequest::Failed {
+                status: 400,
+                error: Some("bad flag; worse".to_owned())
+            })
+        );
+        assert_eq!(
+            regenerate_answer(ResponseTemplate::new(502).set_body_string("oops")).await,
+            Some(RegenRequest::Failed {
+                status: 502,
+                error: None
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn regenerate_and_wait_names_a_failed_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{RRID}/regenerate")))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "boom"})))
             .mount(&server)
             .await;
+        let outcome = client(&server)
+            .regenerate_and_wait(RRID, false, false, || false)
+            .await;
         assert_eq!(
-            client(&server).regenerate(RRID, false, false).await,
-            Some(json!({"errors": [{"message": "bad"}], "status": 400, "error": "HTTP 400"}))
+            outcome,
+            RegenOutcome {
+                failed: Some("TeReGen answered 500 Internal Server Error: boom".to_owned()),
+                ..Default::default()
+            }
         );
     }
 
@@ -1502,7 +1591,7 @@ mod tests {
     async fn regenerate_none_when_unreachable() {
         // A closed port is the only way to reach the POST `send` arm; every
         // other `regenerate` test drives a status, not a transport failure.
-        let mut out = Some(json!({}));
+        let mut out = Some(RegenRequest::Refused(String::new()));
         let logs = capture_logs(|| async {
             out = unreachable_client().regenerate(RRID, false, false).await;
         })

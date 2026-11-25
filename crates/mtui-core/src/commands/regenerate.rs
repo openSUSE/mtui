@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::teregen::{DocumentFetch, TeregenV2, TeregenV2Error};
+use mtui_datasources::TeReGenError;
+use mtui_datasources::teregen::{DocumentFetch, RegenRequest, TeregenV2, TeregenV2Error};
 use mtui_testreport::UpdateKind;
 use mtui_types::report_document::ReportDocument;
 use mtui_types::{UpdateID, Workflow};
@@ -11,6 +12,7 @@ use tracing::info;
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
 use crate::commands::support::{document_edits_guard, require_update, template_completion};
+use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 use crate::template_scope::canonical_template_name;
@@ -101,7 +103,8 @@ impl Command for Regenerate {
                      carries tester content (verdict, testers, issue answers, install/regression \
                      results), loaded or on the server, or holds edits that were never \
                      committed; without it the REPL asks before discarding such content and \
-                     MCP refuses; teregen itself still refuses on a verdict or testers",
+                     MCP refuses; teregen itself still refuses on a verdict, testers or \
+                     tester-filed issues (new_issues)",
                 ),
         )
         .arg(
@@ -191,10 +194,11 @@ impl Command for Regenerate {
             return Ok(());
         }
         if let Some(error) = &outcome.error {
-            session
-                .display
-                .println(&format!("Regeneration refused: {error}"));
-            println_retry_hint(session, force, ignore_inconsistent);
+            print_refusal(session, error, force, ignore_inconsistent);
+            return Ok(());
+        }
+        if let Some(failed) = &outcome.failed {
+            print_failure(session, &rrid_str, failed);
             return Ok(());
         }
         if !outcome.ok {
@@ -291,7 +295,7 @@ async fn tester_content_gate(
     Err(CommandError::Other(format!(
         "{rrid}'s {place} already carries tester-authored content (a verdict, testers, issue \
          answers, or install/regression results); {advice} --discard-authored to regenerate \
-         anyway — teregen itself still refuses on a verdict or testers"
+         anyway — teregen itself still refuses on a verdict, testers or tester-filed issues"
     )))
 }
 
@@ -358,33 +362,57 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
 fn report_enqueue(
     session: &mut Session,
     rrid: &str,
-    result: Option<&serde_json::Value>,
+    result: Option<&RegenRequest>,
     force: bool,
     ignore_inconsistent: bool,
 ) {
-    let Some(result) = result else {
-        session.display.println(&format!(
-            "Regeneration request for {rrid} failed (TeReGen unreachable)"
-        ));
-        return;
+    let job = match result {
+        None => {
+            session.display.println(&format!(
+                "Regeneration request for {rrid} failed (TeReGen unreachable)"
+            ));
+            return;
+        }
+        Some(RegenRequest::Refused(error)) => {
+            print_refusal(session, error, force, ignore_inconsistent);
+            return;
+        }
+        Some(RegenRequest::Failed { status, error }) => {
+            let failed = TeReGenError::Status {
+                status: *status,
+                error: error.clone(),
+            };
+            print_failure(session, rrid, &failed.to_string());
+            return;
+        }
+        Some(RegenRequest::Enqueued { job }) => job
+            .as_ref()
+            .map_or_else(|| "?".to_owned(), std::string::ToString::to_string),
+        Some(_) => "?".to_owned(),
     };
-    if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
-        session
-            .display
-            .println(&format!("Regeneration refused: {error}"));
-        println_retry_hint(session, force, ignore_inconsistent);
-        return;
-    }
-    let job = result
-        .get("job")
-        .map(std::string::ToString::to_string)
-        .unwrap_or_else(|| "?".to_owned());
     session
         .display
         .println(&format!("Regeneration job {job} enqueued for {rrid}"));
     session
         .display
         .println("Not waiting (--no-wait); reload the template once it is built.");
+}
+
+/// A 409: TeReGen's own refusal, which a flag may lift.
+fn print_refusal(session: &mut Session, error: &str, force: bool, ignore_inconsistent: bool) {
+    session.display.println(&format!(
+        "Regeneration refused: {}",
+        sanitize_external(error, Some(500))
+    ));
+    println_retry_hint(session, force, ignore_inconsistent);
+}
+
+/// Any other error status: the request failed, and no flag lifts that.
+fn print_failure(session: &mut Session, rrid: &str, failed: &str) {
+    session.display.println(&format!(
+        "Regeneration request for {rrid} failed: {}",
+        sanitize_external(failed, Some(500))
+    ));
 }
 
 /// Suggests the flags that might lift a refusal, skipping ones already set.
@@ -484,6 +512,86 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("--force"), "{out}");
+    }
+
+    /// The output of `regenerate` against a server answering `response` to the
+    /// POST, with `flags` (the waiting path when none says `--no-wait`).
+    async fn regenerate_output(response: ResponseTemplate, flags: &[&str]) -> String {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/reports/SUSE:Maintenance:1:1/regenerate"))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config = config_for(&server);
+        Regenerate
+            .call(&mut session, &matches(&Regenerate, flags))
+            .await
+            .unwrap();
+        buf.contents()
+    }
+
+    /// A 409 is TeReGen refusing: say so and offer the flags that may lift it,
+    /// whether or not the command waits.
+    #[tokio::test]
+    async fn a_409_is_a_refusal_with_a_retry_hint_on_both_paths() {
+        for flags in [&["--no-wait"][..], &[]] {
+            let out = regenerate_output(
+                ResponseTemplate::new(409).set_body_json(serde_json::json!({"error": "edited"})),
+                flags,
+            )
+            .await;
+            assert!(
+                out.contains("Regeneration refused: edited"),
+                "{flags:?}: {out}"
+            );
+            assert!(out.contains("Retry with --force"), "{flags:?}: {out}");
+        }
+    }
+
+    /// A 500 or a validator's 400 is a failed request: no flag lifts it, so no
+    /// retry hint, and TeReGen's reason (sanitized) is named.
+    #[tokio::test]
+    async fn an_error_status_is_a_failed_request_without_a_retry_hint() {
+        for flags in [&["--no-wait"][..], &[]] {
+            let out = regenerate_output(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({"error": "db \u{1b}[31mdown"})),
+                flags,
+            )
+            .await;
+            assert!(
+                out.contains(
+                    "Regeneration request for SUSE:Maintenance:1:1 failed: TeReGen answered \
+                     500 Internal Server Error: db down"
+                ),
+                "{flags:?}: {out}"
+            );
+            assert!(!out.contains('\u{1b}'), "{flags:?}: {out:?}");
+            assert!(!out.contains("refused"), "{flags:?}: {out}");
+            assert!(!out.contains("--force"), "{flags:?}: {out}");
+
+            let out = regenerate_output(
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "errors": [{"message": "Missing property.", "path": "/x"}], "status": 400
+                })),
+                flags,
+            )
+            .await;
+            assert!(
+                out.contains("400 Bad Request: Missing property."),
+                "{flags:?}: {out}"
+            );
+            assert!(!out.contains("--force"), "{flags:?}: {out}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_202_without_a_body_is_enqueued() {
+        let out = regenerate_output(ResponseTemplate::new(202), &["--no-wait"]).await;
+        assert!(out.contains("Regeneration job ? enqueued"), "{out}");
     }
 
     /// Mounts the success mocks (regenerate → 202, status → finished) on `server`.

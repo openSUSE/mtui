@@ -356,6 +356,10 @@ async fn regenerate_via_teregen(
         error!("Regeneration refused: {err}");
         return None;
     }
+    if let Some(failed) = &outcome.failed {
+        error!("Regeneration request failed: {failed}");
+        return None;
+    }
     info!("Regeneration job {:?} enqueued for {}", outcome.job, rrid);
 
     if !outcome.ok {
