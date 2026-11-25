@@ -805,6 +805,15 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
     failures
 }
 
+/// Whether `stderr` holds only transactional-update's notice for a discarded snapshot.
+fn is_only_discard_notice(stderr: &str) -> bool {
+    stderr.lines().all(|line| {
+        line.strip_prefix("Removing snapshot #")
+            .and_then(|rest| rest.strip_suffix("..."))
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// Reads each `hosts` member's [`Target::last_repo`](mtui_hosts::Target::last_repo) verdict after a
 /// `RepoOp::Add` fan-out, splitting it into hosts that must be excluded from
 /// the patch (`Add`/`Remove`/`UnknownCommand` — the repo genuinely did not
@@ -1611,14 +1620,22 @@ async fn prepare_body(
     // An out-of-scope host is dropped for a third: it was in no fan-out of this
     // prepare at all, so its `last*` is some earlier phase's — an rpm warning
     // from `package_check` is enough to fail a prepare it was never part of.
+    //
+    // A transactional host is dropped for a fourth when its clean exit wrote
+    // only the discard notice to stderr, which 4.8 prints on a no-op prepare.
     let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
         .into_iter()
         .filter(|e| {
             e.host.as_ref().is_none_or(|h| in_scope(h))
-                && !e
-                    .host
-                    .as_ref()
-                    .is_some_and(|h| check_failed.contains(h) || accounted.contains(h))
+                && !e.host.as_ref().is_some_and(|h| {
+                    check_failed.contains(h)
+                        || accounted.contains(h)
+                        || targets.get(h).is_some_and(|t| {
+                            t.transactional()
+                                && t.lastexit() == Some(0)
+                                && is_only_discard_notice(t.lasterr())
+                        })
+                })
         })
         .collect();
     failures.extend(accounted_failures);
@@ -12734,6 +12751,316 @@ mod tests {
         // the check named, so the specific verdict survives verbatim.
         assert_eq!(err.reason, "update stack locked", "err: {err}");
         assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+    }
+
+    /// The prepare command `NoopRepo` dispatches for `pkg-a` on a transactional host.
+    const TU_PREPARE_PKG_A: &str = "transactional-update --continue -n pkg in -l  pkg-a";
+
+    /// stdout of a live transactional-update 4.8.4 prepare that found nothing to install.
+    const TU48_NOOP_STDOUT: &str = "Checking for newer version.\n\
+        transactional-update 4.8.4 started\n\
+        Options: --continue -n pkg in -l pkg-a\n\
+        Separate /var detected.\n\
+        2026-11-25 15:07:12 tukit 4.8.4 started\n\
+        2026-11-25 15:07:12 Options: -c164 open\n\
+        2026-11-25 15:07:12 Using snapshot 164 as base for new snapshot 165.\n\
+        2026-11-25 15:07:12 /var/lib/overlay/164/etc\n\
+        ID: 165\n\
+        2026-11-25 15:07:14 Transaction completed.\n\
+        Calling zypper install\n\
+        zypper: nothing to update\n\
+        2026-11-25 15:07:19 tukit 4.8.4 started\n\
+        2026-11-25 15:07:19 Options: abort 165\n\
+        2026-11-25 15:07:21 Discarding snapshot 165.\n\
+        2026-11-25 15:07:21 Transaction completed.\n\
+        transactional-update finished\n";
+
+    /// What 4.8.x writes to stderr when it discards a snapshot, on success and failure alike.
+    const TU48_DISCARD_STDERR: &str = "Removing snapshot #165...\n";
+
+    /// A transactional host whose `pkg-a` prepare answers `prepare`, every other command `0`.
+    fn transactional_prepare_target(
+        hostname: &str,
+        (product, version): (&str, &str),
+        prepare: CommandLog,
+    ) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(TU_PREPARE_PKG_A, prepare)
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new(product, version, "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_accepts_a_transactional_no_op_that_discarded_its_snapshot() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_prepare_target(
+                "h1",
+                product,
+                CommandLog::new(
+                    TU_PREPARE_PKG_A,
+                    TU48_NOOP_STDOUT,
+                    TU48_DISCARD_STDERR,
+                    0,
+                    0,
+                ),
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let res = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await;
+
+            assert!(
+                handle.commands().iter().any(|c| c == TU_PREPARE_PKG_A),
+                "{product:?}: the prepare must have dispatched: {:?}",
+                handle.commands()
+            );
+            assert!(
+                res.is_ok(),
+                "{product:?}: exit 0 with only the discard notice on stderr: {res:?}"
+            );
+            // The reboot gate never read stderr, so the no-op still reboots, as before.
+            assert!(rebooted(&handle), "{product:?}: the reboot is kept");
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_update_reports_no_degradation_for_a_transactional_no_op_prepare() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_prepare_target(
+                "h1",
+                product,
+                CommandLog::new(
+                    TU_PREPARE_PKG_A,
+                    TU48_NOOP_STDOUT,
+                    TU48_DISCARD_STDERR,
+                    0,
+                    0,
+                ),
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+            let report = transactional_report();
+            let packages = report.get_package_list();
+            let mut diagnostics = Vec::new();
+
+            let res = perform_update(
+                &mut group,
+                &report,
+                &packages,
+                "42",
+                "7",
+                None,
+                false,
+                false,
+                &mut diagnostics,
+            )
+            .await;
+
+            assert!(res.is_ok(), "{product:?}: {res:?}");
+            assert!(
+                handle.commands().iter().any(|c| c == TU_PREPARE_PKG_A),
+                "{product:?}: the prepare step must have run: {:?}",
+                handle.commands()
+            );
+            assert!(
+                diagnostics.is_empty(),
+                "{product:?}: a no-op prepare is not a degradation: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_still_fails_a_transactional_install_that_exited_one() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_prepare_target(
+                "h1",
+                product,
+                CommandLog::new(
+                    TU_PREPARE_PKG_A,
+                    "Calling zypper install\n",
+                    "ERROR: zypper install on /.snapshots/165/snapshot failed with exit code 104!\n\
+                     Removing snapshot #165...\n",
+                    1,
+                    0,
+                ),
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("a failed install must not report success");
+
+            assert_eq!(err.reason, "prepare command failed", "{product:?}");
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product:?}");
+            assert!(
+                !rebooted(&handle),
+                "{product:?}: no reboot into a failed prepare"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_still_fails_a_transactional_marker_on_a_clean_exit() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_prepare_target(
+                "h1",
+                product,
+                CommandLog::new(
+                    TU_PREPARE_PKG_A,
+                    TU48_NOOP_STDOUT,
+                    "System management is locked by the application with pid 4242 (zypper).\n\
+                     Removing snapshot #165...\n",
+                    0,
+                    0,
+                ),
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("a locked update stack must not report success");
+
+            assert_eq!(err.reason, "update stack locked", "{product:?}");
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product:?}");
+            assert!(
+                !rebooted(&handle),
+                "{product:?}: no reboot into a failed prepare"
+            );
+        }
+    }
+
+    #[test]
+    fn is_only_discard_notice_accepts_nothing_but_whole_notice_lines() {
+        assert!(is_only_discard_notice(""));
+        assert!(is_only_discard_notice("Removing snapshot #165...\n"));
+        assert!(!is_only_discard_notice(
+            "Removing snapshot #165...\nERROR: something else\n"
+        ));
+        assert!(!is_only_discard_notice("ERROR: something else\n"));
+        assert!(!is_only_discard_notice(
+            "Removing snapshot #165... failed\n"
+        ));
+        assert!(!is_only_discard_notice("Removing snapshot #...\n"));
+        assert!(!is_only_discard_notice("Removing snapshot #16x...\n"));
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_still_fails_a_transactional_clean_exit_with_other_stderr() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, handle) = transactional_prepare_target(
+                "h1",
+                product,
+                CommandLog::new(
+                    TU_PREPARE_PKG_A,
+                    TU48_NOOP_STDOUT,
+                    "Removing snapshot #165...\nERROR: something else\n",
+                    0,
+                    0,
+                ),
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("stderr beyond the discard notice must not be a silent success");
+
+            assert!(
+                handle.commands().iter().any(|c| c == TU_PREPARE_PKG_A),
+                "{product:?}: the prepare must have dispatched: {:?}",
+                handle.commands()
+            );
+            assert_eq!(err.reason, "prepare command failed", "{product:?}");
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_keeps_failing_a_read_write_prepare_that_wrote_to_stderr() {
+        for product in [("SLES", "15.5"), ("SLES", "16.1")] {
+            let conn = MockConnection::new("h1").with_default(CommandLog::new(
+                "",
+                "",
+                TU48_DISCARD_STDERR,
+                0,
+                0,
+            ));
+            let handle = conn.clone();
+            let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new(product.0, product.1, "x86_64"),
+                    BTreeSet::new(),
+                    false,
+                ),
+                false,
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("on a zypper host stderr is still a prepare failure");
+
+            assert!(
+                handle
+                    .commands()
+                    .iter()
+                    .any(|c| c == "zypper -n in -y -l  pkg-a"),
+                "{product:?}: the zypper prepare must have dispatched: {:?}",
+                handle.commands()
+            );
+            assert_eq!(err.reason, "prepare command failed", "{product:?}");
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product:?}");
+        }
     }
 
     #[tokio::test]

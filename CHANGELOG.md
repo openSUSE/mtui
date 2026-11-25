@@ -605,6 +605,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- On SL Micro 6.0 and 6.1, a `prepare` that has nothing to install is no
+  longer reported as `prepare command failed`, and `update` no longer adds
+  `prepare before update reported a host failure` to its degradations for it.
+  Their transactional-update 4.8 writes `Removing snapshot #N...` to stderr
+  when it discards the unused snapshot, and any stderr counted as a failure.
+  On a host with a read-only root that notice alone is no longer a failure;
+  any other stderr still is, as is a non-zero exit. SLES 16 was not affected:
+  its transactional-update writes the notice to stdout (#856).
 - `downgrade`, and `update`'s automatic rollback, now append their `downgrade`
   row to `/var/log/mtui.log` only on hosts a downgrade command was sent to. A
   host whose package version probe failed, one for which it found no version
