@@ -1,6 +1,6 @@
 [book]
 title = "mtui"
-description = "An improved, idiomatic Rust successor to openSUSE/mtui."
+description = "Maintenance Test Update Installer for SUSE QE update validation."
 authors = ["The mtui contributors"]
 language = "en"
 src = "src"
