@@ -10,6 +10,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `list_refhosts --free` now shows who holds a locked host. Each row names
+  the operation lock's holder, start time and comment, and the pool claim's
+  RRID, holder and start time, in `list_locks`'s `since <time> by <user> :
+  <comment>` shape. `--json` adds `lock_holder` (`user`, `since`, `comment`)
+  and `pool_holder` (`user`, `since`), each `null` when nothing is held or the
+  lock file is unparseable; `lock` and `pool` keep their values. Before, a
+  locked host showed only `locked` until it was attached and listed with
+  `list_locks` (#851).
 - MCP `put` takes `hosts`, a list of connected hostnames, and writes only to
   those, as `get` already did. An unknown or disabled name refuses the call
   before anything is written, and the reply lists only the hosts written.

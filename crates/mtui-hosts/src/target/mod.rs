@@ -781,22 +781,29 @@ impl Target {
     /// degrades to its default rather than aborting the whole `list_locks`
     /// fan-out.
     pub async fn lock_status(&mut self, pool: bool) -> LockRow {
+        self.try_lock_status(pool).await.unwrap_or_default()
+    }
+
+    /// [`lock_status`](Self::lock_status) that propagates the read error.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any transport error raised while reading the remote lock file.
+    pub async fn try_lock_status(&mut self, pool: bool) -> Result<LockRow> {
         if pool {
             let Some(lock) = self.pool_lock.as_mut() else {
-                return LockRow::default();
+                return Ok(LockRow::default());
             };
             // Single remote read; every field is derived from the snapshot.
-            let Ok(snap) = lock.snapshot().await else {
-                return LockRow::default();
-            };
+            let snap = lock.snapshot().await?;
             if snap.invalid {
-                return LockRow::invalid();
+                return Ok(LockRow::invalid());
             }
             if snap.lock.user.is_empty() {
-                return LockRow::default();
+                return Ok(LockRow::default());
             }
             let time = snap.lock.display_time();
-            LockRow {
+            Ok(LockRow {
                 is_locked: true,
                 is_mine: snap.is_mine,
                 locked_by: snap.lock.user,
@@ -807,23 +814,21 @@ impl Target {
                 comment: snap.rrid,
                 sibling: None,
                 invalid: false,
-            }
+            })
         } else {
             let Some(lock) = self.lock.as_mut() else {
-                return LockRow::default();
+                return Ok(LockRow::default());
             };
             // Single remote read; every field is derived from the snapshot.
-            let Ok(snap) = lock.snapshot().await else {
-                return LockRow::default();
-            };
+            let snap = lock.snapshot().await?;
             if snap.invalid {
-                return LockRow::invalid();
+                return Ok(LockRow::invalid());
             }
             if snap.lock.user.is_empty() {
-                return LockRow::default();
+                return Ok(LockRow::default());
             }
             let time = snap.lock.display_time();
-            LockRow {
+            Ok(LockRow {
                 is_locked: true,
                 is_mine: snap.is_mine,
                 locked_by: snap.lock.user,
@@ -831,7 +836,7 @@ impl Target {
                 comment: snap.lock.comment,
                 sibling: snap.sibling,
                 invalid: false,
-            }
+            })
         }
     }
 

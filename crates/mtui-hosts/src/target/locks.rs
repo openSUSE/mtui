@@ -129,7 +129,7 @@ pub struct RemoteLock {
 /// that I/O once and hands these already-resolved (sync) values downstream so
 /// the display stays sync and snapshot-testable. Carries the fields the
 /// lock listing reads off the lock object.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct LockRow {
     /// Whether the host is currently locked/claimed.
     pub is_locked: bool,

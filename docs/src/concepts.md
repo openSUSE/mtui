@@ -232,10 +232,14 @@ session); see [Configuration](configuration.md) for `reap_stale`, `stale_age`,
 [`list_refhosts --free`](cli.md#list_refhosts): its connect is a read-only
 survey, so it never reaps. Its `lock` column reports one of `free`, `locked`,
 `pool` (free but pool-claimed), `locked+pool`, `unreachable` (the host could
-not be probed), or `unknown` (the probe never completed for it). `--json`
-carries the raw probe state in `lock` (`free`, `locked`, `unreachable` or
-`unknown`) and adds a `pool` key: the claiming RRID, or `null` when unclaimed.
-`pool` and `locked+pool` are table-only labels.
+not be probed), or `unknown` (the probe never completed for it), followed by
+who holds it: `since <time> by <user> : <comment>` for the operation lock and
+`pool <RRID> since <time> by <user>` for the pool claim. `--json` carries the
+raw probe state in `lock` (`free`, `locked`, `unreachable` or `unknown`) and
+adds a `pool` key (the claiming RRID, or `null` when unclaimed),
+`lock_holder` (`user`, `since`, `comment`) and `pool_holder` (`user`,
+`since`); each holder is `null` when nothing is held or the lock file is
+invalid. `pool` and `locked+pool` are table-only labels.
 
 ### Product-Increment autolock
 
