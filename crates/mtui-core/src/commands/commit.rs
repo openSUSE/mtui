@@ -77,7 +77,7 @@ async fn commit_document(session: &mut Session, client: &TeregenV2) -> CommandRe
     let summary = upload_and_report(session, client).await?;
     session
         .display
-        .println("note: the legacy log view may lag (teregen T4)");
+        .println("note: the legacy log view may lag behind the uploaded document");
 
     if summary.failed > 0 {
         return Err(CommandError::Other(format!(
