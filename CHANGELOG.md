@@ -286,8 +286,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   has no version`. A pool-drawn host counts as a failed draw and its slot goes
   to a sibling; `add_host` names a slot no sibling serves. `add_host -t` and a
   template's named host are refused; there is no override. `load_template`
-  prints `skipped <host>: <reason>` for every host it refused, including a
-  pool host whose slot a sibling then served, and a refused host's
+  and `add_host` print `skipped <host>: <reason>` for every host they refused,
+  including a pool host whose slot a sibling then served, and a refused host's
   `refhosts.yml` drift is still printed. With nothing loaded, hosts attach as
   before, so a run-only session keeps them for `run`, `get` and `put` (#832).
   **MCP note:** with an update loaded, `add_host -t` of such a host fails the

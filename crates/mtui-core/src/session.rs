@@ -1533,7 +1533,12 @@ impl Session {
             .await;
         // `load_template` prints no unserved-slot lines, so a refusal is named
         // here, or under `mtui-mcp` it would only reach the log.
-        for (host, failure) in refused_unusable(&failures, &unserved) {
+        self.show_refused(&failures, &unserved);
+    }
+
+    /// Prints `skipped <host>: <reason>` for each host refused as unusable.
+    fn show_refused(&mut self, failures: &[(String, HostFailure)], unserved: &[Unserved]) {
+        for (host, failure) in refused_unusable(failures, unserved) {
             self.display.println(
                 &self
                     .display
@@ -2159,9 +2164,24 @@ impl Session {
 
         let rrid = self.metadata().id();
         let pool_primaries: std::collections::HashSet<String> = wanted.iter().cloned().collect();
-        let (more_unserved, _) = self
+        let (more_unserved, failures) = self
             .connect_and_add_hosts(wanted, &rrid, &pool_primaries)
             .await;
+        // A refused host whose slot a sibling served is in no unserved line.
+        let named: std::collections::HashSet<&str> = more_unserved
+            .iter()
+            .flat_map(|u| match u {
+                Unserved::Unconnectable { failures, .. } => failures.as_slice(),
+                _ => &[],
+            })
+            .map(|(h, _)| h.as_str())
+            .collect();
+        let unnamed: Vec<_> = failures
+            .iter()
+            .filter(|(h, _)| !named.contains(h.as_str()))
+            .cloned()
+            .collect();
+        self.show_refused(&unnamed, &[]);
         unserved.extend(more_unserved);
         unserved
     }
@@ -4689,6 +4709,66 @@ mod tests {
             );
             assert!(!holds_a_lock(c), "{h} was locked");
         }
+    }
+
+    /// `add_host`'s pool draw names a refused primary even when a sibling
+    /// serves its slot, so no unserved-slot line carries it.
+    #[tokio::test]
+    async fn add_host_names_a_refused_primary_whose_slot_a_sibling_served() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        assert!(
+            candidates.len() >= 2,
+            "a slot needs a sibling: {candidates:?}"
+        );
+        let (mut s, buf) = locking_session(config, &[], &[tp]);
+        s.shuffle = no_shuffle;
+        let (rw, ro) = candidates.split_last().unwrap();
+        for h in ro {
+            s.inject_mock_connection(h, product_host(h, "SLES", "15", "5", true));
+        }
+        s.inject_mock_connection(rw, product_host(rw, "SLES", "15", "5", false));
+
+        let unserved = s.add_testplatform_hosts().await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![rw.clone()]);
+        let out = buf.contents();
+        assert!(
+            out.contains(&format!(
+                "skipped {}: no command set for SLES 15-SP5, transactional",
+                ro[0]
+            )),
+            "{out:?}"
+        );
+    }
+
+    /// A refused host already named by its unserved slot is not named again.
+    #[tokio::test]
+    async fn add_host_names_a_refused_host_of_an_unserved_slot_once() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        let (mut s, buf) = locking_session(config, &[], &[tp]);
+        for h in &candidates {
+            s.inject_mock_connection(h, product_host(h, "SLES", "15", "5", true));
+        }
+
+        let unserved = s.add_testplatform_hosts().await;
+
+        assert!(
+            matches!(unserved.as_slice(), [Unserved::Unconnectable { .. }]),
+            "{unserved:?}"
+        );
+        let out = buf.contents();
+        assert!(!out.contains("skipped"), "{out:?}");
     }
 
     /// A refused host's product problem is named as such, and its
