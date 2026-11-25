@@ -20,6 +20,7 @@ checklist below. See CONTRIBUTING.md for the full workflow.
 - [ ] Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - [ ] `cargo fmt --all --check` is clean.
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` is clean.
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items` is clean.
 - [ ] `cargo test --workspace` passes.
 - [ ] The compile-only feature matrix builds: `cargo build --workspace --no-default-features` and `--all-features`.
 - [ ] New/changed code is covered (>= 80% patch coverage).
