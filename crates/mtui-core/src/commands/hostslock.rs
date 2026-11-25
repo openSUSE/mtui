@@ -15,8 +15,8 @@ use crate::session::Session;
 ///
 /// Locks all repository transactions on the target hosts (or only those named
 /// with `-t`) with a `timestamp:user:pid[:comment]` remote lock, removed
-/// automatically on session exit; a `-c` comment keeps the lock effective
-/// against other sessions too.
+/// automatically on session exit; a `-c` comment makes it a reservation that
+/// this session's own flows leave in place until `unlock` or session exit.
 pub struct HostLock;
 
 #[async_trait]
@@ -41,7 +41,7 @@ impl Command for HostLock {
                 .num_args(1..)
                 .action(ArgAction::Append)
                 .value_name("COMMENT")
-                .help("Lock comment (keeps the lock effective across sessions)"),
+                .help("Lock comment (held across operations until unlock or session exit)"),
         )
     }
 
