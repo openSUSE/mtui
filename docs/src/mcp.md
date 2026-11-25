@@ -646,18 +646,21 @@ Removes a bug filed with `report_new_issue_write`.
 ### `report_files` (read-only)
 
 Lists the report directory's files — `build_checks/`, the `install_logs`
-directory, `results/` and `checkers.log` — merged by file name with the files
-teregen holds for the report.
+directory, `results/` and `checkers.log` — matched with the files teregen holds for the
+report, by name and server directory.
 
 - Parameters: `template` (optional).
 - Returns `{ "id", "files": [{"path","name","size","server"}], "server_only":
-  [{"name","origin","size","at"}] }`, plus `"server_error"` when the server
-  listing failed. `files` are the local regular files, sorted by `path`
+  [{"name","dir","origin","size","at"}] }`, plus `"server_error"` when the
+  server listing failed. `files` are the local regular files, sorted by `path`
   (report-directory-relative; subdirectories and symlinks are skipped).
-  `server` is `{ "origin", "size", "at" }` for the server's file of that name
-  (`origin` is `pipeline` or `uploaded`), or `null` when it has none; sizes
-  differ until `commit` uploads. `server_only` lists server files with no local
-  copy; `report_file_read` can read them.
+  `server` is `{ "dir", "origin", "size", "at" }` for the server copy
+  `report_file_read` would read for that path (`origin` is `pipeline` or
+  `uploaded`; `dir` is `uploads`, `install_logs` or `build_checks`, `null` from
+  a server that does not say), or `null` when it has none; sizes differ until
+  `commit` uploads. `server_only` lists server files with no local copy, one per
+  `dir` when several directories hold the same name; `report_file_read` can
+  read them.
 - A failed server listing (not found, still generating, unreachable) never
   fails the call: the local list is returned with `server_error` set.
 
