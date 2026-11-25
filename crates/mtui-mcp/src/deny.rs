@@ -38,9 +38,7 @@ pub(crate) fn is_denied(name: &str) -> bool {
 }
 
 /// Per-tool argument deny (#410): `clap` args an MCP tool must not advertise
-/// in its schema. At dispatch a sent one is accepted and ignored while its
-/// `DEPRECATED_KWARGS` shim lives (refused as unknown from 26.5); the strip
-/// before argv reconstruction is what keeps it from reaching the engine.
+/// in its schema. At dispatch a sent one is refused as an unknown key.
 ///
 /// The `url_*` overrides retarget trust — endpoints, not the operator's
 /// configured ones — with no operator-visible artifact, so a headless client

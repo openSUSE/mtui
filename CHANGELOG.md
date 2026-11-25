@@ -8,6 +8,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed
+
+- MCP: the tool-call keys that 26.4 dropped from the schemas are now refused
+  as `unknown argument(s): …` instead of being ignored with a server-log
+  warning: `template` and `all_templates` on `unload`, `list_templates`,
+  `list_refhosts`, `updates`, `whoami` and `set_log_level`; `all_templates` on
+  `regenerate`; `url_openqa`, `url_dashboard_qam`, `url_qam`, `test_pattern`
+  and `no_fetch` on `openqa_overview`; `url_openqa` and `url_dashboard_qam` on
+  `openqa_jobs`. **MCP schema note:** no schema changes; a call that still
+  sends one of these keys now fails.
+
 ## [26.4.1] - 2026-11-25
 
 ### Added

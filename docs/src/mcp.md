@@ -203,8 +203,9 @@ parameters. The session-level tools — `load_template`, `unload`,
 
 A client still sending `template`/`all_templates` to `unload`, `list_templates`,
 `list_refhosts`, `updates`, `whoami` or `set_log_level`, or `all_templates` to
-`regenerate`, has them ignored with a server-log warning until 26.5.
-`load_template` refuses them now; `config_show` never took them.
+`regenerate`, has the call refused with `unknown argument(s): …` (they were
+ignored with a server-log warning in 26.4).
+`load_template` never accepted them; `config_show` never took them.
 
 Omitting both parameters resolves per command: a read/annotate tool
 (`list_*` other than the session-level ones above, `show_*`, `openqa_*`,
@@ -350,12 +351,11 @@ and nothing is written there.
 ## Command behaviour notes
 
 - Every tool schema sets `additionalProperties: false`, so an argument the tool
-  does not declare is refused with `unknown argument(s): …`, apart from the
-  retired arguments noted below that are still ignored for one release.
+  does not declare is refused with `unknown argument(s): …`.
 - The `openqa_overview` and `openqa_jobs` tools hide their operator override
   flags (`--url-openqa`, `--url-dashboard-qam`, `--url-qam`, `--test-pattern`,
   `--no-fetch`, #410): a headless client uses the operator's configured
-  endpoints, and a sent one is ignored with a server-log warning until 26.5.
+  endpoints, and a sent one is refused as an unknown argument.
   The REPL keeps every flag.
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command

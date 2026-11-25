@@ -283,7 +283,7 @@ next actionable task before working on a subsystem.
 - **MCP tool names/schemas** — downstream LLM configs depend on them; snapshot the
   synthesised + slimmed schemas. Dropping a property takes two releases: the
   schema loses it at once, the call keeps accepting (and ignoring) it for one
-  release through `crates/mtui-mcp/src/tools.rs::DEPRECATED_KWARGS`, whose doc
+  release through a temporary shim in `crates/mtui-mcp/src/tools.rs`, whose doc
   names the release that refuses them and whose test fails that version bump —
   and only then is it refused. The one exception is a key that already failed
   the call (#597: `load_template`'s `template`/`all_templates`); remove it
