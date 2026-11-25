@@ -592,6 +592,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` tears down on `SIGHUP` like on `SIGTERM`. Before, a closed
+  terminal or parent ended it without releasing its pool claims and operation
+  locks (#851).
 - A pool draw no longer attaches a reference host whose operation lock
   (`/var/lock/mtui.lock`) another owner holds, including another mtui process
   of the same user. `load_template` and `add_host` without `-t` used to attach

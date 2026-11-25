@@ -97,9 +97,10 @@ wiremock.workspace = true
 libc = "0.2"
 nix = { version = "0.32", features = ["user"] }
 
-# `mkfifo` plants the non-regular sink the vetted open must refuse.
+# `mkfifo` plants the non-regular sink the vetted open must refuse; `raise`
+# delivers the shutdown signals.
 [target."cfg(unix)".dev-dependencies]
-nix = { version = "0.32", features = ["fs", "user"] }
+nix = { version = "0.32", features = ["fs", "signal", "user"] }
 
 [features]
 default = ["mcp"]
