@@ -772,9 +772,9 @@ expression: pretty
           "type": "boolean"
         },
         "comment": {
-          "description": "Lock comment (keeps the lock effective across sessions)",
+          "description": "Lock comment (held across operations until unlock or session exit)",
           "items": {
-            "description": "Lock comment (keeps the lock effective across sessions)",
+            "description": "Lock comment (held across operations until unlock or session exit)",
             "type": "string"
           },
           "minItems": 1,

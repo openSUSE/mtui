@@ -235,7 +235,7 @@ Options:
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
   -c, --comment <COMMENT>...
-          Lock comment (keeps the lock effective across sessions)
+          Lock comment (held across operations until unlock or session exit)
 
   -h, --help
           Print help

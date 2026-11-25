@@ -172,11 +172,11 @@ cooperate rather than clobber one another.
   serialized repository transactions (enabling/disabling the test repo,
   install/update/prepare/downgrade). Set it explicitly with
   [`lock`](cli.md#lock); it is applied automatically around the flows that need
-  it. Enabled locks are removed when the session exits. To make the lock effective
-  for *other* sessions too, give it a comment (`lock -c "<why>"`). Such a
-  reservation is never rewritten or released by `run`, `update`, `install` or
-  `prepare` on the host; only `unlock` removes it. Templates loaded in the same
-  process, and the sessions of one `mtui-mcp` server, hold the operation lock
+  it. Enabled locks are removed when the session exits, commented or not. To
+  keep the lock between operations, give it a comment (`lock -c "<why>"`). Such
+  a reservation is never rewritten or released by `run`, `update`, `install` or
+  `prepare` on the host; `unlock` or the end of the session removes it.
+  Templates loaded in the same process, and the sessions of one `mtui-mcp` server, hold the operation lock
   against each other like separate users: a second template's `run` or `update`
   waits for (or, at `[lock] wait = 0`, refuses on) the first one's hold.
 - **Pool-claim lock** (`/var/lock/mtui-pool.lock`, RRID-based) — taken during
