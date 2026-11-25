@@ -595,6 +595,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `mtui-mcp` tears down on `SIGHUP` like on `SIGTERM`. Before, a closed
   terminal or parent ended it without releasing its pool claims and operation
   locks (#851).
+- Under `--transport http`, a session that ends without the server's own
+  teardown, after a client's `DELETE` or when the transport's keep-alive gives
+  up on it, now releases its pool claims and operation locks and disconnects
+  its hosts. Before, only the idle sweep and server shutdown did, so such a
+  session's holds stayed until `[lock] stale_age` (#851).
 - A pool draw no longer attaches a reference host whose operation lock
   (`/var/lock/mtui.lock`) another owner holds, including another mtui process
   of the same user. `load_template` and `add_host` without `-t` used to attach
