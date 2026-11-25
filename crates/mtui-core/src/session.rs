@@ -22,7 +22,9 @@ use mtui_hosts::{
     Target,
 };
 use mtui_testreport::reports::CommandSetGap;
-use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
+use mtui_testreport::{
+    LoadCancelled, LoadContext, NullReport, TestReport, UpdateKind, make_testreport,
+};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
 use mtui_types::hostlog::HostLog;
@@ -1365,41 +1367,52 @@ impl Session {
     /// Returns the loaded report's RRID, empty when the load failed and the null
     /// report was substituted.
     ///
-    /// `force_continue` is forwarded to [`make_testreport`]: the non-interactive
-    /// escape hatch for a stale template hash.
+    /// `force_continue` is forwarded as [`make_testreport`]'s
+    /// [`LoadContext::force_continue`]: the non-interactive escape hatch for a
+    /// stale template hash.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadCancelled`] when the session's cancel token stopped the load while
+    /// it waited for TeReGen; the registry is untouched.
     pub async fn load_update(
         &mut self,
         update: &UpdateID,
         autoconnect: bool,
         kind: UpdateKind,
         force_continue: bool,
-    ) -> String {
-        self.load_update_reported(update, autoconnect, kind, force_continue)
-            .await
-            .0
+    ) -> Result<String, LoadCancelled> {
+        Ok(self
+            .load_update_reported(update, autoconnect, kind, force_continue)
+            .await?
+            .0)
     }
 
     /// [`load_update`](Self::load_update) that also returns *why* a load failed.
     ///
     /// Returns `(rrid, load_error)`: on failure an empty RRID plus the
     /// diagnostic [`make_testreport`] stashed on the substituted null report.
+    /// A cancelled load is the `Err`, as in [`load_update`](Self::load_update).
     pub(crate) async fn load_update_reported(
         &mut self,
         update: &UpdateID,
         autoconnect: bool,
         kind: UpdateKind,
         force_continue: bool,
-    ) -> (String, Option<String>) {
+    ) -> Result<(String, Option<String>), LoadCancelled> {
         let report = make_testreport(
             update,
             self.config.clone(),
             kind,
             autoconnect,
-            self.is_repl,
-            self.prompter.as_ref(),
-            force_continue,
+            LoadContext {
+                is_repl: self.is_repl,
+                prompter: self.prompter.as_ref(),
+                force_continue,
+                cancel: self.cancel_token(),
+            },
         )
-        .await;
+        .await?;
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
         let load_error = if rrid.is_empty() {
@@ -1445,7 +1458,7 @@ impl Session {
         if pending && !rrid.is_empty() {
             self.autoconnect_active(&rrid).await;
         }
-        (rrid, load_error)
+        Ok((rrid, load_error))
     }
 
     /// Connects the active report's reference hosts (the deferred half of
@@ -3202,7 +3215,8 @@ mod tests {
         let update = UpdateID::parse(rrid).unwrap();
         let loaded = s
             .load_update(&update, true, UpdateKind::Kernel, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(loaded, rrid);
         assert!(s.templates.contains(rrid));
@@ -3226,7 +3240,8 @@ mod tests {
 
         let update = UpdateID::parse(rrid).unwrap();
         s.load_update(&update, true, UpdateKind::Kernel, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(
             s.metadata().base().lock_comment,
@@ -3249,7 +3264,8 @@ mod tests {
 
         let update = UpdateID::parse(rrid).unwrap();
         s.load_update(&update, true, UpdateKind::Kernel, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(s.metadata().base().lock_comment, "");
     }
@@ -3268,7 +3284,8 @@ mod tests {
 
         let update = UpdateID::parse(rrid).unwrap();
         s.load_update(&update, true, UpdateKind::Kernel, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(s.metadata().base().lock_comment, "");
     }
@@ -3301,7 +3318,8 @@ mod tests {
         let update = UpdateID::parse(rrid).unwrap();
         let loaded = s
             .load_update(&update, true, UpdateKind::Kernel, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(loaded, rrid);
         assert!(
@@ -3329,7 +3347,8 @@ mod tests {
         let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
         let (loaded, reason) = s
             .load_update_reported(&update, true, UpdateKind::Auto, false)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(loaded, "");
         assert!(s.templates.is_empty());

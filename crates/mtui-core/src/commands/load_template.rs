@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
-use mtui_testreport::UpdateKind;
+use mtui_testreport::{LoadCancelled, UpdateKind};
 use mtui_types::UpdateID;
 
 use crate::command::{Command, Scope};
@@ -151,7 +151,8 @@ impl Command for LoadTemplate {
         // connect actually happens.
         let (loaded, reason) = session
             .load_update_reported(&update, true, kind, force_continue)
-            .await;
+            .await
+            .map_err(|e| load_cancelled(&update, e))?;
         if loaded.is_empty() {
             return Err(CommandError::Other(match reason {
                 Some(why) => format!("could not load template for {update}: {why}"),
@@ -172,6 +173,11 @@ impl Command for LoadTemplate {
             .println(&format!("loaded {loaded} ({connected} hosts connected)"));
         Ok(())
     }
+}
+
+/// The [`CommandError::Cancelled`] for a load stopped while waiting for TeReGen.
+fn load_cancelled(update: &UpdateID, e: LoadCancelled) -> CommandError {
+    CommandError::Cancelled(format!("loading {update}: {e}"))
 }
 
 #[cfg(test)]
@@ -243,6 +249,71 @@ mod tests {
             "{err:?}"
         );
         assert!(session.templates.is_empty());
+    }
+
+    /// Loads `-k SUSE:Maintenance:1:1` under an already-cancelled session token
+    /// against a teregen answering every document `GET` with `status`.
+    async fn load_cancelled_against(status: u16) -> (Session, CommandResult) {
+        let (mut session, _buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        let server = MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(status))
+            .mount(&server)
+            .await;
+        session.config.teregen_api_v2 = server.uri();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        session.set_cancel_token(cancel);
+
+        let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:1:1"]);
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            LoadTemplate.call(&mut session, &args),
+        )
+        .await
+        .expect("a cancelled load must not wait out the busy poll");
+        (session, out)
+    }
+
+    /// A cancel while TeReGen is still generating ends the load as cancelled.
+    #[tokio::test]
+    async fn a_cancel_during_the_generating_wait_is_cancelled() {
+        let (session, out) = load_cancelled_against(503).await;
+
+        assert_eq!(
+            out.unwrap_err().to_string(),
+            "cancelled: loading SUSE:Maintenance:1:1: stopped waiting for TeReGen's \
+             document; nothing was loaded"
+        );
+        assert!(session.templates.is_empty());
+    }
+
+    /// A cancel during a stale template's regeneration says the job TeReGen
+    /// was asked for keeps running, unlike one during the document wait.
+    #[test]
+    fn a_cancelled_regeneration_wait_says_the_job_continues() {
+        let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
+
+        assert_eq!(
+            load_cancelled(&update, LoadCancelled::Regeneration).to_string(),
+            "cancelled: loading SUSE:Maintenance:1:1: stopped waiting for TeReGen to \
+             regenerate the stale template; nothing was loaded, and the requested \
+             regeneration continues on the server"
+        );
+    }
+
+    /// A real failure that coincides with a cancel is still reported as itself.
+    #[tokio::test]
+    async fn a_real_failure_outranks_a_coinciding_cancel() {
+        let (_session, out) = load_cancelled_against(500).await;
+
+        let err = out.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("could not load")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

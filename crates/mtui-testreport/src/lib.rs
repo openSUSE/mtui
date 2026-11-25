@@ -33,7 +33,7 @@ pub use export::{
 };
 pub use export_authoring::author_export;
 pub use ingest::apply_document;
-pub use lifecycle::{UpdateKind, make_testreport};
+pub use lifecycle::{LoadCancelled, LoadContext, UpdateKind, make_testreport};
 pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{ProductParseError, gitrepoparse, parse_product, reporepoparse};
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
