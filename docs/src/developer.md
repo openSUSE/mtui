@@ -30,9 +30,9 @@ Repo automation lives in the `xtask` crate, invoked through the alias in
 |------|---------|--------|
 | Regenerate packaging artifacts | `cargo xtask gen` | `dist/completions/{bash,zsh,fish}/…` + `dist/man/*.1` |
 | Regenerate generated docs | `cargo xtask gen-docs` | `docs/src/cli.md` + `docs/src/invocation.md` |
-| Build a release tarball | `cargo xtask package --version <VER> --target <TRIPLE>` | `dist/release/…tar.gz` |
-| Probe the teregen v1↔v2 corpus | `cargo xtask corpus-survey` | Read-only 200/404/503/other split by RRID kind |
-| Check for teregen schema drift | `cargo xtask schema-check` | Diffs the live `/api/v2/schema` against the committed copy |
+| Build a release tarball | `cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]` | `dist/release/…tar.gz` (binaries are read from `target/<TRIPLE>/release` unless `--bin-dir` is given) |
+| Probe the teregen v1↔v2 corpus | `cargo xtask corpus-survey [--v1-base <URL>] [--v2-base <URL>]` | Read-only 200/404/409-stale/503/other split by RRID kind |
+| Check for teregen schema drift | `cargo xtask schema-check [--url <URL>]` | Diffs the live `/api/v2/schema` against the committed copy |
 | Mint/reuse a teregen v2 auth token | `cargo xtask teregen-login [--base <URL>] [--user <NAME>] [--namespace <NS>] [--no-store] [--no-probe]` | Signs teregen's SSH challenge with your oscrc key, caches the bearer token, and probes `GET /schema`; never prints the token |
 | Probe the teregen v2 write client | `cargo xtask teregen-put --id <RRID> [--base <URL>] [--user <NAME>] [--file <PATH>] [--if-match <ETAG>\|--create] [--dry-run]` | GETs a document and re-PUTs it with the just-received `ETag` by default; `--file`/`--if-match`/`--create` drive a backfill or a deliberate negative case; `--dry-run` prints the request instead of sending it |
 
@@ -45,8 +45,11 @@ resuming report-document work, and treat drift as blocking.
 
 ## Quality gates
 
-CI (`.github/workflows/`) mirrors the local gate. Run the **whole workspace**
-before claiming done:
+CI (`.github/workflows/`) mirrors the local gate, plus jobs the local gate does
+not run: `typos`, `cargo-deny` (`cargo deny check` runs locally), `mdbook`,
+`packaging`, `container`, `cflite_fuzz`/`cflite_batch`, `codeql`,
+`dependency-review`, `scorecard` and `beta`. Run the **whole workspace** before
+claiming done:
 
 ```sh
 cargo fmt --all --check
@@ -95,7 +98,10 @@ The trait has just **two required methods**; everything else has a default:
 | `about` | `fn about(&self) -> Option<&'static str>` | `None` |
 | `scope` | `fn scope(&self) -> Scope` | `Scope::Active` |
 | `requires_canonical_session` | `fn requires_canonical_session(&self, argv: &[String]) -> bool` | `false` — answered per invocation, not per command |
+| `reads_resolved_report` | `fn reads_resolved_report(&self) -> bool` | `true` — `false` on a `Scope::Single` command exempts it from the claim refusal and drops `-T` |
 | `skip_hostless_templates` | `fn skip_hostless_templates(&self) -> bool` | `true` |
+| `includes_detached_hosts` | `fn includes_detached_hosts(&self) -> bool` | `false` — `true` counts retained removed-host logs as ownership of a named `-t` host |
+| `repoints_active` | `fn repoints_active(&self) -> bool` | `false` — `true` keeps the active-template move the body made |
 | `configure` | `fn configure(&self, cmd: clap::Command) -> clap::Command` | identity (no args) |
 | `complete` | `fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String>` | `Vec::new()` |
 
@@ -190,7 +196,8 @@ display) passed into each call. There are no hidden globals.
   runs the upload path against a disposable, unprivileged OpenSSH `sshd` on
   loopback (generated keys, a scratch root under the system temp dir, public-key
   login, killed on drop) so symlink/hardlink/rename behaviour is the operating
-  system's. It is `#[ignore]` and needs `MTUI_TEST_REAL_SFTP=1`; if that is set
+  system's. It is `#[ignore]`, runs locally only (no workflow sets the flag or
+  passes `--ignored`) and needs `MTUI_TEST_REAL_SFTP=1`; if that is set
   and `sshd`, `sftp-server` or `ssh-keygen` is missing it panics rather than
   passing: `MTUI_TEST_REAL_SFTP=1 cargo test -p mtui-hosts --test it
   remote_upload_safety -- --ignored --test-threads=1`. Optional overrides:
@@ -242,10 +249,12 @@ serialised with `#[serial(...)]`, and tests must not assume per-binary isolation
 `insta` prefixes each snapshot file with the test-binary name, which is `it` for
 these crates: `it__<module>__<name>.snap`.
 
-> **Exception: `mtui-core`.** It does *not* use the `it.rs` pattern — its
-> integration tests are per-file and its snapshots are named `<module>__<name>.snap`
-> (no `it__` prefix). Add a `mtui-core` integration test as a normal top-level
-> `tests/*.rs` there; use the `it.rs` `mod` convention in root `mtui`, `mtui-hosts`,
+> **Exceptions.** `mtui-core`, `mtui-config` (a single `tests/load.rs`) and
+> `xtask` do *not* use the `it.rs` pattern — their integration tests are
+> per-file, and `mtui-core`'s snapshots are named `<module>__<name>.snap` (no
+> `it__` prefix). `mtui-cli` has no `tests/` directory. Add an integration test
+> to `mtui-core` or `xtask` as a normal top-level `tests/*.rs`; use the `it.rs`
+> `mod` convention in root `suse-mtui`, `mtui-types`, `mtui-hosts`,
 > `mtui-datasources`, `mtui-testreport`, `mtui-tui`, and `mtui-mcp`.
 
 ## Debugging the MCP server
@@ -279,7 +288,6 @@ correct refusal path.
 
 Common issues:
 
-- **HTTP client gets a 404 at the root** — the endpoint is `/mcp`, not `/`.
 - **A new command is missing from the tool surface** — check `MCP_DENYLIST`; if it
   isn't denied, confirm it's registered in `register_all()` and re-exported from
   `commands/mod.rs`. Run with `--debug` to see the synthesis loop.
@@ -288,15 +296,28 @@ Common issues:
   [Background jobs](mcp.md#background-jobs)). The server emits progress heartbeats
   for clients that supply a `progressToken`.
 
+## Fuzzing
+
+`fuzz/` holds seven cargo-fuzz targets over the untrusted-input parsers, in
+`fuzz/fuzz_targets/`. It is a detached workspace that needs nightly:
+
+```sh
+cargo +nightly fuzz run <target>
+```
+
+CI runs the targets with ClusterFuzzLite on pull requests and in a weekly batch.
+
 ## Documentation
 
 The book lives under `docs/` (mdBook). Two pages are **generated** — `cli.md` from
 the command registry and `invocation.md` from the binary parsers — via
 `cargo xtask gen-docs`; a drift-guard test (`cargo test -p xtask`) fails if the
-checked-in copies are stale. **Never hand-edit those two files** (or the `cli.md`
+checked-in copies are stale. The same guard covers `dist/completions` and
+`dist/man`: run `cargo xtask gen` after a command or flag change. **Never hand-edit those two files** (or the `cli.md`
 preamble, which is emitted by the generator). Every other page is hand-written.
 
-Build the book locally (if `mdbook` is installed):
+Build the book locally (if `mdbook` and `mdbook-linkcheck2` are installed; CI
+pins `mdbook-linkcheck2` 0.13.0):
 
 ```sh
 mdbook build docs

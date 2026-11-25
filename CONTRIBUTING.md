@@ -11,7 +11,7 @@ of Done.
 - Larger refactors should be split into reviewable commits or, if they
   cross subsystems, into a series of PRs.
 - Rebase rather than merge when bringing your branch up to date.
-- CI must be green before review (fmt, clippy, test, and the feature matrix).
+- CI must be green before review (fmt, clippy, rustdoc, test, and the feature matrix).
 - Keep **both surfaces** (`mtui` and `mtui-mcp`) building and passing when
   touching commands, `Session`, the registry, or the entrypoints.
 
@@ -55,11 +55,13 @@ Run these locally before opening a PR (CI runs the same commands):
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
 cargo test --workspace
 ```
 
-Warnings are errors under clippy. Tests run against default features; the
-long pole is cold compilation, not the test run itself.
+Warnings are errors under clippy and rustdoc. Tests run against default
+features; the long pole is cold compilation, not the test run itself. CI also
+runs `msrv` and `macos` jobs.
 
 Also run the compile-only feature matrix, which catches feature-gate rot:
 
@@ -82,8 +84,9 @@ cargo fmt --all
 pre-commit install
 ```
 
-Installs hooks for `cargo fmt` and `cargo clippy`. CI runs the same gates,
-so pre-commit is purely a convenience.
+Installs hooks for `cargo fmt` and `cargo clippy`. The clippy hook runs
+without `--all-features`, so it is a subset of the CI gate and purely a
+convenience.
 
 ## Tests
 
@@ -91,13 +94,23 @@ so pre-commit is purely a convenience.
   `crates/*/tests/`.
 - Add a new integration test as a `mod` line in the crate's `tests/it.rs`
   (one integration-test binary per crate), not as a new top-level
-  `tests/*.rs`.
+  `tests/*.rs`. `mtui-core`, `mtui-config` and `xtask` are the exceptions:
+  their integration tests are per-file.
 - Mock, don't hit the network/hosts: HTTP via `wiremock`, SSH via a
   `MockConnection`, subprocesses via a command-runner trait or a stub on
-  `PATH`. Gate real hosts/containers behind `#[ignore]` + a CI env flag.
+  `PATH`. Gate real hosts/containers behind `#[ignore]` + an env flag; those
+  tests run locally only.
 - Snapshot text contracts (report document goldens, MCP schemas,
   lock-file format) with `insta`.
 - New/changed code needs >=80% patch coverage.
+
+## Merging
+
+Mergify merges a PR with a rebase once all of these hold: two approving
+reviews and no requested changes, every check green including
+`codecov/project` (target 81%), linear history, and neither the
+`acceptance-tests-needed` nor the `not-ready` label. The `merge-fast` label
+skips the approval requirement.
 
 ## Changelog
 
