@@ -1056,6 +1056,19 @@ mod tests {
         assert!(text.starts_with(error.as_str()));
     }
 
+    /// The cap is 2048 bytes exactly, for both reason extractors.
+    #[test]
+    fn reasons_keep_exactly_the_cap() {
+        let long = "a".repeat(3000);
+        let body = json!({"error": long});
+        assert_eq!(error_text(body.to_string().as_bytes()).unwrap().len(), 2048);
+        assert_eq!(failure_text(&body).unwrap().len(), 2048);
+        let errors = json!({"errors": [{"message": long}]});
+        assert_eq!(failure_text(&errors).unwrap().len(), 2048);
+        let short = "a".repeat(2048);
+        assert_eq!(failure_text(&json!({"error": short})).unwrap(), short);
+    }
+
     #[tokio::test]
     async fn updates_status_carries_teregens_reason() {
         let server = serve(

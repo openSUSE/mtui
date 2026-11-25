@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{teregen_client, teregen_failure};
+use crate::commands::support::unless_cancelled;
 #[cfg(test)]
 use crate::display::TRUNCATION_MARK;
 use crate::display::sanitize_external;
@@ -324,13 +325,11 @@ impl Command for Updates {
         // higher-ranked-lifetime limit.
         let futures: Vec<_> = queries.iter().map(|q| teregen.updates(q)).collect();
         let cancel = session.cancel_token();
-        let results: Vec<_> = tokio::select! {
-            () = cancel.cancelled() => {
-                return Err(CommandError::Cancelled(
-                    "updates cancelled while waiting for TeReGen".to_owned(),
-                ));
-            }
-            results = stream::iter(futures).buffered(4).collect() => results,
+        let lookups = stream::iter(futures).buffered(4).collect::<Vec<_>>();
+        let Some(results) = unless_cancelled(&cancel, lookups).await else {
+            return Err(CommandError::Cancelled(
+                "updates cancelled while waiting for TeReGen".to_owned(),
+            ));
         };
 
         // `Err` is surfaced, `Ok(None)` (no `updates` key) skipped: only a
@@ -2236,6 +2235,9 @@ mod tests {
     async fn an_assignment_view_with_another_status_is_refused_before_any_request() {
         for flags in [
             &["--status", "tested", "--mine"][..],
+            &["--status", "tested", "--assignee", "alice"],
+            &["--status", "tested", "--all-assignees"],
+            &["--status", "all", "--mine"],
             &["--status", "all", "--assignee", "alice"],
             &["--status", "all", "--all-assignees"],
         ] {

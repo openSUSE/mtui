@@ -257,7 +257,7 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`dir`, `origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy, each with its `dir`: report_file_read can read them. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "List the report directory's files — `build_checks/`, the install-log directory, `results/` and `checkers.log` — each with its report-relative `path`, `name` and `size`. `server` is the matching teregen artifact (`dir`, `origin`, `size`, `at`), or null when the server has none; sizes differ until `commit` uploads. `server_only` lists server files with no local copy, each with its `dir` and the `path` report_file_read reads it from: null when a same-named copy in a preferred directory answers every such path, or the server names no `dir`. A failed server listing leaves the local list and sets `server_error`. Needs a loaded report document; without one it refuses (run load_template or regenerate). Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {

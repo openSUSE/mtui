@@ -7,7 +7,7 @@ use mtui_types::RequestKind;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{teregen_client, teregen_failure};
-use crate::commands::support::{require_update, template_completion};
+use crate::commands::support::{require_update, template_completion, unless_cancelled};
 use crate::display::{CommandPromptDisplay, sanitize_external};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -217,13 +217,10 @@ impl Command for Checkers {
 
         let cancel = session.cancel_token();
         let id = rrid.to_string();
-        let lookup = tokio::select! {
-            () = cancel.cancelled() => {
-                return Err(CommandError::Cancelled(
-                    "checkers cancelled while waiting for TeReGen".to_owned(),
-                ));
-            }
-            lookup = teregen.checkers(&id) => lookup,
+        let Some(lookup) = unless_cancelled(&cancel, teregen.checkers(&id)).await else {
+            return Err(CommandError::Cancelled(
+                "checkers cancelled while waiting for TeReGen".to_owned(),
+            ));
         };
         let runs = lookup.map_err(|e| {
             CommandError::Other(format!(

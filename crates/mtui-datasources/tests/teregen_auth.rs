@@ -914,18 +914,27 @@ async fn a_second_expired_challenge_is_surfaced_not_retried() {
     assert_eq!(challenge_count(&server).await, 2);
 }
 
-/// Only an expired challenge earns a second one: a rejected signature would
+/// Only an expired challenge earns a second one: any other refusal would
 /// fail the same way again.
 #[tokio::test]
 async fn a_rejected_signature_is_not_reminted() {
-    let server = MockServer::start().await;
-    let (_dir, store_file) = store_path();
-    mount_challenge_200(&server).await;
-    mount_verify_401(&server, verify_401("signature_rejected")).await;
+    for hint in [
+        "signature_rejected",
+        "key_list_unavailable",
+        "token_unknown",
+        "token_expired",
+        "token_missing",
+        "something_new",
+    ] {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_challenge_200(&server).await;
+        mount_verify_401(&server, verify_401(hint)).await;
 
-    auth_for(&server, store_file)
-        .token()
-        .await
-        .expect_err("refused");
-    assert_eq!(challenge_count(&server).await, 1);
+        auth_for(&server, store_file)
+            .token()
+            .await
+            .expect_err("refused");
+        assert_eq!(challenge_count(&server).await, 1, "{hint}");
+    }
 }

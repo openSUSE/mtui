@@ -375,7 +375,7 @@ pub enum TeReGenError {
 fn status_display(status: u16, error: Option<&str>) -> String {
     let status = reqwest::StatusCode::from_u16(status)
         .map_or_else(|_| status.to_string(), |s| s.to_string());
-    match error {
+    match error.filter(|e| !e.trim().is_empty()) {
         Some(error) => format!("TeReGen answered {status}: {error}"),
         None => format!("TeReGen answered {status}"),
     }
@@ -402,6 +402,17 @@ fn assign_invalid_message(state: Assignment, user: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_teregen_reason_is_no_reason() {
+        for blank in ["", "  "] {
+            let err = TeReGenError::Status {
+                status: 502,
+                error: Some(blank.to_owned()),
+            };
+            assert_eq!(err.to_string(), "TeReGen answered 502 Bad Gateway");
+        }
+    }
 
     #[test]
     fn assign_invalid_display_messages_are_stable() {

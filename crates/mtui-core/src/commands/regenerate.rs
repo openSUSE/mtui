@@ -7,6 +7,7 @@ use mtui_datasources::teregen::{DocumentFetch, RegenRequest, TeregenV2, TeregenV
 use mtui_testreport::UpdateKind;
 use mtui_types::report_document::ReportDocument;
 use mtui_types::{UpdateID, Workflow};
+use serde_json::Value;
 use tracing::info;
 
 use crate::command::{Command, Scope};
@@ -383,14 +384,24 @@ fn report_enqueue(
             print_failure(session, rrid, &failed.to_string());
             return;
         }
-        Some(RegenRequest::Enqueued { job }) => job
-            .as_ref()
-            .map_or_else(|| "?".to_owned(), std::string::ToString::to_string),
-        Some(_) => "?".to_owned(),
+        Some(RegenRequest::Enqueued { job }) => job,
+        Some(_) => {
+            session.display.println(&format!(
+                "Regeneration request for {rrid}: TeReGen's reply is not one this mtui understands"
+            ));
+            return;
+        }
     };
-    session
-        .display
-        .println(&format!("Regeneration job {job} enqueued for {rrid}"));
+    let id = match job {
+        Some(Value::Number(id)) => Some(id.to_string()),
+        Some(Value::String(id)) => Some(sanitize_external(id, Some(100))),
+        Some(Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_)) | None => None,
+    };
+    let line = match id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => format!("Regeneration job {id} enqueued for {rrid}"),
+        None => format!("Regeneration job enqueued for {rrid} (TeReGen named no job id)"),
+    };
+    session.display.println(&line);
     session
         .display
         .println("Not waiting (--no-wait); reload the template once it is built.");
@@ -537,13 +548,14 @@ mod tests {
     async fn a_409_is_a_refusal_with_a_retry_hint_on_both_paths() {
         for flags in [&["--no-wait"][..], &[]] {
             let out = regenerate_output(
-                ResponseTemplate::new(409).set_body_json(serde_json::json!({"error": "edited"})),
+                ResponseTemplate::new(409)
+                    .set_body_json(serde_json::json!({"error": "ed\u{1b}[2Ki\u{9b}31mted"})),
                 flags,
             )
             .await;
             assert!(
                 out.contains("Regeneration refused: edited"),
-                "{flags:?}: {out}"
+                "{flags:?}: {out:?}"
             );
             assert!(out.contains("Retry with --force"), "{flags:?}: {out}");
         }
@@ -589,7 +601,40 @@ mod tests {
     #[tokio::test]
     async fn a_202_without_a_body_is_enqueued() {
         let out = regenerate_output(ResponseTemplate::new(202), &["--no-wait"]).await;
-        assert!(out.contains("Regeneration job ? enqueued"), "{out}");
+        assert!(
+            out.contains(
+                "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)"
+            ),
+            "{out}"
+        );
+    }
+
+    /// A job id is shown as TeReGen gave it: a string unquoted and sanitized,
+    /// anything that is not an id as no id at all.
+    #[tokio::test]
+    async fn an_enqueued_job_id_is_shown_only_when_it_is_one() {
+        for (job, want) in [
+            (serde_json::json!(42), "Regeneration job 42 enqueued"),
+            (
+                serde_json::json!("j\u{1b}[31m-7"),
+                "Regeneration job j-7 enqueued",
+            ),
+            (
+                serde_json::json!("\u{1b}[2K"),
+                "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)",
+            ),
+            (
+                serde_json::json!({"id": 1}),
+                "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)",
+            ),
+        ] {
+            let out = regenerate_output(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": job})),
+                &["--no-wait"],
+            )
+            .await;
+            assert!(out.contains(want), "{job}: {out:?}");
+        }
     }
 
     /// Mounts the success mocks (regenerate → 202, status → finished) on `server`.

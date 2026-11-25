@@ -112,56 +112,10 @@ fn reporepoparse_drops_products_with_no_matching_repo() {
 }
 
 mod credential_redaction {
-    use std::cell::RefCell;
-    use std::fmt::Write as _;
-    use std::sync::OnceLock;
-
     use mtui_testreport::{gitrepoparse, reporepoparse};
     use mtui_types::SystemProduct;
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-    use tracing_subscriber::registry::Registry;
 
-    thread_local! {
-        static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
-    }
-
-    struct CaptureLayer;
-
-    struct FieldVisitor(String);
-
-    impl Visit for FieldVisitor {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            let _ = write!(self.0, " {}={value:?}", field.name());
-        }
-    }
-
-    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            SINK.with(|s| {
-                if let Some(buf) = s.borrow_mut().as_mut() {
-                    let mut v = FieldVisitor(String::new());
-                    event.record(&mut v);
-                    buf.push(v.0);
-                }
-            });
-        }
-    }
-
-    /// Every event `f` emits on this thread, all fields included. The
-    /// subscriber is global and only the sink is thread-local, so a callsite
-    /// first reached from another thread cannot be cached as disabled.
-    fn capture_events(f: impl FnOnce()) -> String {
-        static ONCE: OnceLock<()> = OnceLock::new();
-        ONCE.get_or_init(|| {
-            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
-        });
-        SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
-        f();
-        SINK.with(|s| s.borrow_mut().take())
-            .unwrap_or_default()
-            .join("\n")
-    }
+    use crate::log_capture::capture_events;
 
     #[test]
     fn dropping_an_invalid_credential_url_logs_it_masked() {

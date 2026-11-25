@@ -19,6 +19,8 @@ mod ingest;
 // `src/lifecycle.rs`'s colocated `ingest_tests` unit tests.
 #[path = "lifecycle_ingest.rs"]
 mod lifecycle_ingest;
+#[path = "log_capture.rs"]
+mod log_capture;
 #[path = "null_report.rs"]
 mod null_report;
 #[path = "obs_report.rs"]
