@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.4.1] - 2026-11-25
+
 ### Added
 
 - `list_refhosts --free` now shows who holds a locked host. Each row names
