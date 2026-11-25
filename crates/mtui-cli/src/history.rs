@@ -7,8 +7,8 @@
 //!
 //! mtui is XDG-first: the history file lives at `$XDG_DATA_HOME/mtui/history`
 //! ([`mtui_config::data_dir`]), keeping durable per-user state out of the config
-//! and cache trees. On macOS the `directories` crate resolves it to
-//! `~/Library/Application Support/mtui` instead.
+//! and cache trees. On macOS the `directories` crate ignores `$XDG_DATA_HOME`
+//! and the file is `~/Library/Application Support/mtui/history`.
 //!
 //! History is best-effort, matching mtui's lenient config philosophy — an
 //! unresolvable data directory or an unopenable file degrades to an **in-memory**
