@@ -195,6 +195,55 @@ async fn service_unavailable_maps_to_generating() {
     assert!(matches!(err, TeregenV2Error::Generating));
 }
 
+/// A read's `503` is `Busy` only when the body says `{"error":"busy"}`; any
+/// other body is the conservative `Generating`, never "safe to retry".
+#[tokio::test]
+async fn read_503_busy_is_told_apart_from_generating() {
+    for (body, busy) in [
+        (Some(serde_json::json!({"error": "busy"})), true),
+        (Some(serde_json::json!({"error": "generating"})), false),
+        (Some(serde_json::json!({"error": "nope"})), false),
+        (None, false),
+    ] {
+        let server = MockServer::start().await;
+        let response = match &body {
+            Some(b) => ResponseTemplate::new(503).set_body_json(b),
+            None => ResponseTemplate::new(503).set_body_string("<html>"),
+        };
+        for p in [
+            format!("/reports/{RRID}"),
+            artifacts_path(RRID),
+            artifact_path(RRID, "uploads", "x.log"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(p))
+                .respond_with(response.clone())
+                .mount(&server)
+                .await;
+        }
+        let c = client(&server);
+        let errs = [
+            c.fetch_document(RRID, None).await.unwrap_err(),
+            c.list_artifacts(RRID).await.unwrap_err(),
+            c.read_artifact(RRID, "uploads", "x.log", 0)
+                .await
+                .unwrap_err(),
+        ];
+        for err in errs {
+            assert_eq!(
+                matches!(err, TeregenV2Error::Busy),
+                busy,
+                "{body:?}: {err:?}"
+            );
+            assert_eq!(
+                matches!(err, TeregenV2Error::Generating),
+                !busy,
+                "{body:?}: {err:?}"
+            );
+        }
+    }
+}
+
 /// A `400` carries the server's own detail message.
 #[tokio::test]
 async fn bad_request_carries_the_servers_detail() {

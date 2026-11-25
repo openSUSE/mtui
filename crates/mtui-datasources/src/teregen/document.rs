@@ -63,9 +63,15 @@ pub enum TeregenV2Error {
     /// since it was generated).
     #[error("the server's document is stale — run `regenerate`")]
     Stale,
-    /// `503`: the document is being generated right now.
+    /// `503`: the document is being generated right now. Also the fallback for
+    /// a `503` whose body is not a recognised `busy`.
     #[error("the server is still generating this document")]
     Generating,
+    /// `503`, body `{"error":"busy"}`: teregen is committing an earlier upload.
+    /// Transient, and unlike [`Generating`](Self::Generating) not a generation
+    /// in progress.
+    #[error("teregen is committing an earlier upload; retry shortly")]
+    Busy,
     /// `400`: the server rejects the id itself (`GET /updates` can
     /// advertise an id both APIs reject).
     #[error("the server rejects this id: {detail}")]
@@ -313,7 +319,7 @@ impl TeregenV2 {
             StatusCode::NOT_MODIFIED => return Ok(DocumentFetch::NotModified),
             StatusCode::NOT_FOUND => return Err(TeregenV2Error::NotFound),
             StatusCode::CONFLICT => return Err(TeregenV2Error::Stale),
-            StatusCode::SERVICE_UNAVAILABLE => return Err(TeregenV2Error::Generating),
+            StatusCode::SERVICE_UNAVAILABLE => return Err(unavailable_error(response).await),
             StatusCode::BAD_REQUEST => {
                 let detail = read_body_capped(response, MAX_API_BODY)
                     .await
@@ -392,7 +398,7 @@ impl TeregenV2 {
     /// # Errors
     ///
     /// [`TeregenV2Error::RejectedId`] (`400`), [`TeregenV2Error::NotFound`]
-    /// (`404`), [`TeregenV2Error::Generating`] (`503`); a transport failure,
+    /// (`404`), [`TeregenV2Error::Generating`] or [`TeregenV2Error::Busy`] (`503`); a transport failure,
     /// any other status or an unparseable body is [`TeregenV2Error::Transport`].
     pub async fn list_artifacts(&self, rrid: &str) -> Result<Vec<ArtifactEntry>, TeregenV2Error> {
         let url = format!("{}/reports/{rrid}/artifacts", self.base);
@@ -411,7 +417,7 @@ impl TeregenV2 {
 
         match response.status() {
             StatusCode::NOT_FOUND => return Err(TeregenV2Error::NotFound),
-            StatusCode::SERVICE_UNAVAILABLE => return Err(TeregenV2Error::Generating),
+            StatusCode::SERVICE_UNAVAILABLE => return Err(unavailable_error(response).await),
             StatusCode::BAD_REQUEST => {
                 let detail = read_body_capped(response, MAX_API_BODY)
                     .await
@@ -447,7 +453,7 @@ impl TeregenV2 {
     /// # Errors
     ///
     /// [`TeregenV2Error::RejectedId`] (`400`), [`TeregenV2Error::NotFound`]
-    /// (`404`), [`TeregenV2Error::Generating`] (`503`); an unsatisfiable range
+    /// (`404`), [`TeregenV2Error::Generating`] or [`TeregenV2Error::Busy`] (`503`); an unsatisfiable range
     /// (`416`, an empty file) is an empty body. A transport failure or any
     /// other status is [`TeregenV2Error::Transport`].
     pub async fn read_artifact(
@@ -486,7 +492,7 @@ impl TeregenV2 {
             }
             StatusCode::RANGE_NOT_SATISFIABLE => Ok(Vec::new()),
             StatusCode::NOT_FOUND => Err(TeregenV2Error::NotFound),
-            StatusCode::SERVICE_UNAVAILABLE => Err(TeregenV2Error::Generating),
+            StatusCode::SERVICE_UNAVAILABLE => Err(unavailable_error(response).await),
             StatusCode::BAD_REQUEST => {
                 let detail = read_body_capped(response, MAX_API_BODY)
                     .await
@@ -843,6 +849,22 @@ pub fn is_valid_artifact_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+/// The error for a read's `503`: [`TeregenV2Error::Busy`] when the body says
+/// `{"error":"busy"}`, else [`TeregenV2Error::Generating`] — the conservative
+/// reading, as on writes: an unrecognised body is never taken as safe to retry.
+async fn unavailable_error(response: reqwest::Response) -> TeregenV2Error {
+    let busy = read_body_capped(response, MAX_API_BODY)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|v| v.get("error").and_then(|e| e.as_str()) == Some("busy"));
+    if busy {
+        TeregenV2Error::Busy
+    } else {
+        TeregenV2Error::Generating
+    }
 }
 
 /// Extract a `{"error": "..."}` body's message, falling back to the raw body

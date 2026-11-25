@@ -584,6 +584,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Reading a report from TeReGen while it commits an earlier upload (`503`
+  `busy`) says so (`teregen is committing an earlier upload; retry shortly`)
+  and `load_template` waits it out, as it does a generation in progress. All
+  three reads, the document and the two artifact reads, called it "still
+  generating", which is what a `503` with any other body still reads as.
 - `updates --status <status>` lists that status. With any status other than
   `testing` it still sent the testing queue's assignment parameters, and
   TeReGen answered with the queue in testing, so `--status tested` listed
