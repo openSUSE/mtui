@@ -45,6 +45,10 @@ Two transports are served:
   authenticated boundary (see [Security boundary](#security-boundary)).
 
 Logs go to **stderr**; **stdout** is the transport, so never write to it.
+`set_log_level` changes the level of that log, which belongs to the server: under
+`--transport http` a call from any client changes it for every session, and none
+of it reaches the client. A runtime level replaces the whole startup filter,
+per-target `RUST_LOG` directives included.
 
 ## Tool profiles
 

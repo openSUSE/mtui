@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use mtui_core::{
-    Args, ColorMode, LogLevel, LogLevelSink, Session, TRANSPORT_LOG_CARVE_OUT, register_all,
+    Args, ColorMode, LogLevel, LogLevelSink, Session, level_directive, register_all,
     resolve_log_directives,
 };
 use tracing_subscriber::EnvFilter;
@@ -72,8 +72,8 @@ pub fn run() -> anyhow::Result<()> {
     // re-checks TTY / `NO_COLOR` / `COLOR` at each call.
     session.display.set_color(color);
 
-    // Composition root: the REPL-only sinks. `mtui-mcp` installs none of them,
-    // so there the toasts, `set_log_level` and the timeout prompt are no-ops.
+    // Composition root: the REPL's sinks. `mtui-mcp` installs only its own log
+    // level control, so there the toasts and the timeout prompt are no-ops.
     // The notify backend is itself a no-op off a TTY, so a piped REPL is safe.
     session.set_notify_sink(Box::new(|msg: &str, error: bool| {
         notify_user(msg, error);
@@ -147,13 +147,14 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// `RUST_LOG` is unset.
 ///
 /// **`DEBUG` raises mtui's targets only — by whichever knob turned it on.** `-d`
-/// and a runtime `set_log_level debug` go through `level_directive`, which
-/// appends [`TRANSPORT_LOG_CARVE_OUT`]; [`resolve_log_directives`] applies the
-/// same cap *on top* of a `RUST_LOG`, so `RUST_LOG=debug` cannot switch the
-/// third-party HTTP transport's `DEBUG` back on — those crates log a connection
-/// pool authority that can carry redirect-supplied userinfo (#439). Naming a
-/// transport target (`RUST_LOG=hyper_util=debug`) is an informed opt-in:
-/// honoured verbatim, and announced on stderr at startup.
+/// and a runtime `set_log_level debug` go through [`level_directive`], which
+/// appends [`TRANSPORT_LOG_CARVE_OUT`](mtui_core::TRANSPORT_LOG_CARVE_OUT);
+/// [`resolve_log_directives`] applies the same cap *on top* of a `RUST_LOG`, so
+/// `RUST_LOG=debug` cannot switch the third-party HTTP transport's `DEBUG` back
+/// on — those crates log a connection pool authority that can carry
+/// redirect-supplied userinfo (#439). Naming a transport target
+/// (`RUST_LOG=hyper_util=debug`) is an informed opt-in: honoured verbatim, and
+/// announced on stderr at startup.
 ///
 /// At the **default** level the output is a lowercased colored level token,
 /// `": "` and the message ([`logfmt::CompactLevelFormat`]); escapes resolve from
@@ -237,23 +238,6 @@ fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
     }
 }
 
-/// The `EnvFilter` directive string for a [`LogLevel`] — the lowercased
-/// [`tracing::Level`] name — seeding the startup fallback filter and rebuilt on
-/// a runtime `set_log_level`.
-///
-/// At `debug` the base level is followed by [`TRANSPORT_LOG_CARVE_OUT`], holding
-/// the third-party HTTP stack at `INFO`: raising mtui's verbosity must not print
-/// hyper-util's connection-pool key, whose authority can carry
-/// redirect-supplied userinfo (#439). The coarser levels stay bare — appending
-/// the carve-out would *raise* those targets above an operator's `error`/`warn`.
-fn level_directive(level: LogLevel) -> String {
-    let base = level.as_tracing().as_str().to_ascii_lowercase();
-    match level {
-        LogLevel::Debug => format!("{base},{TRANSPORT_LOG_CARVE_OUT}"),
-        LogLevel::Error | LogLevel::Warning | LogLevel::Info => base,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -263,24 +247,6 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
-
-    /// Byte-pins the directive strings. These literals — not the behavioural
-    /// test below — catch a respelling that `EnvFilter` still happens to cover
-    /// (`hyper-util` for `hyper_util`, silently absorbed by the `hyper=info`
-    /// prefix match).
-    #[test]
-    fn level_directive_pins_bare_levels_and_debug_transport_carve_out() {
-        assert_eq!(level_directive(LogLevel::Error), "error");
-        assert_eq!(level_directive(LogLevel::Warning), "warn");
-        assert_eq!(level_directive(LogLevel::Info), "info");
-        // The #439 carve-out, spelled out rather than rebuilt from
-        // `TRANSPORT_LOG_CARVE_OUT`, so emptying that constant cannot green
-        // both sides at once.
-        assert_eq!(
-            level_directive(LogLevel::Debug),
-            "debug,hyper_util=info,hyper=info,reqwest=info"
-        );
-    }
 
     /// A runtime `set_log_level debug` must raise mtui's own targets without
     /// switching on the transport's DEBUG, which prints a credential-bearing

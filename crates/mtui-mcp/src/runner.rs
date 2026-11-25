@@ -16,15 +16,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use mtui_core::{ColorMode, TRANSPORT_LOG_CARVE_OUT, register_all, resolve_log_directives};
+use mtui_core::{
+    ColorMode, LogLevel, TRANSPORT_LOG_CARVE_OUT, level_directive, register_all,
+    resolve_log_directives,
+};
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::registry::Registry;
+use tracing_subscriber::reload;
 
 use crate::args::{McpArgs, Transport};
-use crate::provider::{SessionProvider, SessionRegistry, StdioProvider};
+use crate::provider::{LogLevelControl, SessionProvider, SessionRegistry, StdioProvider};
 use crate::server::McpServer;
 use crate::session::McpSession;
 
@@ -39,23 +44,23 @@ pub async fn run() -> anyhow::Result<()> {
     let args = McpArgs::parse();
 
     let color = ColorMode::from(args.color);
-    init_tracing(args.debug, color);
+    let log_level = init_tracing(args.debug, color);
     tracing::debug!(debug = args.debug, "mtui-mcp starting");
 
     match args.transport {
-        Transport::Stdio => serve_stdio(&args).await,
-        Transport::Http => serve_http(&args).await,
+        Transport::Stdio => serve_stdio(&args, log_level).await,
+        Transport::Http => serve_http(&args, log_level).await,
     }
 }
 
 /// Serve the tool surface over stdio (one process == one client).
 ///
 /// stdout is the JSON-RPC transport — logging goes to stderr only.
-async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
+async fn serve_stdio(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Result<()> {
     let config = args.resolve_config();
     probe_audit_sink(&config).await?;
     let otel = init_otel_exporter(&config).await;
-    let (server, session) = build_stdio_server(config).await;
+    let (server, session) = build_stdio_server(config, log_level).await;
 
     tracing::info!("mtui-mcp: serving on stdio");
 
@@ -182,7 +187,7 @@ async fn wait_for_shutdown(
 ///
 /// Returns an error if the TCP listener cannot bind `--host:--port`, or if the
 /// server loop fails for a reason other than Ctrl-C.
-async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
+async fn serve_http(args: &McpArgs, log_level: LogLevelControl) -> anyhow::Result<()> {
     let config = args.resolve_config();
     probe_audit_sink(&config).await?;
     // OTLP probe before serving; sessions minted below clone the global.
@@ -200,7 +205,7 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     );
 
     let registry = Arc::new(register_all());
-    let sessions = SessionRegistry::new(registry, config);
+    let sessions = SessionRegistry::new(registry, config).with_log_level(log_level);
 
     // No-op when session_idle_timeout == 0.
     let sweeper_cancel = CancellationToken::new();
@@ -315,16 +320,22 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
     }
 }
 
-/// Install a minimal stderr `tracing` subscriber.
+/// Install a minimal stderr `tracing` subscriber and return the control that
+/// `set_log_level` changes its level through.
 ///
-/// No runtime-reload handle (`mtui-mcp` never installs a `set_log_level` sink)
-/// and no spinner-aware writer, unlike the REPL's `init_tracing`. Writes to
-/// **stderr** because stdout carries the MCP JSON-RPC stream; `-d/--debug` and
-/// `RUST_LOG` select the level, ANSI follows the resolved [`ColorMode`].
-fn init_tracing(debug: bool, color: ColorMode) {
+/// Writes to **stderr** because stdout carries the MCP JSON-RPC stream;
+/// `-d/--debug` and `RUST_LOG` select the startup level, ANSI follows the
+/// resolved [`ColorMode`]. No spinner-aware writer, unlike the REPL's.
+///
+/// The level is the **server's**: one filter per process, so under
+/// `--transport http` a `set_log_level` from any client changes it for every
+/// session. A reload replaces the whole filter, as in the REPL — per-target
+/// `RUST_LOG` directives are discarded, and the event format is unchanged.
+fn init_tracing(debug: bool, color: ColorMode) -> LogLevelControl {
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
     let (filter, notice) = startup_filter(debug);
+    let (filter, control) = reloadable_log_filter(filter);
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(color.resolve());
@@ -342,6 +353,33 @@ fn init_tracing(debug: bool, color: ColorMode) {
         // target, so a WARN event would be swallowed by the very filter it
         // warns about.
         eprintln!("{notice}");
+    }
+    control
+}
+
+/// Wrap `filter` in a reload layer, returning it with the [`LogLevelControl`]
+/// that swaps it for [`runtime_directives`] at a new level.
+#[doc(hidden)]
+pub fn reloadable_log_filter(
+    filter: EnvFilter,
+) -> (reload::Layer<EnvFilter, Registry>, LogLevelControl) {
+    let (layer, handle) = reload::Layer::new(filter);
+    // Best-effort: a reload after the subscriber was dropped is ignored.
+    let control: LogLevelControl = Arc::new(move |level| {
+        let _ = handle.reload(EnvFilter::new(runtime_directives(level)));
+    });
+    (layer, control)
+}
+
+/// The filter a runtime `set_log_level` installs: [`level_directive`], plus
+/// [`default_directives`]' `rmcp::service=warn` where the base level would
+/// otherwise let that noise through.
+fn runtime_directives(level: LogLevel) -> String {
+    match level {
+        LogLevel::Debug | LogLevel::Info => {
+            format!("{},rmcp::service=warn", level_directive(level))
+        }
+        LogLevel::Error | LogLevel::Warning => level_directive(level),
     }
 }
 
@@ -400,9 +438,12 @@ fn default_directives(debug: bool) -> String {
 /// The config is passed in rather than resolved here: [`serve_stdio`] already
 /// needs it for the probes above, and `Config::load` logs every malformed key
 /// it skips — resolving twice reports each of them twice.
-async fn build_stdio_server(config: mtui_config::Config) -> (McpServer, Arc<McpSession>) {
+async fn build_stdio_server(
+    config: mtui_config::Config,
+    log_level: LogLevelControl,
+) -> (McpServer, Arc<McpSession>) {
     let registry = Arc::new(register_all());
-    let provider = StdioProvider::new(config);
+    let provider = StdioProvider::new(config).with_log_level(log_level);
     let session = provider.get_or_create("<default>").await;
     (McpServer::new(registry, Arc::clone(&session)), session)
 }
@@ -538,7 +579,8 @@ mod tests {
     #[tokio::test]
     async fn build_stdio_server_wires_the_synthesised_surface() {
         // The tools capability is only advertised once the handler is wired.
-        let (server, _session) = build_stdio_server(args(&[]).resolve_config()).await;
+        let (server, _session) =
+            build_stdio_server(args(&[]).resolve_config(), Arc::new(|_| {})).await;
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
@@ -546,9 +588,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_stdio_server_installs_the_log_level_control() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let (_server, session) = build_stdio_server(
+            args(&[]).resolve_config(),
+            Arc::new(move |level| recorder.lock().unwrap().push(level)),
+        )
+        .await;
+
+        session
+            .run_command(&register_all(), "set_log_level", &["warning".to_owned()])
+            .await
+            .expect("set_log_level reaches the control");
+        assert_eq!(*seen.lock().unwrap(), vec![LogLevel::Warning]);
+    }
+
+    #[tokio::test]
     async fn build_stdio_server_returns_a_closeable_session() {
         // `close()` with no loaded template is a harmless no-op.
-        let (_server, session) = build_stdio_server(args(&[]).resolve_config()).await;
+        let (_server, session) =
+            build_stdio_server(args(&[]).resolve_config(), Arc::new(|_| {})).await;
         session.close().await;
     }
 
@@ -594,6 +654,26 @@ mod tests {
             default_directives(true),
             "debug,rmcp::service=warn,hyper_util=info,hyper=info,reqwest=info"
         );
+    }
+
+    #[test]
+    fn runtime_directives_keep_rmcp_quiet_and_cap_the_transport() {
+        assert_eq!(runtime_directives(LogLevel::Error), "error");
+        assert_eq!(runtime_directives(LogLevel::Warning), "warn");
+        assert_eq!(
+            runtime_directives(LogLevel::Info),
+            "info,rmcp::service=warn"
+        );
+        assert_eq!(
+            runtime_directives(LogLevel::Debug),
+            "debug,hyper_util=info,hyper=info,reqwest=info,rmcp::service=warn"
+        );
+        let out = probe(
+            EnvFilter::try_new(runtime_directives(LogLevel::Debug))
+                .expect("runtime directives must parse"),
+        );
+        assert!(!out.contains("s3cret"), "got: {out:?}");
+        assert!(out.contains("mtui debug reaches the log"), "got: {out:?}");
     }
 
     /// The assembled `-d` directive string must both **parse** and **filter**:

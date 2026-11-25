@@ -1532,7 +1532,8 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["300", "-t", "h1"]))
             }
             "set_log_level" => {
-                let (s, b) = empty_session();
+                let (mut s, b) = empty_session();
+                s.set_log_level_sink(Box::new(|_| {}));
                 (s, b, argv(&["warning"]))
             }
             "put" => {

@@ -95,8 +95,8 @@ pub struct Session {
     /// each line and MCP ignores it.
     should_exit: bool,
     /// Optional sink for runtime log-level changes: a
-    /// `tracing_subscriber::reload` handle under the REPL, `None` headlessly and
-    /// in tests, where `set_log_level` logs the change but mutates nothing.
+    /// `tracing_subscriber::reload` handle under the REPL and `mtui-mcp`, `None`
+    /// in tests, where `set_log_level` fails rather than claim a change.
     log_level_sink: Option<LogLevelSink>,
     /// Optional sink for best-effort desktop notifications, backed by
     /// `mtui-cli`'s `notification::notify_user` under the REPL and `None`
@@ -2601,8 +2601,8 @@ impl Session {
     }
 
     /// Installs the callback `set_log_level` uses to apply a runtime level
-    /// change. The REPL wires it to a `tracing_subscriber::reload` handle so the
-    /// change takes effect immediately; headless callers leave it unset.
+    /// change. Both entrypoints wire it to a `tracing_subscriber::reload` handle
+    /// so the change takes effect immediately.
     pub fn set_log_level_sink(&mut self, sink: LogLevelSink) {
         self.log_level_sink = Some(sink);
     }
@@ -2610,7 +2610,7 @@ impl Session {
     /// Applies `level` through the installed sink, if any.
     ///
     /// Returns `true` when a sink was present and invoked; `false` when none is
-    /// installed (headless/tests), so the caller can still log the change.
+    /// installed, so the caller does not report a change that never happened.
     pub(crate) fn apply_log_level(&mut self, level: LogLevel) -> bool {
         if let Some(sink) = self.log_level_sink.as_mut() {
             sink(level);
