@@ -14,17 +14,35 @@ The config file is resolved in this order:
    - `/etc/mtui.toml` (system-wide)
    - `~/.mtui.toml` (home dotfile)
    - `$XDG_CONFIG_HOME/mtui/mtui.toml` (per-user XDG; falls back to
-     `~/.config/mtui/mtui.toml`)
+     `~/.config/mtui/mtui.toml`). On macOS the per-user file is
+     `~/Library/Application Support/mtui/mtui.toml` and `$XDG_CONFIG_HOME` is
+     not consulted.
 
    When several of these exist they are merged: an option set in a
    higher-precedence file overrides the same option in a lower one. The per-user
    XDG file therefore wins over `/etc` on shared keys.
 
-Loading is **lenient**: a missing or malformed file — or a single bad value — is
-logged at `ERROR` and skipped, falling back to the default. A bad value never
-invalidates the rest of the file, and loading never hard-fails.
+**Command-line flags** are the highest-precedence layer, applied on top of every
+file: `-t/--template-dir`, `-w/--connection-timeout`, `--reboot-timeout`,
+`--reboot-retries` (`mtui` only), `-g/--gitea-token` and `--ssl-verify`.
 
-`~` is expanded to your home directory in path-valued options.
+Loading is **lenient** and never hard-fails:
+
+- A missing file is skipped silently, including a mistyped `--config` path or
+  `$MTUI_CONF`.
+- A file that fails to parse as TOML, or holds a value of the wrong type, is
+  logged at `ERROR` and skipped **whole**; its options take their defaults.
+- A value check — a zero where a positive number is required, an invalid
+  `install_logs`, a relative `put_dirs` entry — rejects only that key, logs it at
+  `ERROR`, and keeps the rest of the file.
+- Unknown keys are ignored without a warning.
+
+`~` is expanded to your home directory in path-valued options, except in the
+CA-bundle path of `ssl_verify`.
+
+The data directory (`$XDG_DATA_HOME/mtui`, or `~/Library/Application
+Support/mtui` on macOS) holds the REPL `history` and the cached
+`teregen-token.json`.
 
 ## Inspecting and changing config at runtime
 
@@ -37,8 +55,15 @@ config show connection_timeout
 config set max_parallel 8
 ```
 
+`config` addresses options by flattened attribute names — `session_user`,
+`refhosts_*`, `openqa_instance*`, `target_tempdir`, `lock_*`, `slack_*`, and so
+on — rather than by `[section]` key. `config show` lists 39 attributes and
+omits `max_oqa_parallel`, the `[mcp]` table and the `[obs]` table.
+`template_dir`, `install_logs`, `refhosts_path` and `target_tempdir` can be
+shown but not `set`.
+
 Secret options are never echoed: `config show`/`config set` print `<set>` for a
-configured secret (currently `gitea_token`) instead of its value. Over MCP,
+configured secret (`gitea_token` and `slack_token`) instead of its value. Over MCP,
 `config show` additionally refuses the bulk dump and operator-local values;
 see [MCP server](mcp.md#config_show-filtering).
 
@@ -65,7 +90,7 @@ Defaults below are the built-in values.
 | `reboot_retries` | int (>0) | `10` | Number of post-reboot reconnect attempts beyond the first. With the defaults this gives a rebooting host up to ~12.7 minutes to come back. |
 | `max_parallel` | int (>0) | `50` | Max hosts to fan out to concurrently (SSH/SFTP/lock/connect batches). |
 | `max_oqa_parallel` | int (>0) | `8` | Max concurrent openQA/QAM HTTP requests in the overview search (kept low to be polite to shared hosts). |
-| `ssh_strict_host_key_checking` | string | `auto_add` | SSH host-key checking policy (`auto_add`, `strict`, `warn`, …). |
+| `ssh_strict_host_key_checking` | string | `auto_add` | SSH host-key checking policy: `auto_add`, `warn` or `reject`. An unknown value falls back to `auto_add` with a warning. |
 
 > **SSH is pubkey-only by design.** mtui authenticates from the SSH agent or
 > `~/.ssh/id_*`; there is no password auth.
@@ -108,7 +133,7 @@ Defaults below are the built-in values.
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `api` | URL | `https://qam.suse.de/api/v1` | TeReGen report/queue API base URL. |
-| `api_v2` | URL | `https://qam.suse.de/api/v2` | TeReGen v2 report/queue API base URL (the JSON-document read path). |
+| `api_v2` | URL | `https://qam.suse.de/api/v2` | TeReGen v2 API base URL: reading **and writing** report documents, `teregen_login`/`whoami`, `checkout`, `regenerate` and the MCP document tools. |
 
 ### `[openqa]`
 
@@ -116,7 +141,7 @@ Defaults below are the built-in values.
 |-----|------|---------|---------|
 | `openqa` | URL | `https://openqa.suse.de` | openQA instance URL. |
 | `baremetal` | URL | `http://openqa.qam.suse.cz` | Baremetal openQA instance URL. |
-| `distri` | string | `sle` | openQA install `distri` parameter. |
+| `distri` | string | `sle` | Accepted and shown by `config`, but not used: openQA queries always send `distri=sle`. |
 
 openQA API credentials (`key`/`secret`, used to sign requests with
 `X-API-Hash`) are **not** part of `mtui.toml`. mtui delegates their discovery
@@ -203,8 +228,8 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `pool_reap_stale` | bool | `true` | On a pool claim attempt, force-remove a pre-existing pool claim older than `pool_stale_age`, regardless of owner. The only automatic recovery for a claim orphaned by an uncatchable exit (SIGKILL/panic/power loss). |
 | `pool_stale_age` | seconds | `86400` | Age beyond which a pool claim is stale and reapable. `0` disables pool-claim reaping. |
 | `pi_autolock` | bool | `true` | When testing a Product Increment (PI), lock each refhost as it connects while the report is loaded, released on unload/quit. |
-| `wait` | seconds | `0` | Pool-claim queueing budget. `0` fails fast on a busy host. |
-| `wait_poll` | seconds (>0) | `15` | Poll interval while waiting for a busy pool lock to free. |
+| `wait` | seconds | `0` | Queueing budget for a busy host, for a pool claim and for a foreign operation lock (`install`/`update`). `0` fails fast. |
+| `wait_poll` | seconds (>0) | `15` | Poll interval while waiting for a busy lock to free. |
 
 ### `[mcp]`
 
@@ -220,7 +245,7 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `session_cap` | int (>0) | `32` | Ceiling on concurrent per-client sessions under `--transport http`. |
 | `session_idle_timeout` | seconds (>0) | `14400` | Inactivity before an idle http session is swept. Also pins rmcp's streamable-HTTP keep-alive (rmcp's own default is 300 s), so the transport never tears a quiet session down before this sweeper would. |
 | `sweep_parallel` | int (>0) | `4` | Max stale sessions the idle sweeper tears down concurrently per cycle. |
-| `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. Agent clients should prefer `core` (36 vs 64 tools on every request); see [MCP server](mcp.md). |
+| `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. Agent clients should prefer `core` (43 vs 71 tools on every request); see [MCP server](mcp.md). |
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). E.g. `["updates", "openqa_overview"]` for a workflow that never lists the queue or polls openQA. |
 | `audit_log` | path | *(unset)* | Durable audit sink for tool calls (versioned JSONL, `0600`): one or two records per call — an `intent` before and an outcome after for a tool without `readOnlyHint`, an outcome alone for a read-only one — plus a terminal record per background job. Unset disables auditing. A path that cannot be opened refuses to start the server; afterwards a failed pre-dispatch `intent` write refuses the call (nothing ran), while a failed outcome write returns the result with an in-band notice. See [MCP server](mcp.md#audit-log). |
@@ -254,8 +279,10 @@ oscrc.
 
 ## Secrets and credentials
 
-- The **`gitea_token`** is masked as `<set>` by both `config show` and
-  `config set`, and is never written to logs or display output.
+- The **`gitea_token`** and **`slack_token`** are masked as `<set>` by both
+  `config show` and `config set`, and are never written to logs or display
+  output. `-g/--gitea-token` puts the Gitea token on the command line, where
+  other local users can see it; prefer the config file.
 - Configured datasource URLs may embed credentials
   (`scheme://user:pass@host`). mtui sanitises the userinfo to `***` before any
   URL reaches a log or an error message, keeping the host visible for diagnosis.

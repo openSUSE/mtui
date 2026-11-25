@@ -7,9 +7,10 @@
 # File resolution order (highest precedence first): `--config <file>` flag,
 # `$MTUI_CONF`, then the default pair merged lowest-precedence first:
 # `/etc/mtui.toml` -> `~/.mtui.toml` -> `$XDG_CONFIG_HOME/mtui/mtui.toml`.
-# Loading is lenient: a missing or malformed file, or a single bad value, is
-# logged and skipped in favor of the default. See `docs/src/configuration.md`
-# for the full reference.
+# Loading is lenient: a missing file is skipped silently, a file that fails to
+# parse is logged and skipped whole, and a single bad value is logged and
+# replaced by its default. See `docs/src/configuration.md` for the full
+# reference.
 
 [mtui]
 # Directory holding checked-out testreport templates.
@@ -41,7 +42,7 @@
 # max_parallel = 50
 # Max concurrent openQA/QAM HTTP requests in the overview search.
 # max_oqa_parallel = 8
-# SSH host-key checking policy (auto_add, strict, warn, ...).
+# SSH host-key checking policy: auto_add, warn or reject.
 # ssh_strict_host_key_checking = "auto_add"
 
 [refhosts]
@@ -73,7 +74,8 @@
 [teregen]
 # TeReGen report/queue API base URL.
 # api = "https://qam.suse.de/api/v1"
-# TeReGen v2 report/queue API base URL (the JSON-document read path).
+# TeReGen v2 API base URL: reading and writing report documents, teregen_login,
+# checkout, regenerate and the MCP document tools.
 # api_v2 = "https://qam.suse.de/api/v2"
 
 [openqa]
@@ -81,7 +83,7 @@
 # openqa = "https://openqa.suse.de"
 # Baremetal openQA instance URL.
 # baremetal = "http://openqa.qam.suse.cz"
-# openQA install `distri` parameter.
+# Accepted but not used: openQA queries always send distri=sle.
 # distri = "sle"
 
 [gitea]
@@ -118,11 +120,13 @@
 # pool_reap_stale = true
 # Age (seconds) beyond which a pool claim is stale and reapable. 0 disables pool-claim reaping.
 # pool_stale_age = 86400
-# When testing a Product Increment (PI), auto-lock all refhosts on `assign` and unlock at end of testing.
+# When testing a Product Increment (PI), lock each refhost as it connects while
+# the report is loaded; released on unload/quit.
 # pi_autolock = true
-# Pool-claim queueing budget, in seconds. 0 fails fast on a busy host.
+# Queueing budget, in seconds, for a busy host: a pool claim or a foreign
+# operation lock. 0 fails fast.
 # wait = 0
-# Poll interval (seconds) while waiting for a busy pool lock to free.
+# Poll interval (seconds) while waiting for a busy lock to free.
 # wait_poll = 15
 
 [mcp]
