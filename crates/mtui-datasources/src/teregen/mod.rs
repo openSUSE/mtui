@@ -42,7 +42,7 @@ pub mod tokens;
 
 use document::MAX_DETAIL_LEN;
 
-pub use auth::{AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
+pub use auth::{AuthHint, AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
     ArtifactEntry, ArtifactOrigin, ArtifactStored, ArtifactUploadError, DocumentFetch,
     Precondition, TeregenV2, TeregenV2Error, TeregenV2WriteError, UploadOutcome,

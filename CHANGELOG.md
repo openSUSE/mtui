@@ -282,6 +282,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- A refused TeReGen login or write names the cause TeReGen reports with its
+  `401`, where it said the cause could not be told apart: an expired or used
+  challenge, a rejected signature (the principal is not listed, has no usable
+  key, or the key does not match; TeReGen does not say which), a key-list
+  outage, or a missing, unknown or expired bearer token. A refusal without a
+  known cause keeps the list of possible causes. A challenge refused as expired
+  or already used is retried once with a new one, and bearer requests now ask
+  for JSON, which is the only form on which TeReGen names a missing token.
 - While an update is loaded, a reference host that `prepare`, `update`,
   `downgrade`, `install` and `uninstall` cannot drive is no longer attached.
   That covers a host whose key has no command set, such as SLES 15 with a
