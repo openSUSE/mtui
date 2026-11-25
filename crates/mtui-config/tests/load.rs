@@ -127,6 +127,24 @@ fn retired_mtui_tempdir_key_is_ignored_not_rejected() {
     assert_eq!(cfg.session_user, "leniencyuser");
 }
 
+/// An `mtui.toml` still carrying the retired `[openqa] distri` key must keep
+/// loading — and applying its other keys — rather than erroring on the
+/// now-unknown field.
+#[test]
+fn retired_openqa_distri_key_is_ignored_not_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mtui.toml");
+    std::fs::write(
+        &path,
+        "[openqa]\ndistri = \"sle-micro\"\nopenqa = \"https://oqa.example\"\n",
+    )
+    .unwrap();
+
+    let cfg = Config::load(Some(path));
+
+    assert_eq!(cfg.openqa_instance, "https://oqa.example");
+}
+
 /// An `mtui.toml` still carrying the retired `[svn]` table must keep loading —
 /// and applying its other keys — rather than erroring on the now-unknown
 /// section.

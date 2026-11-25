@@ -210,9 +210,6 @@ fn default_openqa_instance_baremetal() -> String {
 fn default_gitea_url() -> String {
     "https://src.suse.de".to_owned()
 }
-fn default_openqa_install_distri() -> String {
-    "sle".to_owned()
-}
 /// The Slack integration is **opt-in**: posting to a chat workspace is an
 /// outward-facing side effect that must never follow from a default, so it
 /// stays dark (and says why when invoked) until an explicit `enabled = true`.
@@ -398,13 +395,12 @@ pub(crate) struct TeregenSection {
     pub api_v2: Option<String>,
 }
 
-/// `[openqa]` table — openQA instance URLs and the install distri.
+/// `[openqa]` table — openQA instance URLs.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct OpenqaSection {
     pub openqa: Option<String>,
     pub baremetal: Option<String>,
-    pub distri: Option<String>,
 }
 
 /// `[target]` table.
@@ -551,7 +547,6 @@ impl RawConfig {
         take!(teregen, api_v2);
         take!(openqa, openqa);
         take!(openqa, baremetal);
-        take!(openqa, distri);
         take!(target, tempdir);
         take!(gitea, token);
         take!(gitea, url);
@@ -664,8 +659,6 @@ pub struct Config {
     pub openqa_instance: String,
     /// Baremetal openQA instance URL.
     pub openqa_instance_baremetal: String,
-    /// openQA install `distri` parameter.
-    pub openqa_install_distri: String,
 
     // [gitea]
     /// API token for the Gitea PR review workflow. Empty by default; the Gitea
@@ -831,7 +824,6 @@ impl Default for Config {
             teregen_api_v2: default_teregen_api_v2(),
             openqa_instance: default_openqa_instance(),
             openqa_instance_baremetal: default_openqa_instance_baremetal(),
-            openqa_install_distri: default_openqa_install_distri(),
             gitea_token: String::new(),
             gitea_url: default_gitea_url(),
             slack_enabled: default_slack_enabled(),
@@ -997,7 +989,6 @@ impl Config {
                 "openqa_instance_baremetal",
                 d.openqa_instance_baremetal
             ),
-            openqa_install_distri: raw.openqa.distri.unwrap_or(d.openqa_install_distri),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
             gitea_url: validated_url!(raw.gitea.url, "gitea_url", d.gitea_url),
 
@@ -1159,7 +1150,6 @@ mod tests {
         assert_eq!(c.teregen_api_v2, "https://qam.suse.de/api/v2");
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
         assert_eq!(c.openqa_instance_baremetal, "http://openqa.qam.suse.cz");
-        assert_eq!(c.openqa_install_distri, "sle");
         assert_eq!(c.obs_api_url, "https://api.suse.de");
         assert_eq!(c.obs_request_timeout, 180);
     }
@@ -1215,7 +1205,6 @@ mod tests {
             [openqa]
             openqa = "http://oqa.local"
             baremetal = "http://oqa-bm.local"
-            distri = "sle-micro"
             "#,
         )
         .unwrap();
@@ -1225,7 +1214,6 @@ mod tests {
         assert_eq!(c.teregen_api_v2, "http://tere.local/api/v2");
         assert_eq!(c.openqa_instance, "http://oqa.local");
         assert_eq!(c.openqa_instance_baremetal, "http://oqa-bm.local");
-        assert_eq!(c.openqa_install_distri, "sle-micro");
     }
 
     #[test]
@@ -1648,14 +1636,14 @@ mod tests {
             r#"
             [openqa]
             openqa = "https://openqa.suse.de:44e3"
-            distri = "sle-micro"
+            baremetal = "http://oqa-bm.local"
             "#,
         )
         .unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
         // A sibling valid option in the same file still applies.
-        assert_eq!(c.openqa_install_distri, "sle-micro");
+        assert_eq!(c.openqa_instance_baremetal, "http://oqa-bm.local");
     }
 
     #[test]

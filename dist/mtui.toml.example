@@ -83,8 +83,6 @@
 # openqa = "https://openqa.suse.de"
 # Baremetal openQA instance URL.
 # baremetal = "http://openqa.qam.suse.cz"
-# Accepted but not used: openQA queries always send distri=sle.
-# distri = "sle"
 
 [gitea]
 # API token for the Gitea PR review workflow (secret: masked as <set> by
