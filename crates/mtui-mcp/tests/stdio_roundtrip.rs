@@ -201,25 +201,12 @@ async fn call_config_set_is_method_not_found() {
     .await;
 }
 
-/// #410, dispatch half: an openQA operator override is accepted and reaches
-/// the engine — the call answers with an error payload carrying the
-/// `require_update` refusal (`load_template`), not a protocol error, and
-/// never an unknown-argument refusal.
-///
-/// Non-goal, stated so this is not mistaken for wiring coverage: with no
-/// report loaded both probes fail at `require_update` before the override is
-/// read, so this passes with the dispatch strip deleted too. Engine-inertness
-/// is pinned by `dispatch_openqa_overrides_are_ignored_until_26_5` in
-/// `crates/mtui-mcp/src/tools.rs`, which drives dispatch past
-/// `require_update` against a mock server.
+/// #410, dispatch half: an openQA operator override is refused as an unknown
+/// argument on the wire, before it can reach the engine.
 #[tokio::test]
-async fn call_openqa_override_is_ignored() {
+async fn call_openqa_override_is_refused() {
     with_client(|client| async move {
-        let plain = client
-            .call_tool(CallToolRequestParams::new("openqa_overview"))
-            .await
-            .expect("the call answers");
-        let overridden = client
+        let out = client
             .call_tool(
                 CallToolRequestParams::new("openqa_overview").with_arguments(
                     serde_json::json!({"url_openqa": "http://evil.example/"})
@@ -229,23 +216,12 @@ async fn call_openqa_override_is_ignored() {
                 ),
             )
             .await
-            .expect("a shimmed kwarg answers too");
-        for out in [&plain, &overridden] {
-            assert_eq!(out.is_error, Some(true));
-            let text = format!("{:?}", out.content);
-            assert!(
-                text.contains("load_template"),
-                "the call must reach the engine's require_update refusal: {text}"
-            );
-            assert!(
-                !text.contains("unknown argument"),
-                "the override must be ignored, not refused: {text}"
-            );
-        }
-        assert_eq!(
-            format!("{:?}", plain.content),
-            format!("{:?}", overridden.content),
-            "the override changes nothing"
+            .expect("the call answers with an error payload");
+        assert_eq!(out.is_error, Some(true));
+        let text = format!("{:?}", out.content);
+        assert!(
+            text.contains("unknown argument(s): url_openqa"),
+            "the override must be refused: {text}"
         );
     })
     .await;

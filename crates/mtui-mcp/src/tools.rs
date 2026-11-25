@@ -79,58 +79,6 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// Same double duty as [`READ_ONLY_PREFIXES`].
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs", "openqa_summary"];
 
-/// Tool-call keys still accepted, and ignored, after their property left the
-/// tool's schema in 26.4 (#597, #410): inert there, and a pinned client must
-/// not start failing on a minor release. Keyed by tool name; `dispatch_tool`
-/// looks the table up by the route's stored tool name. Delete with the
-/// 26.5 version bump; `deprecated_kwargs_expire_with_26_5` fails that bump until
-/// this is empty. `load_template` is absent on purpose: its `-T` failed the call
-/// before it ran, so its keys are refused outright.
-///
-/// The `openqa_*` rows are the #410 per-arg deny in its one-release shim form:
-/// the overrides stay hidden from the schemas (via `deny::MCP_DENIED_ARGS`) but
-/// a sent one is ignored, not refused, until 26.5. Unlike the #597 keys — which
-/// name no live `clap` arg, so argv reconstruction drops them on its own —
-/// these name live args, so `dispatch_tool` strips them before `kwargs_to_argv`.
-const DEPRECATED_KWARGS: &[(&str, &[&str])] = &[
-    ("list_refhosts", &["template", "all_templates"]),
-    ("list_templates", &["template", "all_templates"]),
-    ("regenerate", &["all_templates"]),
-    ("set_log_level", &["template", "all_templates"]),
-    ("unload", &["template", "all_templates"]),
-    ("updates", &["template", "all_templates"]),
-    ("whoami", &["template", "all_templates"]),
-    (
-        "openqa_overview",
-        &[
-            "url_openqa",
-            "url_dashboard_qam",
-            "url_qam",
-            "test_pattern",
-            "no_fetch",
-        ],
-    ),
-    ("openqa_jobs", &["url_openqa", "url_dashboard_qam"]),
-];
-
-/// The deprecated keys of `tool` (empty for every other tool).
-fn deprecated_kwargs(tool: &str) -> &'static [&'static str] {
-    match DEPRECATED_KWARGS.iter().find(|(name, _)| *name == tool) {
-        Some((_, keys)) => keys,
-        None => &[],
-    }
-}
-
-/// Remove shimmed keys from dispatch kwargs before argv reconstruction, so an
-/// accepted-but-dropped key never reaches the engine. The #597 keys name no
-/// live arg and would drop out on their own; the #410 overrides name live
-/// args, so this is what keeps them from taking effect.
-fn strip_deprecated_kwargs(tool: &str, kwargs: &mut Map<String, Value>) {
-    for key in deprecated_kwargs(tool) {
-        kwargs.remove(*key);
-    }
-}
-
 /// A synthesised MCP tool as plain data; [`crate::server`] converts it into an
 /// `rmcp::model::Tool` with its `ToolAnnotations { read_only_hint }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,39 +356,17 @@ pub(crate) async fn dispatch_tool(
     // this tool's schema — for a fanned-out tool (`config_show`) the *subcommand*,
     // where its args live, not the parent. `background` was popped above.
     // Minus the per-arg MCP deny (#410): the overrides stay on the live `clap`
-    // args, so schema-only hiding would sail a sent value through to the
-    // engine. Denied keys leave the allowed set here; the ones still covered
-    // by their `DEPRECATED_KWARGS` shim are re-admitted below and stripped
-    // before argv reconstruction instead of refused.
+    // args, so schema-only hiding would sail a sent value through to the engine.
     let arg_source = subparser_layer(&parser, &route.argv_prefix).unwrap_or(&parser);
     let denied = mcp_denied_args(&route.name);
-    // Deprecated keys stay accepted for one release. The #597 keys name no
-    // live arg, so reconstruction would drop them on its own; the #410
-    // overrides name live args, so the strip below is what keeps them from
-    // reaching argv.
-    let deprecated = deprecated_kwargs(&route.name);
-    let sent: Vec<&str> = deprecated
-        .iter()
-        .copied()
-        .filter(|key| kwargs.contains_key(*key))
-        .collect();
-    if !sent.is_empty() {
-        tracing::warn!(
-            tool = route.name.as_str(),
-            keys = ?sent,
-            "ignoring deprecated tool-call keys: dropped from the schema in 26.4, refused from 26.5 (#597, #410)"
-        );
-    }
     let allowed = arg_source
         .get_arguments()
         .filter(|a| !crate::schema::is_clap_builtin(a))
         .map(|a| a.get_id().as_str())
-        .filter(|id| !denied.contains(id))
-        .chain(deprecated.iter().copied());
+        .filter(|id| !denied.contains(id));
     if let Err(err) = reject_unknown_kwargs(&kwargs, allowed) {
         return Err::<String, _>(err).into();
     }
-    strip_deprecated_kwargs(&route.name, &mut kwargs);
 
     // The same layer, or reconstruction drops every kwarg the parent does not
     // declare: `config set` emitted a bare `["set"]` and clap rejected it for the
@@ -1040,8 +966,7 @@ mod tests {
     /// `template=` on `load_template` is an unknown key, refused before argv
     /// reconstruction — not a `TemplateNotLoaded` from the resolver (#597).
     /// Both keys, because `load_template` is the one command whose `-T` failed
-    /// the call before it ran: it is exempt from the one-release shim the other
-    /// session-level tools get, so neither key may be listed for it.
+    /// the call before it ran.
     #[tokio::test]
     async fn load_template_with_a_template_kwarg_is_refused_as_unknown() {
         let session = McpSession::new(Config::default());
@@ -1068,93 +993,6 @@ mod tests {
         .expect_err("template kwargs refused");
         assert_eq!(err.stderr, "unknown argument(s): all_templates, template");
         assert_eq!(err.exit_code, 1);
-    }
-
-    /// The `template`/`all_templates` keys dropped from these tools' schemas in
-    /// 26.4 stay accepted and inert for one release: identical output to
-    /// omitting them, and the unloaded RRID is never resolved (#597).
-    /// `set_log_level` is deliberately not exercised here — its body mutates the
-    /// process-wide log filter, which this crate's tests share.
-    #[tokio::test]
-    async fn deprecated_template_kwargs_are_ignored_on_session_level_tools() {
-        let registry = Arc::new(register_all());
-        let routes = tool_routes(&registry);
-        for (tool, expected) in [
-            ("whoami", "User: "),
-            ("list_templates", "no templates loaded"),
-        ] {
-            let session = McpSession::new(Config::default());
-            let route = routes.get(tool).unwrap_or_else(|| panic!("{tool} route"));
-            let mut outputs = Vec::new();
-            for kwargs in [
-                json!({}),
-                json!({ "template": "SUSE:Maintenance:9:9" }),
-                json!({ "all_templates": true }),
-            ] {
-                let out = completed(
-                    dispatch_tool(
-                        &registry,
-                        &session,
-                        route,
-                        kwargs.as_object().unwrap(),
-                        None,
-                        None,
-                    )
-                    .await
-                    .outcome,
-                )
-                .unwrap_or_else(|e| panic!("{tool} with {kwargs}: {e}"));
-                assert!(out.contains(expected), "{tool} with {kwargs}: {out:?}");
-                outputs.push(out);
-            }
-            assert_eq!(
-                outputs[0], outputs[1],
-                "{tool}: template= changed the output"
-            );
-            assert_eq!(
-                outputs[0], outputs[2],
-                "{tool}: all_templates= changed the output"
-            );
-        }
-    }
-
-    /// `regenerate` kept `-T` but lost `--all-templates`, so only that key is
-    /// shimmed: the call runs and fails on its own terms, not on the key (#597).
-    #[tokio::test]
-    async fn regenerate_all_templates_kwarg_is_ignored() {
-        let session = McpSession::new(Config::default());
-        let registry = Arc::new(register_all());
-        let routes = tool_routes(&registry);
-        let route = routes.get("regenerate").expect("regenerate route");
-        let mut errors = Vec::new();
-        for kwargs in [json!({}), json!({ "all_templates": true })] {
-            let err = completed(
-                dispatch_tool(
-                    &registry,
-                    &session,
-                    route,
-                    kwargs.as_object().unwrap(),
-                    None,
-                    None,
-                )
-                .await
-                .outcome,
-            )
-            .expect_err("nothing loaded, so regenerate fails either way");
-            assert!(
-                !err.stderr.contains("unknown argument"),
-                "{kwargs}: {:?}",
-                err.stderr
-            );
-            errors.push(err);
-        }
-        assert_eq!(errors[0].stderr, errors[1].stderr);
-        assert_eq!(errors[0].exit_code, errors[1].exit_code);
-        assert!(
-            errors[0].stderr.contains("Metadata not loaded"),
-            "{:?}",
-            errors[0].stderr
-        );
     }
 
     /// `list_refhosts`'s own `version` arg is accepted, not refused as an
@@ -1185,125 +1023,47 @@ mod tests {
         }
     }
 
-    /// The shim exempts named keys, not unknown keys at large: a typo on a
-    /// shimmed tool is still refused. Green before the shim landed too — its job
-    /// is to stay green after it (#597).
+    /// The keys dropped from the schemas in 26.4 (#597, #410) are refused like
+    /// any other unknown key.
     #[tokio::test]
-    async fn typo_keys_are_still_refused_on_a_shimmed_tool() {
-        let session = McpSession::new(Config::default());
+    async fn keys_dropped_in_26_4_are_refused_as_unknown() {
         let registry = Arc::new(register_all());
         let routes = tool_routes(&registry);
-        let route = routes.get("whoami").expect("whoami route");
-        let kwargs = json!({ "temlate": "x" });
-        let err = completed(
-            dispatch_tool(
-                &registry,
-                &session,
-                route,
-                kwargs.as_object().unwrap(),
-                None,
-                None,
+        for (tool, key, kwargs) in [
+            (
+                "whoami",
+                "template",
+                json!({ "template": "SUSE:Maintenance:9:9" }),
+            ),
+            (
+                "list_templates",
+                "all_templates",
+                json!({ "all_templates": true }),
+            ),
+            (
+                "openqa_overview",
+                "url_openqa",
+                json!({ "url_openqa": "http://127.0.0.1:1/" }),
+            ),
+        ] {
+            let session = McpSession::new(Config::default());
+            let route = routes.get(tool).unwrap_or_else(|| panic!("{tool} route"));
+            let err = completed(
+                dispatch_tool(
+                    &registry,
+                    &session,
+                    route,
+                    kwargs.as_object().unwrap(),
+                    None,
+                    None,
+                )
+                .await
+                .outcome,
             )
-            .await
-            .outcome,
-        )
-        .expect_err("a misspelled key is not shimmed");
-        assert_eq!(err.stderr, "unknown argument(s): temlate");
-        assert_eq!(err.exit_code, 1);
-    }
-
-    /// Every shimmed row names a live tool carrying that same name on its
-    /// route, and whose schema really has dropped the key. Kills a renamed
-    /// tool leaving a dead row, and a property re-added while the shim still
-    /// exempts it (#597).
-    #[test]
-    fn deprecated_kwargs_name_live_tools_and_absent_properties() {
-        let registry = register_all();
-        let tools = build_tools(&registry);
-        let routes = tool_routes(&registry);
-        for (tool, keys) in DEPRECATED_KWARGS {
-            assert_ne!(
-                *tool, "load_template",
-                "load_template refuses both keys outright; it must not be shimmed"
-            );
-            let route = routes
-                .get(*tool)
-                .unwrap_or_else(|| panic!("{tool} is not a synthesised tool"));
-            // `dispatch_tool` looks the table up by the route's stored tool
-            // name, so a route carrying any other name would never be shimmed.
-            assert_eq!(route.name, *tool, "{tool} routes as {}", route.name);
-            assert!(
-                route.argv_prefix.is_empty(),
-                "{tool}: {:?}",
-                route.argv_prefix
-            );
-            let props = prop_names(&tools, tool);
-            for key in *keys {
-                assert!(
-                    !props.contains(&(*key).to_owned()),
-                    "{tool}.{key} is back in the schema; drop the shim row"
-                );
-            }
-            assert!(!keys.is_empty(), "{tool}: an empty row shims nothing");
+            .expect_err("a dropped key is refused");
+            assert_eq!(err.stderr, format!("unknown argument(s): {key}"), "{tool}");
+            assert_eq!(err.exit_code, 1, "{tool}");
         }
-    }
-
-    /// #410: the per-arg deny and its one-release shim cannot drift apart.
-    /// Every denied key stays accepted (shimmed) until 26.5, and no shimmed
-    /// key outlives its deny: dropping a key from `MCP_DENIED_ARGS` while the
-    /// shim still admits it would sail the value through to the engine (the
-    /// #410 overrides name live `clap` args, so only the strip stops them),
-    /// and dropping a shim row early would refuse a pinned client.
-    #[test]
-    fn denied_args_match_their_deprecation_shim() {
-        use std::collections::BTreeSet;
-
-        use crate::deny::MCP_DENIED_ARGS;
-
-        for (tool, args) in MCP_DENIED_ARGS {
-            let denied: BTreeSet<&str> = args.iter().copied().collect();
-            let shimmed: BTreeSet<&str> = deprecated_kwargs(tool).iter().copied().collect();
-            assert_eq!(denied, shimmed, "{tool}: deny and shim drifted apart");
-        }
-        // The #597 rows shim keys with no deny; a #410 key must never hide there.
-        for (tool, keys) in DEPRECATED_KWARGS {
-            if MCP_DENIED_ARGS.iter().any(|(name, _)| name == tool) {
-                continue;
-            }
-            for key in *keys {
-                assert!(
-                    !MCP_DENIED_ARGS.iter().any(|(_, args)| args.contains(key)),
-                    "{tool}.{key}: shimmed without a deny"
-                );
-            }
-        }
-    }
-
-    /// The removal release, made enforceable: the version bump to 26.5 fails
-    /// until the shim is gone (#597, #410).
-    #[test]
-    fn deprecated_kwargs_expire_with_26_5() {
-        let mut parts = env!("CARGO_PKG_VERSION").split('.');
-        let major: u32 = parts.next().and_then(|p| p.parse().ok()).expect("major");
-        let minor: u32 = parts.next().and_then(|p| p.parse().ok()).expect("minor");
-        assert!(
-            (major, minor) < (26, 5) || DEPRECATED_KWARGS.is_empty(),
-            "26.5 is here, so delete the one-release shim (#597, #410). In \
-             crates/mtui-mcp/src/tools.rs: the `DEPRECATED_KWARGS` table, the \
-             `deprecated_kwargs` helper, the `strip_deprecated_kwargs` helper and \
-             its call in `dispatch_tool`, and in `dispatch_tool` the `deprecated`/`sent` \
-             block plus the `.chain(deprecated.iter().copied())` on `allowed`. In \
-             crates/mtui-mcp/src/deny.rs: the `MCP_DENIED_ARGS` doc paragraph promising \
-             the accept-and-ignore shim. Then \
-             these tests: `deprecated_template_kwargs_are_ignored_on_session_level_tools`, \
-             `regenerate_all_templates_kwarg_is_ignored`, \
-             `typo_keys_are_still_refused_on_a_shimmed_tool`, \
-             `deprecated_kwargs_name_live_tools_and_absent_properties`, \
-             `denied_args_match_their_deprecation_shim`, \
-             `dispatch_openqa_overrides_are_ignored_until_26_5` and this one. \
-             Finally the CHANGELOG `### Deprecated` entry and the two-release sentence \
-             in AGENTS.md's MCP contracts bullet."
-        );
     }
 
     #[test]
@@ -1505,195 +1265,6 @@ mod tests {
                 jobs.contains(&kept.to_owned()),
                 "openqa_jobs.{kept} missing: {jobs:?}"
             );
-        }
-    }
-
-    /// #410: the hidden openQA overrides stay accepted and inert for one
-    /// release per the MCP schema contract (`DEPRECATED_KWARGS`, refused from
-    /// 26.5). Drives real `dispatch_tool` past `require_update` against a
-    /// mock server: the configured endpoint answers, the sent override names
-    /// an unroutable address, so a leaked override fails the call while a
-    /// stripped one succeeds with the same output as omitting it.
-    ///
-    /// Every row below pins the `strip_deprecated_kwargs` call in
-    /// `dispatch_tool` except the `no_fetch` one: a leaked `url_*` fails its
-    /// fetch, a leaked `test_pattern` reshapes the build-check matches (the
-    /// fixture serves one log whose digit-free lines the default heuristic
-    /// skips but `".*"` keeps), and a leaked `url_openqa` turns the
-    /// single-incidents PASSED row the fixture's Core group yields into a
-    /// failed one. `no_fetch` is a deferred no-op (warns, fetches anyway), so
-    /// no fixture can make it observe the strip — its row pins shim
-    /// acceptance only. The old shape (both probes failing at
-    /// `require_update`) could pin neither.
-    #[tokio::test]
-    async fn dispatch_openqa_overrides_are_ignored_until_26_5() {
-        use mtui_testreport::{ObsReport, TestReport};
-        use mtui_types::RequestReviewID;
-        use wiremock::matchers::{method, path, path_regex, query_param, query_param_is_missing};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        // Unroutable, so a leaked override fails fast instead of hanging on DNS.
-        const EVIL: &str = "http://127.0.0.1:1/";
-
-        // Dashboard build lookup + openQA answers on one server, mirroring the
-        // `openqa_overview`/`openqa_jobs` core-test fixtures.
-        async fn configured_server() -> MockServer {
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(path_regex(r"^/api/incident_settings/.*$"))
-                .and(query_param("project", "SUSE:Maintenance:1"))
-                .and(query_param("type", "smelt"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                    {"version": "15-SP5",
-                     "settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
-                ])))
-                .mount(&server)
-                .await;
-            // `openqa_jobs` pages the job list; the follow-up page is empty.
-            Mock::given(method("GET"))
-                .and(path("/api/v1/jobs"))
-                .and(query_param("build", "BUILD-42"))
-                .and(query_param_is_missing("before"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "jobs": [
-                        {"id": 1, "test": "install", "arch": "x86_64",
-                         "result": "passed", "state": "done", "clone_id": null},
-                    ]
-                })))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/jobs"))
-                .and(|req: &wiremock::Request| req.url.query_pairs().any(|(k, _)| k == "before"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "jobs": [] })))
-                .mount(&server)
-                .await;
-            // One Core group, so the single-incidents section renders a PASSED
-            // row for 15-SP5 and a leaked `url_openqa` turns it into a failed
-            // one; the status probes read `/api/v1/jobs/overview` (empty: a
-            // clean build). Mounted before the catch-all below, which would
-            // otherwise answer JobGroups `[]` and hide the group.
-            Mock::given(method("GET"))
-                .and(path("/api/v1/job_groups"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                    {"id": 7, "name": "SLE 15 SP5 Core Incidents", "template": "sle-15"}
-                ])))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/jobs/overview"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-                .mount(&server)
-                .await;
-            // One build-check log matching the incident packages, with
-            // digit-free lines the default heuristic skips but `".*"` keeps —
-            // so a leaked `test_pattern` reshapes the rendered matches.
-            Mock::given(method("GET"))
-                .and(path("/testreports/SUSE:Maintenance:1:1/build_checks"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(
-                    "<html><body><a href=\"BUILD-42-build.log\">BUILD-42-build.log</a></body></html>",
-                ))
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path(
-                    "/testreports/SUSE:Maintenance:1:1/build_checks/BUILD-42-build.log",
-                ))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_string("build-check log preamble\nno test summary here\n"),
-                )
-                .mount(&server)
-                .await;
-            // `openqa_overview`'s version/group/build-check fetches.
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "JobGroups": [], "jobs": []
-                })))
-                .mount(&server)
-                .await;
-            server
-        }
-
-        // One loaded template, so dispatch runs the engine instead of failing
-        // at `require_update`; every endpoint is the mock above.
-        async fn loaded_session(uri: &str) -> Arc<McpSession> {
-            let mut config = Config::default();
-            config.openqa_instance = uri.to_owned();
-            config.qem_dashboard_api = format!("{uri}/api");
-            config.reports_url = format!("{uri}/testreports");
-            let session = McpSession::new(config);
-            {
-                let mut guard = session.session().lock().await;
-                let mut report = ObsReport::new(guard.config.clone());
-                report.base_mut().rrid =
-                    Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
-                guard.templates.add(Box::new(report));
-                guard.templates.set_active("SUSE:Maintenance:1:1");
-            }
-            session
-        }
-
-        let server = configured_server().await;
-        let session = loaded_session(&server.uri()).await;
-        let registry = Arc::new(register_all());
-        let routes = tool_routes(&registry);
-        for (tool, kwargs, marker) in [
-            ("openqa_overview", json!({"url_openqa": EVIL}), "OpenQA:"),
-            (
-                "openqa_overview",
-                json!({"url_dashboard_qam": EVIL, "url_qam": EVIL}),
-                "OpenQA:",
-            ),
-            ("openqa_overview", json!({"test_pattern": ".*"}), "OpenQA:"),
-            // Acceptance-only (see doc): `no_fetch` warns and fetches anyway.
-            ("openqa_overview", json!({"no_fetch": true}), "OpenQA:"),
-            (
-                "openqa_jobs",
-                json!({"url_openqa": EVIL}),
-                "openQA jobs for build BUILD-42",
-            ),
-            (
-                "openqa_jobs",
-                json!({"url_dashboard_qam": EVIL}),
-                "openQA jobs for build BUILD-42",
-            ),
-        ] {
-            let route = routes.get(tool).unwrap_or_else(|| panic!("{tool} route"));
-            // Accepted, never refused as unknown — and past `require_update`,
-            // so success means the override never reached the engine: with the
-            // strip deleted the unroutable URL fails the fetch instead.
-            let overridden = completed(
-                dispatch_tool(
-                    &registry,
-                    &session,
-                    route,
-                    kwargs.as_object().unwrap(),
-                    None,
-                    None,
-                )
-                .await
-                .outcome,
-            )
-            .unwrap_or_else(|err| {
-                panic!("{tool} with {kwargs}: the override leaked to the engine: {err:?}")
-            });
-            assert!(
-                overridden.contains(marker),
-                "{tool} with {kwargs}: {overridden:?}"
-            );
-            assert!(
-                !overridden.contains("127.0.0.1:1"),
-                "{tool} with {kwargs}: {overridden:?}"
-            );
-            // Inert: byte-identical to omitting the override.
-            let plain = completed(
-                dispatch_tool(&registry, &session, route, &Map::new(), None, None)
-                    .await
-                    .outcome,
-            )
-            .expect("baseline succeeds");
-            assert_eq!(overridden, plain, "{tool} with {kwargs}");
         }
     }
 
