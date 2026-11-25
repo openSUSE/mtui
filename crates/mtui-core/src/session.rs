@@ -1628,12 +1628,16 @@ impl Session {
         // Whether a host takes the remote pool lock or the normal autolock;
         // empty on the legacy `add_host --target` path.
         let pool_claims = self.metadata().base().pool_claims.clone();
+        // A host the template names is never a pool draw, even when a draw
+        // also selected it; `-t` hosts come with no `pool_primaries`.
+        let named = self.metadata().base().hostnames.clone();
         let store_ref = store.as_ref();
         let package_meta = &package_meta;
         let timeout_prompt = &timeout_prompt;
         let lock_comment = &lock_comment;
         let config_ref = &config;
         let pool_claims_ref = &pool_claims;
+        let named_ref = &named;
         let holders_ref = &holders;
         let injected_ref = &injected;
         let connect_futs = hosts.iter().map(|host| {
@@ -1646,7 +1650,9 @@ impl Session {
                 package_meta,
                 store_ref,
                 pool_claims_ref.contains(host),
-                pool_claims_ref.contains(host) && pool_primaries.contains(host),
+                pool_claims_ref.contains(host)
+                    && pool_primaries.contains(host)
+                    && !named_ref.contains(host),
                 require_command_set,
                 holders_ref,
                 injected_ref.get(host).map(|c| c.clone_box()),
@@ -1921,7 +1927,7 @@ impl Session {
         Vec<(String, HostFailure)>,
     ) {
         // Snapshot pool state + selection identity before any await.
-        let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
+        let (arbiter, owner, slot_candidates, lock_comment, package_meta, named) = {
             let base = self.metadata().base();
             (
                 base.arbiter,
@@ -1929,6 +1935,7 @@ impl Session {
                 base.slot_candidates.clone(),
                 base.lock_comment.clone(),
                 PackageMeta::of(base),
+                base.hostnames.clone(),
             )
         };
         let (Some(arbiter), Some(owner)) = (arbiter, owner) else {
@@ -2044,7 +2051,7 @@ impl Session {
                     &package_meta,
                     store.as_ref(),
                     true, // backup hosts are always pool claims
-                    true,
+                    !named.contains(&chosen),
                     require_command_set,
                     &holders,
                     injected.get(&chosen).map(|c| c.clone_box()),
@@ -5039,6 +5046,105 @@ mod tests {
 
         assert_eq!(s.targets().names(), vec![host.to_owned()]);
         assert!(buf.contents().is_empty(), "{:?}", buf.contents());
+    }
+
+    /// A host the template names stays named when its testplatform draw also
+    /// selects it: it attaches under a foreign operation lock and serves that
+    /// slot itself, so no sibling is drawn for it.
+    #[tokio::test]
+    async fn template_named_host_also_drawn_attaches_under_a_foreign_lock() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let store = Session::build_refhosts_store(&config)
+            .await
+            .expect("fixture inventory");
+        let (_, slots, _) = Session::pool_select(
+            &store,
+            &[tp.to_owned()],
+            test_arbiter(),
+            &("probe".to_owned(), "SUSE:Maintenance:9:9".to_owned()),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
+        let candidates: Vec<String> = slots.values().next().expect("a slot").clone();
+        assert!(
+            candidates.len() >= 2,
+            "a slot needs a sibling: {candidates:?}"
+        );
+        let named = candidates[0].clone();
+        let lock = op_lock_line("otheruser", 99, 60);
+        let (mut s, buf) = locking_session(config, &[named.as_str()], &[tp]);
+        s.shuffle = no_shuffle;
+        let mut named_conn = None;
+        for h in slots.values().flatten() {
+            let conn = product_host(h, "SLES", "15", "5", false);
+            let conn = if *h == named {
+                let c = conn.with_file(mtui_hosts::TARGET_LOCK_PATH, lock.clone());
+                named_conn = Some(c.clone());
+                c
+            } else {
+                conn
+            };
+            s.inject_mock_connection(h, conn);
+        }
+        let named_conn = named_conn.expect("the named host is a candidate");
+
+        s.autoconnect_active("SUSE:Maintenance:1:1").await;
+
+        let names = s.targets().names();
+        assert!(names.contains(&named), "{names:?}");
+        for sibling in &candidates[1..] {
+            assert!(!names.contains(sibling), "{sibling} drawn: {names:?}");
+        }
+        assert!(
+            s.metadata().base().pool_claims.contains(&named),
+            "the draw selected the named host, or this test proves nothing"
+        );
+        assert_eq!(
+            named_conn.file_contents(mtui_hosts::TARGET_LOCK_PATH),
+            Some(lock)
+        );
+        let out = buf.contents();
+        assert!(!out.contains("skipped"), "{out:?}");
+    }
+
+    /// A template's named host offered as a backup sibling (bare `add_host`
+    /// after it dropped out) attaches under a foreign operation lock too.
+    #[tokio::test]
+    async fn template_named_backup_sibling_attaches_under_a_foreign_lock() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (ro, named) = ("ro-named-backup-primary.invalid", "named-backup.invalid");
+        let lock = op_lock_line("otheruser", 99, 60);
+        s.inject_mock_connection(ro, product_host(ro, "SLES", "15", "6", true));
+        s.inject_mock_connection(named, locked_host(named, lock));
+        s.metadata_mut()
+            .base_mut()
+            .hostnames
+            .insert(named.to_owned());
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("slot", &[ro.to_owned(), named.to_owned()])],
+            &[ro],
+        );
+
+        let (unserved, _failures) = s
+            .connect_and_add_hosts(
+                vec![ro.to_owned()],
+                rrid,
+                &std::collections::HashSet::from([ro.to_owned()]),
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![named.to_owned()]);
     }
 
     /// `load_template` names a pool host it skipped for a foreign lock, with
