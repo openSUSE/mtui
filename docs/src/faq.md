@@ -20,34 +20,40 @@ Yes. Set `template_dir` under `[mtui]` in your config file, or export
 
 Yes. Load more than one testreport and each is a *template* in the session:
 `list_templates` shows the loaded set and `switch` changes the active one. A
-command that acts on a template runs against the active one by default
-(session-level commands such as `list_templates`, `updates` or `config` take no
-template flag); scope it with `-T <RRID>`/`--template <RRID>`, or fan out with
-`--all-templates` where the command allows it. Under fan-out each template gets
-its own `=== <RRID> ===` banner.
+command that acts on a template takes its scope from the command: read/annotate
+commands (`list_*`, `show_*`, `openqa_*`, `export`, `checkout`, `comment`, …) cover
+every loaded template, and the rest act on the active one (session-level commands
+such as `list_templates`, `updates` or `config` take no template flag). Scope a
+call with `-T <RRID>`/`--template <RRID>`, or fan out with `--all-templates`.
+Under fan-out each template gets its own `=== <RRID> ===` banner. See
+[Workflow concepts](concepts.md#fan-out-across-templates).
 
 ## Can I run mtui without loading a testreport?
 
-Yes, for the commands that do not need one — notably `list_refhosts`, which
-searches the reference-host inventory offline (no SSH, no lock, no loaded
-template). Host-action commands need a loaded template with connected hosts.
+Yes, for the commands that do not need one. `list_refhosts` searches the
+reference-host inventory without a loaded template (and without SSH, unless you
+pass `--free`, which connects to read each host's lock state). `run`, `reboot`,
+`lock`/`unlock`, `put`/`get` and `reload_products` act on hosts you added with
+`add_host`. `install`, `uninstall`, `prepare`, `update` and `downgrade` refuse
+without a loaded template.
 
 ## Does mtui support SSH password authentication?
 
 No — and it never will. mtui is **pubkey-only by design**: it authenticates from
-your SSH agent or `~/.ssh/id_*`. This is preserved from MTUI.
+your SSH agent, the `IdentityFile` entries of `~/.ssh/config` or `~/.ssh/id_*`.
 
 ## Can several testers use the same reference hosts at once?
 
-Yes, but the locks are **advisory and fail-fast, not a queue**. Every mtui on the
+Yes, but the locks are **advisory and fail-fast by default**. Every mtui on the
 fleet writes the same `timestamp:user:pid[:comment]` layout, so sessions see one
 another's claims — a host held by someone else is *skipped*, and an
 install/update aborts with "Hosts locked" rather than waiting. Raise
-`[lock] wait` (default `0`) to poll for a busy host during pool arbitration.
+`[lock] wait` (default `0`) to poll for a busy host, both during pool
+arbitration and before `install`/`update` give up on a foreign operation lock.
 Naming a held host explicitly (`add_host -t`) is refused with the holder's
 RRID instead of attaching it, and a fresh remote claim blocks `-t` with no
 override on that template: have the holding template run
-`unlock --pool --force [host]`, or wait for the stale reap.
+`unlock --pool --force -t <host>`, or wait for the stale reap.
 There are two locks with that layout: the operation lock
 (`/var/lock/mtui.lock`, PID-based, guards serialized zypper transactions) and the
 pool-claim lock (`/var/lock/mtui-pool.lock`, RRID-based). Stale-lock reaping is
@@ -63,7 +69,7 @@ flattened, and de-duplicated at load.
 
 ## How do I change the editor used by the `edit` command?
 
-`edit` spawns your `$EDITOR` (or `$VISUAL`) on the controlling terminal, as usual.
+`edit` spawns your `$EDITOR` (`vim` when unset) on the controlling terminal.
 Set it in your shell environment. When the loaded report is a JSON document, a bare
 `edit` opens the document editor instead (see the next question); `edit FILE` always
 uses `$EDITOR`.
@@ -100,7 +106,8 @@ stdout.
 
 `export` authors the collected update data (and, for the openQA-sourced
 workflows, openQA data) onto the loaded report document's `testing.*` sections and
-writes the install logs to the report directory. The document stays local until
+writes the install logs to the report directory. A Manual export also fetches the
+QEM Dashboard results into `testing.openqa`. The document stays local until
 `commit` uploads it. Re-exporting updates the same sections in place.
 
 A `Manual` export must run from the session that ran `update`: the before/after
@@ -140,7 +147,13 @@ When the loaded report's metadata names no package versions, `prepare` and
 <hosts>` over a no-op that installs nothing (#396). Check
 `list_packages -w` and the report metadata; a host the fan-out cannot build a
 command for (unresolvable release, no matching template) likewise fails the
-run by name.
+run by name. That includes a SLES 16 host whose root mode could not be
+determined, reported as `missing preparer (…, transactional-update.conf but
+root mode unknown)`.
+
+When a host action completes on some hosts and fails on others, the command prints
+`<verb> completed on <hosts>` for the hosts it completed on before it reports the
+failure.
 
 ## How do I control what `prepare` installs?
 
@@ -186,9 +199,11 @@ its products could not be read; it was excluded from the update`, or `<host>:
 this update has no repository to add; it was excluded from the update`.
 
 These exclusions cover the automatic rollback too. When a host that was patched
-then fails its check, the rollback reaches only the hosts the patch was
-dispatched to, so an excluded host gets no lock, repository change, downgrade,
-history row or reboot from it.
+then fails its check, or a reachable host does not come back from its reboot,
+the rollback reaches only the hosts the patch was dispatched to, so an excluded
+host gets no lock, repository change, downgrade, history row or reboot from it.
+When a peer's patch never ran, nothing is rolled back: the hosts the update
+completed on get the same finishing steps as a successful run instead.
 
 `prepare -u` fails such a host by name too, on any report: no test repository
 would be added to it, so its install would draw only on the repositories it
@@ -238,9 +253,11 @@ mtui.
 
 ## Where are the per-host install logs stored?
 
-Under the loaded report's directory, in
-`template_dir/<RRID>/install_logs/<host>.log` (one file per refhost). The
-`install_logs` sub-directory name is configurable under `[mtui]`; see
+Under the loaded report's directory, in `template_dir/<RRID>/install_logs/`. The
+file names depend on the workflow: a Manual export writes `<host>.log` (one file
+per refhost), an Auto export `<distri>_<version>_<arch>[_<flavor>].log` (one per
+openQA job), and a Kernel export `<host>-zypper-<arch>.log`. The `install_logs`
+sub-directory name is configurable under `[mtui]`; see
 [Configuration](configuration.md).
 
 ## What does Ctrl-C do?

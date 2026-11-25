@@ -16,39 +16,47 @@ marked `*`), [`switch`](cli.md#switch) changes the active one, and
 [`unload`](cli.md#unload) drops one (closing only *its* host connections).
 
 Session-level commands (`load_template`, `unload`, `switch`, `list_templates`,
-`list_refhosts`, `updates`, `config`, `whoami`, `set_log_level`, `help`, `quit`)
+`list_refhosts`, `updates`, `config`, `whoami`, `teregen_login`, `set_log_level`,
+`help`, `quit`)
 take no template flag: each runs exactly once, never fans out, and accepts
 neither `-T` nor `--all-templates`.
 
 ## Fan-out across templates
 
-When more than one template is loaded, a command falls into one of two groups:
+When more than one template is loaded, a command has one of three scopes:
 
-- **Read/annotate commands** (`list_*`, `show_*`, `openqa_*`, `checkers`,
-  `checkout`, `export`, `set_workflow`, `comment`, …) **fan out across every
-  loaded template by default** — none of them mutates shared remote state, and
-  re-running one is always safe. Each template's output is prefixed with an
-  `=== <RRID> ===` banner so results stay attributable.
-- **Host-mutating and remote-write commands** (`update`, `prepare`, `downgrade`,
-  `install`, `uninstall`, `set_repo`, `run`, `reboot`, `lock`, `unlock`,
-  `add_host`, `remove_host`, `get`, `put`, `approve`, `reject`, `assign`,
-  `unassign`, `request_review`, `commit`) **never implicitly fan out**: bare,
-  they act on exactly one template — the active one in the REPL, or the sole
-  loaded one — and refuse rather than guess when several are loaded headlessly
-  and none is named.
+- **Fanout** — read/annotate commands (`list_*`, `show_*`, `openqa_*`,
+  `checkers`, `checkout`, `export`, `set_workflow`, `comment`, …) **fan out
+  across every loaded template by default**. None of them mutates host state,
+  and re-running one is safe, with one exception: `comment` posts its comment
+  again. Each template's output is prefixed with an `=== <RRID> ===` banner so
+  results stay attributable.
+- **Explicit** — host-mutating and remote-write commands (`update`,
+  `prepare`, `downgrade`, `install`, `uninstall`, `set_repo`, `run`, `reboot`,
+  `lock`, `unlock`, `add_host`, `remove_host`, `get`, `put`, `approve`,
+  `reject`, `assign`, `unassign`, `request_review`, `commit`) **never
+  implicitly fan out**: bare, they act on exactly one template — the active
+  one in the REPL, or the sole loaded one — and refuse rather than guess when
+  several are loaded headlessly and none is named.
+- **Active** — commands that act on the active template in the REPL
+  (`list_products`, `reload_products`, `set_timeout`). A headless caller with
+  several templates loaded and none named fans out instead, because there is no
+  active template to address.
 
 Scope a single call three ways:
 
 - **`-T <RRID>` / `--template <RRID>`** — act on one loaded template only.
-- **`--all-templates`** — force fan-out explicitly, on either group. Mutually
+- **`--all-templates`** — force fan-out explicitly, on any scope. Mutually
   exclusive with `-T`.
-- **`--all-templates=false`** — suppress fan-out on a read/annotate command,
-  narrowing it to the same single-template resolution the other group uses by
+- **`--all-templates=false`** — suppress fan-out on a Fanout command, narrowing
+  it to the same single-template resolution an Explicit command uses by
   default.
 
-A headless caller (MCP) with several templates loaded and neither flag named
-gets [`AmbiguousTemplate`](cli.md), not a silent guess — the error names the
-loaded RRIDs and how to scope the call.
+A headless caller (MCP) with several templates loaded and neither flag named,
+on an Explicit command or under `--all-templates=false`, gets an
+`AmbiguousTemplate` error rather than a silent guess; the error names the loaded
+RRIDs and how to scope the call (see
+[MCP server](mcp.md#multiple-templates-scoping-and-fan-out)).
 
 Failure handling is per-template: if a fanned-out command fails on one template it
 **keeps running on the rest** and reports an aggregate failure at the end. When a
@@ -56,9 +64,18 @@ host-phase command (one that accepts `-t`) fans out *without* explicit `-t` host
 a loaded template with **no connected host** is skipped with a warning rather than
 counted as a failure — so an unscoped `lock`/`run`/… still succeeds on the
 templates that do have hosts. If *every* template is host-less the command ran
-nowhere and fails with "No refhosts defined". Naming a disconnected host with
-`-t <host>` is still a per-template failure, and a `-T`-scoped call keeps
-single-template error behaviour.
+nowhere and fails with "No refhosts defined". With `-t <host>`, a template that
+owns none of the named hosts is skipped with a warning, while a template that
+owns a named host that is disconnected fails; if no template owns the host, the
+result is again "No refhosts defined". A `-T`-scoped call keeps single-template
+error behaviour.
+
+When a host action completes on some hosts and fails on others, the command
+prints `<verb> completed on <hosts>` — naming the hosts it completed on — before
+it reports the failure. After a failed `update`, only a check failure or a
+reboot that did not take effect triggers an automatic rollback; if a peer's
+patch never ran, nothing is rolled back and the hosts that completed get the
+same finishing steps as a successful `update`.
 
 [`export`](cli.md#export) is the exception: it runs on a host-less template
 too, since every workflow has openQA data to write. A Manual template with no
@@ -97,7 +114,7 @@ command out across all of them.
   them as taken. A named host claimed by another template is refused with
   the holder's RRID instead of being attached silently. A fresh remote claim
   blocks `-t` with no override on that template: have the holding template
-  run `unlock --pool --force [host]`, or wait for the stale reap
+  run `unlock --pool --force -t <host>`, or wait for the stale reap
   (`[lock] pool_stale_age`); a force flag for `-t` itself does not exist yet.
 
 To search the inventory *without* connecting, use
@@ -195,9 +212,10 @@ session); see [Configuration](configuration.md) for `reap_stale`, `stale_age`,
 [`list_refhosts --free`](cli.md#list_refhosts): its connect is a read-only
 survey, so it never reaps. Its `lock` column reports one of `free`, `locked`,
 `pool` (free but pool-claimed), `locked+pool`, `unreachable` (the host could
-not be probed), or `unknown` (the probe never completed for it); `--json`
-keeps this vocabulary and adds a `pool` key: the claiming RRID, or `null` when
-unclaimed.
+not be probed), or `unknown` (the probe never completed for it). `--json`
+carries the raw probe state in `lock` (`free`, `locked`, `unreachable` or
+`unknown`) and adds a `pool` key: the claiming RRID, or `null` when unclaimed.
+`pool` and `locked+pool` are table-only labels.
 
 ### Product-Increment autolock
 
