@@ -11,6 +11,8 @@
 //! keeps subscriber types out of the lower crates. Each binary parses the
 //! resolved string itself.
 
+use crate::session::LogLevel;
+
 /// The third-party HTTP transport targets whose `DEBUG` output must not be
 /// switched on as a side effect of raising *mtui's* own verbosity (#439).
 ///
@@ -230,9 +232,45 @@ fn is_verbose_level(text: &str) -> bool {
         )
 }
 
+/// The `EnvFilter` directive string for a [`LogLevel`] — the lowercased
+/// [`tracing::Level`] name — that a runtime `set_log_level` reloads the process
+/// filter with (and the REPL's startup fallback).
+///
+/// At `debug` the base level is followed by [`TRANSPORT_LOG_CARVE_OUT`], holding
+/// the third-party HTTP stack at `INFO`: raising mtui's verbosity must not print
+/// hyper-util's connection-pool key, whose authority can carry
+/// redirect-supplied userinfo (#439). The coarser levels stay bare — appending
+/// the carve-out would *raise* those targets above an operator's `error`/`warn`.
+#[must_use]
+pub fn level_directive(level: LogLevel) -> String {
+    let base = level.as_tracing().as_str().to_ascii_lowercase();
+    match level {
+        LogLevel::Debug => format!("{base},{TRANSPORT_LOG_CARVE_OUT}"),
+        LogLevel::Error | LogLevel::Warning | LogLevel::Info => base,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Byte-pins the directive strings. These literals — not a behavioural
+    /// test — catch a respelling that `EnvFilter` still happens to cover
+    /// (`hyper-util` for `hyper_util`, silently absorbed by the `hyper=info`
+    /// prefix match).
+    #[test]
+    fn level_directive_pins_bare_levels_and_debug_transport_carve_out() {
+        assert_eq!(level_directive(LogLevel::Error), "error");
+        assert_eq!(level_directive(LogLevel::Warning), "warn");
+        assert_eq!(level_directive(LogLevel::Info), "info");
+        // The #439 carve-out, spelled out rather than rebuilt from
+        // `TRANSPORT_LOG_CARVE_OUT`, so emptying that constant cannot green
+        // both sides at once.
+        assert_eq!(
+            level_directive(LogLevel::Debug),
+            "debug,hyper_util=info,hyper=info,reqwest=info"
+        );
+    }
 
     /// Two spellings of one policy — the list drives the "did the operator name
     /// it?" test, the string drives the cap — so a target in only one is a hole.

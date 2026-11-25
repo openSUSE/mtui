@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use mtui_config::Config;
-use mtui_core::{HOST_CLOSE_TIMEOUT, Registry};
+use mtui_core::{HOST_CLOSE_TIMEOUT, LogLevel, Registry};
 use mtui_hosts::OpLockHolders;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -62,6 +62,20 @@ pub(crate) fn now_millis() -> u64 {
     static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
     let epoch = EPOCH.get_or_init(std::time::Instant::now);
     epoch.elapsed().as_millis() as u64
+}
+
+/// The process's runtime log-level control. The `tracing` filter is
+/// process-wide, so every session the server mints shares this one handle.
+pub type LogLevelControl = Arc<dyn Fn(LogLevel) + Send + Sync>;
+
+/// Point `session`'s `set_log_level` at the process-wide `control`.
+fn install_log_level(session: &McpSession, control: &LogLevelControl) {
+    let control = Arc::clone(control);
+    session
+        .session()
+        .try_lock()
+        .expect("a session minted a moment ago is uncontended")
+        .set_log_level_sink(Box::new(move |level| control(level)));
 }
 
 /// The minimal surface the tool layer resolves a session through.
@@ -94,6 +108,13 @@ impl StdioProvider {
         Self {
             session: McpSession::new(config),
         }
+    }
+
+    /// Lets `set_log_level` change the process log level through `control`.
+    #[must_use]
+    pub fn with_log_level(self, control: LogLevelControl) -> Self {
+        install_log_level(&self.session, &control);
+        self
     }
 }
 
@@ -298,6 +319,9 @@ pub struct SessionRegistry {
     /// targets' operation locks all read as ours on the wire and only this
     /// registry tells one session's hold from another's.
     op_lock_holders: OpLockHolders,
+    /// Installed into every minted session, so all of them drive the one
+    /// process filter.
+    log_level: Option<LogLevelControl>,
 }
 
 impl SessionRegistry {
@@ -318,7 +342,16 @@ impl SessionRegistry {
             close_permits: Arc::new(tokio::sync::Semaphore::new(sweep_parallel)),
             next_id: Arc::new(AtomicU64::new(0)),
             op_lock_holders: OpLockHolders::default(),
+            log_level: None,
         }
+    }
+
+    /// Lets `set_log_level` in every session minted from now on change the
+    /// process log level through `control`.
+    #[must_use]
+    pub fn with_log_level(mut self, control: LogLevelControl) -> Self {
+        self.log_level = Some(control);
+        self
     }
 
     /// The configured concurrent-session cap.
@@ -378,6 +411,9 @@ impl SessionRegistry {
             .try_lock()
             .expect("a session minted a moment ago is uncontended")
             .set_op_lock_holders(self.op_lock_holders.clone());
+        if let Some(control) = &self.log_level {
+            install_log_level(&session, control);
+        }
         session
     }
 

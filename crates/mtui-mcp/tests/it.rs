@@ -18,6 +18,8 @@ mod http_isolation;
 mod json_crush;
 #[path = "log_fold.rs"]
 mod log_fold;
+#[path = "log_level.rs"]
+mod log_level;
 #[path = "mcp_jobs.rs"]
 mod mcp_jobs;
 #[path = "nonempty_success.rs"]

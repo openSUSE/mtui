@@ -876,7 +876,7 @@ Options:
 
 ## `set_log_level`
 
-Changes the current mtui log level.
+Changes the current mtui log level. Under mtui-mcp it is the server's level, shared by every session of an http server, and the log goes to the server's stderr, not to the client.
 
 ```text
 Usage: set_log_level <level>

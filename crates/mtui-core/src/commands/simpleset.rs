@@ -20,9 +20,10 @@ const WORKFLOWS: &[&str] = &["auto", "manual", "kernel"];
 /// The log levels offered for completion / validation.
 const LEVELS: &[&str] = &["info", "warning", "error", "debug"];
 
-/// Changes the current mtui log level via the session's log-level sink (the REPL
-/// wires a `tracing_subscriber::reload` handle; headless callers still log the
-/// change). `debug` surfaces per-command tracing in real time.
+/// Changes the current mtui log level via the session's log-level sink (both
+/// entrypoints wire a `tracing_subscriber::reload` handle). Without a sink it
+/// fails rather than report a change it did not make. `debug` surfaces
+/// per-command tracing in real time.
 pub struct SetLogLevel;
 
 #[async_trait]
@@ -32,7 +33,11 @@ impl Command for SetLogLevel {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Changes the current mtui log level.")
+        Some(
+            "Changes the current mtui log level. Under mtui-mcp it is the server's level, \
+             shared by every session of an http server, and the log goes to the server's \
+             stderr, not to the client.",
+        )
     }
 
     fn scope(&self) -> Scope {
@@ -72,7 +77,11 @@ impl Command for SetLogLevel {
             .ok_or_else(|| CommandError::Other("log level is required".to_owned()))?;
         let level = LogLevel::parse(name)
             .ok_or_else(|| CommandError::Other(format!("unknown log level: {name}")))?;
-        session.apply_log_level(level);
+        if !session.apply_log_level(level) {
+            return Err(CommandError::Other(
+                "log level unchanged: this process has no runtime log-level control".to_owned(),
+            ));
+        }
         session.display.println(&format!("Log level set to {name}"));
         Ok(())
     }
@@ -326,11 +335,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn succeeds_without_sink_installed() {
-        let (mut session, _buf) = empty_session();
+    async fn refuses_to_claim_a_change_without_a_sink() {
+        let (mut session, buf) = empty_session();
         let args = matches(&SetLogLevel, &["debug"]);
-        // No sink installed (headless): still Ok, just logs.
-        SetLogLevel.call(&mut session, &args).await.unwrap();
+        let err = SetLogLevel
+            .call(&mut session, &args)
+            .await
+            .expect_err("nothing changed, so the call must fail");
+        assert_eq!(
+            err.to_string(),
+            "log level unchanged: this process has no runtime log-level control"
+        );
+        assert!(
+            !buf.contents().contains("Log level set to"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     /// Headless with several templates loaded the level is set once, not once
@@ -338,6 +358,7 @@ mod tests {
     #[tokio::test]
     async fn set_log_level_runs_once_headless_with_several_templates_loaded() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_log_level_sink(Box::new(|_| {}));
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
@@ -355,6 +376,7 @@ mod tests {
     #[tokio::test]
     async fn set_log_level_runs_against_a_held_active_entry() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_log_level_sink(Box::new(|_| {}));
         session.release_active_guard();
         let entry = session
             .templates

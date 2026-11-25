@@ -57,7 +57,7 @@ pub(crate) use handle::SessionHandle;
 #[cfg(feature = "mcp")]
 pub use profiles::{CORE, resolve_keep_set};
 #[cfg(feature = "mcp")]
-pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
+pub use provider::{LogLevelControl, SessionProvider, SessionRegistry, StdioProvider};
 #[cfg(feature = "mcp")]
 pub use server::McpServer;
 #[cfg(feature = "mcp")]
@@ -72,4 +72,4 @@ pub use transfer_tools::{dispatch_transfer_tool, transfer_tool_descriptors};
 #[cfg(feature = "mcp")]
 mod runner;
 #[cfg(feature = "mcp")]
-pub use runner::{http_app, run};
+pub use runner::{http_app, reloadable_log_filter, run};

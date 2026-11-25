@@ -46,7 +46,7 @@ pub use entrypoint::ExitStatus;
 pub use error::{CommandError, CommandResult};
 pub use log_filter::{
     LogDirectives, TRANSPORT_DEBUG_NOTICE, TRANSPORT_LOG_CARVE_OUT, TRANSPORT_LOG_TARGETS,
-    resolve_log_directives, resolve_log_directives_from,
+    level_directive, resolve_log_directives, resolve_log_directives_from,
 };
 pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::{
