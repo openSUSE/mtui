@@ -1,9 +1,9 @@
 [[production]]
-package = "mtui-cli"
+package = "suse-mtui"
 bin = "mtui"
 reason = "shipped package repl binary"
 
 [[production]]
-package = "mtui-mcp"
+package = "suse-mtui"
 bin = "mtui-mcp"
 reason = "shipped package mcp binary"
