@@ -1498,14 +1498,88 @@ async fn files_merge_local_and_server_entries_by_name() {
         out["files"],
         json!([{
             "path": "install_logs/a.log", "name": "a.log", "size": 5,
-            "server": {"origin": "pipeline", "size": 9, "at": 1_700_000_000},
+            "server": {"dir": null, "origin": "pipeline", "size": 9, "at": 1_700_000_000},
         }])
     );
     assert_eq!(
         out["server_only"],
-        json!([{"name": "b.log", "origin": "uploaded", "size": 3, "at": 1_700_000_000}])
+        json!([{
+            "name": "b.log", "dir": null, "origin": "uploaded", "size": 3, "at": 1_700_000_000,
+        }])
     );
     assert!(out.get("server_error").is_none());
+}
+
+/// The same name in two server directories is two files: neither is dropped,
+/// and each says where it lives.
+#[tokio::test]
+async fn same_named_server_files_are_listed_per_directory() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("x.log", "pipeline", "install_logs"),
+            artifact_in("x.log", "uploaded", "uploads"),
+        ]}),
+    )
+    .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    let listed: Vec<(&str, &str)> = out["server_only"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), e["dir"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed, [("x.log", "install_logs"), ("x.log", "uploads")]);
+}
+
+/// A local file is matched with the server copy `report_file_read` would read
+/// for its path, not with any file of the same name: `build_checks/x.log` has
+/// nothing in `uploads`, which stays server-only.
+#[tokio::test]
+async fn a_local_file_does_not_borrow_another_directory_server_copy() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("build_checks/x.log", "x");
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [artifact_in("x.log", "uploaded", "uploads")]}),
+    )
+    .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert_eq!(out["files"][0]["server"], Value::Null);
+    assert_eq!(out["server_only"][0]["dir"], "uploads");
+}
+
+/// The committed copy in `uploads` is the one reported for an install log
+/// that also exists in the pipeline's directory, and neither server copy is
+/// listed again as server-only.
+#[tokio::test]
+async fn an_install_log_reports_the_committed_server_copy() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.write("install_logs/h1.log", "x");
+    f.serve_artifacts(
+        &server,
+        200,
+        json!({"id": f.id, "artifacts": [
+            artifact_in("h1.log", "pipeline", "install_logs"),
+            artifact_in("h1.log", "uploaded", "uploads"),
+        ]}),
+    )
+    .await;
+
+    let out = call(&f.session, "report_files", json!({})).await;
+
+    assert_eq!(out["files"][0]["server"]["dir"], "uploads");
+    assert_eq!(out["server_only"], json!([]));
 }
 
 #[tokio::test]

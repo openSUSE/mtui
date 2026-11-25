@@ -338,9 +338,9 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
         description: format!(
             "List the report directory's files — `build_checks/`, the install-log directory, \
              `results/` and `checkers.log` — each with its report-relative `path`, `name` and \
-             `size`. `server` is the matching teregen artifact (`origin`, `size`, `at`), or \
+             `size`. `server` is the matching teregen artifact (`dir`, `origin`, `size`, `at`), or \
              null when the server has none; sizes differ until `commit` uploads. `server_only` \
-             lists server files with no local copy: report_file_read can read them. A failed server \
+             lists server files with no local copy, each with its `dir`: report_file_read can read them. A failed server \
              listing leaves the local list and sets `server_error`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(vec![("template", template_prop())], &[]),
@@ -726,32 +726,63 @@ async fn report_files(
         config,
     } = file_scope(session, template, ran_under).await?;
 
-    let local = blocking(move || list_local(&dir, &install_logs)).await?;
+    let logs = install_logs.clone();
+    let local = blocking(move || list_local(&dir, &logs)).await?;
     let (server, server_error) = match server_listing(&config, &id).await {
         Ok(entries) => (entries, None),
         Err(e) => (Vec::new(), Some(e)),
     };
-    let by_name: BTreeMap<&str, &ArtifactEntry> =
-        server.iter().map(|e| (e.name.as_str(), e)).collect();
-    let artifact =
-        |e: &ArtifactEntry| json!({ "origin": e.origin.as_str(), "size": e.size, "at": e.at });
+    let artifact = |e: &ArtifactEntry| json!({ "dir": e.dir, "origin": e.origin.as_str(), "size": e.size, "at": e.at });
+    // `report_file_read` reads a local file's path from these server
+    // directories, preferred first; a server that predates `dir` is matched by
+    // name alone, behind any entry that names its directory.
+    let preference = |e: &ArtifactEntry, path: &str| -> Option<usize> {
+        let dirs = server_dirs(path, &install_logs);
+        match e.dir.as_deref() {
+            Some(d) => dirs.iter().position(|x| *x == d),
+            None => Some(dirs.len()),
+        }
+    };
 
     let files: Vec<Value> = local
         .iter()
         .map(|f| {
+            let matched = server
+                .iter()
+                .filter(|e| e.name == f.name)
+                .filter_map(|e| preference(e, &f.path).map(|rank| (rank, e)))
+                .min_by_key(|(rank, _)| *rank)
+                .map(|(_, e)| artifact(e));
             json!({
                 "path": f.path,
                 "name": f.name,
                 "size": f.size,
-                "server": by_name.get(f.name.as_str()).map(|e| artifact(e)),
+                "server": matched,
             })
         })
         .collect();
-    let server_only: Vec<Value> = by_name
+    // A server copy that a local file of the same name would be read in place
+    // of stays unlisted.
+    let shadowed = |e: &ArtifactEntry| {
+        local
+            .iter()
+            .any(|f| f.name == e.name && preference(e, &f.path).is_some())
+    };
+    let by_key: BTreeMap<(&str, Option<&str>), &ArtifactEntry> = server
         .iter()
-        .filter(|(name, _)| !local.iter().any(|f| f.name == **name))
-        .map(|(name, e)| {
-            json!({ "name": name, "origin": e.origin.as_str(), "size": e.size, "at": e.at })
+        .filter(|e| !shadowed(e))
+        .map(|e| ((e.name.as_str(), e.dir.as_deref()), e))
+        .collect();
+    let server_only: Vec<Value> = by_key
+        .iter()
+        .map(|((name, _), e)| {
+            json!({
+                "name": name,
+                "dir": e.dir,
+                "origin": e.origin.as_str(),
+                "size": e.size,
+                "at": e.at,
+            })
         })
         .collect();
 

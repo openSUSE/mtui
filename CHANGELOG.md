@@ -574,6 +574,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `report_files` keeps same-named files in different server directories
+  apart. It matched server files to local ones by name alone, so a log present
+  in both `uploads` and `install_logs` was listed once, a local
+  `build_checks/x.log` borrowed the `uploads/x.log` entry, and a local
+  install log reported the pipeline's copy instead of the committed one that
+  `report_file_read` reads. `server` is now the copy for that path, and
+  `server` and each `server_only` entry carry their `dir`. **MCP schema note:**
+  additive only — a `dir` key in `report_files` output, and the `report_files` tool description names it.
 - Reading a report from TeReGen while it commits an earlier upload (`503`
   `busy`) says so (`teregen is committing an earlier upload; retry shortly`)
   and `load_template` waits it out, as it does a generation in progress. All
