@@ -41,7 +41,7 @@ jobs:
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1  # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # Per-target floor, not a job cap: 3600s / 5 targets => >=12 min each.
+          # Per-target floor, not a job cap: 3600s / 7 targets => ~8.5 min each.
           fuzz-seconds: 3600
           mode: batch
           sanitizer: ${{ matrix.sanitizer }}

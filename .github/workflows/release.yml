@@ -587,9 +587,9 @@ jobs:
 
   crates-io:
     # After the GitHub release, so a crates.io failure never hides the
-    # artifacts. `cargo publish --workspace` is not atomic: after a partial
-    # failure re-run with `--exclude <already published crates>` (see
-    # docs/src/installation.md).
+    # artifacts. `cargo publish --workspace` is not atomic and does not skip
+    # published crates, so after a partial failure publish the rest by hand
+    # rather than re-running this job (see docs/src/installation.md).
     needs: [release, gate]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
