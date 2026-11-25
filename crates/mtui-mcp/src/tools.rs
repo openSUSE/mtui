@@ -1413,8 +1413,8 @@ mod tests {
         assert!(out.contains("max_parallel"), "got: {out:?}");
         assert!(out.contains('7'), "got: {out:?}");
         // The filter has to survive argv reconstruction. Both assertions above
-        // also hold of the unfiltered 39-attribute dump, so only the *absence*
-        // of the other 38 proves `attributes` reached clap.
+        // also hold of the unfiltered 38-attribute dump, so only the *absence*
+        // of the other 37 proves `attributes` reached clap.
         assert!(!out.contains("connection_timeout"), "got: {out:?}");
         assert_eq!(
             out.lines().filter(|l| !l.trim().is_empty()).count(),

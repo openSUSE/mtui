@@ -20,8 +20,8 @@
 //! [`tokio::time::timeout`] with a 60s per-future cap (`FUTURE_TIMEOUT`), while
 //! preserving a fixed ordering (incident settings first, then update settings;
 //! jobs in submission order) and warn-and-skip on timeout. [`DashboardAutoOpenQA`]
-//! takes no config: `openqa_install_distri` / `openqa_install_logs` are pinned
-//! constants (`OPENQA_INSTALL_DISTRI`, `install_logfile_for`).
+//! takes no config: the openQA install distri and log file name are pinned
+//! (`OPENQA_INSTALL_DISTRI`, `install_logfile_for`).
 //!
 //! [`RequestReviewID`]: mtui_types::RequestReviewID
 
