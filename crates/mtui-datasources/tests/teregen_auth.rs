@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mtui_datasources::teregen::{TeregenAuth, TeregenAuthError, TokenStore};
+use mtui_datasources::teregen::{AuthHint, AuthStage, TeregenAuth, TeregenAuthError, TokenStore};
 use mtui_datasources::{HttpClient, VerifyPolicy};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -624,4 +624,255 @@ async fn debug_of_teregen_auth_never_contains_a_token() {
     let rendered = format!("{auth:?}");
     assert!(rendered.contains("TeregenAuth"));
     assert!(!rendered.to_lowercase().contains("token"));
+}
+
+async fn mount_verify_401(server: &MockServer, body: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(body)
+        .mount(server)
+        .await;
+}
+
+fn verify_401(hint: &str) -> ResponseTemplate {
+    ResponseTemplate::new(401)
+        .set_body_json(serde_json::json!({"error": "unauthorized", "hint": hint}))
+}
+
+/// The prose each verify hint maps to, and a phrase only it contains: the
+/// generic list of causes must not be what the user reads.
+#[tokio::test]
+async fn verify_401_names_the_cause_teregen_reports() {
+    for (wire, hint, phrase) in [
+        (
+            "challenge_expired_or_used",
+            AuthHint::ChallengeExpiredOrUsed,
+            "already used or has expired",
+        ),
+        (
+            "signature_rejected",
+            AuthHint::SignatureRejected,
+            "does not say which",
+        ),
+        (
+            "key_list_unavailable",
+            AuthHint::KeyListUnavailable,
+            "refuses every principal",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_challenge_200(&server).await;
+        mount_verify_401(&server, verify_401(wire)).await;
+
+        let err = auth_for(&server, store_file)
+            .token()
+            .await
+            .expect_err("401 refused");
+        let TeregenAuthError::Unauthorized {
+            hint: text,
+            server_hint,
+            ..
+        } = &err
+        else {
+            panic!("{wire}: expected Unauthorized, got {err:?}");
+        };
+        assert_eq!(*server_hint, Some(hint), "{wire}");
+        assert!(text.contains(phrase), "{wire}: {text}");
+        assert!(
+            !text.contains("sshkeys.yaml"),
+            "{wire}: generic list leaked: {text}"
+        );
+    }
+}
+
+/// No body, a body without a hint and an unknown hint all read as the generic
+/// list, and an unknown value is never echoed.
+#[tokio::test]
+async fn unknown_or_absent_hint_keeps_the_generic_text() {
+    for body in [
+        ResponseTemplate::new(401),
+        ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": "unauthorized"})),
+        ResponseTemplate::new(401)
+            .set_body_json(serde_json::json!({"error": "unauthorized", "hint": "zzz-marker"})),
+        ResponseTemplate::new(401).set_body_string("<html>zzz-marker</html>"),
+    ] {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_challenge_200(&server).await;
+        mount_verify_401(&server, body).await;
+
+        let err = auth_for(&server, store_file)
+            .token()
+            .await
+            .expect_err("401 refused");
+        let TeregenAuthError::Unauthorized {
+            hint, server_hint, ..
+        } = &err
+        else {
+            panic!("expected Unauthorized, got {err:?}");
+        };
+        assert_eq!(*server_hint, None);
+        assert!(hint.contains("sshkeys.yaml"), "{hint}");
+        for rendered in [err.to_string(), format!("{err:?}")] {
+            assert!(!rendered.contains("zzz-marker"), "echoed: {rendered}");
+        }
+    }
+}
+
+/// A write refused after a fresh mint names teregen's cause, not the
+/// stale-cache one.
+#[tokio::test]
+async fn write_retry_401_names_the_cause_teregen_reports() {
+    for (wire, hint, phrase) in [
+        ("token_missing", AuthHint::TokenMissing, "Authorization"),
+        ("token_expired", AuthHint::TokenExpired, "server clock"),
+        ("token_unknown", AuthHint::TokenUnknown, "revoked"),
+    ] {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_challenge_200(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ssh/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "a".repeat(64),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/schema"))
+            .respond_with(verify_401(wire))
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/schema", server.uri());
+        let err = auth_for(&server, store_file)
+            .authenticated_request(reqwest::Method::GET, &url)
+            .await
+            .expect_err("a second 401 is surfaced");
+        let TeregenAuthError::Unauthorized {
+            hint: text,
+            server_hint,
+            stage,
+            ..
+        } = &err
+        else {
+            panic!("{wire}: expected Unauthorized, got {err:?}");
+        };
+        assert_eq!(*stage, AuthStage::WriteRetry);
+        assert_eq!(*server_hint, Some(hint), "{wire}");
+        assert!(text.contains(phrase), "{wire}: {text}");
+        assert!(!text.contains("not a stale cache"), "{wire}: {text}");
+    }
+}
+
+/// teregen sends `token_missing` only to a client that accepts JSON.
+#[tokio::test]
+async fn bearer_requests_ask_for_json() {
+    use wiremock::matchers::header;
+
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "a".repeat(64),
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/schema"))
+        .and(header("accept", "application/json"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let url = format!("{}/schema", server.uri());
+    let response = auth_for(&server, store_file)
+        .authenticated_request(reqwest::Method::GET, &url)
+        .await
+        .expect("request goes through");
+    assert_eq!(response.status().as_u16(), 200);
+}
+
+async fn challenge_count(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/auth/ssh/challenge")
+        .count()
+}
+
+/// An expired or used nonce is retried with a new challenge, once.
+#[tokio::test]
+async fn an_expired_challenge_is_reminted_once() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(verify_401("challenge_expired_or_used"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "b".repeat(64),
+        })))
+        .mount(&server)
+        .await;
+
+    let token = auth_for(&server, store_file)
+        .token()
+        .await
+        .expect("the second challenge succeeds");
+    assert_eq!(token, "b".repeat(64));
+    assert_eq!(challenge_count(&server).await, 2);
+}
+
+/// A nonce refused as expired twice is surfaced after exactly two challenges:
+/// challenges are rate-limited, so this must never loop.
+#[tokio::test]
+async fn a_second_expired_challenge_is_surfaced_not_retried() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    mount_verify_401(&server, verify_401("challenge_expired_or_used")).await;
+
+    let err = auth_for(&server, store_file)
+        .token()
+        .await
+        .expect_err("still refused");
+    assert!(
+        matches!(
+            err,
+            TeregenAuthError::Unauthorized {
+                server_hint: Some(AuthHint::ChallengeExpiredOrUsed),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(challenge_count(&server).await, 2);
+}
+
+/// Only an expired challenge earns a second one: a rejected signature would
+/// fail the same way again.
+#[tokio::test]
+async fn a_rejected_signature_is_not_reminted() {
+    let server = MockServer::start().await;
+    let (_dir, store_file) = store_path();
+    mount_challenge_200(&server).await;
+    mount_verify_401(&server, verify_401("signature_rejected")).await;
+
+    auth_for(&server, store_file)
+        .token()
+        .await
+        .expect_err("refused");
+    assert_eq!(challenge_count(&server).await, 1);
 }

@@ -15,9 +15,11 @@
 //!   `400` invalid body, `429 {"error":"too_many_requests"}` past 20
 //!   challenges/60s per username (an approximate, non-atomic limit).
 //! * `verify` — body `{"username", "nonce", "signature"}` → `200 {"token"}`,
-//!   `400`, `401 {"error":"unauthorized"}` for **every** failure reason —
-//!   unknown user, no key, wrong key, bad signature, or a stale/consumed nonce
-//!   — deliberately indistinguishable (a `DUMMY_KEY` keeps timing uniform).
+//!   `400`, `401 {"error":"unauthorized","hint":…}`. The `hint` is one of a few
+//!   safe causes ([`AuthHint`]): a stale/consumed nonce, a key-list outage, or
+//!   `signature_rejected` for unknown user, no usable key, wrong key and bad
+//!   signature alike (a `DUMMY_KEY` keeps timing uniform). A body without a
+//!   known hint gets the generic list of causes.
 //! * The signed message is the **bare nonce bytes, no trailing newline**; the
 //!   signature is the **armored PEM** text (teregen's wire format, unlike
 //!   OBS's raw base64).
@@ -46,8 +48,8 @@ pub const DEFAULT_NAMESPACE: &str = "teregen-auth";
 /// The [`Signer`] context label for fail-closed hints.
 const CONTEXT: &str = "teregen auth";
 
-/// A hint naming every cause a `401` from `/auth/ssh/verify` can hide — the
-/// server deliberately makes them indistinguishable.
+/// A hint naming every cause a `401` from `/auth/ssh/verify` can hide, for a
+/// refusal that carries no (known) [`AuthHint`].
 const UNAUTHORIZED_HINT: &str = "the server does not distinguish these, but a 401 from \
      /auth/ssh/verify means one of: the principal is unknown to teregen's \
      sshkeys.yaml, that principal has no key configured, the signing key does \
@@ -61,6 +63,85 @@ const UNAUTHORIZED_HINT: &str = "the server does not distinguish these, but a 40
 const WRITE_AFTER_REMINT_HINT: &str = "the cached token was discarded and a fresh one minted, \
      yet the write was still refused (401): not a stale cache — check the \
      principal/key mapping or a server-side revocation";
+
+/// The cause teregen reports with a `401` (`Error.hint` in its OpenAPI spec).
+///
+/// Parsed from a closed vocabulary so the server's text is never echoed: an
+/// unknown value is `None`, and [`explanation`](Self::explanation) is mtui's
+/// own prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthHint {
+    /// The challenge nonce was already used or has expired.
+    ChallengeExpiredOrUsed,
+    /// The signature was rejected: unknown principal, no usable key, a key
+    /// mismatch or a bad signature; teregen does not say which.
+    SignatureRejected,
+    /// teregen could not load its key list.
+    KeyListUnavailable,
+    /// The bearer token is not known to this teregen.
+    TokenUnknown,
+    /// The bearer token has expired.
+    TokenExpired,
+    /// The request carried no bearer token.
+    TokenMissing,
+}
+
+impl AuthHint {
+    /// The hint for teregen's wire value, or `None` for anything else.
+    #[must_use]
+    pub fn parse(wire: &str) -> Option<Self> {
+        Some(match wire {
+            "challenge_expired_or_used" => Self::ChallengeExpiredOrUsed,
+            "signature_rejected" => Self::SignatureRejected,
+            "key_list_unavailable" => Self::KeyListUnavailable,
+            "token_unknown" => Self::TokenUnknown,
+            "token_expired" => Self::TokenExpired,
+            "token_missing" => Self::TokenMissing,
+            _ => return None,
+        })
+    }
+
+    /// What the cause means for the person holding the credentials.
+    #[must_use]
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::ChallengeExpiredOrUsed => {
+                "the challenge nonce was already used or has expired (nonces are single-use \
+                 and live 60s); retry"
+            }
+            Self::SignatureRejected => {
+                "teregen rejected the signature: the principal is not listed, has no usable \
+                 key, or the signing key does not match the configured one; it does not say \
+                 which"
+            }
+            Self::KeyListUnavailable => {
+                "teregen could not load its key list: a server-side outage that refuses \
+                 every principal, not a problem with this key"
+            }
+            Self::TokenUnknown => {
+                "the bearer token is unknown to this teregen: it was revoked, or minted by \
+                 another instance"
+            }
+            Self::TokenExpired => {
+                "the bearer token has expired; if a fresh one is refused too, check the \
+                 server clock"
+            }
+            Self::TokenMissing => {
+                "teregen saw no bearer token: a proxy may have dropped the Authorization \
+                 header"
+            }
+        }
+    }
+}
+
+/// The [`AuthHint`] in a `401` response body, or `None` when the body is
+/// unreadable, not a JSON object, or carries no known `hint`.
+async fn read_hint(response: reqwest::Response) -> Option<AuthHint> {
+    let bytes = read_body_capped(response, MAX_API_BODY).await.ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    AuthHint::parse(value.get("hint")?.as_str()?)
+}
 
 /// Which request a [`TeregenAuthError::Unauthorized`] answers for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,8 +194,11 @@ pub enum TeregenAuthError {
         /// matching on this public field cannot leak embedded credentials by
         /// logging it.
         base: String,
-        /// Names the indistinguishable possible causes.
+        /// What the refusal means: [`AuthHint::explanation`] when teregen gave
+        /// a known hint, else the generic list of possible causes.
         hint: String,
+        /// The cause teregen reported, when it reported a known one.
+        server_hint: Option<AuthHint>,
     },
 
     /// A non-401/429 protocol fault: a `400`, an unexpected status, or a
@@ -410,13 +494,19 @@ impl<A: AgentKeys> TeregenAuth<A> {
                         )
                     })
             }
-            401 => Err(TeregenAuthError::Unauthorized {
-                principal: self.principal.clone(),
-                key: self.signed_key(),
-                stage: AuthStage::Verify,
-                base: sanitize_url(&self.base),
-                hint: UNAUTHORIZED_HINT.to_owned(),
-            }),
+            401 => {
+                let server_hint = read_hint(response).await;
+                Err(TeregenAuthError::Unauthorized {
+                    principal: self.principal.clone(),
+                    key: self.signed_key(),
+                    stage: AuthStage::Verify,
+                    base: sanitize_url(&self.base),
+                    hint: server_hint
+                        .map_or(UNAUTHORIZED_HINT, AuthHint::explanation)
+                        .to_owned(),
+                    server_hint,
+                })
+            }
             400 => Err(TeregenAuthError::Protocol(
                 "teregen auth verify request was refused (400)".to_owned(),
             )),
@@ -446,9 +536,18 @@ impl<A: AgentKeys> TeregenAuth<A> {
     }
 
     /// Unconditionally challenge + verify + cache a fresh token.
+    ///
+    /// A verify refused as `challenge_expired_or_used` is retried once with a
+    /// new challenge — never more, as challenges are rate-limited — and
+    /// whatever the second attempt answers is surfaced.
     async fn mint(&self) -> Result<String, TeregenAuthError> {
-        let nonce = self.challenge().await?;
-        let token = self.verify(&nonce).await?;
+        let token = match self.challenge_and_verify().await {
+            Err(TeregenAuthError::Unauthorized {
+                server_hint: Some(AuthHint::ChallengeExpiredOrUsed),
+                ..
+            }) => self.challenge_and_verify().await?,
+            other => other?,
+        };
         if let Some(store) = &self.store {
             let cached = CachedToken {
                 base: self.base.clone(),
@@ -464,6 +563,11 @@ impl<A: AgentKeys> TeregenAuth<A> {
             }
         }
         Ok(token)
+    }
+
+    async fn challenge_and_verify(&self) -> Result<String, TeregenAuthError> {
+        let nonce = self.challenge().await?;
+        self.verify(&nonce).await
     }
 
     /// Drop any cached token, forcing the next [`token`](Self::token) call to
@@ -549,12 +653,16 @@ impl<A: AgentKeys> TeregenAuth<A> {
         let token = self.token().await?;
         let response = self.bearer_request(method, url, &token, &customize).await?;
         if response.status().as_u16() == 401 {
+            let server_hint = read_hint(response).await;
             return Err(TeregenAuthError::Unauthorized {
                 principal: self.principal.clone(),
                 key: self.signed_key(),
                 stage: AuthStage::WriteRetry,
                 base: sanitize_url(&self.base),
-                hint: WRITE_AFTER_REMINT_HINT.to_owned(),
+                hint: server_hint
+                    .map_or(WRITE_AFTER_REMINT_HINT, AuthHint::explanation)
+                    .to_owned(),
+                server_hint,
             });
         }
         Ok(response)
@@ -572,7 +680,13 @@ impl<A: AgentKeys> TeregenAuth<A> {
         F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
         tracing::debug!("teregen: {method} {}", sanitize_url(url));
-        let builder = self.http.inner().request(method, url).bearer_auth(token);
+        // teregen sends `token_missing` only on its JSON branch.
+        let builder = self
+            .http
+            .inner()
+            .request(method, url)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/json");
         Ok(customize(builder).send().await.map_err(HttpError::from)?)
     }
 }
@@ -735,6 +849,7 @@ mod tests {
             stage: AuthStage::Verify,
             base: sanitize_url("https://user:pass@qam.example.invalid/api/v2"),
             hint: "hint".to_owned(),
+            server_hint: None,
         };
         for rendered in [format!("{err}"), format!("{err:?}")] {
             assert!(!rendered.contains("user:pass"), "leaked: {rendered}");
