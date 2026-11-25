@@ -9,8 +9,9 @@ REPL. Adding, renaming, or removing a command changes the MCP tools
 automatically. Two commands, `get` and `put`, are denied synthesis and
 re-served under the same names as hand-written tools that carry file content
 in-band (see [File transfer tools](#file-transfer-tools)) — a path on the
-server's filesystem would be meaningless to a remote `--transport http` client,
-and is never needed on stdio either. The underlying semantics of each tool are the command semantics in
+server's filesystem would be meaningless to a remote `--transport http` client.
+`put` can still upload a file that already sits on the server, by `source=`, on
+either transport, gated by `[mcp] put_dirs`. The underlying semantics of each tool are the command semantics in
 the [Command reference](cli.md).
 
 ## Building and running
@@ -38,8 +39,10 @@ Two transports are served:
   ```
 
   `--host`/`--port` bind the HTTP listener and are ignored under stdio. The bind
-  address is **loopback only** — rmcp's DNS-rebinding guard rejects non-loopback
-  binds.
+  address is not restricted, but rmcp's DNS-rebinding guard checks each
+  request's `Host` header, which must be `localhost`, `127.0.0.1` or `::1`;
+  anything else gets a 403. Keep the listener on loopback or behind an
+  authenticated boundary (see [Security boundary](#security-boundary)).
 
 Logs go to **stderr**; **stdout** is the transport, so never write to it.
 
@@ -56,8 +59,8 @@ Fine-tune with `[mcp] tools_allow` (add specific tools on top of the profile) an
 in [Configuration](configuration.md) for these and the resource caps
 (`max_output_bytes`, `max_active_jobs`, session budget, …).
 
-Agent clients should prefer **`core`**: the full surface (64 tools) is sent on
-every request, while `core` (36 tools) covers the everyday flow — load →
+Agent clients should prefer **`core`**: the full surface (71 tools) is sent on
+every request, while `core` (43 tools) covers the everyday flow — load →
 inspect → run/install → fill the report → approve/reject — without the host
 bookkeeping and server-tuning tail. If a workflow never lists the queue or
 polls openQA, deny those on top:
@@ -189,8 +192,9 @@ A client still sending `template`/`all_templates` to `unload`, `list_templates`,
 
 Omitting both parameters resolves per command: a read/annotate tool
 (`list_*` other than the session-level ones above, `show_*`, `openqa_*`,
-`checkers`, `checkout`, `export`, `set_workflow`, `comment`) fans out across
-every loaded template, prefixing each template's
+`checkers`, `checkout`, `export`, `set_workflow`, `comment`, `analyze_diff`,
+`reload_openqa`, `reload_products`, `set_host_state`, `set_timeout`) fans out
+across every loaded template, prefixing each template's
 output with an `=== <RRID> ===` banner. A host-mutating or remote-write tool
 (`update`, `prepare`, `downgrade`, `install`, `uninstall`, `set_repo`, `run`,
 `reboot`, `lock`, `unlock`, `add_host`, `remove_host`, `approve`, `reject`,
@@ -321,6 +325,9 @@ and nothing is written there.
 
 ## Command behaviour notes
 
+- Every tool schema sets `additionalProperties: false`, so an argument the tool
+  does not declare is refused with `unknown argument(s): …`, apart from the
+  retired arguments noted below that are still ignored for one release.
 - The `openqa_overview` and `openqa_jobs` tools hide their operator override
   flags (`--url-openqa`, `--url-dashboard-qam`, `--url-qam`, `--test-pattern`,
   `--no-fetch`, #410): a headless client uses the operator's configured
@@ -474,8 +481,9 @@ the report.
 - Returns `{ "id", "dirty", "sections": [{"name","size","has_unanswered"}],
   "complete", "unfilled": [...] }`. `size` is the byte length of the section's
   compact JSON (advisory). `unfilled` holds the RFC 6901 pointer of every
-  `null` leaf in the whole document, in sorted key order; `complete` is true
-  when there is none. `dirty` is true while edits await `commit`.
+  `null` leaf in the whole document, in sorted key order, leaving out
+  tester-filed (`new: true`) issues, which start out unanswered by design;
+  `complete` is true when there is none. `dirty` is true while edits await `commit`.
 
 ### `report_section_read` (read-only)
 
@@ -586,7 +594,8 @@ report_field_write pointer=/testing/install/checks/1/verdict value="PASSED"
 ### `report_issue_write`
 
 Replaces one **existing** issue with `value`; the set of issues cannot grow or
-shrink. Validated and applied exactly like `report_section_write`.
+shrink. Validated and applied exactly like `report_section_write`. `value` is
+declared as an object; a string holding a JSON object is decoded.
 
 - Parameters (required): `issue_id`, `value`. Plus optional `template`.
 - Returns `{ "id", "issue_id", "dirty": true }`.
@@ -677,7 +686,7 @@ as clipped (invalid) JSON.
 Long-running commands run as background jobs so a tool call returns promptly with
 a job id you can poll. The slow host commands — `run`, `update`, `downgrade`,
 `prepare`, `install`, `uninstall`, `set_repo`, `reboot`, `regenerate`, `add_host`,
-and `load_template` — accept a **`background=true`** parameter. Instead of
+`load_template` and `request_review` — accept a **`background=true`** parameter. Instead of
 holding the request open for the minutes the operation takes, the call returns
 immediately with the job id(s); when the command fans out across several
 templates it mints **one job per template**, each independently pollable and
@@ -991,8 +1000,9 @@ receiver. A minimal OpenTelemetry Collector Contrib setup lives in
   best-effort host names the call resolved to, and the redacted arguments
   (secrets masked, file bodies fingerprinted as `{bytes, sha256}` — see
   above). An `intent` record carries the same header and arguments but no
-  outcome; a `terminal` record carries no arguments at all, only the job id,
-  its terminal state, and the outcome. Anyone who can read the
+  outcome; a `terminal` record carries no arguments, only the tool, session,
+  transport, duration, RRIDs and host names, the job id, its terminal state,
+  and the outcome. Anyone who can read the
   shipped stream learns which hosts were acted on and how the calls ended.
   The example's `debug` exporter prints each shipped record — redacted
   arguments and host names included — to the collector's stdout, so keep
@@ -1035,7 +1045,7 @@ transport is stdio, where there is no per-request connection to drop — a
 client that simply stops waiting (e.g. because it hit its own timeout) sends
 nothing, and the server has no way to learn the caller gave up. In that case
 the lock is still released, just on the ordinary schedule: the `connect_timeout`
-budget (commit A) and the shared backup-retry budget bound how long that takes
+budget and the shared backup-retry budget bound how long that takes
 rather than leaving it unbounded. Backgrounding a slow command
 (`background=true`, see above) plus `job_cancel` remains the reliable way to
 recover a stuck call regardless of transport.
