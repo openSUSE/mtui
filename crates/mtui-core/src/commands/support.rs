@@ -246,6 +246,17 @@ pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> 
         .collect()
 }
 
+/// Connected host names starting with `text`.
+#[must_use]
+pub(crate) fn host_completion(session: &Session, text: &str) -> Vec<String> {
+    session
+        .targets()
+        .names()
+        .into_iter()
+        .filter(|n| n.starts_with(text))
+        .collect()
+}
+
 /// Filters flag/value choices for tab completion.
 ///
 /// `synonyms` groups interchangeable flags — e.g. `[["-t", "--target"]]`;
@@ -1102,6 +1113,18 @@ mod tests {
             vec!["SUSE:Maintenance:2:2"]
         );
         assert!(template_completion(&session, "nope").is_empty());
+    }
+
+    #[test]
+    fn host_completion_offers_connected_hosts_by_prefix() {
+        use crate::commands::testkit::session_with_hosts;
+        let (session, _buf) =
+            session_with_hosts("SUSE:Maintenance:1:1", &["alpha", "alps", "beta"], "ok");
+        let mut got = host_completion(&session, "al");
+        got.sort();
+        assert_eq!(got, vec!["alpha", "alps"]);
+        assert_eq!(host_completion(&session, "beta"), vec!["beta"]);
+        assert!(host_completion(&session, "nope").is_empty());
     }
 
     #[test]

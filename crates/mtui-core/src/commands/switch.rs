@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
+use super::support::template_completion;
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -54,12 +55,7 @@ impl Command for Switch {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        session
-            .templates
-            .rrids()
-            .into_iter()
-            .filter(|r| r.starts_with(text))
-            .collect()
+        template_completion(session, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
