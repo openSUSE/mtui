@@ -26,7 +26,6 @@
 //! immediately, and the job tools poll/control that table.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,6 +39,7 @@ use crate::session::{
     CallScope, DEFAULT_PROGRESS_INTERVAL, JOB_WAIT_CAP_SECS, JobView, McpCommandError, McpSession,
     ProgressSink, ScopeSlot, ToolOutcome, run_with_heartbeat,
 };
+use crate::tool_args::{reject_unknown_for, reject_unknown_kwargs};
 
 /// Commands that touch reference hosts and can run for minutes, so they gain a
 /// `background` boolean parameter (see [`dispatch_tool`]). An explicit list.
@@ -110,34 +110,6 @@ pub struct ToolRoute {
 /// `true` iff a command is known to be side-effect-free.
 fn is_read_only(name: &str) -> bool {
     READ_ONLY_EXACT.contains(&name) || READ_ONLY_PREFIXES.iter().any(|p| name.starts_with(p))
-}
-
-/// Reject any tool-call kwarg not in `allowed`, mirroring the strict
-/// `additionalProperties: false` the advertised schema carries.
-///
-/// The runtime half for clients that do not validate: without it a misspelled
-/// field (`temlate=`, `mesage=`) is silently dropped and the command runs with
-/// it missing. Keys are reported sorted for a deterministic message.
-pub(crate) fn reject_unknown_kwargs<'a>(
-    kwargs: &Map<String, Value>,
-    allowed: impl IntoIterator<Item = &'a str>,
-) -> Result<(), McpCommandError> {
-    let allowed: std::collections::BTreeSet<&str> = allowed.into_iter().collect();
-    let mut unknown: Vec<&str> = kwargs
-        .keys()
-        .map(String::as_str)
-        .filter(|k| !allowed.contains(k))
-        .collect();
-    if unknown.is_empty() {
-        return Ok(());
-    }
-    unknown.sort_unstable();
-    let names = unknown.join(", ");
-    Err(McpCommandError {
-        stdout: String::new(),
-        stderr: format!("unknown argument(s): {names}"),
-        exit_code: 1,
-    })
 }
 
 /// The `clap` subcommand a fanned-out subparser tool's args live on, resolved
@@ -614,17 +586,7 @@ pub(crate) async fn dispatch_job_tool_with_interval(
     sink: Option<&dyn ProgressSink>,
     interval: Duration,
 ) -> Result<String, McpCommandError> {
-    // The allowed keys are the descriptor's advertised properties, so this cannot
-    // drift from the tool's strict schema.
-    if let Some(desc) = job_tool_descriptors().into_iter().find(|d| d.name == name) {
-        let allowed = desc
-            .input_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(|props| props.keys().map(String::as_str));
-        reject_unknown_kwargs(kwargs, allowed)?;
-    }
+    reject_unknown_for(kwargs, job_tool_descriptors(), name)?;
 
     match name {
         "job_list" => {
@@ -646,13 +608,13 @@ pub(crate) async fn dispatch_job_tool_with_interval(
                     &session.job_status_wait(&job_id, budget).await?,
                 ))
             };
-            heartbeat_while_parked(view, sink, name, interval).await
+            run_with_heartbeat(view, sink, name, interval).await
         }
         "job_result" => {
             let job_id = job_id_arg(kwargs)?;
             let budget = wait_seconds_arg(kwargs)?;
             let output = session.job_result_wait(&job_id, budget);
-            heartbeat_while_parked(output, sink, name, interval).await
+            run_with_heartbeat(output, sink, name, interval).await
         }
         "job_cancel" => {
             let job_id = job_id_arg(kwargs)?;
@@ -663,24 +625,6 @@ pub(crate) async fn dispatch_job_tool_with_interval(
             stderr: format!("unknown job tool: {other}"),
             exit_code: 1,
         }),
-    }
-}
-
-/// Drive `fut`, heart-beating whenever the caller supplied a sink.
-///
-/// A zero budget needs no guard of its own. The server hands a sink only to a
-/// call [`job_call_waits`] says will park, and `run_with_heartbeat`'s `biased`
-/// select returns an already-ready future before its first tick — so a poll
-/// emits nothing either way, and a guard here would be untestable.
-async fn heartbeat_while_parked<F: Future>(
-    fut: F,
-    sink: Option<&dyn ProgressSink>,
-    name: &str,
-    interval: Duration,
-) -> F::Output {
-    match sink {
-        Some(sink) => run_with_heartbeat(fut, sink, name, interval).await,
-        None => fut.await,
     }
 }
 

@@ -5,14 +5,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 use crate::session::McpCommandError;
-
-fn refuse(msg: impl Into<String>) -> McpCommandError {
-    McpCommandError {
-        stdout: String::new(),
-        stderr: msg.into(),
-        exit_code: 1,
-    }
-}
+use crate::tool_args::refuse;
 
 /// Resolve `relpath` under `base`, refusing anything that escapes it.
 ///

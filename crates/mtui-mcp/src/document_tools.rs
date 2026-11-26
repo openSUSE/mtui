@@ -26,25 +26,15 @@ use crate::session::{
     record_scope, run_with_heartbeat,
 };
 use crate::slim::cap_output;
+use crate::tool_args::{TEMPLATE_NOTE, opt_str, refuse, reject_unknown_for, schema, template_prop};
 use crate::tools::ToolDescriptor;
 use crate::transfer_tools::resolve_rrid;
-
-const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded template; required when more \
-     than one is loaded.";
 
 const DOCUMENT_NOTE: &str =
     "Needs a loaded report document; without one it refuses (run load_template or regenerate).";
 
 const WRITE_NOTE: &str = "Validated against the report schema locally, refused with the offending pointers, and \
      applied to local state only; `commit` uploads it.";
-
-fn refuse(msg: impl Into<String>) -> McpCommandError {
-    McpCommandError {
-        stdout: String::new(),
-        stderr: msg.into(),
-        exit_code: 1,
-    }
-}
 
 fn no_document() -> McpCommandError {
     refuse("no report document loaded — run load_template or regenerate")
@@ -57,33 +47,9 @@ fn access_refusal(access: ReportAccess, rrid: &str) -> McpCommandError {
     }
 }
 
-fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Map<String, Value> {
-    let mut properties = Map::new();
-    for (name, spec) in props {
-        properties.insert(name.to_owned(), spec);
-    }
-    let mut s = Map::new();
-    s.insert("type".to_owned(), Value::String("object".to_owned()));
-    s.insert("properties".to_owned(), Value::Object(properties));
-    if !required.is_empty() {
-        s.insert(
-            "required".to_owned(),
-            Value::Array(required.iter().map(|r| json!(r)).collect()),
-        );
-    }
-    s.insert("additionalProperties".to_owned(), Value::Bool(false));
-    s
-}
-
 /// The document tool descriptors (transport-free).
 #[must_use]
 pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
-    let template_prop = || {
-        json!({
-            "type": "string",
-            "description": "RRID of a loaded template to target (required when >1 loaded).",
-        })
-    };
     let section_prop = |sections: Vec<Section>, what: &str| {
         json!({
             "type": "string",
@@ -417,10 +383,7 @@ pub(crate) async fn dispatch_document_tool_scoped(
     ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     let body = dispatch_document_tool_inner(session, name, kwargs, ran_under);
-    match sink {
-        None => body.await,
-        Some(sink) => run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await,
-    }
+    run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await
 }
 
 async fn dispatch_document_tool_inner(
@@ -429,18 +392,7 @@ async fn dispatch_document_tool_inner(
     kwargs: &Map<String, Value>,
     ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    if let Some(desc) = document_tool_descriptors()
-        .into_iter()
-        .find(|d| d.name == name)
-    {
-        let allowed = desc
-            .input_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(|props| props.keys().map(String::as_str));
-        crate::tools::reject_unknown_kwargs(kwargs, allowed)?;
-    }
+    reject_unknown_for(kwargs, document_tool_descriptors(), name)?;
 
     let template = opt_str(kwargs, "template")?;
     let out = match name {
@@ -509,17 +461,6 @@ async fn dispatch_document_tool_inner(
         other => return Err(refuse(format!("unknown document tool: {other}"))),
     };
     Ok(capped(session, out))
-}
-
-fn opt_str<'a>(
-    kwargs: &'a Map<String, Value>,
-    key: &str,
-) -> Result<Option<&'a str>, McpCommandError> {
-    match kwargs.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(refuse(format!("{key} must be a string, got {other}"))),
-    }
 }
 
 /// A non-negative integer argument; absent or `null` is `None`.
