@@ -38,20 +38,15 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// The `mtui` REPL entry point.
 ///
-/// Parses the top-level [`Args`] (clap handles `--help`/`--version` — the latter
-/// carrying `mtui-core`'s build-provenance block — and usage errors, exiting the
-/// process itself), initialises `tracing` from `-d/--debug` + `RUST_LOG`, seeds
-/// the session from `-a`/`-k` and `--sut` ([`seed_session`]), then enters the
-/// REPL.
+/// Parses the top-level [`Args`] (clap handles `--help`/`--version` and usage errors,
+/// exiting itself), initialises `tracing` from `-d/--debug` + `RUST_LOG`, seeds the
+/// session from `-a`/`-k` and `--sut` ([`seed_session`]), then enters the REPL.
 ///
-/// The REPL is this binary's **only** driving surface: there is no positional
-/// command mode, since headless single-command dispatch is an
-/// `mtui-mcp`/embedding concern. Config resolves through
+/// The REPL is this binary's **only** driving surface (headless single-command
+/// dispatch is an `mtui-mcp`/embedding concern). Config resolves through
 /// [`Args::resolve_config`]: the file layers via
 /// [`Config::load`](mtui_config::Config::load), then the CLI overrides on top.
 pub fn run() -> anyhow::Result<()> {
-    // clap auto-handles `--help`/`--version` (exit 0) and usage errors (exit 2)
-    // before returning here.
     let args = Args::parse();
 
     // One `--color` decision drives every operator-facing level, since they all
@@ -67,9 +62,9 @@ pub fn run() -> anyhow::Result<()> {
     let registry = Arc::new(register_all());
     let mut session = Session::new(args.resolve_config(), true);
 
-    // `Session::new` defaults the display to `ColorMode::Never`, so without this
-    // the content color helpers never emit ANSI in the live REPL. `Auto` then
-    // re-checks TTY / `NO_COLOR` / `COLOR` at each call.
+    // `Session::new` defaults the display to `ColorMode::Never`; without this the color
+    // helpers never emit ANSI in the live REPL (`Auto` re-checks TTY / `NO_COLOR` /
+    // `COLOR` per call).
     session.display.set_color(color);
 
     // Composition root: the REPL's sinks. `mtui-mcp` installs only its own log
@@ -101,24 +96,20 @@ pub fn run() -> anyhow::Result<()> {
     let Some(status) = ending.status() else {
         return Ok(());
     };
-    // Force-quit or a teardown on SIGHUP/SIGTERM: exactly one destructor, then leave. `into_line_editor` keeps
-    // the blast radius at reedline, which persists its `FileBackedHistory` on
-    // drop, without tearing down the whole session graph.
-    //
-    // `process::exit`, not `main() -> ExitCode`: returning drops the runtime,
-    // which blocks on in-flight `spawn_blocking` — including the stdin prompter
-    // very likely outstanding when someone force-quits, whose read never
+    // Force-quit or a teardown on SIGHUP/SIGTERM: drop exactly one destructor
+    // (`into_line_editor`, whose `FileBackedHistory` persists on drop) and leave.
+    // //
+    // `process::exit`, not `main() -> ExitCode`: returning drops the runtime, which
+    // blocks on in-flight `spawn_blocking`, e.g. the stdin prompter whose read never
     // returns.
     drop(repl.into_line_editor());
     std::process::exit(status.into());
 }
 
-/// A spinner-aware stderr writer for the `tracing` subscriber.
-///
-/// Every record is written under a [`mtui_hosts::suspend`] guard, so a live TTY
-/// spinner erases its frame (`\r` + clear-to-EOL), the record lands on a clean
-/// line, and the spinner repaints on its next tick. With no spinner active —
-/// notably off a TTY — this is a plain stderr writer plus a paint-lock take.
+/// A spinner-aware stderr writer for the `tracing` subscriber: each record is written
+/// under a [`mtui_hosts::suspend`] guard so a live TTY spinner erases its frame first
+/// and the record lands on a clean line. With no spinner (notably off a TTY) it is a
+/// plain stderr writer.
 struct SpinnerAwareStderr;
 
 impl Write for SpinnerAwareStderr {
@@ -146,40 +137,33 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// Honours `RUST_LOG`; `-d/--debug` raises the default level to `DEBUG` when
 /// `RUST_LOG` is unset.
 ///
-/// **`DEBUG` raises mtui's targets only — by whichever knob turned it on.** `-d`
-/// and a runtime `set_log_level debug` go through [`level_directive`], which
-/// appends [`TRANSPORT_LOG_CARVE_OUT`](mtui_core::TRANSPORT_LOG_CARVE_OUT);
+/// **`DEBUG` raises mtui's targets only, by whichever knob turned it on.** `-d` and a
+/// runtime `set_log_level debug` go through [`level_directive`], which appends
+/// [`TRANSPORT_LOG_CARVE_OUT`](mtui_core::TRANSPORT_LOG_CARVE_OUT);
 /// [`resolve_log_directives`] applies the same cap *on top* of a `RUST_LOG`, so
-/// `RUST_LOG=debug` cannot switch the third-party HTTP transport's `DEBUG` back
-/// on — those crates log a connection pool authority that can carry
-/// redirect-supplied userinfo (#439). Naming a transport target
-/// (`RUST_LOG=hyper_util=debug`) is an informed opt-in: honoured verbatim, and
+/// `RUST_LOG=debug` cannot switch the HTTP transport's `DEBUG` back on: those crates
+/// log a pool authority that can carry redirect-supplied userinfo. Naming a transport
+/// target (`RUST_LOG=hyper_util=debug`) is an informed opt-in, honoured verbatim and
 /// announced on stderr at startup.
 ///
-/// At the **default** level the output is a lowercased colored level token,
-/// `": "` and the message ([`logfmt::CompactLevelFormat`]); escapes resolve from
-/// `color` through the *same* [`ColorMode::resolve`] the display uses, so
-/// `--color` governs both identically. `-d/--debug` keeps the verbose Rust
-/// format instead, and mtui deliberately has no DEBUG-only
-/// `" [module:function]"` suffix since that format's `target` covers the need.
-/// The user-facing *command error* is rendered by the session display, not this
-/// subscriber (`repl::render_error`), so a failing command never prints twice.
+/// At the **default** level the output is a lowercased colored level token, `": "` and
+/// the message ([`logfmt::CompactLevelFormat`]), with escapes resolved from `color`
+/// through the same [`ColorMode::resolve`] the display uses; `-d/--debug` keeps the
+/// verbose Rust format. The user-facing *command error* is rendered by the session
+/// display (`repl::render_error`), not this subscriber, so a failing command never
+/// prints twice.
 ///
-/// **Runtime reload.** The `EnvFilter` sits behind a
-/// [`tracing_subscriber::reload`] layer and the returned [`LogLevelSink`] flips
-/// it, backing the `set_log_level` command; install it with
-/// [`set_log_level_sink`](mtui_core::Session::set_log_level_sink). Keeping the
-/// [`Handle`](tracing_subscriber::reload::Handle) inside the closure keeps
+/// **Runtime reload.** The `EnvFilter` sits behind a [`tracing_subscriber::reload`]
+/// layer and the returned [`LogLevelSink`] flips it, backing `set_log_level` (install
+/// it with [`set_log_level_sink`](mtui_core::Session::set_log_level_sink)); the
+/// [`Handle`](tracing_subscriber::reload::Handle) stays inside the closure to keep
 /// `tracing_subscriber` out of the lower crates. A reload **replaces the whole
-/// filter**, discarding the per-target `RUST_LOG` directives the process started
-/// with — an explicit transport opt-in included, which `debug` replaces with the
-/// carve-out above. It changes the *level filter only*, never the event format:
-/// switching to `debug` at runtime does not retroactively add `-d`'s verbose
-/// layout (deliberate, consistent with [`logfmt`]).
+/// filter**, discarding the startup per-target `RUST_LOG` directives (an explicit
+/// transport opt-in included), and changes the level filter only, never the event
+/// format (consistent with [`logfmt`]).
 #[must_use = "install the sink via Session::set_log_level_sink, or `set_log_level` has no effect"]
 pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     let (filter, notice) = startup_filter(debug);
-    // Wrap the filter in a reload layer so `set_log_level` can flip it live.
     let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
     let registry = tracing_subscriber::registry().with(filter);
     if debug {
@@ -189,9 +173,8 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
             .with(tracing_subscriber::fmt::layer().with_writer(SpinnerAwareStderr))
             .init();
     } else {
-        // The subscriber's own ANSI is off so only the custom format's explicit
-        // level coloring emits escapes, keeping the decision shared with the
-        // display via `ColorMode::resolve`.
+        // The subscriber's own ANSI is off so only the custom format's level coloring
+        // emits escapes, sharing the `ColorMode::resolve` decision with the display.
         registry
             .with(
                 tracing_subscriber::fmt::layer()
@@ -215,14 +198,13 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     })
 }
 
-/// The startup `EnvFilter` and the optional one-line stderr notice, resolved
-/// from `$RUST_LOG` and this process's own defaults.
+/// The startup `EnvFilter` and the optional one-line stderr notice, resolved from
+/// `$RUST_LOG` and this process's own defaults.
 ///
-/// A seam, so the `RUST_LOG` composition is testable without installing a global
-/// subscriber (once-per-process). The defaults come from [`level_directive`], so
-/// the `-d` fallback and a runtime `set_log_level debug` cannot diverge, and
-/// `RUST_LOG` is layered on by [`resolve_log_directives`], the same helper
-/// `mtui-mcp` uses, so neither entrypoint grows its own answer.
+/// A seam, so the composition is testable without a global subscriber. Defaults come
+/// from [`level_directive`] and `RUST_LOG` is layered on by
+/// [`resolve_log_directives`], the helper `mtui-mcp` also uses, so the entrypoints
+/// cannot diverge.
 fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
     let defaults = level_directive(if debug {
         LogLevel::Debug

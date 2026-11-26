@@ -11,9 +11,9 @@
 //! output stays plain.
 //!
 //! Like [`MtuiPrompt`](crate::prompt::MtuiPrompt) and
-//! [`MtuiCompleter`](crate::completer::MtuiCompleter), this holds the shared
-//! `Arc<Registry>` / `Arc<Mutex<Session>>` and reads them synchronously during
-//! reedline's redraw — never overlapping the post-`read_line` dispatch lock.
+//! [`MtuiCompleter`](crate::completer::MtuiCompleter), it reads the shared
+//! `Arc<Registry>` / `Arc<Mutex<Session>>` synchronously during reedline's redraw,
+//! never overlapping the dispatch lock.
 
 use std::sync::{Arc, Mutex};
 

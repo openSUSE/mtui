@@ -1,17 +1,13 @@
 //! reedline [`Completer`] adapter over the command surface.
 //!
-//! An **adapter**, not new completion logic: it translates reedline's
-//! `(line, pos)` into the `(text, line)` the registry commands expect,
-//! dispatches to [`Command::complete`](mtui_core::Command::complete) (or
-//! [`Registry::keys`] — names **and** aliases — for the first token), and
-//! re-emits [`Suggestion`]s.
+//! An **adapter**, not new completion logic: it translates reedline's `(line, pos)`
+//! into the `(text, line)` the registry commands expect and dispatches to
+//! [`Command::complete`](mtui_core::Command::complete) (or [`Registry::keys`], names
+//! **and** aliases, for the first token).
 //!
-//! [`reedline::Completer::complete`] receives no session, but a command's
-//! `complete(session, …)` needs one (loaded RRIDs, host names and templates
-//! drive the candidates), so the completer holds a clone of the same
-//! `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) loop drives. Completion
-//! runs *during* `read_line` and dispatch *after* it returns, so its short-lived
-//! lock never overlaps the per-line dispatch lock.
+//! reedline's `complete` receives no session, so the completer holds a clone of the
+//! `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) drives. Completion runs
+//! *during* `read_line` and dispatch *after* it returns, so the locks never overlap.
 
 use std::sync::{Arc, Mutex};
 
@@ -49,18 +45,14 @@ fn split_text_word(line: &str) -> (&str, usize) {
 }
 
 impl Completer for MtuiCompleter {
-    /// Returns completion candidates for the buffer `line` up to byte offset
-    /// `pos`.
+    /// Returns completion candidates for the buffer `line` up to byte offset `pos`.
     ///
-    /// A first token (`begidx == 0`) completes over registry names **and
-    /// aliases** by case-sensitive prefix; otherwise the first token names the
-    /// command whose `complete(session, text, line)` is delegated to, and an
-    /// unknown token or a command with no completer yields nothing.
-    ///
-    /// A poisoned session lock is recovered ([`into_inner`](std::sync::PoisonError::into_inner))
-    /// rather than panicking — a bad completion must never tear down the REPL.
-    /// Candidates are computed synchronously, so the answer is always
-    /// [`CompletionResult::Fresh`].
+    /// A first token completes over registry names **and aliases** by case-sensitive
+    /// prefix; otherwise the first token names the command whose `complete(session, text,
+    /// line)` is used (nothing for an unknown token or a command without a completer). A
+    /// poisoned session lock is recovered rather than panicking, so a bad completion
+    /// never tears down the REPL; candidates are computed synchronously, so the result is
+    /// always [`CompletionResult::Fresh`].
     fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
         let before = &line[..pos.min(line.len())];
         // Left-trimmed before computing offsets; the shift is tracked so the

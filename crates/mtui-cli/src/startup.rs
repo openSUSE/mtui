@@ -1,15 +1,11 @@
 //! Startup seeding: the pre-REPL work the `mtui` binary does before entering the
 //! interactive loop.
 //!
-//! First an `-a`/`-k` update via [`Session::load_update`] — an explicitly
-//! requested one resolving to a null report exits `1` rather than dropping into
-//! an empty session — then the `--sut` hosts through the shared engine's
-//! `add_host`, best-effort.
-//!
-//! This module only *seeds*; the binary always enters the REPL afterwards, since
-//! mtui has no single-command mode. [`seed_session`] is the testable seam: it
-//! returns [`ControlFlow`] so `main` maps a fatal outcome to a process exit and
-//! this module never calls [`std::process::exit`] itself.
+//! First an `-a`/`-k` update via [`Session::load_update`] (an explicitly requested
+//! one resolving to a null report exits `1` rather than dropping into an empty
+//! session), then the `--sut` hosts through the shared engine's `add_host`,
+//! best-effort. [`seed_session`] returns [`ControlFlow`] so `main` maps a fatal
+//! outcome to a process exit and this module never calls [`std::process::exit`].
 
 use std::ops::ControlFlow;
 

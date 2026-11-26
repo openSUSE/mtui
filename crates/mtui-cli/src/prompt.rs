@@ -6,11 +6,10 @@
 //! status line on the right — reedline 0.50 has no bottom toolbar, and the right
 //! prompt is the closest persistent analogue.
 //!
-//! Both read the shared `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl)
-//! loop and the [`MtuiCompleter`](crate::completer::MtuiCompleter) share.
-//! reedline calls `render_*` synchronously *during* `read_line`, so these short
-//! read-locks never overlap the post-`read_line` dispatch lock (the completer's
-//! soundness argument, unchanged).
+//! Both read the shared `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) loop and
+//! the [`MtuiCompleter`](crate::completer::MtuiCompleter) share. reedline calls
+//! `render_*` synchronously *during* `read_line`, so these short read-locks never
+//! overlap the dispatch lock.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};

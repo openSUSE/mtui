@@ -1,18 +1,15 @@
 //! The interactive `shell` REPL command and its raw-mode TTY bridge.
 //!
-//! The host-library half — spawning the remote PTY and exposing it as an
-//! object-safe [`ShellChannel`] duplex — lives in `mtui-hosts` (feature
-//! `shell`); this module is the **CLI consumer** that owns the local terminal.
+//! The host-library half (the remote PTY as an object-safe [`ShellChannel`] duplex)
+//! lives in `mtui-hosts` (feature `shell`); this module is the **CLI consumer** that
+//! owns the local terminal.
 //!
-//! It lives here, not in the engine, because attaching an interactive PTY needs
-//! a controlling terminal only the `mtui` binary owns: `mtui-core`'s `shell`
-//! command stays a headless-error stub for MCP, and the REPL intercepts the
-//! `shell` line before dispatch (`is_shell_line`) to drive the bridge here.
-//!
-//! The pump loop `bridge` is generic over a `BridgeIo` trait abstracting the
-//! three terminal touch-points (async input, stdout write, flush), so it runs
-//! offline against `MockConnection`'s scriptable [`ShellChannel`]. The only
-//! untested sliver is the `TerminalIo` / `RawModeGuard` wiring around a real TTY.
+//! Attaching an interactive PTY needs a controlling terminal only the `mtui` binary
+//! owns, so `mtui-core`'s `shell` stays a headless-error stub for MCP and the REPL
+//! intercepts the line (`is_shell_line`) to drive the bridge here. The pump loop
+//! `bridge` is generic over a `BridgeIo` trait (async input, stdout write, flush), so
+//! it runs offline against `MockConnection`'s scriptable [`ShellChannel`]; only the
+//! `TerminalIo` / `RawModeGuard` wiring around a real TTY is untested.
 
 use std::io::Write as _;
 
@@ -32,11 +29,9 @@ pub enum InputEvent {
     Resize(u32, u32),
 }
 
-/// The three local-terminal touch-points the [`bridge`] pump needs, abstracted
-/// so tests drive it without a real TTY.
-///
-/// `#[async_trait]` rather than a native `async fn` in trait keeps it
-/// dyn-compatible, so [`bridge`] can take `&mut dyn BridgeIo`.
+/// The three local-terminal touch-points the [`bridge`] pump needs, abstracted so
+/// tests drive it without a real TTY. `#[async_trait]` keeps it dyn-compatible for
+/// `&mut dyn BridgeIo`.
 #[async_trait::async_trait]
 trait BridgeIo: Send {
     /// Awaits the next local input event, or `None` on local EOF / stream end.
@@ -49,14 +44,11 @@ trait BridgeIo: Send {
     fn flush(&mut self);
 }
 
-/// Pumps bytes between a spawned [`ShellChannel`] and the local terminal until
-/// either side ends the session.
-///
-/// Remote output goes to [`BridgeIo::write_out`], local [`InputEvent::Bytes`] to
-/// [`ShellChannel::write`], and [`InputEvent::Resize`] to a best-effort
-/// [`ShellChannel::resize`] so the remote PTY tracks a mid-session SIGWINCH. A
-/// remote `Ok(0)`/error or a local `None` stops the loop; the channel is closed
-/// on the way out.
+/// Pumps bytes between a spawned [`ShellChannel`] and the local terminal until either
+/// side ends the session: remote output goes to [`BridgeIo::write_out`],
+/// [`InputEvent::Bytes`] to [`ShellChannel::write`], and [`InputEvent::Resize`] to a
+/// best-effort [`ShellChannel::resize`]. A remote `Ok(0)`/error or a local `None`
+/// stops the loop, and the channel is closed on the way out.
 ///
 /// # Errors
 ///
@@ -193,11 +185,9 @@ fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
     }
 }
 
-/// Spawns an interactive shell on `target` and runs the local↔remote [`bridge`]
-/// under raw mode.
-///
-/// Reads the terminal size, spawns via [`Target::shell`] (state-gated: a
-/// disabled/failed target returns `None`), then bridges until the session ends.
+/// Spawns an interactive shell on `target` (state-gated via [`Target::shell`]: a
+/// disabled/failed target returns `None`) and runs the local↔remote [`bridge`] under
+/// raw mode.
 ///
 /// # Errors
 ///
@@ -221,11 +211,11 @@ async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
     bridge(channel.as_mut(), &mut io).await
 }
 
-/// Peeks a REPL input line: if its first token is the `shell` command, returns
-/// its argv (everything after the command word); otherwise `None`.
+/// Peeks a REPL input line: if its first token is the `shell` command, returns its
+/// argv (everything after the command word); otherwise `None`.
 ///
-/// The pure seam the REPL routes `shell` through to reach the CLI bridge instead
-/// of the headless engine, kept off the reedline boundary so it is unit-testable.
+/// The pure seam the REPL routes `shell` through, kept off the reedline boundary so
+/// it is unit-testable.
 #[must_use]
 pub(crate) fn is_shell_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex_split(line)?;
