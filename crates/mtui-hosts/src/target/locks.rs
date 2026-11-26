@@ -1408,7 +1408,6 @@ mod tests {
     use crate::connection::MockConnection;
     use std::path::Path;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Own/foreign/unknown arms stay distinguishable both ways, hedge, and keep
     /// `--force`'s whole-group scope visible instead of "force this one host".
@@ -1646,42 +1645,7 @@ mod tests {
 
     // --- test scaffolding ---------------------------------------------------
 
-    /// A fake clock: fixed `now`, a manually-advanceable monotonic counter, and
-    /// a no-op sleep that advances the monotonic clock by the slept amount.
-    #[derive(Clone)]
-    struct FakeClock {
-        now: u64,
-        mono: Arc<AtomicU64>, // milliseconds
-    }
-
-    impl FakeClock {
-        fn new(now: u64) -> Self {
-            Self {
-                now,
-                mono: Arc::new(AtomicU64::new(0)),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Clock for FakeClock {
-        fn now_unix(&self) -> u64 {
-            self.now
-        }
-        fn monotonic(&self) -> f64 {
-            self.mono.load(Ordering::SeqCst) as f64 / 1000.0
-        }
-        async fn sleep(&self, secs: f64) {
-            self.mono
-                .fetch_add((secs * 1000.0) as u64, Ordering::SeqCst);
-        }
-    }
-
-    fn cfg() -> Config {
-        let mut c = Config::default();
-        c.session_user = "testuser".into();
-        c
-    }
+    use crate::target::test_support::{FakeClock, cfg};
 
     fn tl(conn: MockConnection, clock: FakeClock) -> TargetLock<FakeClock> {
         TargetLock::with_clock(Box::new(conn), &cfg(), clock)
