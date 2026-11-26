@@ -293,8 +293,8 @@ pub(crate) fn parse_traceparent(value: &str) -> Option<([u8; 16], [u8; 8], u8)> 
     {
         return None;
     }
-    let trace = hex_to_bytes::<16>(trace_hex)?;
-    let span = hex_to_bytes::<8>(span_hex)?;
+    let trace = crate::util::hex_decode::<16>(trace_hex)?;
+    let span = crate::util::hex_decode::<8>(span_hex)?;
     if trace.iter().all(|&b| b == 0) || span.iter().all(|&b| b == 0) {
         return None;
     }
@@ -394,20 +394,6 @@ fn is_tracestate_key_char(b: u8) -> bool {
 fn is_lower_hex(s: &str) -> bool {
     s.bytes()
         .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-}
-
-fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
-    if hex.len() != N * 2 {
-        return None;
-    }
-    let mut out = [0u8; N];
-    let (chunks, _) = hex.as_bytes().as_chunks::<2>();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let hi = (chunk[0] as char).to_digit(16)?;
-        let lo = (chunk[1] as char).to_digit(16)?;
-        out[i] = (hi * 16 + lo) as u8;
-    }
-    Some(out)
 }
 
 // Hand-written protobuf varint encoder (no prost, even in dev-deps).
@@ -633,7 +619,7 @@ fn gap_record(seq_start: u64, seq_end: u64, count: usize, service_name: &str) ->
         int_attr("mtui.lost", count as i64),
     ];
     LogRecord {
-        time_nanos: now_nanos(),
+        time_nanos: crate::util::epoch_nanos(),
         severity_number: 13,
         severity_text: "WARN",
         body,
@@ -641,13 +627,6 @@ fn gap_record(seq_start: u64, seq_end: u64, count: usize, service_name: &str) ->
         trace: None,
     }
     .encode()
-}
-
-pub(crate) fn now_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
 }
 
 // Closed-vocab classification of a reqwest failure: never the URL.
@@ -916,7 +895,7 @@ impl OtelExporter {
             message: "mtui-mcp otel probe".to_owned(),
             level: "info".to_owned(),
             target: "mtui_mcp::otel::probe".to_owned(),
-            time_nanos: now_nanos(),
+            time_nanos: crate::util::epoch_nanos(),
         });
         let scope = scope_logs(OTEL_SCOPE_DIAG, &[body]);
         let payload = export_request(&self.config_service, &[scope]);
@@ -1254,7 +1233,7 @@ where
             message: escape_diag_field(&visitor.message),
             level: escape_diag_field(&level),
             target: escape_diag_field(target),
-            time_nanos: now_nanos(),
+            time_nanos: crate::util::epoch_nanos(),
         });
     }
 }
@@ -1472,8 +1451,11 @@ mod tests {
     fn traceparent_strict_lowercase_55_bytes() {
         let valid = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
         let (trace, span, flags) = parse_traceparent(valid).expect("valid");
-        assert_eq!(hex_of(&trace), "0af7651916cd43dd8448eb211c80319c");
-        assert_eq!(hex_of(&span), "00f067aa0ca902b7");
+        assert_eq!(
+            crate::util::hex_encode(&trace),
+            "0af7651916cd43dd8448eb211c80319c"
+        );
+        assert_eq!(crate::util::hex_encode(&span), "00f067aa0ca902b7");
         assert_eq!(flags, 1);
         // Uppercase rejected (strict lowercase).
         assert!(parse_traceparent(&valid.to_uppercase()).is_none());
@@ -1488,10 +1470,6 @@ mod tests {
         assert!(
             parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none()
         );
-    }
-
-    fn hex_of(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
     #[test]
@@ -2009,7 +1987,7 @@ mod tests {
                 session_id: 9,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("enqueue");
@@ -2049,7 +2027,7 @@ mod tests {
                 session_id: 9,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("enqueue");
@@ -2104,7 +2082,7 @@ mod tests {
             session_id: 1,
             response_bytes: None,
             trace: None,
-            time_nanos: now_nanos(),
+            time_nanos: crate::util::epoch_nanos(),
             extra_attrs: Vec::new(),
         };
         export_batch(
@@ -2182,7 +2160,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             }),
             Err(EnqueueError::Unhealthy),
@@ -2207,7 +2185,7 @@ mod tests {
                 message: "probe".to_owned(),
                 level: "info".to_owned(),
                 target: "t".to_owned(),
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
             }],
         )
         .await;
@@ -2226,7 +2204,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("dispatch accepted after recovery");
@@ -2430,7 +2408,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .await
@@ -2607,7 +2585,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("first enqueue while healthy");
@@ -2627,7 +2605,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             }),
             Err(EnqueueError::Unhealthy),

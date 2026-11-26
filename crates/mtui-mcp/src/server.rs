@@ -226,7 +226,7 @@ impl McpServer {
     /// atomic is private and unobserved.
     fn touch(&self) {
         self.last_touch
-            .store(crate::provider::now_millis(), Ordering::Relaxed);
+            .store(crate::provider::mono_millis(), Ordering::Relaxed);
     }
 }
 
@@ -2376,7 +2376,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: crate::otel::now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("enqueue while healthy");
@@ -2437,7 +2437,7 @@ mod tests {
                 session_id: 1,
                 response_bytes: None,
                 trace: None,
-                time_nanos: crate::otel::now_nanos(),
+                time_nanos: crate::util::epoch_nanos(),
                 extra_attrs: Vec::new(),
             })
             .expect("enqueue while healthy");
@@ -2571,7 +2571,7 @@ mod tests {
                     session_id: 1,
                     response_bytes: None,
                     trace: None,
-                    time_nanos: crate::otel::now_nanos(),
+                    time_nanos: crate::util::epoch_nanos(),
                     extra_attrs: Vec::new(),
                 })
                 .expect("queue accepts to capacity");

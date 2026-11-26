@@ -49,7 +49,7 @@ use crate::session::McpSession;
 /// Measured against a process-lifetime epoch so the value is a plain comparable
 /// `u64` shareable through an [`AtomicU64`] (an `Instant` is not atomically
 /// storable). Only *differences* are meaningful.
-pub(crate) fn now_millis() -> u64 {
+pub(crate) fn mono_millis() -> u64 {
     use std::sync::OnceLock;
     static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
     let epoch = EPOCH.get_or_init(std::time::Instant::now);
@@ -350,7 +350,7 @@ impl SessionRegistry {
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let session = self.make_session();
-        let last_touch = Arc::new(AtomicU64::new(now_millis()));
+        let last_touch = Arc::new(AtomicU64::new(mono_millis()));
         state.insert(id, Arc::downgrade(&session), Arc::clone(&last_touch));
         drop(state);
 
@@ -501,7 +501,7 @@ async fn sweep_loop(live: LiveSet, timeout: Duration, parallel: usize, cancel: C
 /// One sweep cycle: confirm the stale set under the lock, then close it
 /// concurrently under `parallel` with a single overall deadline.
 async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
-    let now = now_millis();
+    let now = mono_millis();
     let timeout_ms = timeout.as_millis() as u64;
 
     // Phase 1 (serial, lock-held): the re-read and the removal run with no await
@@ -517,7 +517,7 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
             continue; // already evicted elsewhere
         };
         let touched = tracked.last_touch.load(Ordering::Relaxed);
-        if now_millis().saturating_sub(touched) < timeout_ms {
+        if mono_millis().saturating_sub(touched) < timeout_ms {
             tracing::info!(id, "skipping sweep: session re-activated");
             continue;
         }
@@ -591,7 +591,7 @@ mod tests {
         let reg = reg_with_idle(Duration::from_millis(200));
         let session = reg.make_session();
         // The sweeper's first cycle (>= 1s later) sees it aged past the 200ms TTL.
-        let (_id, _touch) = track(&reg, &session, now_millis());
+        let (_id, _touch) = track(&reg, &session, mono_millis());
         assert_eq!(reg.live_count(), 1);
 
         let cancel = CancellationToken::new();
@@ -635,7 +635,7 @@ mod tests {
             );
             guard.targets_mut().add(target);
         }
-        track(&reg, &session, now_millis());
+        track(&reg, &session, mono_millis());
 
         let cancel = CancellationToken::new();
         let sweeper = reg.spawn_sweeper(cancel.clone()).unwrap();
@@ -660,7 +660,7 @@ mod tests {
     async fn sweeper_spares_freshly_touched_session() {
         let reg = reg_with_idle(Duration::from_millis(200));
         let session = reg.make_session();
-        let (_id, touch) = track(&reg, &session, now_millis());
+        let (_id, touch) = track(&reg, &session, mono_millis());
 
         let cancel = CancellationToken::new();
         let sweeper = reg.spawn_sweeper(cancel.clone()).unwrap();
@@ -668,7 +668,7 @@ mod tests {
         // Keep touching under the TTL for ~600ms (several sweep cycles).
         for _ in 0..12 {
             tokio::time::sleep(Duration::from_millis(50)).await;
-            touch.store(now_millis(), Ordering::Relaxed);
+            touch.store(mono_millis(), Ordering::Relaxed);
         }
         let alive = reg.live_count();
         cancel.cancel();
@@ -684,15 +684,15 @@ mod tests {
         let session = reg.make_session();
         // Age the entry into staleness by elapsing the TTL, rather than
         // back-dating: robust regardless of the monotonic epoch's value.
-        let (id, touch) = track(&reg, &session, now_millis());
+        let (id, touch) = track(&reg, &session, mono_millis());
         tokio::time::sleep(Duration::from_millis(250)).await;
 
-        let now = now_millis();
+        let now = mono_millis();
         let stale = collect_stale(&reg.live, reg.idle_timeout, now);
         assert_eq!(stale.len(), 1, "aged session is stale");
 
         // A client re-activates it before the sweep evicts.
-        touch.store(now_millis(), Ordering::Relaxed);
+        touch.store(mono_millis(), Ordering::Relaxed);
 
         // Drive the loop's per-entry re-check manually.
         let timeout_ms = reg.idle_timeout.as_millis() as u64;
@@ -701,7 +701,7 @@ mod tests {
             let tracked = state.sessions.get(&id).unwrap();
             let touched = tracked.last_touch.load(Ordering::Relaxed);
             assert!(
-                now_millis().saturating_sub(touched) < timeout_ms,
+                mono_millis().saturating_sub(touched) < timeout_ms,
                 "re-check must see the fresh touch and spare the session"
             );
         }
@@ -768,7 +768,7 @@ mod tests {
             let mut sessions = Vec::new();
             for _ in 0..n {
                 let sess = slow_close_session(delay).await;
-                track(&reg, &sess, now_millis());
+                track(&reg, &sess, mono_millis());
                 sessions.push(sess);
             }
             assert_eq!(reg.live_count(), n);
@@ -804,8 +804,8 @@ mod tests {
         let reg = reg_with_idle(Duration::from_secs(3600)); // effectively no sweep
         let s1 = slow_close_session(Duration::from_millis(10)).await;
         let s2 = slow_close_session(Duration::from_millis(10)).await;
-        track(&reg, &s1, now_millis());
-        track(&reg, &s2, now_millis());
+        track(&reg, &s1, mono_millis());
+        track(&reg, &s2, mono_millis());
         assert_eq!(reg.live_count(), 2);
 
         reg.close_all().await;
@@ -838,7 +838,7 @@ mod tests {
             guard.templates.add(Box::new(report));
             guard.templates.set_active("SUSE:Maintenance:1:1");
         }
-        track(&reg, &session, now_millis());
+        track(&reg, &session, mono_millis());
 
         assert!(!handle.is_closed(), "host starts connected");
         reg.close_all().await;
@@ -870,7 +870,7 @@ mod tests {
         let reg = reg_with_idle(Duration::from_millis(100));
         let gate = Arc::new(tokio::sync::Notify::new()); // never fired → close wedges
         let sess = wedged_session(Arc::clone(&gate)).await;
-        track(&reg, &sess, now_millis().saturating_sub(10_000));
+        track(&reg, &sess, mono_millis().saturating_sub(10_000));
 
         let cancel = CancellationToken::new();
         let sweeper = reg.spawn_sweeper(cancel.clone()).unwrap();
@@ -1064,7 +1064,7 @@ mod tests {
         let probe = conn.clone();
         let session = reg.make_session();
         attach_locked(&session, conn).await;
-        track(&reg, &session, now_millis());
+        track(&reg, &session, mono_millis());
         tokio::time::sleep(Duration::from_millis(120)).await;
 
         tokio::select! {
@@ -1095,7 +1095,7 @@ mod tests {
         drop(late_session);
         reg.live.lock().unwrap().clear();
         let first = slow_close_session(Duration::from_millis(200)).await;
-        track(&reg, &first, now_millis());
+        track(&reg, &first, mono_millis());
 
         let closing = tokio::spawn({
             let reg = reg.clone();
