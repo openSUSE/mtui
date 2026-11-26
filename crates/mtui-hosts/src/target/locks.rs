@@ -1090,35 +1090,6 @@ impl<C: Clock> TargetLock<C> {
         Ok(format!("{} is {}", self.hostname(), self.lock))
     }
 
-    /// The user who currently holds the lock (empty when unlocked).
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from [`load`](Self::load).
-    pub(crate) async fn locked_by(&mut self) -> Result<String> {
-        self.load().await?;
-        Ok(self.lock.user.clone())
-    }
-
-    /// The comment on the current lock (empty when none/unlocked).
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from [`load`](Self::load).
-    pub(crate) async fn comment(&mut self) -> Result<String> {
-        self.load().await?;
-        Ok(self.lock.comment.clone())
-    }
-
-    /// A formatted lock-creation time, or `"unknown"` when the stored timestamp
-    /// is missing/malformed (must not raise — this is called while reporting a
-    /// foreign lock during acquisition).
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from [`load`](Self::load).
-    pub(crate) async fn time(&mut self) -> Result<String> {
-        self.load().await?;
-        Ok(self.lock.display_time())
-    }
-
     /// Unlocks the target.
     ///
     /// With `force = false` a foreign lock is refused; with `force = true` any
@@ -2301,21 +2272,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn time_formats_and_tolerates_bad_timestamp() {
+    async fn loaded_owner_formats_time_and_tolerates_bad_timestamp() {
         let conn = MockConnection::new("h1")
             .with_file(TARGET_LOCK_PATH, b"1700000000:testuser:12345".to_vec());
         let mut lock = tl(conn, FakeClock::new(now()));
-        assert!(lock.time().await.unwrap().contains("UTC"));
+        lock.load().await.unwrap();
+        assert!(lock.loaded_owner().since.contains("UTC"));
 
         let conn = MockConnection::new("h1")
             .with_file(TARGET_LOCK_PATH, b"notanumber:otheruser:99999".to_vec());
         let mut lock = tl(conn, FakeClock::new(now()));
-        assert_eq!(lock.time().await.unwrap(), "unknown");
+        lock.load().await.unwrap();
+        assert_eq!(lock.loaded_owner().since, "unknown");
 
         let conn =
             MockConnection::new("h1").with_file(TARGET_LOCK_PATH, b":otheruser:99999".to_vec());
         let mut lock = tl(conn, FakeClock::new(now()));
-        assert_eq!(lock.time().await.unwrap(), "unknown");
+        lock.load().await.unwrap();
+        assert_eq!(lock.loaded_owner().since, "unknown");
     }
 
     // --- reaping ------------------------------------------------------------
