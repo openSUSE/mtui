@@ -8,10 +8,9 @@
 //! `(hostname, stdout, stdin, stderr, exitcode)` that raises [`UpdateError`] on
 //! a recognised failure.
 //!
-//! [`WorkflowRegistry`] implements three seams over them: the crate-local
-//! [`DoerProvider`] / [`CheckProvider`] (used by the bespoke
-//! prepare/update/downgrade flows) and `mtui_hosts::PlanProvider` (used by the
-//! shared install/uninstall template). The `PlanProvider` impl is legal here
+//! [`WorkflowRegistry`] resolves them for the bespoke prepare/update/downgrade
+//! flows, and implements `mtui_hosts::PlanProvider` for the shared
+//! install/uninstall template. The `PlanProvider` impl is legal here
 //! and nowhere else — foreign trait, local type, and the check tables'
 //! `CheckArgs` fields are `pub(crate)`. `impl OperationGroup for HostsGroup`
 //! stays in `mtui-hosts`, so that crate never depends on this one.
@@ -225,43 +224,11 @@ impl Role {
     }
 }
 
-/// The injectable seam that resolves an action's command templates for a
-/// `(release, transactional)` key.
+/// The registry of action and check tables, keyed by
+/// `(role, release, transactional)`.
 ///
-/// Implemented by [`WorkflowRegistry`] over the [`actions`] tables; the
-/// install/uninstall path reaches it through that type's
-/// `mtui_hosts::PlanProvider` impl.
-pub trait DoerProvider: Send + Sync {
-    /// Resolves the action command set for `role` at `(release, transactional)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the role's [`HostError::MissingInstaller`] / etc. when no entry
-    /// exists for the key.
-    fn doer(
-        &self,
-        role: Role,
-        release: &str,
-        transactional: bool,
-    ) -> Result<actions::ActionCommands, HostError>;
-}
-
-/// The injectable seam that resolves a post-run check for a
-/// `(release, transactional)` key.
-///
-/// Implemented by [`WorkflowRegistry`] over the [`checks`] tables. An unknown
-/// key yields `None`, which the caller treats as "no check to run".
-pub trait CheckProvider: Send + Sync {
-    /// Resolves the post-run check for `role` at `(release, transactional)`, or
-    /// `None` when no check is registered for the key.
-    fn check(&self, role: Role, release: &str, transactional: bool) -> Option<checks::CheckFn>;
-}
-
-/// The default [`DoerProvider`] / [`CheckProvider`], backed by the [`actions`]
-/// and [`checks`] tables.
-///
-/// The concrete registry every flow builds and, for install/uninstall, injects
-/// into the `HostsGroup` as a `mtui_hosts::PlanProvider`. Carries the
+/// The one concrete registry every flow builds and, for install/uninstall,
+/// injects into the `HostsGroup` as a `mtui_hosts::PlanProvider`. Carries the
 /// prepare-only `force` / `testing` flags, which the other actions ignore.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowRegistry {
@@ -277,10 +244,14 @@ impl WorkflowRegistry {
     pub(crate) fn new(force: bool, testing: bool) -> Self {
         Self { force, testing }
     }
-}
 
-impl DoerProvider for WorkflowRegistry {
-    fn doer(
+    /// Resolves the action command set for `role` at `(release, transactional)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the role's [`HostError::MissingInstaller`] / etc. when no entry
+    /// exists for the key.
+    pub(crate) fn action_commands(
         &self,
         role: Role,
         release: &str,
@@ -297,10 +268,16 @@ impl DoerProvider for WorkflowRegistry {
         };
         resolved.ok_or_else(|| role.missing_error(release))
     }
-}
 
-impl CheckProvider for WorkflowRegistry {
-    fn check(&self, role: Role, release: &str, transactional: bool) -> Option<checks::CheckFn> {
+    /// Resolves the post-run check for `role` at `(release, transactional)`, or
+    /// `None` when no check is registered for the key, which the caller treats
+    /// as "no check to run".
+    pub(crate) fn check_fn(
+        &self,
+        role: Role,
+        release: &str,
+        transactional: bool,
+    ) -> Option<checks::CheckFn> {
         match role {
             // Install and uninstall share one check table.
             Role::Install | Role::Uninstall => {
@@ -332,7 +309,7 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
         let Some(role) = Role::from_operation_role(role) else {
             return Err(HostError::missing_for(role, release));
         };
-        let commands = DoerProvider::doer(self, role, release, transactional)?;
+        let commands = self.action_commands(role, release, transactional)?;
         // Raw templates, not rendered strings: the package list is only known
         // inside `mtui-hosts`, at `Operation::collect` time. `Doer` substitutes
         // `$packages` with a plain `replace`, which agrees with this crate's
@@ -356,7 +333,7 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
             _ => "operation",
         };
         let check_fn = Role::from_operation_role(role)
-            .and_then(|role| CheckProvider::check(self, role, release, transactional));
+            .and_then(|role| self.check_fn(role, release, transactional));
 
         Box::new(move |a: mtui_hosts::CheckArgs<'_>| match &check_fn {
             Some(check) => {
@@ -448,7 +425,9 @@ mod tests {
     fn registry_resolves_installer_doer() {
         use std::collections::HashMap;
         let reg = WorkflowRegistry::default();
-        let doer = reg.doer(Role::Install, "15", false).expect("installer");
+        let doer = reg
+            .action_commands(Role::Install, "15", false)
+            .expect("installer");
         let vars: HashMap<&str, &str> = [("packages", "pkg")].into_iter().collect();
         assert_eq!(
             doer.render_command(&vars).unwrap(),
@@ -459,9 +438,11 @@ mod tests {
     #[test]
     fn registry_missing_doer_maps_to_role_error() {
         let reg = WorkflowRegistry::default();
-        let err = reg.doer(Role::Install, "99", false).unwrap_err();
+        let err = reg.action_commands(Role::Install, "99", false).unwrap_err();
         assert!(matches!(err, HostError::MissingInstaller { .. }));
-        let err = reg.doer(Role::Downgrade, "99", false).unwrap_err();
+        let err = reg
+            .action_commands(Role::Downgrade, "99", false)
+            .unwrap_err();
         assert!(matches!(err, HostError::MissingDowngrader { .. }));
     }
 
@@ -470,7 +451,7 @@ mod tests {
         use std::collections::HashMap;
         let vars: HashMap<&str, &str> = [("package", "p")].into_iter().collect();
         let forced = WorkflowRegistry::new(true, false)
-            .doer(Role::Prepare, "15", false)
+            .action_commands(Role::Prepare, "15", false)
             .unwrap();
         assert!(
             forced
@@ -479,7 +460,7 @@ mod tests {
                 .contains("--force-resolution")
         );
         let unforced = WorkflowRegistry::new(false, false)
-            .doer(Role::Prepare, "15", false)
+            .action_commands(Role::Prepare, "15", false)
             .unwrap();
         assert!(
             !unforced
@@ -493,14 +474,14 @@ mod tests {
     fn registry_uninstall_uses_install_check_table() {
         let reg = WorkflowRegistry::default();
         // uninstall shares the install check table.
-        assert!(reg.check(Role::Uninstall, "15", false).is_some());
+        assert!(reg.check_fn(Role::Uninstall, "15", false).is_some());
     }
 
     #[test]
     fn registry_resolves_and_runs_a_check() {
         let reg = WorkflowRegistry::default();
         let check = reg
-            .check(Role::Install, "15", false)
+            .check_fn(Role::Install, "15", false)
             .expect("install check");
         let ok = check(checks::CheckArgs {
             hostname: "h1",
@@ -525,8 +506,8 @@ mod tests {
         let reg = WorkflowRegistry::default();
         // Keys with no doer either: `("slmicro", true)` is now a *registered*
         // update key and would demonstrate nothing.
-        assert!(reg.check(Role::Update, "nonesuch", false).is_none());
-        assert!(reg.check(Role::Update, "15", true).is_none());
+        assert!(reg.check_fn(Role::Update, "nonesuch", false).is_none());
+        assert!(reg.check_fn(Role::Update, "15", true).is_none());
     }
 
     #[test]
@@ -537,8 +518,8 @@ mod tests {
         // registry, the path that check takes, so the table wiring is pinned
         // too.
         let reg = WorkflowRegistry::default();
-        assert!(reg.check(Role::Update, "slmicro", true).is_some());
-        assert!(reg.check(Role::Update, "YUM", false).is_some());
+        assert!(reg.check_fn(Role::Update, "slmicro", true).is_some());
+        assert!(reg.check_fn(Role::Update, "YUM", false).is_some());
     }
 
     #[test]
@@ -553,7 +534,7 @@ mod tests {
         for (release, transactional) in [("slmicro", true), ("YUM", false)] {
             for role in [Role::Prepare, Role::Install, Role::Uninstall] {
                 assert!(
-                    reg.check(role, release, transactional).is_some(),
+                    reg.check_fn(role, release, transactional).is_some(),
                     "{role:?} @ ({release}, {transactional}) must resolve a check"
                 );
             }
@@ -573,10 +554,10 @@ mod tests {
     fn assert_checked_alike(role: Role, actual: (&str, bool), expected: (&str, bool)) {
         let reg = WorkflowRegistry::default();
         let want = reg
-            .check(role, expected.0, expected.1)
+            .check_fn(role, expected.0, expected.1)
             .unwrap_or_else(|| panic!("{role:?} @ {expected:?} has no check"));
         let got = reg
-            .check(role, actual.0, actual.1)
+            .check_fn(role, actual.0, actual.1)
             .unwrap_or_else(|| panic!("{role:?} @ {actual:?} has no check"));
         for (stdout, stderr, exitcode) in [
             ("", "", 0),
@@ -625,9 +606,11 @@ mod tests {
             WorkflowRegistry::new(true, true),
         ] {
             for role in ROLES {
-                let micro = reg.doer(role, "slmicro", true).expect("the slmicro entry");
+                let micro = reg
+                    .action_commands(role, "slmicro", true)
+                    .expect("the slmicro entry");
                 let sles = reg
-                    .doer(role, "16", true)
+                    .action_commands(role, "16", true)
                     .unwrap_or_else(|e| panic!("{role:?} @ (\"16\", true): {e}"));
                 assert_eq!(sles, micro, "{role:?}");
             }
@@ -644,7 +627,7 @@ mod tests {
             for release in ["slmicro", "16"] {
                 for role in ROLES {
                     let cmds = reg
-                        .doer(role, release, true)
+                        .action_commands(role, release, true)
                         .unwrap_or_else(|e| panic!("{role:?} @ ({release:?}, true): {e}"));
                     let template = cmds.command_template();
                     let (wanted, unwanted) = match role {
@@ -683,8 +666,12 @@ mod tests {
             WorkflowRegistry::new(true, true),
         ] {
             for role in ROLES {
-                let zypper = reg.doer(role, "15", false).expect("the zypper entry");
-                let sles = reg.doer(role, "16", false).expect("the read-write entry");
+                let zypper = reg
+                    .action_commands(role, "15", false)
+                    .expect("the zypper entry");
+                let sles = reg
+                    .action_commands(role, "16", false)
+                    .expect("the read-write entry");
                 assert_eq!(sles, zypper, "{role:?}");
                 assert_eq!(sles.render_reboot().unwrap(), None, "{role:?}");
             }
@@ -725,14 +712,16 @@ mod tests {
         let install = PlanProvider::doer(&reg, "installer", "15", false).expect("installer");
         let uninstall = PlanProvider::doer(&reg, "uninstaller", "15", false).expect("uninstaller");
 
-        let install_commands =
-            DoerProvider::doer(&reg, Role::Install, "15", false).expect("install table entry");
+        let install_commands = reg
+            .action_commands(Role::Install, "15", false)
+            .expect("install table entry");
         let expected_install = Doer::new(
             install_commands.command_template(),
             install_commands.reboot_template().unwrap_or_default(),
         );
-        let uninstall_commands =
-            DoerProvider::doer(&reg, Role::Uninstall, "15", false).expect("uninstall table entry");
+        let uninstall_commands = reg
+            .action_commands(Role::Uninstall, "15", false)
+            .expect("uninstall table entry");
         let expected_uninstall = Doer::new(
             uninstall_commands.command_template(),
             uninstall_commands.reboot_template().unwrap_or_default(),
@@ -814,7 +803,7 @@ mod tests {
         ] {
             for role in [Role::Install, Role::Uninstall] {
                 let commands = WorkflowRegistry::default()
-                    .doer(role, release, transactional)
+                    .action_commands(role, release, transactional)
                     .expect("a table entry");
                 let vars: HashMap<&str, &str> = [("packages", "pkg-a pkg-b")].into_iter().collect();
                 let expected = commands.render_command(&vars).expect("renders");
