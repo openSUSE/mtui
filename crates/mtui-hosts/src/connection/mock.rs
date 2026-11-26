@@ -65,7 +65,7 @@ pub enum MockSftpOp {
         /// The local destination folder.
         local: PathBuf,
     },
-    /// `sftp_listdir(path)`.
+    /// `listdir(path)` on a batched SFTP session.
     Listdir(PathBuf),
     /// `sftp_open(path)`.
     Open(PathBuf),
@@ -87,9 +87,7 @@ pub enum MockSftpOp {
     Append(PathBuf),
     /// `sftp_remove(path)`.
     Remove(PathBuf),
-    /// `sftp_rmdir(path)`.
-    Rmdir(PathBuf),
-    /// `sftp_readlink(path)`.
+    /// `readlink(path)` on a batched SFTP session.
     Readlink(PathBuf),
     /// `sftp_mtime(path)`.
     Mtime(PathBuf),
@@ -168,7 +166,7 @@ pub struct MockConnection {
     sftp_session_delay: std::time::Duration,
     /// See [`with_cancel_on_sftp_session`](Self::with_cancel_on_sftp_session).
     cancel_on_sftp_session: Option<tokio_util::sync::CancellationToken>,
-    /// Canned directory listings keyed by remote path (for `sftp_listdir` /
+    /// Canned directory listings keyed by remote path (for `listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
     /// File contents keyed by remote path. Shared + mutable so `sftp_write`
@@ -176,7 +174,7 @@ pub struct MockConnection {
     /// makes the lock protocol (exclusive create, reconcile, read-back)
     /// testable end-to-end.
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
-    /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
+    /// Canned symlink targets keyed by remote path (for `readlink`).
     links: HashMap<PathBuf, String>,
     /// See [`with_mtime`](Self::with_mtime).
     mtimes: HashMap<PathBuf, u64>,
@@ -356,7 +354,7 @@ impl MockConnection {
         self
     }
 
-    /// Scripts `path`'s first `count` [`sftp_listdir`](Connection::sftp_listdir)
+    /// Scripts `path`'s first `count` [`listdir`](SftpSession::listdir)
     /// calls to raise a transient [`HostError::Sftp`], exercising a bounded
     /// retry (e.g. `Target::connect`'s system-parse retry) against a flaky
     /// session.
@@ -518,7 +516,7 @@ impl MockConnection {
         self
     }
 
-    /// Scripts a canned directory listing for `sftp_listdir` /
+    /// Scripts a canned directory listing for `listdir` /
     /// `sftp_get_folder` on `path`.
     #[must_use]
     pub fn with_listing(
@@ -574,7 +572,7 @@ impl MockConnection {
             .collect()
     }
 
-    /// Scripts a canned symlink target for `sftp_readlink` on `path`.
+    /// Scripts a canned symlink target for `readlink` on `path`.
     #[must_use]
     pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
         self.links.insert(path.into(), target.into());
@@ -590,7 +588,7 @@ impl MockConnection {
     }
 
     /// Scripts a directory `path` to raise [`HostError::SftpNotFound`] from
-    /// [`sftp_listdir`](Connection::sftp_listdir). Without this, unscripted
+    /// [`listdir`](SftpSession::listdir). Without this, unscripted
     /// directories return an empty listing rather than erroring.
     #[must_use]
     pub fn with_missing_dir(mut self, path: impl Into<PathBuf>) -> Self {
@@ -682,6 +680,47 @@ impl MockConnection {
             .expect("mock events lock")
             .push(MockEvent::Sftp(op.clone()));
         self.sftp_ops.lock().expect("mock sftp lock").push(op);
+    }
+
+    fn listdir(&self, path: &Path) -> Result<Vec<String>> {
+        self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
+        // Fail the first N calls, then fall through so a retry recovers.
+        {
+            let mut pending = self
+                .listdir_transient_failures
+                .lock()
+                .expect("mock transient-failures lock");
+            if let Some(remaining) = pending.get_mut(path)
+                && *remaining > 0
+            {
+                *remaining -= 1;
+                return Err(HostError::Sftp {
+                    host: self.hostname.clone(),
+                    reason: "Timeout".to_owned(),
+                });
+            }
+        }
+        if self.missing_dirs.contains(path) {
+            return Err(HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
+        Ok(self.listings.get(path).cloned().unwrap_or_default())
+    }
+
+    fn readlink(&self, path: &Path) -> Result<String> {
+        self.record_sftp(MockSftpOp::Readlink(path.to_path_buf()));
+        // An unscripted path is a missing symlink, which the SFTP layer reports
+        // as `SftpNotFound` rather than a generic error; `parse_system` relies
+        // on that to degrade a missing `baseproduct` to a dangling base.
+        self.links
+            .get(path)
+            .cloned()
+            .ok_or_else(|| HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            })
     }
 
     /// The file-lookup body of `sftp_open` **without** the per-op handshake
@@ -834,11 +873,11 @@ impl SftpSession for MockSftpSession {
     }
 
     async fn listdir(&mut self, path: &Path) -> Result<Vec<String>> {
-        self.conn.sftp_listdir(path).await
+        self.conn.listdir(path)
     }
 
     async fn readlink(&mut self, path: &Path) -> Result<String> {
-        self.conn.sftp_readlink(path).await
+        self.conn.readlink(path)
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -1049,33 +1088,6 @@ impl Connection for MockConnection {
         Ok(())
     }
 
-    async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
-        self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
-        // Fail the first N calls, then fall through so a retry recovers.
-        {
-            let mut pending = self
-                .listdir_transient_failures
-                .lock()
-                .expect("mock transient-failures lock");
-            if let Some(remaining) = pending.get_mut(path)
-                && *remaining > 0
-            {
-                *remaining -= 1;
-                return Err(HostError::Sftp {
-                    host: self.hostname.clone(),
-                    reason: "Timeout".to_owned(),
-                });
-            }
-        }
-        if self.missing_dirs.contains(path) {
-            return Err(HostError::SftpNotFound {
-                host: self.hostname.clone(),
-                path: path.display().to_string(),
-            });
-        }
-        Ok(self.listings.get(path).cloned().unwrap_or_default())
-    }
-
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
         // The per-op path opens its own session per call, so it pays the
         // handshake here — the once-per-read cost the 0mop.3 batched path
@@ -1228,25 +1240,6 @@ impl Connection for MockConnection {
             });
         }
         Ok(self.mtimes.get(path).copied())
-    }
-
-    async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
-        self.record_sftp(MockSftpOp::Rmdir(path.to_path_buf()));
-        Ok(())
-    }
-
-    async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
-        self.record_sftp(MockSftpOp::Readlink(path.to_path_buf()));
-        // An unscripted path is a missing symlink, which the SFTP layer reports
-        // as `SftpNotFound` rather than a generic error; `parse_system` relies
-        // on that to degrade a missing `baseproduct` to a dangling base.
-        self.links
-            .get(path)
-            .cloned()
-            .ok_or_else(|| HostError::SftpNotFound {
-                host: self.hostname.clone(),
-                path: path.display().to_string(),
-            })
     }
 
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
@@ -1463,11 +1456,11 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_listdir_returns_scripted_entries() {
-        let mut conn = MockConnection::new("h1").with_listing("/var/log", ["a.log", "b.log"]);
-        let entries = conn.sftp_listdir(Path::new("/var/log")).await.expect("ok");
+        let conn = MockConnection::new("h1").with_listing("/var/log", ["a.log", "b.log"]);
+        let entries = conn.listdir(Path::new("/var/log")).expect("ok");
         assert_eq!(entries, ["a.log", "b.log"]);
         // Unscripted paths list empty, not error.
-        let empty = conn.sftp_listdir(Path::new("/nope")).await.expect("ok");
+        let empty = conn.listdir(Path::new("/nope")).expect("ok");
         assert!(empty.is_empty());
     }
 
@@ -1592,10 +1585,10 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_readlink_returns_scripted_target() {
-        let mut conn = MockConnection::new("h1").with_link("/link", "/target");
-        let target = conn.sftp_readlink(Path::new("/link")).await.expect("ok");
+        let conn = MockConnection::new("h1").with_link("/link", "/target");
+        let target = conn.readlink(Path::new("/link")).expect("ok");
         assert_eq!(target, "/target");
-        assert!(conn.sftp_readlink(Path::new("/nope")).await.is_err());
+        assert!(conn.readlink(Path::new("/nope")).is_err());
     }
 
     #[tokio::test]
@@ -1720,10 +1713,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sftp_remove_rmdir_getfolder_recorded() {
+    async fn sftp_remove_getfolder_recorded() {
         let mut conn = MockConnection::new("h1");
         conn.sftp_remove(Path::new("/f")).await.expect("ok");
-        conn.sftp_rmdir(Path::new("/d")).await.expect("ok");
         conn.sftp_get_folder(Path::new("/rd"), Path::new("/ld"))
             .await
             .expect("ok");
@@ -1731,7 +1723,6 @@ mod tests {
             conn.sftp_ops(),
             [
                 MockSftpOp::Remove(PathBuf::from("/f")),
-                MockSftpOp::Rmdir(PathBuf::from("/d")),
                 MockSftpOp::GetFolder {
                     remote: PathBuf::from("/rd"),
                     local: PathBuf::from("/ld"),

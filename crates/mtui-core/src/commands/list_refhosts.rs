@@ -1131,7 +1131,6 @@ mod tests {
                         | MockSftpOp::Write { .. }
                         | MockSftpOp::Append(_)
                         | MockSftpOp::Remove(_)
-                        | MockSftpOp::Rmdir(_)
                 )
             })
             .collect();
