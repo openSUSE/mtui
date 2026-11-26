@@ -275,6 +275,42 @@ pub(crate) async fn refresh_auto(
     Ok(())
 }
 
+/// Like [`require_update`], and also refuses a report naming no package
+/// versions: `verb` would dispatch nothing and print a success an MCP client
+/// cannot tell from a real one. Returns the package list.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when no report is loaded, or it names no packages.
+pub(crate) fn require_packages(session: &Session, verb: &str) -> Result<Vec<String>, CommandError> {
+    require_update(session)?;
+    let packages = session.metadata().get_package_list();
+    if packages.is_empty() {
+        return Err(CommandError::Other(format!(
+            "the loaded report names no package versions, so {verb} has nothing to \
+             install; refusing to report success — check `list_packages -w` and the \
+             report metadata"
+        )));
+    }
+    Ok(packages)
+}
+
+/// Prints the OBS principal and signing-key lines `whoami` and `teregen_login`
+/// open with.
+pub(crate) fn print_identity(
+    session: &mut Session,
+    creds: &mtui_datasources::obs::oscrc::ObsCredentials,
+) {
+    let key = mtui_datasources::sshsig::key_display(
+        creds.sshkey_path.as_deref(),
+        creds.sshkey_fingerprint.as_deref(),
+    );
+    session
+        .display
+        .println(&format!("principal: {}", creds.user));
+    session.display.println(&format!("signing key: {key}"));
+}
+
 /// Guards a command body that requires a loaded update, so a data-source
 /// command fails cleanly instead of building a client for an empty RRID.
 ///
@@ -1305,6 +1341,30 @@ mod tests {
         assert_eq!(got, vec!["alpha", "alps"]);
         assert_eq!(host_completion(&session, "beta"), vec!["beta"]);
         assert!(host_completion(&session, "nope").is_empty());
+    }
+
+    #[test]
+    fn require_packages_refuses_an_unloaded_or_package_less_report_verbatim() {
+        use crate::commands::testkit::{empty_session, session_with_hosts};
+        let (session, _buf) = empty_session();
+        assert!(matches!(
+            require_packages(&session, "update"),
+            Err(CommandError::Other(m)) if m == "Metadata not loaded, please use load_template first"
+        ));
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let err = require_packages(&session, "prepare").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the loaded report names no package versions, so prepare has nothing to \
+             install; refusing to report success — check `list_packages -w` and the \
+             report metadata"
+        );
+        session.metadata_mut().base_mut().packages.insert(
+            "standard".to_owned(),
+            std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+        );
+        assert!(!require_packages(&session, "prepare").unwrap().is_empty());
     }
 
     #[test]

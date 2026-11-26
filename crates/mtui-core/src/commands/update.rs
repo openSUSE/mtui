@@ -6,9 +6,11 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use super::perform::{PerformOp, drive};
-use super::support::{CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags};
+use super::support::{
+    CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, require_packages,
+};
 use crate::command::{Command, Scope};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
@@ -71,19 +73,7 @@ impl Command for Update {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         tracing::info!("Updating");
-        // Not-loaded first, so the refusal below can honestly say "the loaded
-        // report".
-        let _rrid = crate::commands::support::require_update(session)?;
-        // #396: an empty package list would dispatch nothing and still print an
-        // unqualified success.
-        if session.metadata().get_package_list().is_empty() {
-            return Err(CommandError::Other(
-                "the loaded report names no package versions, so update has nothing to \
-                 install; refusing to report success — check `list_packages -w` and the \
-                 report metadata"
-                    .to_owned(),
-            ));
-        }
+        require_packages(session, "update")?;
         let noprepare = args.get_flag("noprepare");
         let newpackage = args.get_flag("newpackage");
         // Read before the drive so it survives an error path.

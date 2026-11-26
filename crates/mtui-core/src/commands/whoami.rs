@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use clap::ArgMatches;
 use mtui_datasources::obs::oscrc;
 use mtui_datasources::sanitize_url;
-use mtui_datasources::sshsig::key_display;
 use mtui_datasources::teregen::{TokenStore, describe_age};
 
 use crate::command::{Command, Scope};
+use crate::commands::support::print_identity;
 use crate::error::CommandResult;
 use crate::session::Session;
 
@@ -65,14 +65,7 @@ impl Whoami {
             .println(&format!("User: {user}, app pid: {pid}"));
         match oscrc::read_credentials(&session.config.obs_api_url) {
             Ok(creds) => {
-                let key = key_display(
-                    creds.sshkey_path.as_deref(),
-                    creds.sshkey_fingerprint.as_deref(),
-                );
-                session
-                    .display
-                    .println(&format!("principal: {}", creds.user));
-                session.display.println(&format!("signing key: {key}"));
+                print_identity(session, &creds);
                 if session.is_repl {
                     if let Some(path) = &creds.sshkey_path {
                         session

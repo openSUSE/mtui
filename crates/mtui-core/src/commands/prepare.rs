@@ -6,9 +6,11 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use super::perform::{PerformOp, drive};
-use super::support::{CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags};
+use super::support::{
+    CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, require_packages,
+};
 use crate::command::{Command, Scope};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
@@ -80,20 +82,7 @@ impl Command for Prepare {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Not-loaded first, so the refusal below can honestly say "the loaded
-        // report".
-        let _rrid = crate::commands::support::require_update(session)?;
-        let packages = session.metadata().get_package_list();
-        // #396: an empty package list would sail through the flow with zero
-        // installs and print a success an MCP client cannot tell from a real one.
-        if packages.is_empty() {
-            return Err(CommandError::Other(
-                "the loaded report names no package versions, so prepare has nothing to \
-                 install; refusing to report success — check `list_packages -w` and the \
-                 report metadata"
-                    .to_owned(),
-            ));
-        }
+        let packages = require_packages(session, "prepare")?;
         drive(
             session,
             args,
