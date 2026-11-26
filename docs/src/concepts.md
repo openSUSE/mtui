@@ -101,11 +101,12 @@ command out across all of them.
 
 - The host drawn for each slot is chosen **at random** among the free candidates,
   spreading load across interchangeable refhosts.
-- Each slot gets a host of its own. A host can match two slots, as an `SLE_HPC`
-  host carrying the `SLES-LTSS` addon matches both an `SLE_HPC` and a
-  `SLES-LTSS` slot; it serves only the slot it was drawn for, on later
-  `add_host` calls too, a candidate no other slot needs is drawn first, and a
-  slot whose every candidate already serves another slot is named in
+- Slots are matched to hosts so that each gets a host of its own whenever the
+  free candidates allow it. A host can match two slots, as an `SLE_HPC` host
+  carrying the `SLES-LTSS` addon matches both an `SLE_HPC` and a `SLES-LTSS`
+  slot; it serves only the slot it was drawn for, on later `add_host` calls
+  too, a candidate no other slot needs is preferred, and a slot left without a
+  host because every candidate already serves another slot is named in
   `add_host`'s result.
 - If the chosen host fails to connect, mtui automatically **tries another
   candidate** from the same slot; only when *every* candidate for a slot is

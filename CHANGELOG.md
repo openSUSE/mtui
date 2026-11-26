@@ -23,8 +23,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `add_host` without `-t`, and the autoconnect after `load_template`, no
   longer skip a test-target slot because a host drawn for another slot also
-  matches it, such as an `SLE_HPC` host carrying the `SLES-LTSS` addon. Each
-  slot now gets a host of its own, kept by the slot it was drawn for when a
+  matches it, such as an `SLE_HPC` host carrying the `SLES-LTSS` addon. Slots
+  are now matched to hosts so that each gets a host of its own whenever the
+  free candidates allow it, a host stays with the slot it was drawn for when a
   later `add_host` meets the slots in another order, and a backup host is
   tried for a slot whose own host failed to connect even when another slot's
   host is one of its candidates. `add_host` names a slot whose every
@@ -32,7 +33,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   candidate already serves another slot (<hosts>)`, and a slot whose other
   candidates are claimed by another RRID as `unserved slot <slot>: all <n>
   candidates claimed (<host> by <RRID>, …) or already serving another slot
-  (<hosts>)`, no longer naming its own RRID as a claimant (#880, #882).
+  (<hosts>)` (#880, #882).
 - `remove_host`, `unload`, `quit`, and a reload of an already-loaded update
   (`load_template`, `regenerate`) no longer report a clean teardown when
   something was left on a host. The reply now carries one `warning: <host>: …`
