@@ -6,5 +6,6 @@ testplatform "base=sles(major=15,minor=5);arch=[s390x]": no matching refhost
 testplatform "base=sles(major=15,minor=5);arch=[x86_64,s390x]": no refhost for arch s390x
 refhosts inventory unavailable; no testplatform host resolved
 unserved slot sles 15.5 aarch64 +ha +we: all 2 candidates claimed (h1 by SUSE:Maintenance:2:2, h2 by SUSE:Maintenance:3:3)
+unserved slot sles 15.5 aarch64 +ha +we: all 2 candidates claimed (h11 by SUSE:Maintenance:2:2) or already serving another slot (h12)
 unserved slot sles 15.5 aarch64 +ha +we: no candidate connected (h3: unreachable; h4: claimed by SUSE:Maintenance:9:9; h5: claimed remotely; h8: pool claim failed; h9: no command set for SLES 15-SP6, transactional; h10: base product unreadable (/etc/products.d/baseproduct is missing or dangling))
 unserved slot sles 15.5 x86_64: backup retry budget exhausted (tried h6, h7)

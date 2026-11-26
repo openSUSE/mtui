@@ -64,6 +64,9 @@ pub struct TestReportBase {
     /// Per-slot ordered candidate hostnames captured during pool selection, so
     /// connect can fall back to a sibling host when the primary claim fails.
     pub slot_candidates: HashMap<String, Vec<String>>,
+    /// The [`slot_candidates`](Self::slot_candidates) key each pool host was
+    /// drawn for, so a host that matches two slots stays with the one it serves.
+    pub pool_slots: HashMap<String, String>,
     /// Set when a load asked for autoconnect; the actual connect is deferred
     /// until after the host arbiter is wired.
     pub autoconnect_pending: bool,
@@ -172,6 +175,7 @@ impl TestReportBase {
             owner: None,
             pool_claims: HashSet::new(),
             slot_candidates: HashMap::new(),
+            pool_slots: HashMap::new(),
             autoconnect_pending: false,
             load_error: None,
             stale_hash_warning: None,
@@ -359,6 +363,7 @@ pub trait TestReport {
             .collect();
         base.pool_claims.clear();
         base.slot_candidates.clear();
+        base.pool_slots.clear();
         if let (Some(arbiter), Some(owner)) = (base.arbiter.as_ref(), base.owner.as_ref()) {
             arbiter.release_owner(owner);
         }
@@ -381,6 +386,7 @@ pub trait TestReport {
     fn release_pool_claim(&mut self, host: &str) {
         let base = self.base_mut();
         base.pool_claims.remove(host);
+        base.pool_slots.remove(host);
         base.slot_candidates.retain(|_slot, candidates| {
             candidates.retain(|c| c != host);
             !candidates.is_empty()
@@ -1181,12 +1187,14 @@ mod tests {
         base.pool_claims.insert("h2".to_owned());
         base.slot_candidates
             .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
+        base.pool_slots.insert("h1".to_owned(), "slot0".to_owned());
         let mut r = MetaReport { base };
 
         r.release_pool_claims(Duration::from_secs(5)).await;
 
         assert!(r.base().pool_claims.is_empty());
         assert!(r.base().slot_candidates.is_empty());
+        assert!(r.base().pool_slots.is_empty());
         let arbiter = r.base().arbiter.as_ref().unwrap();
         assert!(arbiter.owner_of("h1").is_none());
         assert!(arbiter.owner_of("h2").is_none());
@@ -1271,10 +1279,16 @@ mod tests {
         // h1 primary, h2 backup sibling, in one slot.
         base.slot_candidates
             .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
+        base.pool_slots.insert("h1".to_owned(), "slot0".to_owned());
+        base.pool_slots.insert("h2".to_owned(), "slot1".to_owned());
         let mut r = MetaReport { base };
 
         r.release_pool_claim("h1");
 
+        assert_eq!(
+            r.base().pool_slots,
+            HashMap::from([("h2".to_owned(), "slot1".to_owned())])
+        );
         assert!(!r.base().pool_claims.contains("h1"));
         assert!(r.base().pool_claims.contains("h2"));
         // The freed host is re-acquirable by another owner; the sibling is not.
