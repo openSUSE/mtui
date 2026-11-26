@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
 
-use super::row_budget::{crush, row_notice};
+use super::row_budget::crush;
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, resolve_dashboard_key, template_completion};
 use crate::error::{CommandError, CommandResult};
@@ -380,14 +380,8 @@ impl Command for OpenQAJobs {
                 ));
             }
         }
-        if crushed.truncated > 0 {
-            session.display.println(&row_notice(
-                crushed.truncated,
-                crushed.total,
-                crushed.anomaly_kept,
-                crushed.anomaly_total,
-                JOBS_HINT,
-            ));
+        if let Some(notice) = crushed.notice(JOBS_HINT) {
+            session.display.println(&notice);
         }
         Ok(())
     }

@@ -31,9 +31,7 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{
-    crush, json_envelope, probe_meta, probe_notice, row_notice, truncation_meta,
-};
+use super::row_budget::{crush, json_envelope, probe_meta, probe_notice};
 
 /// Narrowing flags named in the row-budget notice.
 const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/--addon";
@@ -532,27 +530,11 @@ impl Command for ListRefhosts {
         );
         // Truncation notices only a real row-budget cut; --free windowing gets
         // its own probe note so anomaly counts never cover unprobed hosts.
-        let trunc_notice = (crushed.truncated > 0).then(|| {
-            row_notice(
-                crushed.truncated,
-                crushed.total,
-                crushed.anomaly_kept,
-                crushed.anomaly_total,
-                REFHOSTS_HINT,
-            )
-        });
+        let trunc_notice = crushed.notice(REFHOSTS_HINT);
         let probe_needed = free && window_dropped > 0;
         let probe_note = probe_needed.then(|| probe_notice(probed_len, matched_total));
         if as_json {
-            let trunc_meta = (crushed.truncated > 0).then(|| {
-                truncation_meta(
-                    crushed.truncated,
-                    crushed.total,
-                    crushed.anomaly_kept,
-                    crushed.anomaly_total,
-                    REFHOSTS_HINT,
-                )
-            });
+            let trunc_meta = crushed.meta(REFHOSTS_HINT);
             let probe_meta_opt = probe_needed.then(|| probe_meta(probed_len, matched_total));
             if trunc_meta.is_some() || probe_meta_opt.is_some() {
                 let rows: Vec<Value> = crushed.kept.iter().map(Record::to_json).collect();

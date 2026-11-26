@@ -21,7 +21,7 @@ use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush, json_envelope, row_notice, truncation_meta};
+use super::row_budget::{crush, json_envelope};
 
 /// Narrowing flags named in the row-budget notice.
 const UPDATES_HINT: &str = "--limit/--offset/--field/-G";
@@ -444,28 +444,14 @@ impl Command for Updates {
         // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
         // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
         let crushed = crush(windowed, update_key, anomaly_severity);
+        let notice = crushed.notice(UPDATES_HINT);
+        let meta = crushed.meta(UPDATES_HINT);
         let mut shown = crushed.kept;
-        // Over-cap --json stays in-band like the byte-cap convention, but as a
-        // structured envelope so stdout stays valid JSON for jq/MCP parsers.
-        let notice = (crushed.truncated > 0).then(|| {
-            row_notice(
-                crushed.truncated,
-                crushed.total,
-                crushed.anomaly_kept,
-                crushed.anomaly_total,
-                UPDATES_HINT,
-            )
-        });
 
         if as_json {
-            if crushed.truncated > 0 {
-                let meta = truncation_meta(
-                    crushed.truncated,
-                    crushed.total,
-                    crushed.anomaly_kept,
-                    crushed.anomaly_total,
-                    UPDATES_HINT,
-                );
+            // Over-cap --json stays in-band like the byte-cap convention, but as a
+            // structured envelope so stdout stays valid JSON for jq/MCP parsers.
+            if let Some(meta) = meta {
                 session
                     .display
                     .println(&json_envelope(shown, Some(meta), None));

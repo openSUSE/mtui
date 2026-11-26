@@ -11,7 +11,7 @@ use crate::commands::support::{
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush_slice, row_notice};
+use super::row_budget::crush_slice;
 
 /// Narrowing flags named in the row-budget notices.
 // Per-section caps sum to ~600 rows total (single 100 + up to 4 aggregated groups +
@@ -21,6 +21,17 @@ const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pat
 
 /// Non-`passed` rows survive the crush: the actionable openQA signal.
 /// Severity: `failed` and `error` (2) outrank other non-`passed` (1).
+fn version_key(r: &oqa::VersionResult) -> (&str, &str, &str, usize, usize, &str) {
+    (
+        &r.version,
+        &r.url,
+        &r.status,
+        r.failed_count,
+        r.running_count,
+        &r.note,
+    )
+}
+
 fn anomaly_severity_version(row: &oqa::VersionResult) -> u8 {
     match row.status.as_str() {
         "passed" => 0,
@@ -188,31 +199,12 @@ impl Command for OpenQAOverview {
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
             // Row budget backstops many-version incidents: head+tail+anomalies.
-            let single = crush_slice(
-                single_incidents,
-                |r: &oqa::VersionResult| {
-                    (
-                        r.version.as_str(),
-                        r.url.as_str(),
-                        r.status.as_str(),
-                        r.failed_count,
-                        r.running_count,
-                        r.note.as_str(),
-                    )
-                },
-                anomaly_severity_version,
-            );
+            let single = crush_slice(single_incidents, version_key, anomaly_severity_version);
             for row in &single.kept {
                 print_version_row(session, row);
             }
-            if single.truncated > 0 {
-                session.display.println(&row_notice(
-                    single.truncated,
-                    single.total,
-                    single.anomaly_kept,
-                    single.anomaly_total,
-                    OPENQA_HINT,
-                ));
+            if let Some(notice) = single.notice(OPENQA_HINT) {
+                session.display.println(&notice);
             }
 
             if !no_aggregated {
@@ -222,31 +214,13 @@ impl Command for OpenQAOverview {
                         "\nAggregated updates - {}",
                         title_case(&group.group)
                     )));
-                    let versions = crush_slice(
-                        &group.versions,
-                        |r: &oqa::VersionResult| {
-                            (
-                                r.version.as_str(),
-                                r.url.as_str(),
-                                r.status.as_str(),
-                                r.failed_count,
-                                r.running_count,
-                                r.note.as_str(),
-                            )
-                        },
-                        anomaly_severity_version,
-                    );
+                    let versions =
+                        crush_slice(&group.versions, version_key, anomaly_severity_version);
                     for row in &versions.kept {
                         print_version_row(session, row);
                     }
-                    if versions.truncated > 0 {
-                        session.display.println(&row_notice(
-                            versions.truncated,
-                            versions.total,
-                            versions.anomaly_kept,
-                            versions.anomaly_total,
-                            OPENQA_HINT,
-                        ));
+                    if let Some(notice) = versions.notice(OPENQA_HINT) {
+                        session.display.println(&notice);
                     }
                 }
                 if aggregated.is_empty() {
@@ -284,14 +258,8 @@ impl Command for OpenQAOverview {
             for entry in &checks.kept {
                 print_build_check(session, entry);
             }
-            if checks.truncated > 0 {
-                session.display.println(&row_notice(
-                    checks.truncated,
-                    checks.total,
-                    checks.anomaly_kept,
-                    checks.anomaly_total,
-                    OPENQA_HINT,
-                ));
+            if let Some(notice) = checks.notice(OPENQA_HINT) {
+                session.display.println(&notice);
             }
         }
 
