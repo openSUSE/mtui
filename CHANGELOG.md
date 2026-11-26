@@ -14,13 +14,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transaction with a `zypper --dry-run` before committing it, and refuse it on
   a host where the solver would remove a protected package the command did not
   name (the kernel, `systemd`, `glibc`, `rpm`, `zypper`/`libzypp`, `openssh`,
-  `grub2`, `dracut`, `bash`, `pam`, …), or where the dry run fails or cannot be
-  read. A refused host runs nothing further and fails the command by name; the
-  other hosts carry on. Other removals are reported per host. The new
-  `--allow-removal` flag commits the transaction anyway. YUM and SLE 11 hosts,
-  `run`, and the prepare and rollback inside `update` are not checked; see
-  "Removal guard" in the docs (#873). **MCP schema note:** the four tools gain an
-  optional boolean `allow_removal`.
+  `grub2`, `dracut`, `bash`, `pam`, …), or where the dry run fails, times out
+  or cannot be read. A refused host's transaction is not run and the host fails
+  the command by name; the other hosts carry on. Other removals are reported
+  per host. The new `--allow-removal` flag commits the transaction anyway. The
+  check is best-effort: the real command resolves the transaction again.
+  Transactional (SL Micro, transactional SLES 16), SLE 11 and YUM hosts are not
+  checked, and the command output names each one as unchecked; `run` and the
+  prepare and rollback inside `update` are not checked either. The guard's dry
+  runs stay out of the exported install logs, and `show_log` omits their XML.
+  See "Removal guard" in the docs (#873). **MCP schema note:** the four tools
+  gain an optional boolean `allow_removal`.
 
 ### Changed
 

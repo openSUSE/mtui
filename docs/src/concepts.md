@@ -165,41 +165,66 @@ concurrently across enabled hosts.
 
 `install`, `uninstall`, `prepare` and `downgrade` let the package solver decide
 what else a transaction takes with it, and `-n` accepts the result. Before
-committing, each host first resolves the same transaction with a dry run
-(`zypper -x … --dry-run`) and reads the packages it would remove. The host is
-refused — it runs nothing further, is not rebooted, gets no history row, and
-fails the command by name while the other hosts carry on — when that set holds
-a protected package the command did not name, or when the dry run fails or
-its output cannot be read. Every other removal is allowed and reported as
-`<host>: the transaction also removes …`.
+committing, each checked host first resolves the same transaction with a dry
+run (`zypper -x … --dry-run`) and reads the packages it would remove. The host
+is refused — its transaction is not run, it is not rebooted, it gets no history
+row, and it fails the command by name while the other hosts carry on — when
+that set holds a protected package the command did not name, or when the dry
+run fails, times out, or its output cannot be read. Every other removal is
+allowed and reported as `<host>: the transaction also removes …`.
+
+The check is best-effort. The real command resolves the transaction again,
+after its own refresh, and PackageKit or another zypper user on the host can
+change what it resolves to between the dry run and the commit.
+
+A refused host has still been through the steps before the dry run:
+
+- `install`, `uninstall`: the operation lock was taken and is released; nothing
+  else changed.
+- `prepare`: the update repository was added and refreshed, and stays.
+- `downgrade`: the update repository was removed and the repositories
+  refreshed; it is not added back.
+
+In `install`, `uninstall` and `prepare`, a cancel (Ctrl-C, MCP `job_cancel`)
+that lands while the dry run is running stops the command before the
+transaction is dispatched on any host.
 
 Protected, by exact name: the base system (`aaa_base`, `bash`, `bash-sh`,
 `coreutils`, `filesystem`, `glibc`, `pam`, `systemd`, `udev`, `util-linux`),
-`dracut`, the kernels (`kernel-default`, `kernel-default-base`, `kernel-64kb`,
-`kernel-azure`, `kernel-kvmsmall`, `kernel-preempt`, `kernel-rt`,
-`kernel-zfcpdump`), the package stack (`libzypp`, `rpm`, `rpm-ndb`,
-`transactional-update`, `zypper`), and what keeps the host reachable
-(`NetworkManager`, `wicked`, `openssh`, `openssh-common`, `openssh-server`);
-and `grub2` with every `grub2-*` package. The list is built in.
+the boot chain (`dracut`, `kmod`, `shim`, and the kernels `kernel-default`,
+`kernel-default-base`, `kernel-64kb`, `kernel-azure`, `kernel-kvmsmall`,
+`kernel-preempt`, `kernel-rt`, `kernel-zfcpdump`), the package and snapshot
+stack (`libzypp`, `rpm`, `rpm-ndb`, `snapper`, `transactional-update`, `tukit`,
+`zypper`), and what keeps the host reachable (`NetworkManager`, `wicked`,
+`openssh`, `openssh-common`, `openssh-server`, `sudo`); and `grub2` with every
+`grub2-*` package. The list is built in. Known gaps: the `libtukit` library
+packages and the products' `*-release` packages are not on it, so a
+transaction that removes them without also removing a listed package is not
+refused.
 
 Pass `--allow-removal` (the `allow_removal` property of the MCP tools) to
 commit the transaction anyway; it skips the dry run.
 
-Limits:
+Not checked — each such host is named in the command output and the MCP
+result as `<host>: no dry run exists for this host, …`, counted as a
+degradation:
 
-- `downgrade` judges a host by one dry run of all its packages, also where it
-  then downgrades them one transaction per package.
-- On transactional hosts (SL Micro, transactional SLES 16) the dry run runs
-  plain `zypper` against the booted root, while the transaction runs in a new
-  snapshot. mtui reboots into the snapshot after each transactional operation,
-  so the booted root is the base of the next one; a snapshot staged by
-  something else and not yet booted is not what the dry run sees.
-- SLE 11 hosts are not checked: their zypper predates the releases whose
-  dry-run output the check was verified against.
-- `YUM` hosts are not checked: yum/dnf have no machine-readable transaction
-  summary. A warning in mtui's log (not in the command output) names each
-  such host.
-- `run` is not checked, nor are the prepare and rollback inside `update`.
+- Transactional hosts (SL Micro, transactional SLES 16): the transaction runs
+  in a new snapshot whose repositories and trusted keys can differ from the
+  booted root's, and no dry run on such a host has been verified to resolve the
+  same transaction.
+- SLE 11 hosts: their zypper predates the releases whose dry-run output the
+  check was verified against.
+- `YUM` hosts: yum/dnf have no machine-readable transaction summary.
+
+`run` is not checked either, nor are the prepare and rollback inside `update`.
+
+On a non-transactional host `downgrade` downgrades one package per
+transaction, but the guard judges one dry run of all the host's packages
+together. The single transactions can resolve differently from the combined
+one, so the guard can refuse a downgrade none of them would make harmful, and
+can miss a protected package that one of them removes while the combined
+solve keeps it.
 
 ## Locking
 

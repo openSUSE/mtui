@@ -20,6 +20,7 @@ pub mod template;
 use mtui_hosts::HostError;
 use thiserror::Error;
 
+pub use actions::dry_run::is_dry_run;
 pub use checks::Diagnostic;
 
 /// The package-manager family an action or check table entry is keyed on.

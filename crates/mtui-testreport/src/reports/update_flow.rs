@@ -836,8 +836,9 @@ fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> V
 ///
 /// Unless `allow_removal`, each host first resolves the transaction with a dry
 /// run ([`mtui_hosts::target::removal`]); a host where it would remove a
-/// protected package, or where the dry run fails, runs nothing further and
-/// fails by name, and every other removal is reported on `diagnostics`.
+/// protected package, or where the dry run fails, does not run the transaction
+/// and fails by name. Every other removal, and each host without a dry run, is
+/// reported on `diagnostics`.
 pub async fn perform_install(
     targets: &mut HostsGroup,
     packages: &[String],
@@ -989,6 +990,15 @@ async fn perform_operation_with(
         from..failures.len()
     };
     failures.extend(removal_verdicts(report.dry_runs, packages, diagnostics));
+    // A refusal collected before the cancel outranks it; neither claims a host.
+    if report.cancelled {
+        if failures.is_empty() {
+            return Err(UpdateError::cancelled(format!(
+                "{label} cancelled before the transaction ran on any host"
+            )));
+        }
+        return aggregate_failures(label, failures);
+    }
     // Every host was planned and nothing rolls back, so each one not failed is done.
     let completed = completed_hosts(targets, &targets.names(), &failures);
     // An install may have landed where only the reboot then failed, so every
@@ -1092,19 +1102,25 @@ async fn guard_removals(
     requested: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<UpdateError> {
-    let verdicts = removal::probe_removals(targets, probes, requested).await;
-    removal_verdicts(verdicts, requested, diagnostics)
+    let dry_runs = removal::probe_removals(targets, probes, requested).await;
+    removal_verdicts(dry_runs, requested, diagnostics)
 }
 
-/// Reports each dry run's removals beyond `requested` on `diagnostics`, and
-/// returns one failure per host the guard refused.
+/// Reports each dry run's removals beyond `requested`, and each host left
+/// unchecked, on `diagnostics`, and returns one failure per host the guard
+/// refused.
 fn removal_verdicts(
-    verdicts: BTreeMap<String, Result<Vec<String>, String>>,
+    dry_runs: removal::DryRuns,
     requested: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<UpdateError> {
+    for host in dry_runs.unchecked {
+        diagnostics.push(Diagnostic::degradation(format!(
+            "{host}: no dry run exists for this host, so what the transaction removes was not checked"
+        )));
+    }
     let mut refused = Vec::new();
-    for (host, verdict) in verdicts {
+    for (host, verdict) in dry_runs.verdicts {
         match verdict {
             Ok(removed) => {
                 let extra: Vec<&str> = removed
@@ -15174,11 +15190,10 @@ mod tests {
         )
     }
 
-    /// An SLES 15 (or, `transactional`, SL Micro) target that answers `probe`
-    /// with `stdout`/`exit` and every other command with `default_stdout`.
+    /// An SLES 15 target that answers `probe` with `stdout`/`exit` and every
+    /// other command with `default_stdout`.
     fn target_answering(
         hostname: &str,
-        transactional: bool,
         probe: &str,
         stdout: &str,
         exit: i16,
@@ -15190,14 +15205,13 @@ mod tests {
             .with_changing_boot_id();
         let handle = conn.clone();
         let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
-        let product = if transactional {
-            SystemProduct::new("SL-Micro", "6.0", "x86_64")
-        } else {
-            SystemProduct::new("SLES", "15.5", "x86_64")
-        };
         t.set_system(
-            System::new(product, BTreeSet::new(), transactional),
-            transactional,
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
         );
         (t, handle)
     }
@@ -15212,7 +15226,6 @@ mod tests {
     async fn uninstall_refuses_only_the_host_whose_dry_run_removes_a_protected_package() {
         let (t1, h1) = target_answering(
             "h1",
-            false,
             RM_PROBE,
             &dry_run_removing(&["libfoo", "zypper"]),
             0,
@@ -15220,7 +15233,6 @@ mod tests {
         );
         let (t2, h2) = target_answering(
             "h2",
-            false,
             RM_PROBE,
             &dry_run_removing(&["libfoo", "libfoo-devel"]),
             0,
@@ -15262,7 +15274,6 @@ mod tests {
     async fn allow_removal_uninstalls_without_a_dry_run() {
         let (t, h) = target_answering(
             "h1",
-            false,
             RM_PROBE,
             &dry_run_removing(&["libfoo", "zypper"]),
             0,
@@ -15282,7 +15293,6 @@ mod tests {
         let probe = "zypper -x -n rm --dry-run libzypp zypper";
         let (t, h) = target_answering(
             "h1",
-            false,
             probe,
             &dry_run_removing(&["libzypp", "zypper"]),
             0,
@@ -15300,8 +15310,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_or_unreadable_dry_run_fails_closed() {
-        let (t1, h1) = target_answering("h1", false, RM_PROBE, "", 104, "");
-        let (t2, h2) = target_answering("h2", false, RM_PROBE, "ok", 0, "");
+        let (t1, h1) = target_answering("h1", RM_PROBE, "", 104, "");
+        let (t2, h2) = target_answering("h2", RM_PROBE, "ok", 0, "");
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let err =
@@ -15320,27 +15330,190 @@ mod tests {
         }
     }
 
+    fn unchecked_note(host: &str) -> Diagnostic {
+        Diagnostic::degradation(format!(
+            "{host}: no dry run exists for this host, so what the transaction removes was not checked"
+        ))
+    }
+
     #[tokio::test]
-    async fn a_refused_transactional_install_neither_stages_nor_reboots() {
-        let probe = "zypper -x -n in --dry-run -y -l libfoo";
-        let (t, h) = target_answering("h1", true, probe, &dry_run_removing(&["systemd"]), 0, "");
+    async fn a_transactional_install_or_uninstall_runs_unchecked_and_says_so() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            for (role, command) in [
+                (Role::Install, "transactional-update -n pkg install libfoo"),
+                (Role::Uninstall, "transactional-update -n pkg remove libfoo"),
+            ] {
+                let (t, h) = transactional_target("h1", product, "");
+                let mut group = HostsGroup::new(vec![t], false);
+                let mut diagnostics = Vec::new();
+                let packages = ["libfoo".to_owned()];
+
+                let res = match role {
+                    Role::Install => {
+                        super::perform_install(&mut group, &packages, false, &mut diagnostics).await
+                    }
+                    _ => {
+                        super::perform_uninstall(&mut group, &packages, false, &mut diagnostics)
+                            .await
+                    }
+                };
+
+                assert!(res.is_ok(), "{product:?} {role:?}: {res:?}");
+                assert_eq!(h.commands()[0], command, "{product:?}: {:?}", h.commands());
+                assert!(
+                    !h.commands().iter().any(|c| c.contains("--dry-run")),
+                    "{product:?}: {:?}",
+                    h.commands()
+                );
+                assert_eq!(diagnostics, vec![unchecked_note("h1")], "{product:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transactional_prepare_runs_unchecked_and_says_so() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, h) = transactional_target("h1", product, "");
+            let mut group = HostsGroup::new(vec![t], false);
+            let mut diagnostics = Vec::new();
+
+            let res = super::perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                false,
+                &mut diagnostics,
+            )
+            .await;
+
+            assert!(res.is_ok(), "{product:?}: {res:?}");
+            assert!(
+                !h.commands().iter().any(|c| c.contains("--dry-run")),
+                "{product:?}: {:?}",
+                h.commands()
+            );
+            assert_eq!(diagnostics, vec![unchecked_note("h1")], "{product:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transactional_downgrade_runs_unchecked_and_says_so() {
+        for product in TRANSACTIONAL_PRODUCTS {
+            let (t, h) = transactional_target("h1", product, "pkg-a = 1.0-1\n");
+            let mut group = HostsGroup::new(vec![t], false);
+            let mut diagnostics = Vec::new();
+
+            let res = super::perform_downgrade(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                None,
+                false,
+                &mut diagnostics,
+            )
+            .await;
+
+            assert!(res.is_ok(), "{product:?}: {res:?}");
+            assert!(
+                !h.commands().iter().any(|c| c.contains("--dry-run")),
+                "{product:?}: {:?}",
+                h.commands()
+            );
+            assert_eq!(diagnostics, vec![unchecked_note("h1")], "{product:?}");
+        }
+    }
+
+    /// A SLES 15 host whose guard dry run `probe` finds nothing to remove, and
+    /// lands a cancel on the group's token while it runs.
+    fn target_cancelling_during(probe: &str) -> (HostsGroup, MockConnection) {
+        let token = HostsGroup::new(Vec::new(), false).cancel_token();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                probe,
+                CommandLog::new(probe, dry_run_removing(&[]), "", 0, 0),
+            )
+            .with_cancel_on_command(probe, token.clone());
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
         let mut group = HostsGroup::new(vec![t], false);
+        group.set_cancel_token(token);
+        (group, handle)
+    }
+
+    #[tokio::test]
+    async fn a_cancel_during_the_install_dry_run_installs_nothing_and_unlocks() {
+        let probe = "zypper -x -n in --dry-run -y -l libfoo";
+        let (mut group, h) = target_cancelling_during(probe);
 
         let err =
             super::perform_install(&mut group, &["libfoo".to_owned()], false, &mut Vec::new())
                 .await
-                .expect_err("systemd would go");
+                .expect_err("cancelled");
 
-        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(err.completed().is_empty(), "{err:?}");
         assert_eq!(h.commands(), vec![probe.to_owned()]);
-        assert!(!rebooted(&h), "{:?}", h.fired_commands());
+        assert!(
+            h.file_contents(HISTORY_LOG).is_none(),
+            "nothing ran to record"
+        );
+        assert!(
+            h.sftp_ops().iter().any(
+                |op| matches!(op, MockSftpOp::Remove(p) if p.to_string_lossy() == TARGET_LOCK_PATH)
+            ),
+            "the operation lock is released: {:?}",
+            h.sftp_ops()
+        );
+        assert!(h.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_during_the_prepare_dry_run_prepares_nothing() {
+        let probe = "zypper -x -n in --dry-run -y -l pkg-a";
+        let (mut group, h) = target_cancelling_during(probe);
+
+        let err = super::perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("cancelled");
+
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(
+            !h.commands().iter().any(|c| c.starts_with("zypper -n in")),
+            "{:?}",
+            h.commands()
+        );
+        assert!(
+            h.file_contents(HISTORY_LOG).is_none(),
+            "nothing ran to record"
+        );
     }
 
     #[tokio::test]
     async fn prepare_refuses_only_the_host_whose_dry_run_removes_a_protected_package() {
         let probe = "zypper -x -n in --dry-run -y -l pkg-a";
-        let (t1, h1) = target_answering("h1", false, probe, &dry_run_removing(&["glibc"]), 0, "");
-        let (t2, h2) = target_answering("h2", false, probe, &dry_run_removing(&[]), 0, "");
+        let (t1, h1) = target_answering("h1", probe, &dry_run_removing(&["glibc"]), 0, "");
+        let (t2, h2) = target_answering("h2", probe, &dry_run_removing(&[]), 0, "");
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let err = super::perform_prepare(
@@ -15380,13 +15553,12 @@ mod tests {
         let versions = "pkg-a = 1.0-1\n";
         let (t1, h1) = target_answering(
             "h1",
-            false,
             &probe,
             &dry_run_removing(&["openssh-server"]),
             0,
             versions,
         );
-        let (t2, h2) = target_answering("h2", false, &probe, &dry_run_removing(&[]), 0, versions);
+        let (t2, h2) = target_answering("h2", &probe, &dry_run_removing(&[]), 0, versions);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let err = super::perform_downgrade(

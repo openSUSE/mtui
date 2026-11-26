@@ -1639,6 +1639,10 @@ impl OperationGroup for HostsGroup {
         HostsGroup::reboot_transactional(self, &map).await
     }
 
+    fn cancel_requested(&self) -> bool {
+        HostsGroup::cancel_requested(self)
+    }
+
     async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
         HostsGroup::unlock(self, None).await
     }
