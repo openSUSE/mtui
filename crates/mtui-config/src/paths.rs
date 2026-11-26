@@ -24,13 +24,10 @@ const ETC_CONFIG: &str = "/etc/mtui.toml";
 /// Environment variable holding an explicit config-file override.
 const ENV_CONFIG: &str = "MTUI_CONF";
 
-/// Basename of the per-user config file, used both for the home dotfile
-/// (`~/.mtui.toml`, with a leading dot) and inside the XDG config directory
-/// (`$XDG_CONFIG_HOME/mtui/mtui.toml`).
+/// Basename of the per-user config file inside the XDG config directory.
 const CONFIG_FILE: &str = "mtui.toml";
 
-/// Expand a leading `~` (and `~/`) to the user's home directory. The `~user`
-/// form is left untouched — mtui has never relied on it.
+/// Expand a leading `~` / `~/`; the `~user` form is left untouched.
 #[must_use]
 pub(crate) fn expanduser(path: &Path) -> PathBuf {
     let Some(s) = path.to_str() else {
@@ -55,18 +52,14 @@ fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
 }
 
-/// The per-user XDG config file path (`$XDG_CONFIG_HOME/mtui/mtui.toml`,
-/// falling back to `~/.config/mtui` per the XDG spec; on macOS the
-/// `directories` crate resolves `~/Library/Application Support/mtui`), if
+/// The per-user XDG config file (`$XDG_CONFIG_HOME/mtui/mtui.toml`), if
 /// resolvable.
 #[must_use]
 fn xdg_config_file() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(CONFIG_FILE))
 }
 
-/// The home-directory dotfile config path `~/.mtui.toml`, if a home dir can be
-/// resolved. Sits between `/etc` and the XDG file in precedence (see
-/// [`config_search_paths`]).
+/// The home dotfile `~/.mtui.toml`, if a home dir can be resolved.
 #[must_use]
 fn home_config_file() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".mtui.toml"))
@@ -74,9 +67,8 @@ fn home_config_file() -> Option<PathBuf> {
 
 /// The user data directory for mtui (`$XDG_DATA_HOME/mtui`), if resolvable.
 ///
-/// mtui is XDG-first for config/cache/data alike. Durable per-user state such
-/// as the REPL history lives here, distinct from the disposable cache dir and
-/// the user-authored config dir: it must survive a cache wipe.
+/// Durable per-user state such as the REPL history lives here, apart from the
+/// disposable cache dir: it must survive a cache wipe.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
@@ -118,7 +110,6 @@ fn resolve_search_paths(
         return vec![expanduser(&env)];
     }
 
-    // Default chain, lowest precedence first: /etc → home dotfile → XDG.
     let mut paths = vec![PathBuf::from(ETC_CONFIG)];
     if let Some(home) = home {
         paths.push(home);
