@@ -305,14 +305,21 @@ pub(crate) fn server_dirs(rel: &str, install_logs: &Path) -> &'static [&'static 
 /// The report path whose server fallback reads the copy of `name` in `dir`,
 /// given every server copy as `(name, dir)`. `None` when no path reaches it: a
 /// same-named copy in a preferred directory answers each one, the server named
-/// no directory, or `name` is not a single path component.
+/// no directory or one outside the three it serves, or `name` is not a single
+/// normal path component.
 pub(crate) fn server_read_path(
     name: &str,
     dir: Option<&str>,
     listed: &[(&str, Option<&str>)],
     install_logs: &Path,
 ) -> Option<String> {
-    let dir = dir.filter(|_| !name.contains('/'))?;
+    let mut parts = Path::new(name).components();
+    let one_file = !name.contains('/')
+        && matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        );
+    let dir = dir.filter(|_| one_file)?;
     let candidates = [
         CHECKERS_LOG.to_owned(),
         format!("{BUILD_CHECKS}/{name}"),
@@ -612,6 +619,33 @@ mod tests {
         assert_eq!(server_dirs("checkers.log", logs), ["uploads"]);
         assert!(server_dirs("elsewhere/x.log", logs).is_empty());
         assert!(server_dirs("other.log", logs).is_empty());
+    }
+
+    /// Each row is a copy that only its name or `dir` keeps from being read.
+    #[test]
+    fn server_read_path_is_none_for_a_copy_no_path_reads() {
+        let logs = Path::new("install_logs");
+        for (name, dir) in [
+            ("", Some("uploads")),
+            (".", Some("uploads")),
+            ("..", Some("uploads")),
+            ("a/b", Some("uploads")),
+            ("a/", Some("uploads")),
+            ("x.log", Some("elsewhere")),
+            ("x.log", None),
+        ] {
+            let listed = [(name, dir)];
+            assert_eq!(
+                server_read_path(name, dir, &listed, logs),
+                None,
+                "{name:?} in {dir:?}"
+            );
+        }
+        let listed = [("x.log", Some("uploads"))];
+        assert_eq!(
+            server_read_path("x.log", Some("uploads"), &listed, logs).as_deref(),
+            Some("results/x.log")
+        );
     }
 
     #[test]

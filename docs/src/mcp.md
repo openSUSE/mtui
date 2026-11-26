@@ -697,7 +697,8 @@ report, by name and server directory.
   `dir` when several directories hold the same name. `path` is the path
   `report_file_read` reads that copy from, or `null` when no path does: a
   same-named copy in `uploads` is read in place of the `install_logs` one, and
-  a copy from a server that names no `dir` cannot be read on its own.
+  a copy whose `dir` is missing or is not `build_checks`, `install_logs` or
+  `uploads`, or whose name is not a plain file name, cannot be read on its own.
 - A failed server listing (not found, still generating, unreachable) never
   fails the call: the local list is returned with `server_error` set.
 
