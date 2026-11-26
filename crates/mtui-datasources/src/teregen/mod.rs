@@ -562,7 +562,10 @@ fn error_text(bytes: &[u8]) -> Option<String> {
 }
 
 fn error_field(body: &Value) -> Option<String> {
-    let text = body.get("error")?.as_str().filter(|t| !t.is_empty())?;
+    let text = body
+        .get("error")?
+        .as_str()
+        .filter(|t| !t.trim().is_empty())?;
     Some(cap_detail(text))
 }
 
@@ -578,6 +581,7 @@ fn failure_text(body: &Value) -> Option<String> {
         .as_array()?
         .iter()
         .filter_map(|e| e.get("message").and_then(Value::as_str))
+        .filter(|m| !m.trim().is_empty())
         .collect::<Vec<_>>()
         .join("; ");
     (!text.is_empty()).then(|| cap_detail(&text))
@@ -675,6 +679,36 @@ mod tests {
     #[test]
     fn smelt_backed_timeout_outlasts_teregens_smelt_budget() {
         assert!(SMELT_BACKED_TIMEOUT >= Duration::from_secs(55));
+    }
+
+    /// A SMELT-backed read gives up after exactly [`SMELT_BACKED_TIMEOUT`]: the
+    /// patient read timeout is set longer here, so only the request's own
+    /// timeout can end the wait at that mark.
+    #[tokio::test(start_paused = true)]
+    async fn smelt_backed_reads_give_up_after_the_smelt_backed_timeout() {
+        // Unpooled: virtual time can give up before the request lands, and a
+        // pooled server would hand it to the next test's mock.
+        let server = MockServer::builder().start().await;
+        Mock::given(method("GET"))
+            .and(path(checkers_path()))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3600)))
+            .mount(&server)
+            .await;
+        let http = HttpClient::with_read_timeouts(
+            VerifyPolicy::Default(false),
+            HTTP_TIMEOUT.1,
+            Duration::from_secs(600),
+        )
+        .unwrap();
+        let c = TeReGen::with_client(http, &server.uri());
+        let start = tokio::time::Instant::now();
+        let err = c.checkers(RRID).await.unwrap_err();
+        assert!(matches!(err, TeReGenError::Fetch(_)), "{err}");
+        assert_eq!(
+            start.elapsed().as_secs(),
+            SMELT_BACKED_TIMEOUT.as_secs(),
+            "{err}"
+        );
     }
 
     /// The SMELT-backed reads outwait the shared client's read timeout. A
@@ -1421,6 +1455,25 @@ mod tests {
             regenerate_answer(ResponseTemplate::new(409).set_body_string("<html>")).await,
             Some(RegenRequest::Refused("HTTP 409".to_owned()))
         );
+        assert_eq!(
+            regenerate_answer(ResponseTemplate::new(409).set_body_json(json!({"error": "  "})))
+                .await,
+            Some(RegenRequest::Refused("HTTP 409".to_owned()))
+        );
+    }
+
+    /// Whitespace is no reason, for both reason extractors.
+    #[test]
+    fn blank_reasons_are_no_reason() {
+        for blank in ["", " ", "\t\n"] {
+            let body = json!({"error": blank});
+            assert_eq!(error_text(body.to_string().as_bytes()), None, "{blank:?}");
+            assert_eq!(failure_text(&body), None, "{blank:?}");
+            let errors = json!({"errors": [{"message": blank}, {"message": blank}]});
+            assert_eq!(failure_text(&errors), None, "{blank:?}");
+        }
+        let errors = json!({"errors": [{"message": " "}, {"message": "bad key"}]});
+        assert_eq!(failure_text(&errors).as_deref(), Some("bad key"));
     }
 
     /// Any other error status is a failed request, never a refusal: no flag

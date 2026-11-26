@@ -73,7 +73,8 @@ serial_test.workspace = true
 # Pinned to the versions ssh-key 0.7 resolves so the traits/types unify.
 signature = "3.0.0"
 tempfile = "3"
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+# `test-util` for `start_paused`: the SMELT-backed timeout is a minute long.
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # Scoped subscriber to capture the oscrc loose-permissions warning in tests.
 tracing-subscriber.workspace = true
 wiremock.workspace = true

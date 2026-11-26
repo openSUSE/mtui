@@ -394,10 +394,13 @@ fn report_enqueue(
     };
     let id = match job {
         Some(Value::Number(id)) => Some(id.to_string()),
-        Some(Value::String(id)) => Some(sanitize_external(id, Some(100))),
-        Some(Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_)) | None => None,
+        Some(Value::String(id)) if is_job_id(id) => Some(id.clone()),
+        Some(
+            Value::String(_) | Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_),
+        )
+        | None => None,
     };
-    let line = match id.filter(|id| !id.trim().is_empty()) {
+    let line = match id {
         Some(id) => format!("Regeneration job {id} enqueued for {rrid}"),
         None => format!("Regeneration job enqueued for {rrid} (TeReGen named no job id)"),
     };
@@ -405,6 +408,15 @@ fn report_enqueue(
     session
         .display
         .println("Not waiting (--no-wait); reload the template once it is built.");
+}
+
+/// A string job id worth printing: 1 to 100 characters of `[A-Za-z0-9._:-]`.
+/// Anything else, whitespace included, could forge a line of output.
+fn is_job_id(id: &str) -> bool {
+    (1..=100).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
 /// A 409: TeReGen's own refusal, which a flag may lift.
@@ -609,24 +621,27 @@ mod tests {
         );
     }
 
-    /// A job id is shown as TeReGen gave it: a string unquoted and sanitized,
-    /// anything that is not an id as no id at all.
+    /// A job id is shown as TeReGen gave it, a string unquoted; a string with
+    /// any other character, or longer than 100, and a non-id value are no id.
     #[tokio::test]
     async fn an_enqueued_job_id_is_shown_only_when_it_is_one() {
+        let none = "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)";
+        let longest = "a".repeat(100);
+        let shown = format!("Regeneration job {longest} enqueued");
         for (job, want) in [
             (serde_json::json!(42), "Regeneration job 42 enqueued"),
             (
-                serde_json::json!("j\u{1b}[31m-7"),
-                "Regeneration job j-7 enqueued",
+                serde_json::json!("Job-7.a:b_c"),
+                "Regeneration job Job-7.a:b_c enqueued",
             ),
-            (
-                serde_json::json!("\u{1b}[2K"),
-                "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)",
-            ),
-            (
-                serde_json::json!({"id": 1}),
-                "Regeneration job enqueued for SUSE:Maintenance:1:1 (TeReGen named no job id)",
-            ),
+            (serde_json::json!(longest), shown.as_str()),
+            (serde_json::json!("a".repeat(101)), none),
+            (serde_json::json!(""), none),
+            (serde_json::json!("7\nRegeneration refused: forged"), none),
+            (serde_json::json!("7\tx"), none),
+            (serde_json::json!("7 x"), none),
+            (serde_json::json!("j\u{1b}[31m-7"), none),
+            (serde_json::json!({"id": 1}), none),
         ] {
             let out = regenerate_output(
                 ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": job})),
