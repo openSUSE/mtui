@@ -229,8 +229,8 @@ item, in the command's reply (so an MCP client sees it too):
   reboot clears it, otherwise it stays until it is older than
   `[lock] stale_age` (`pool_stale_age`) or someone runs `unlock -f`
   (`unlock -f -p`). A lock or claim that now belongs to another owner (this
-  session's hold lapsed, e.g. it was reaped as stale and taken) is left in
-  place and named as such, with no `unlock -f` advice: it is theirs;
+  session's hold lapsed, e.g. it was reaped as stale and taken) is named as
+  such: the close did not release it, and there is no `unlock -f` advice;
 - the update's repositories, when the last repository change this session
   made on the host was an add (`set_repo -A`, `prepare --update`, or an
   `update` that stopped before removing them): with the update loaded,

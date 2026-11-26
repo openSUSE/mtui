@@ -846,8 +846,8 @@ pub(crate) fn leftover_notices(
                 None => continue,
                 Some(CloseRelease::TakenOver) => {
                     lines.push(format!(
-                        "warning: {host}: {what} now belongs to another owner, so the close left \
-                         it in place; it is theirs to release"
+                        "warning: {host}: {what} now belongs to another owner, so the close did \
+                         not release it"
                     ));
                     continue;
                 }
@@ -967,8 +967,8 @@ mod tests {
         assert_eq!(
             leftover_notices(&leftovers),
             [
-                "warning: h1: pool claim now belongs to another owner, so the close left it in \
-                 place; it is theirs to release"
+                "warning: h1: pool claim now belongs to another owner, so the close did not \
+                 release it"
             ]
         );
     }

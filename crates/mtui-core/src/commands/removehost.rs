@@ -229,8 +229,43 @@ mod tests {
         let out = buf.contents();
         assert!(
             out.contains(
-                "warning: h1: operation lock now belongs to another owner, so the close left it \
-                 in place; it is theirs to release"
+                "warning: h1: operation lock now belongs to another owner, so the close did not \
+                 release it"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("unlock -f"), "{out}");
+    }
+
+    /// The claim's own release outcome, not the operation lock's, decides the line.
+    #[tokio::test]
+    async fn names_a_claim_taken_over_by_another_template() {
+        use mtui_hosts::POOL_LOCK_PATH;
+
+        let conn = MockConnection::new("h1");
+        let mut t = target_with("h1", conn.clone());
+        t.set_rrid("SUSE:Maintenance:1:1");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:1")
+                .await
+                .expect("claim written"),
+            "fixture must hold the pool claim"
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let _ = conn.with_file(
+            POOL_LOCK_PATH,
+            format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:2:2").into_bytes(),
+        );
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        let out = buf.contents();
+        assert!(
+            out.contains(
+                "warning: h1: pool claim now belongs to another owner, so the close did not \
+                 release it"
             ),
             "{out}"
         );
