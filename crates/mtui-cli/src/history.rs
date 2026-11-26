@@ -1,18 +1,14 @@
 //! Persistent REPL command history.
 //!
-//! A [`FileBackedHistory`] keeps the up-arrow stack across sessions; Ctrl-R
-//! reverse-search comes free from reedline's default emacs edit mode, and the
-//! greyed inline hint ([`DefaultHinter`](reedline::DefaultHinter)) is wired
-//! alongside [`file_backed_history`] in [`crate::repl::Repl::new`].
+//! A [`FileBackedHistory`] keeps the up-arrow stack across sessions (Ctrl-R search and
+//! the inline hint come from reedline, wired in [`crate::repl::Repl::new`]).
 //!
-//! mtui is XDG-first: the history file lives at `$XDG_DATA_HOME/mtui/history`
-//! ([`mtui_config::data_dir`]), keeping durable per-user state out of the config
-//! and cache trees. On macOS the `directories` crate ignores `$XDG_DATA_HOME`
-//! and the file is `~/Library/Application Support/mtui/history`.
+//! mtui is XDG-first: the file lives at `$XDG_DATA_HOME/mtui/history`
+//! ([`mtui_config::data_dir`]); on macOS the `directories` crate ignores
+//! `$XDG_DATA_HOME` and it is `~/Library/Application Support/mtui/history`.
 //!
-//! History is best-effort, matching mtui's lenient config philosophy — an
-//! unresolvable data directory or an unopenable file degrades to an **in-memory**
-//! history with a WARN rather than failing to start.
+//! History is best-effort: an unresolvable data directory or unopenable file
+//! degrades to an **in-memory** history with a WARN.
 
 use std::path::PathBuf;
 
@@ -21,21 +17,17 @@ use reedline::{FileBackedHistory, HISTORY_SIZE, History};
 /// Basename of the history file inside the mtui data directory.
 const HISTORY_FILE: &str = "history";
 
-/// Builds the shared REPL history backend.
-///
-/// Persists to `$XDG_DATA_HOME/mtui/history` when the data directory resolves,
-/// otherwise (or on any I/O error) degrades to an in-memory history. Returns a
-/// boxed trait object so [`crate::repl`] stays decoupled from the concrete
-/// backend.
+/// Builds the shared REPL history backend, persisting to `$XDG_DATA_HOME/mtui/history`
+/// when the data directory resolves and otherwise (or on any I/O error) degrading to
+/// in-memory. Boxed so [`crate::repl`] stays decoupled from the backend.
 #[must_use]
 pub(crate) fn file_backed_history() -> Box<dyn History> {
     history_from_path(mtui_config::data_dir().map(|d| d.join(HISTORY_FILE)))
 }
 
-/// Pure core of [`file_backed_history`], with the path injected so both the
-/// happy and the degradation path are unit-testable without touching the
-/// process environment. `None` or a `with_file` failure both yield the
-/// in-memory [`FileBackedHistory::default`], the latter with a WARN.
+/// Pure core of [`file_backed_history`] with the path injected, so both paths are
+/// testable without touching the environment. `None` or a `with_file` failure yields
+/// the in-memory [`FileBackedHistory::default`] (the latter with a WARN).
 #[must_use]
 fn history_from_path(path: Option<PathBuf>) -> Box<dyn History> {
     let Some(path) = path else {

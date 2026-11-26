@@ -1,12 +1,11 @@
 //! The `edit` REPL command: the report-document editor, or `$EDITOR` on an
 //! explicit file.
 //!
-//! Spawning `$EDITOR` (default `vim`) inherits the process stdio, so the child
-//! needs the controlling terminal only the `mtui` binary owns. `mtui-core`'s
-//! `edit` is therefore a headless-error stub, mirroring `shell`, and the REPL
-//! intercepts the `edit` line before dispatch ([`is_edit_line`]) to spawn the
-//! editor here. [`run_edit`] returns a typed [`anyhow::Result`] rather than
-//! logging and swallowing; the REPL renders any failure in red.
+//! Spawning `$EDITOR` (default `vim`) inherits stdio and needs the controlling
+//! terminal only the `mtui` binary owns, so `mtui-core`'s `edit` is a headless-error
+//! stub (like `shell`) and the REPL intercepts the line ([`is_edit_line`]) to spawn
+//! the editor here. [`run_edit`] returns a typed [`anyhow::Result`] and the REPL
+//! renders any failure in red.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,9 +16,8 @@ use mtui_core::{CommandError, Session};
 /// Peeks a REPL input line: if its first token is the `edit` command, returns
 /// its argv (everything after the command word); otherwise `None`.
 ///
-/// The pure seam the REPL routes `edit` through to reach the local `$EDITOR`
-/// spawn instead of the headless engine, kept off the reedline boundary so it is
-/// unit-testable (mirroring [`crate::shell::is_shell_line`]).
+/// The pure seam the REPL routes `edit` through, kept off the reedline boundary so
+/// it is unit-testable (like [`crate::shell::is_shell_line`]).
 #[must_use]
 pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex::split(line)?;

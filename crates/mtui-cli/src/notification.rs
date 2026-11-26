@@ -4,10 +4,9 @@
 //! Without the feature, or off an interactive desktop session, `display` is a
 //! quiet no-op, so headless, piped, cron and `mtui-mcp` runs never pop one.
 //!
-//! The guard is `desktop_available`: `stdin` must be a TTY, and on Linux/BSD a
-//! graphical session (`DISPLAY` / `WAYLAND_DISPLAY`) must be present; macOS
-//! qualifies on the TTY check alone. It is parameterised
-//! (`desktop_available_with`) so it is unit-testable without a real terminal.
+//! The guard `desktop_available` requires a TTY `stdin` and, on Linux/BSD, a
+//! graphical session (`DISPLAY` / `WAYLAND_DISPLAY`); macOS needs only the TTY. It is
+//! parameterised (`desktop_available_with`) so it is unit-testable.
 
 use std::io::IsTerminal;
 
@@ -47,8 +46,8 @@ fn display(summary: Option<&str>, text: Option<&str>, icon: Option<&str>) {
     if !desktop_available() {
         return;
     }
-    // Only reached with a real desktop TTY, so the offline suite covers
-    // `display_backend` directly; the guard→backend edge needs a pty harness.
+    // The guard→backend edge needs a pty harness, so the offline suite covers
+    // `display_backend` directly.
     display_backend(summary, text, icon);
 }
 

@@ -1,33 +1,32 @@
 //! The interactive REPL: read → dispatch → repeat.
 //!
-//! Every line goes to [`mtui_core::dispatch_line`] — the *same* engine the MCP
-//! surface dispatches through — whose typed [`EngineError`] the loop renders
-//! before carrying on, so a bad command never tears down the session.
+//! Every line goes to [`mtui_core::dispatch_line`], the same engine the MCP surface
+//! uses, and its typed [`EngineError`] is rendered before carrying on, so a bad
+//! command never tears down the session.
 //!
-//! On [`reedline::Signal`]: `Success(line)` dispatches, then honours a pending
-//! `quit` ([`Session::should_exit`]); `CtrlD` dispatches `quit`'s `EOF` alias so
-//! the full teardown runs; `CtrlC` clears a partial line and reprompts, because
-//! reedline holds raw mode while reading and Ctrl-C is a mere key event there.
+//! On [`reedline::Signal`]: `Success(line)` dispatches, then honours a pending `quit`
+//! ([`Session::should_exit`]); `CtrlD` dispatches `quit`'s `EOF` alias so the full
+//! teardown runs; `CtrlC` clears a partial line and reprompts (reedline holds raw
+//! mode while reading, so Ctrl-C is a key event there).
 //!
 //! *While a command runs* the terminal is cooked and Ctrl-C is a real SIGINT,
-//! forwarded onto the session's cancellation seam (`spawn_interrupt_forwarder`
-//! → `step_interruptible`) rather than killing the process, which skipped every
-//! teardown and stranded a dead-pid operation lock on each locked host. The
-//! first press cancels at the next checkpoint, the second force-quits with a
-//! record of the locks left behind. During the teardown — Ctrl-D *or* a typed
-//! `quit`/`exit` — presses escalate but never *cancel*, since cancelling the
-//! cleanup is what strands the locks (`OnPress`).
+//! forwarded onto the session's cancellation seam (`spawn_interrupt_forwarder` →
+//! `step_interruptible`) instead of killing the process, which would skip every
+//! teardown and strand a dead-pid operation lock on each locked host. The first press
+//! cancels at the next checkpoint, the second force-quits with a record of the locks
+//! left behind. During the teardown (Ctrl-D or a typed `quit`/`exit`) presses
+//! escalate but never *cancel*, since cancelling the cleanup is what strands the
+//! locks (`OnPress`).
 //!
-//! `SIGHUP` and `SIGTERM` ride the same seam (`Interrupt::Terminate`): a
-//! running command is cancelled as by the first Ctrl-C, then the `quit`
-//! teardown runs and the process exits 128 + the signal. The prompt's
-//! `read_line` runs on a blocking thread so a signal there is not stuck behind
-//! a keypress; that read is abandoned, never resumed.
+//! `SIGHUP` and `SIGTERM` ride the same seam (`Interrupt::Terminate`): a running
+//! command is cancelled as by the first Ctrl-C, then the `quit` teardown runs and the
+//! process exits 128 + the signal. The prompt's `read_line` runs on a blocking thread
+//! so a signal there is not stuck behind a keypress; that read is abandoned, never
+//! resumed.
 //!
-//! Tab completion, persistent history + Ctrl-R + inline hint, and the
-//! workflow-aware prompt/highlighter live in the [`Reedline`] builder /
-//! [`MtuiPrompt`] in [`Repl::new`]; the command-timeout prompter is wired at the
-//! composition root, `run()` in `lib.rs`.
+//! Completion, history, the hint and the prompt/highlighter are built in
+//! [`Repl::new`]; the command-timeout prompter is wired at the composition root,
+//! `run()` in `lib.rs`.
 
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,19 +51,16 @@ const COMPLETION_MENU: &str = "completion_menu";
 /// The banner printed once before the first prompt.
 const INTRO: &str = "Maintenance Test Update Installer";
 
-/// How many unread events the forwarder queues: two Ctrl-C presses (one to
-/// cancel, one to force-quit; a third says nothing the second did not) and
-/// the single termination it forwards.
+/// How many unread events the forwarder queues: two Ctrl-C presses (cancel, then
+/// force-quit) and the single termination it forwards.
 const INTERRUPT_QUEUE: usize = 3;
 
 /// What a command-timeout prompt answers once a termination arrived: the
 /// terminal may be gone, and the teardown must not wait on a reply.
 const TERMINATING_ANSWER: &str = "n";
 
-/// The command whose dispatch *is* the session teardown.
-///
-/// Matched after registry resolution, so its aliases (`exit`, `EOF`) — and any
-/// added later — come along for free.
+/// The command whose dispatch *is* the session teardown, matched after registry
+/// resolution so its aliases (`exit`, `EOF`) come along.
 const QUIT_COMMAND: &str = "quit";
 
 /// A signal the REPL tears down for before exiting with 128 + its number.
@@ -96,9 +92,9 @@ enum Interrupt {
 
 /// How [`Repl::run`] ended.
 ///
-/// A force-quit is *decided* here and *executed* by the caller: reedline
-/// persists its `FileBackedHistory` on drop and `std::process::exit` runs no
-/// destructors, so the process must outlive the line editor.
+/// A force-quit is *decided* here and *executed* by the caller, because
+/// `std::process::exit` runs no destructors and reedline persists its
+/// `FileBackedHistory` on drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplExit {
     /// `quit`/Ctrl-D: the teardown ran, the process exits normally.
@@ -112,10 +108,8 @@ pub enum ReplExit {
 }
 
 impl ReplExit {
-    /// The process status to exit with, or `None` to return from `main`
-    /// normally. [`ExitStatus::Interrupted`] is 128 + `SIGINT`, the shell
-    /// convention for a Ctrl-C death, routed through [`ExitStatus`] rather than
-    /// a bare integer so the binary speaks one exit vocabulary.
+    /// The process status to exit with, or `None` to return from `main` normally.
+    /// [`ExitStatus::Interrupted`] is 128 + `SIGINT`.
     #[must_use]
     pub fn status(self) -> Option<ExitStatus> {
         match self {
@@ -127,26 +121,24 @@ impl ReplExit {
     }
 }
 
-/// What a Ctrl-C press does to the dispatch it lands on: the one difference
-/// between an ordinary command and the session teardown, so they can share
-/// [`step_interruptible`] rather than keeping two subtle `select!` loops in
-/// sync.
+/// What a Ctrl-C press does to the dispatch it lands on: the one difference between
+/// an ordinary command and the session teardown, so they share
+/// [`step_interruptible`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnPress {
     /// An ordinary command: the first press cancels it at its next checkpoint.
     Cancel,
-    /// The `quit` teardown, however it was asked for (Ctrl-D or a typed
-    /// `quit`/`exit`): a press **never** cancels, because cancelling the
-    /// cleanup is what strands the locks. It still counts toward the
-    /// force-quit, because the teardown can genuinely hang — `quit`'s
-    /// pool-claim release has no timeout of its own.
+    /// The `quit` teardown, however asked for (Ctrl-D or a typed `quit`/`exit`): a
+    /// press **never** cancels, because cancelling the cleanup strands the locks, but it
+    /// still counts toward the force-quit, since the teardown can genuinely hang
+    /// (`quit`'s pool-claim release has no timeout of its own).
     EscalateOnly,
 }
 
 impl OnPress {
-    /// The notice the *first* press prints. Informational, so `warn`: an
-    /// operator who set `error` has said they do not want it, whereas
-    /// [`on_escalate`]'s record is not suppressible.
+    /// The notice the *first* press prints. `warn`, as it is informational and an
+    /// operator who set `error` has declined it; [`on_escalate`]'s record is not
+    /// suppressible.
     fn first_press_notice(self) -> &'static str {
         match self {
             Self::Cancel => {
@@ -165,11 +157,10 @@ impl OnPress {
 
 /// Records the force-quit and reports the ending.
 ///
-/// The two kinds name different remedies because they abandon different things:
-/// a command its operation locks, a teardown the pool claims as well. Extracted
-/// from the loop's arms so that pairing is testable — the arms need a terminal.
-/// `error!`, not `warn!`: the only record that mtui is walking away from locks
-/// it holds must survive `set_log_level error`.
+/// The two kinds name different remedies because they abandon different things: a
+/// command its operation locks, a teardown the pool claims as well. Extracted from the
+/// loop's arms so that pairing is testable. `error!`, not `warn!`: the only record
+/// that mtui is walking away from locks it holds must survive `set_log_level error`.
 fn on_escalate(on_press: OnPress) -> ReplExit {
     match on_press {
         OnPress::Cancel => tracing::error!(
@@ -187,13 +178,11 @@ fn on_escalate(on_press: OnPress) -> ReplExit {
 
 /// Decides what a press must do to the dispatch of `line`.
 ///
-/// A typed `quit`/`exit`/`EOF` *is* the teardown Ctrl-D dispatches, so it gets
-/// the teardown's rules: otherwise typing `quit` at a blackholed refhost cancels
-/// one's own cleanup, and the advice that follows never mentions the stranded
-/// pool claim. The first token is resolved through the registry (the
-/// [`is_shell_line`](crate::shell::is_shell_line) precedent), so only a
-/// command-position hit counts and `help quit` stays a `help` line; an
-/// unparseable line takes the ordinary path and the engine renders its error.
+/// A typed `quit`/`exit`/`EOF` *is* the teardown Ctrl-D dispatches, so it gets the
+/// teardown's rules (otherwise typing `quit` at a blackholed refhost cancels one's
+/// own cleanup). The first token is resolved through the registry, so only a
+/// command-position hit counts and `help quit` stays a `help` line; an unparseable
+/// line takes the ordinary path and the engine renders its error.
 fn press_policy(registry: &Registry, line: &str) -> OnPress {
     let Some(tokens) = shlex::split(line) else {
         return OnPress::Cancel;
@@ -211,11 +200,10 @@ fn press_policy(registry: &Registry, line: &str) -> OnPress {
 
 /// The interactive REPL, owning the line editor and the command registry.
 ///
-/// The registry and session sit behind [`Arc`]/[`Arc<Mutex>`] because reedline
-/// hands the [`MtuiCompleter`] it owns no session, so the completer reads the
-/// live one through the same handle this loop drives. Completion runs *during*
-/// `read_line` and dispatch *after* it returns, so neither holds the lock at
-/// once.
+/// The registry and session sit behind [`Arc`]/[`Arc<Mutex>`] because reedline hands
+/// the [`MtuiCompleter`] no session, so it reads the live one through the same
+/// handle this loop drives; completion runs during `read_line` and dispatch after, so
+/// neither holds the lock at once.
 pub struct Repl {
     /// `None` only once a signal abandoned the read holding it.
     line_editor: Option<Reedline>,
@@ -228,10 +216,8 @@ pub struct Repl {
 
 impl Repl {
     /// Builds a REPL over `registry` and `session`: an [`MtuiCompleter`] behind a
-    /// columnar menu bound to <kbd>Tab</kbd>, a `file_backed_history` persisting
-    /// to `$XDG_DATA_HOME/mtui/history` (Ctrl-R comes from the default emacs
-    /// bindings), a [`DefaultHinter`], and [`MtuiPrompt`]. The command-timeout
-    /// prompter is wired separately at the composition root, `run()` in `lib.rs`.
+    /// columnar menu on <kbd>Tab</kbd>, a `file_backed_history` (Ctrl-R from the default
+    /// emacs bindings), a [`DefaultHinter`], and [`MtuiPrompt`].
     #[must_use]
     pub fn new(
         registry: Arc<Registry>,
@@ -278,16 +264,14 @@ impl Repl {
         }
     }
 
-    /// Consumes the REPL, returning **only** the line editor; the rest is
-    /// leaked, not dropped.
+    /// Consumes the REPL, returning **only** the line editor; the rest is leaked, not
+    /// dropped.
     ///
-    /// The force-quit path's contract is "run exactly one destructor, then exit",
-    /// which neither `process::exit` (runs none) nor returning from `main` (runs
-    /// all, and blocks on the runtime) expresses; the one that must run is
-    /// reedline's `FileBackedHistory` flush. Since `Repl` solely owns the
-    /// `Arc<Mutex<Session>>`, dropping the rest would synchronously tear down
-    /// every SSH `Target`, HTTP client and template on the one path whose job is
-    /// to get out now — nothing there blocks today, and leaking keeps it so.
+    /// The force-quit path must run exactly one destructor (reedline's
+    /// `FileBackedHistory` flush) and exit, which neither `process::exit` (runs none) nor
+    /// returning from `main` (runs all and blocks on the runtime) expresses. Dropping the
+    /// rest would synchronously tear down every SSH `Target`, HTTP client and template on
+    /// the path whose job is to get out now.
     #[must_use]
     pub fn into_line_editor(self) -> Option<Reedline> {
         let Self {
@@ -303,9 +287,8 @@ impl Repl {
 
     /// Runs the read → dispatch loop until `quit`/Ctrl-D, driving the session.
     ///
-    /// Returns [`ReplExit::Normal`], or [`ReplExit::ForceQuit`] when a double
-    /// Ctrl-C asked to stop waiting for a command (or a teardown); the caller
-    /// executes that decision — see [`ReplExit`] for why not here.
+    /// Returns [`ReplExit::Normal`], or [`ReplExit::ForceQuit`] when a double Ctrl-C asked
+    /// to stop waiting; the caller executes that decision (see [`ReplExit`]).
     ///
     /// # Errors
     ///
@@ -313,13 +296,12 @@ impl Repl {
     /// failures are *not* errors here: they are rendered and the loop continues.
     ///
     /// The session guard is held across the dispatch's `.await`
-    /// (`clippy::await_holding_lock`, allowed below). Sound because nothing else
-    /// can want the lock there: the only other holder is the synchronous
-    /// `read_line`, which returned before we lock, and the interrupt forwarder
-    /// touches no session state. A `tokio::sync::Mutex` is the usual remedy, but
-    /// its `blocking_lock` panics inside `read_line`'s runtime context and its
-    /// async `lock` is unreachable from the synchronous completer, so std
-    /// `Mutex` + a scoped allow fits this alternating editor↔dispatch bridge.
+    /// (`clippy::await_holding_lock`, allowed below). Sound because nothing else can want
+    /// the lock there: the only other holder is the synchronous `read_line`, which
+    /// returned before we lock, and the interrupt forwarder touches no session state. A
+    /// `tokio::sync::Mutex` would panic in `blocking_lock` inside `read_line`'s runtime
+    /// context and its async `lock` is unreachable from the synchronous completer, so std
+    /// `Mutex` + a scoped allow fits.
     #[allow(clippy::await_holding_lock)]
     pub async fn run(&mut self) -> anyhow::Result<ReplExit> {
         {
@@ -329,8 +311,8 @@ impl Repl {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             session.display.println(INTRO);
         }
-        // Armed before the first prompt, for the whole session — see the
-        // forwarder's own note on why that is what makes Ctrl-C deterministic.
+        // Armed before the first prompt for the whole session, which is what makes Ctrl-C
+        // deterministic (see the forwarder).
         let mut interrupts = spawn_interrupt_forwarder(Arc::clone(&self.terminating));
 
         loop {
@@ -362,9 +344,8 @@ impl Repl {
             };
             match signal {
                 Signal::Success(line) => {
-                    // `shell` attaches an interactive PTY, needing the local TTY
-                    // only this REPL owns; the engine shared with headless MCP
-                    // has a stub, so the line is intercepted before dispatch.
+                    // `shell` needs the local TTY only this REPL owns; the engine shared with
+                    // headless MCP has a stub, so the line is intercepted before dispatch.
                     if let Some(argv) = crate::shell::is_shell_line(&line) {
                         let mut session = self
                             .session
@@ -409,9 +390,8 @@ impl Repl {
                                 break;
                             }
                         }
-                        // A second Ctrl-C: the operator declined to wait for the
-                        // cooperative stop. Loudly, since this is the one path
-                        // that *can* leave locks a clean stop would release.
+                        // A second Ctrl-C: the operator declined to wait for the cooperative stop. Loud,
+                        // since this path can leave locks a clean stop would release.
                         StepOutcome::Escalate => return Ok(on_escalate(on_press)),
                         StepOutcome::Terminated(termination) => {
                             let mut session = self
@@ -437,10 +417,8 @@ impl Repl {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     session.display.println("");
                 }
-                // Ctrl-D dispatches the `EOF` alias through the engine so the
-                // full teardown runs (pool-claim release + host close); a bare
-                // `break` would skip it. reedline persists the history when the
-                // editor drops after `run` returns.
+                // Ctrl-D dispatches the `EOF` alias through the engine so the full teardown
+                // (pool-claim release + host close) runs; a bare `break` would skip it.
                 Signal::CtrlD => {
                     let outcome = {
                         let mut session = self
@@ -475,12 +453,11 @@ impl Repl {
         Ok(ReplExit::Normal)
     }
 
-    /// Reads one line on a blocking thread, or the termination that arrived
-    /// first.
+    /// Reads one line on a blocking thread, or the termination that arrived first.
     ///
-    /// On a termination the read is abandoned with the editor in it, so the
-    /// terminal leaves raw mode here; the caller must exit the process rather
-    /// than drop the runtime, which would wait on that read forever.
+    /// On a termination the read is abandoned with the editor in it (the terminal leaves
+    /// raw mode here), so the caller must exit the process rather than drop the runtime,
+    /// which would wait on that read forever.
     async fn read_line(
         &mut self,
         interrupts: &mut mpsc::Receiver<Interrupt>,
@@ -609,32 +586,29 @@ async fn terminate(
     }
 }
 
-/// Spawns the SIGINT forwarder and hands back the channel the dispatch loop
-/// reads presses from.
+/// Spawns the SIGINT forwarder and hands back the channel the dispatch loop reads
+/// presses from.
 ///
-/// Spawned once per [`Repl::run`] and outliving every dispatch: the SIGINT
-/// handler is installed *process-wide* on first use and never uninstalled, so
-/// arming here — before the first prompt — is what makes Ctrl-C mean one thing
-/// for the whole session, rather than depending on whether an earlier command
-/// armed it as a side effect. Since reedline holds raw mode while `read_line`
-/// owns the terminal, the forwarder only sees presses from a cooked window: a
+/// Spawned once per [`Repl::run`] and outliving every dispatch: the SIGINT handler is
+/// installed *process-wide* on first use and never uninstalled, so arming before the
+/// first prompt makes Ctrl-C mean one thing for the whole session. reedline holds raw
+/// mode during `read_line`, so the forwarder only sees presses from a cooked window: a
 /// running command, or a gap between them ([`step_interruptible`] drains those).
 ///
 /// "The whole session" means *from the first prompt onward*: startup seeding
-/// (`-a`/`-k`/`--sut`) runs before this and a Ctrl-C there still kills the
-/// process. Arming earlier without a consumer would make Ctrl-C during a
-/// 60-second connect a silent no-op, so the fix is to route the seeding through
-/// this protocol, not to move this call. Only the wiring lives here; the effect
-/// is [`step_interruptible`], tested by injecting on this same channel, since a
-/// real `SIGINT` would take every other test in the shared binary down.
+/// (`-a`/`-k`/`--sut`) runs before this and a Ctrl-C there still kills the process.
+/// Arming earlier without a consumer would make Ctrl-C during a 60-second connect a
+/// silent no-op, so seeding would have to route through this protocol instead. Only
+/// the wiring lives here; the effect is [`step_interruptible`], tested by injecting on
+/// this channel, since a real `SIGINT` would take every other test in the shared
+/// binary down.
 fn spawn_interrupt_forwarder(terminating: Arc<AtomicBool>) -> mpsc::Receiver<Interrupt> {
     let (tx, rx) = mpsc::channel(INTERRUPT_QUEUE);
     let forward = Forward { tx, terminating };
     tokio::spawn(async move {
-        // One long-lived stream per signal, created *before* the first press:
-        // a fresh `ctrl_c()` subscription per press only sees signals arriving
-        // after its first poll, losing one that lands between two calls. Each
-        // is installed on its own, so one that cannot be costs no other.
+        // One long-lived stream per signal, created *before* the first press (a fresh
+        // `ctrl_c()` per press loses a signal landing between two calls), each installed
+        // on its own so one that cannot be costs no other.
         #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
@@ -739,35 +713,31 @@ enum StepOutcome {
 
 /// Dispatches one input `line` with Ctrl-C wired to the cancellation seam.
 ///
-/// The interruptible sibling of [`step`], and like it deliberately TTY-free:
-/// presses arrive on `interrupts` — [`spawn_interrupt_forwarder`]'s channel in
-/// the live REPL, a test's own sender otherwise — so the whole protocol is
-/// exercisable without raising a signal. Three constraints shape the body:
+/// The interruptible sibling of [`step`], and like it TTY-free: presses arrive on
+/// `interrupts` ([`spawn_interrupt_forwarder`]'s channel live, a test's own sender
+/// otherwise). Three constraints shape the body:
 ///
 /// * **A fresh token per dispatch, installed unconditionally.** A
-///   [`CancellationToken`] is one-shot and this loop never resets it, so a
-///   cancel would otherwise poison *every* later dispatch — the `quit`/`EOF`
-///   teardown included, which would die at the `Command::run` pre-flight check
-///   and strand exactly the pool claims and host locks a cooperative cancel
-///   exists to release. Unconditional installation is the MCP job layer's
-///   self-healing shape.
-/// * **Stale presses are drained first.** A Ctrl-C from a cooked gap between
-///   commands belongs to no dispatch and must not cancel the next one.
-/// * **The dispatch future is never dropped on a press.** Cancelling the token
-///   asks the flow to stop at its next checkpoint; dropping it would abandon
-///   the flow mid-step, which is the teardown hole this replaces. Escalation is
-///   the one exception, at the operator's explicit second request.
+///   [`CancellationToken`] is one-shot and never reset here, so a cancel would
+///   otherwise poison *every* later dispatch, including the `quit`/`EOF` teardown,
+///   which would die at the `Command::run` pre-flight check and strand the pool
+///   claims and host locks a cancel exists to release.
+/// * **Stale presses are drained first.** A Ctrl-C from a cooked gap between commands
+///   belongs to no dispatch.
+/// * **The dispatch future is never dropped on a press.** Cancelling the token asks
+///   the flow to stop at its next checkpoint; dropping it would abandon the flow
+///   mid-step. Escalation (the operator's explicit second press) is the one
+///   exception.
 ///
-/// What the first press buys depends on the command: checkpointed flows
-/// (`update`, `prepare`, `downgrade`, every fan-out boundary) stop promptly with
-/// their locks released, while a host operation already under way (`run`,
-/// `install`, `uninstall`) finishes first and unlocks normally.
+/// What the first press buys depends on the command: checkpointed flows (`update`,
+/// `prepare`, `downgrade`, every fan-out boundary) stop promptly with their locks
+/// released, while a host operation already under way (`run`, `install`,
+/// `uninstall`) finishes first and unlocks normally.
 ///
-/// `on_press` is the *only* difference between an ordinary command and the
-/// teardown ([`OnPress::EscalateOnly`] skips the `token.cancel()` and prints the
-/// teardown's notice). Sharing one body is deliberate: two copies of a
-/// biased-select protocol drift, which is how a typed `quit` came to be
-/// unprotected where Ctrl-D was not.
+/// `on_press` is the *only* difference between an ordinary command and the teardown
+/// ([`OnPress::EscalateOnly`] skips `token.cancel()` and prints the teardown's
+/// notice). One shared body is deliberate: two copies of a biased-select protocol
+/// drift.
 async fn step_interruptible(
     registry: &Registry,
     session: &mut Session,
@@ -793,20 +763,17 @@ async fn step_interruptible(
     let mut pressed = false;
     loop {
         let press = tokio::select! {
-            // Biased, completion first: a press landing in the same poll
-            // window as the command's own completion must not be attributed to
-            // it, or the race force-quits a command that just finished cleanly
-            // — warning about released locks, and skipping the `quit` teardown
-            // that would release the pool claims. A press that loses the race
-            // stays queued for the next dispatch to drain.
+            // Biased, completion first: a press landing in the same poll window as the
+            // command's own completion must not be attributed to it, or the race force-quits
+            // a command that just finished cleanly and skips the `quit` teardown. A press
+            // that loses the race stays queued for the next dispatch.
             biased;
             flow = &mut dispatch => return settled(flow, terminated),
             press = interrupts.recv() => press,
         };
         let Some(event) = press else {
-            // The forwarder is gone (only when SIGINT cannot be handled at
-            // all), so nothing can interrupt this dispatch: see it through
-            // instead of spinning on a closed channel.
+            // The forwarder is gone (SIGINT cannot be handled at all): see the dispatch
+            // through rather than spin on a closed channel.
             return settled((&mut dispatch).await, terminated);
         };
         if let Interrupt::Terminate(termination) = event {
@@ -848,11 +815,10 @@ fn settled(flow: ControlFlow<()>, terminated: Option<Termination>) -> StepOutcom
 
 /// Dispatches one input `line` and reports whether the loop should stop.
 ///
-/// The testable heart of the loop, deliberately independent of the TTY-bound
-/// [`Reedline`] editor: it dispatches through the shared engine, reports any
-/// error through `tracing::error!` exactly once, and reports
-/// [`ControlFlow::Break`] iff `quit` asked the session to exit. An
-/// empty/whitespace line is a no-op the engine already handles.
+/// The testable heart of the loop, independent of the TTY-bound [`Reedline`]: it
+/// dispatches through the shared engine, reports any error through `tracing::error!`
+/// exactly once, and returns [`ControlFlow::Break`] iff `quit` asked the session to
+/// exit.
 async fn step(registry: &Registry, session: &mut Session, line: &str) -> ControlFlow<()> {
     if let Err(err) = dispatch_line(registry, session, line).await {
         render_error(&err);
@@ -867,19 +833,16 @@ async fn step(registry: &Registry, session: &mut Session, line: &str) -> Control
 /// Reports a dispatch error through `tracing::error!`, the single operator log
 /// channel.
 ///
-/// Errors, warnings and info share one path: the subscriber installed by
-/// [`init_tracing`](crate::init_tracing), whose
-/// [`CompactLevelFormat`](crate::logfmt::CompactLevelFormat) renders each level
-/// as a lowercased, colorized token under one `--color` decision. The message is
-/// the event's *message*, not a structured field, so no `err=` noise appears.
-/// Headless `mtui-mcp` renders identical *text* through its captured display
-/// buffer instead — same text, the channel each surface has.
+/// The subscriber from [`init_tracing`](crate::init_tracing) renders each level via
+/// [`CompactLevelFormat`](crate::logfmt::CompactLevelFormat) under one `--color`
+/// decision. The message is the event's *message*, not a structured field. Headless
+/// `mtui-mcp` renders the same text through its captured display buffer instead.
 ///
-/// One exception: a genuine usage error (`Parse { help_or_version: false, .. }`)
-/// already carries clap's own `error: ` prefix, so it is tagged with
+/// A genuine usage error (`Parse { help_or_version: false, .. }`) already carries
+/// clap's own `error: ` prefix, so it is tagged with
 /// [`CLAP_PREFIXED_TARGET`](crate::logfmt::CLAP_PREFIXED_TARGET), which
-/// `CompactLevelFormat` renders without adding a second one.
-/// `--help`/`--version` output takes the normal path.
+/// `CompactLevelFormat` renders without a second one. `--help`/`--version` output
+/// takes the normal path.
 fn render_error(err: &EngineError) {
     match err {
         EngineError::Parse {

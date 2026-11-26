@@ -1,20 +1,16 @@
 //! Custom compact `tracing` event format for the REPL.
 //!
-//! One line per record: a **lowercased**, colorized level token, `": "`, then
-//! the message — no timestamp, no module path. That is how the session display
-//! already renders command errors (`repl::render_error`), so bringing
-//! `tracing::info!`/`warn!` to the same look makes the two channels
-//! indistinguishable to an operator reading the terminal.
+//! One line per record: a **lowercased**, colorized level token, `": "`, then the
+//! message, with no timestamp or module path. That matches how the session display
+//! renders command errors (`repl::render_error`), so the two channels look alike.
 //!
-//! **The ANSI decision is shared with the display**: it is computed once from
-//! the resolved [`ColorMode`](mtui_core::ColorMode) handed to
-//! [`init_tracing`](crate::init_tracing), so `--color` governs the level token
-//! and the `error:` line identically. The subscriber's own ANSI is disabled so
-//! only this layer's explicit coloring emits escapes.
+//! The ANSI decision is shared with the display: computed once from the resolved
+//! [`ColorMode`](mtui_core::ColorMode) given to [`init_tracing`](crate::init_tracing),
+//! so `--color` governs both. The subscriber's own ANSI is disabled so only this
+//! layer emits escapes.
 //!
-//! Installed at the *default* verbosity only; `-d/--debug` keeps the stock
-//! verbose format. mtui deliberately has no DEBUG-only `" [module:function]"`
-//! suffix — the verbose format's `target` covers the same need.
+//! Installed at the default verbosity only; `-d/--debug` keeps the stock verbose
+//! format.
 
 use std::fmt;
 
