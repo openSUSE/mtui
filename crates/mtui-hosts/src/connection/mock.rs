@@ -134,6 +134,8 @@ pub struct MockConnection {
     block_close: Option<Arc<tokio::sync::Notify>>,
     /// See [`with_close_delay`](Self::with_close_delay).
     close_delay: Option<std::time::Duration>,
+    /// See [`with_blocking_sftp_remove`](Self::with_blocking_sftp_remove).
+    block_sftp_remove: Option<Arc<tokio::sync::Notify>>,
     /// See [`with_failing_close`](Self::with_failing_close).
     close_fails: bool,
     /// Number of times [`reconnect`](Connection::reconnect) has been called.
@@ -236,6 +238,7 @@ impl MockConnection {
             closed: Arc::new(Mutex::new(false)),
             block_close: None,
             close_delay: None,
+            block_sftp_remove: None,
             close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
@@ -452,6 +455,15 @@ impl MockConnection {
     #[must_use]
     pub fn with_blocking_close(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
         self.block_close = Some(gate);
+        self
+    }
+
+    /// Makes [`sftp_remove`](Connection::sftp_remove) block until `gate` is
+    /// notified: a lock release that wedges, so a teardown budget expires
+    /// mid-release.
+    #[must_use]
+    pub fn with_blocking_sftp_remove(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
+        self.block_sftp_remove = Some(gate);
         self
     }
 
@@ -1206,6 +1218,9 @@ impl Connection for MockConnection {
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
+        if let Some(gate) = self.block_sftp_remove.clone() {
+            gate.notified().await;
+        }
         if self.sftp_remove_not_found {
             return Err(HostError::SftpNotFound {
                 host: self.hostname.clone(),

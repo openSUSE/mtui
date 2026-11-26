@@ -21,11 +21,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `remove_host`, `unload` and `quit` no longer report a clean teardown when
+- `remove_host`, `unload`, `quit`, and a reload of an already-loaded update
+  (`load_template`, `regenerate`) no longer report a clean teardown when
   something was left on a host. The reply now carries one `warning: <host>: …`
   line for each operation lock or pool claim the session still holds after the
   close (the link was down, the release failed, or the teardown was
-  abandoned), with how it goes away; for the update's repositories when the
+  abandoned), with how it goes away, or that it now belongs to another owner
+  and is left to it; for the update's repositories when the
   session's last repository change on that host was an add; and for packages
   the session's `install` put there that no later `uninstall` removed. The
   teardown itself is still never refused, and the check runs nothing on the

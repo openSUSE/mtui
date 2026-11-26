@@ -192,6 +192,51 @@ mod tests {
         );
     }
 
+    /// The release wedges past the budget, so the close never finishes it.
+    #[tokio::test]
+    async fn names_a_lock_left_because_the_teardown_was_abandoned() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let conn = MockConnection::new("h1").with_blocking_sftp_remove(Arc::clone(&gate));
+        let t = locked("h1", conn).await;
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        testkit::with_shrunk_budget(50, remove_all(&mut session)).await;
+        let out = buf.contents();
+        assert!(
+            out.contains(
+                "warning: h1: operation lock not released (teardown abandoned); unless the \
+                 host reboots, it stays until it is older than [lock] stale_age or someone runs \
+                 `unlock -f`"
+            ),
+            "{out}"
+        );
+        gate.notify_waiters();
+    }
+
+    /// Another owner's lock is not ours to force, so no `unlock -f` advice.
+    #[tokio::test]
+    async fn a_lock_taken_over_by_another_owner_is_left_to_it() {
+        use mtui_hosts::TARGET_LOCK_PATH;
+
+        let conn = MockConnection::new("h1");
+        let t = locked("h1", conn.clone()).await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let _ = conn.with_file(TARGET_LOCK_PATH, format!("{now}:otheruser:99").into_bytes());
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        let out = buf.contents();
+        assert!(
+            out.contains(
+                "warning: h1: operation lock now belongs to another owner, so the close left it \
+                 in place; it is theirs to release"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("unlock -f"), "{out}");
+    }
+
     /// The lock is held right up to the close, so a notice built from the
     /// pre-close record would name it here.
     #[tokio::test]
@@ -203,8 +248,8 @@ mod tests {
     }
 
     const REPOS_LEFT: &str = "warning: h1: the update's repositories are still configured \
-        (this session's last repository change there was an add); re-add the host and run \
-        `set_repo --remove`";
+        (this session's last repository change there was an add); with the update loaded, \
+        reconnect the host and run `set_repo --remove`";
 
     async fn set_repo(session: &mut Session, flag: &str) {
         use crate::commands::setrepo::SetRepo;

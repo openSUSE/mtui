@@ -965,17 +965,26 @@ async fn perform_operation_with(
             completed: Vec::new(),
         })
         .collect();
-    // An install may have landed even where the reboot then failed, so only a
-    // failed check rules a host out; an uninstall counts only where it completed.
+    let reboot_failed = {
+        let from = failures.len();
+        failures.extend(report.reboot_failures.into_iter().map(reboot_error));
+        from..failures.len()
+    };
+    // Every host was planned and nothing rolls back, so each one not failed is done.
+    let completed = completed_hosts(targets, &targets.names(), &failures);
+    // An install may have landed where only the reboot then failed, so every
+    // failure but those rules its host out; an uninstall counts only where it completed.
+    let ruled_out: BTreeSet<&str> = failures
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !reboot_failed.contains(i))
+        .filter_map(|(_, e)| e.host.as_deref())
+        .collect();
     let installed_on: Vec<String> = targets
         .names()
         .into_iter()
-        .filter(|h| is_enabled(targets, h))
-        .filter(|h| !failures.iter().any(|e| e.host.as_deref() == Some(h)))
+        .filter(|h| is_enabled(targets, h) && !ruled_out.contains(h.as_str()))
         .collect();
-    failures.extend(report.reboot_failures.into_iter().map(reboot_error));
-    // Every host was planned and nothing rolls back, so each one not failed is done.
-    let completed = completed_hosts(targets, &targets.names(), &failures);
     let install = matches!(op, Op::Install);
     let hosts = if install { &installed_on } else { &completed };
     for host in hosts {
@@ -7399,6 +7408,20 @@ mod tests {
         assert_eq!(group.get("h1").unwrap().leftovers().installed, ["pkg-b"]);
     }
 
+    /// A disabled host runs nothing, yet its exit-0 snapshot passes the check.
+    #[tokio::test]
+    async fn an_install_is_not_recorded_on_a_disabled_host() {
+        let (t, _h) = sles_target("h1", "");
+        let (mut off, _h2) = sles_target("h2", "");
+        off.set_state(TargetState::Disabled);
+        let mut group = HostsGroup::new(vec![t, off], false);
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect("a clean install");
+        assert_eq!(group.get("h1").unwrap().leftovers().installed, ["pkg-a"]);
+        assert!(group.get("h2").unwrap().leftovers().installed.is_empty());
+    }
+
     #[tokio::test]
     async fn a_failed_install_is_not_recorded() {
         let (t, _h) = sles_target_with_exit("h1", "", 104);
@@ -9432,7 +9455,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_uninstall_reports_a_transactional_host_that_never_reconnects() {
-        let (t, _handle) = slmicro_target_failing_reconnect("h1");
+        let (mut t, _handle) = slmicro_target_failing_reconnect("h1");
+        t.note_installed(&["pkg-a".to_owned()]);
         let mut group = HostsGroup::new(vec![t], false);
 
         let err = perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
@@ -9450,6 +9474,8 @@ mod tests {
             "reason: {}",
             err.reason
         );
+        // The uninstall may not have landed, so the install stays recorded.
+        assert_eq!(group.get("h1").unwrap().leftovers().installed, ["pkg-a"]);
     }
 
     #[tokio::test]
