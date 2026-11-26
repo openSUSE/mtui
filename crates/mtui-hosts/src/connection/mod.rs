@@ -163,9 +163,6 @@ pub trait Connection: Send + Sync {
     /// written. Bytes are streamed, not buffered whole.
     async fn sftp_get_folder(&mut self, remote: &Path, local: &Path) -> Result<()>;
 
-    /// Lists the entries of a remote directory.
-    async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>>;
-
     /// Reads a remote file's full contents over SFTP.
     ///
     /// Object safety means bytes rather than a live handle; that covers every
@@ -221,12 +218,6 @@ pub trait Connection: Send + Sync {
     /// [`HostError::Sftp`](crate::HostError::Sftp) otherwise, as for
     /// [`sftp_open`](Self::sftp_open).
     async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>>;
-
-    /// Recursively deletes a remote directory over SFTP (files then the dir).
-    async fn sftp_rmdir(&mut self, path: &Path) -> Result<()>;
-
-    /// Returns the target of a remote symbolic link.
-    async fn sftp_readlink(&mut self, path: &Path) -> Result<String>;
 
     /// Opens a batched SFTP session that reuses one channel+subsystem across
     /// several reads, returning an object-safe [`SftpSession`] handle.

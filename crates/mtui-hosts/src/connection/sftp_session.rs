@@ -56,8 +56,6 @@ pub trait SftpSession: Send {
 
     /// Lists the entries of a remote directory over the shared session.
     ///
-    /// The object-safe counterpart to
-    /// [`Connection::sftp_listdir`](super::Connection::sftp_listdir).
     ///
     /// # Errors
     ///
@@ -68,8 +66,6 @@ pub trait SftpSession: Send {
 
     /// Returns the target of a remote symbolic link over the shared session.
     ///
-    /// The object-safe counterpart to
-    /// [`Connection::sftp_readlink`](super::Connection::sftp_readlink).
     ///
     /// # Errors
     ///

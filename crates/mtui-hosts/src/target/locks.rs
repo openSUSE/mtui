@@ -3021,9 +3021,6 @@ mod tests {
         ) -> Result<()> {
             self.inner.sftp_get_folder(remote, local).await
         }
-        async fn sftp_listdir(&mut self, path: &std::path::Path) -> Result<Vec<String>> {
-            self.inner.sftp_listdir(path).await
-        }
         async fn sftp_open(&mut self, path: &std::path::Path) -> Result<Vec<u8>> {
             let landed = {
                 let mut pending = self.land_on_open.lock().unwrap();
@@ -3081,12 +3078,6 @@ mod tests {
                 self.inner.clone().sftp_write(path, &content, false).await?;
             }
             self.inner.sftp_mtime(path).await
-        }
-        async fn sftp_rmdir(&mut self, path: &std::path::Path) -> Result<()> {
-            self.inner.sftp_rmdir(path).await
-        }
-        async fn sftp_readlink(&mut self, path: &std::path::Path) -> Result<String> {
-            self.inner.sftp_readlink(path).await
         }
         async fn sftp_session(&mut self) -> Result<Box<dyn crate::connection::SftpSession + '_>> {
             self.inner.sftp_session().await

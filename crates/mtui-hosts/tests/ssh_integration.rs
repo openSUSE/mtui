@@ -1568,8 +1568,9 @@ async fn sftp_listdir_returns_entries() {
     let port = start_server(fs).await;
     let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
 
-    let mut entries = conn
-        .sftp_listdir(std::path::Path::new("/var/log"))
+    let mut session = conn.sftp_session().await.expect("session");
+    let mut entries = session
+        .listdir(std::path::Path::new("/var/log"))
         .await
         .expect("listdir");
     entries.sort();
@@ -1720,28 +1721,6 @@ async fn run_reconnects_when_link_dropped() {
 }
 
 #[tokio::test]
-async fn sftp_rmdir_removes_children_then_dir() {
-    let fs = SharedFs::default();
-    {
-        let mut g = fs.lock().await;
-        g.dirs
-            .insert("/d".to_owned(), vec!["c1".to_owned(), "c2".to_owned()]);
-        g.files.insert("/d/c1".to_owned(), b"1".to_vec());
-        g.files.insert("/d/c2".to_owned(), b"2".to_vec());
-    }
-    let port = start_server(fs.clone()).await;
-    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
-
-    conn.sftp_rmdir(std::path::Path::new("/d"))
-        .await
-        .expect("rmdir");
-    let g = fs.lock().await;
-    assert!(!g.dirs.contains_key("/d"));
-    assert!(!g.files.contains_key("/d/c1"));
-    assert!(!g.files.contains_key("/d/c2"));
-}
-
-#[tokio::test]
 async fn sftp_remove_and_readlink() {
     let fs = SharedFs::default();
     {
@@ -1759,7 +1738,10 @@ async fn sftp_remove_and_readlink() {
     assert!(!fs.lock().await.files.contains_key("/tmp/f"));
 
     let target = conn
-        .sftp_readlink(std::path::Path::new("/tmp/link"))
+        .sftp_session()
+        .await
+        .expect("session")
+        .readlink(std::path::Path::new("/tmp/link"))
         .await
         .expect("readlink");
     assert_eq!(target, "/tmp/target");
@@ -2091,7 +2073,10 @@ async fn sftp_verbs_over_one_connection_share_a_single_subsystem() {
     conn.sftp_open(std::path::Path::new("/a"))
         .await
         .expect("open a");
-    conn.sftp_listdir(std::path::Path::new("/"))
+    conn.sftp_session()
+        .await
+        .expect("session")
+        .listdir(std::path::Path::new("/"))
         .await
         .expect("listdir");
     assert_eq!(

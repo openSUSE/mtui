@@ -1722,18 +1722,6 @@ impl Connection for SshConnection {
         results.into_iter().collect::<Result<Vec<()>>>().map(|_| ())
     }
 
-    async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
-        let (_sftp, dir) = self
-            .sftp_first_request(
-                FirstRequestReplay::Repeatable,
-                path,
-                |sftp, path| async move { sftp.read_dir(path).await },
-                |s, e| s.sftp_verb_err_at(e, path),
-            )
-            .await?;
-        Ok(dir.map(|e| e.file_name()).collect())
-    }
-
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
         let (_sftp, data) = self
             .sftp_first_request(
@@ -1853,33 +1841,6 @@ impl Connection for SshConnection {
             )
             .await?;
         Ok(meta.mtime.map(u64::from))
-    }
-
-    async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
-        let sftp = self.sftp().await?;
-        let path_str = path.to_string_lossy().to_string();
-        if let Ok(dir) = sftp.read_dir(path_str.clone()).await {
-            for entry in dir {
-                let child = format!("{path_str}/{}", entry.file_name());
-                let _ = sftp.remove_file(child).await;
-            }
-        }
-        sftp.remove_dir(path_str)
-            .await
-            .map_err(|e| self.sftp_verb_err(e))?;
-        Ok(())
-    }
-
-    async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
-        let (_sftp, target) = self
-            .sftp_first_request(
-                FirstRequestReplay::Repeatable,
-                path,
-                |sftp, path| async move { sftp.read_link(path).await },
-                |s, e| s.sftp_verb_err_at(e, path),
-            )
-            .await?;
-        Ok(target)
     }
 
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {

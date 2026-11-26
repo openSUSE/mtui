@@ -3561,7 +3561,6 @@ mod tests {
                     | Write { path, .. }
                     | Remove(path)
                     | Mtime(path)
-                    | Rmdir(path)
                     | Readlink(path)
                     | Put { remote: path, .. }
                     | PutBytes { remote: path, .. }
