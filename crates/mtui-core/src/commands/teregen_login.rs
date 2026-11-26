@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use clap::ArgMatches;
 use mtui_datasources::obs::oscrc;
 use mtui_datasources::sanitize_url;
-use mtui_datasources::sshsig::key_display;
 use mtui_datasources::teregen::{TokenStore, describe_age};
 
+use super::support::print_identity;
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -68,10 +68,6 @@ impl TeregenLogin {
         // REPL half — no headless redaction exists on this command.
         let creds = oscrc::read_credentials(&session.config.obs_api_url)
             .map_err(|e| CommandError::Other(format!("could not read oscrc credentials: {e}")))?;
-        let key = key_display(
-            creds.sshkey_path.as_deref(),
-            creds.sshkey_fingerprint.as_deref(),
-        );
         let base = session.config.teregen_api_v2.clone();
 
         let prev_line = match &store {
@@ -97,10 +93,7 @@ impl TeregenLogin {
         // Identity context first: a failed mint leaves the previous entry
         // alone, so its age is most useful exactly when the mint fails —
         // and the display buffer reaches the caller on `Err` too.
-        session
-            .display
-            .println(&format!("principal: {}", creds.user));
-        session.display.println(&format!("signing key: {key}"));
+        print_identity(session, &creds);
         session
             .display
             .println(&format!("base: {}", sanitize_url(&base)));
