@@ -144,7 +144,9 @@ fn add_background_property(schema: &mut Map<String, Value>) {
 
 /// One internal walk that produces both the descriptors and their routes, so the
 /// two views can never disagree on the tool set.
-fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, ToolRoute>) {
+pub(crate) fn synthesise(
+    registry: &Registry,
+) -> (Vec<ToolDescriptor>, BTreeMap<String, ToolRoute>) {
     warn_on_deny_drift(registry);
 
     let mut descriptors: Vec<ToolDescriptor> = Vec::new();
@@ -279,7 +281,7 @@ pub fn build_tools(registry: &Registry) -> Vec<ToolDescriptor> {
 
 /// Build the tool-name → [`ToolRoute`] map for dispatching calls back to the
 /// engine. Keys match [`build_tools`] descriptor names exactly.
-#[must_use]
+#[cfg(test)]
 pub(crate) fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
     synthesise(registry).1
 }
