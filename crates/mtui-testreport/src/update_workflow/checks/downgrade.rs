@@ -1,10 +1,10 @@
 //! Post-downgrade check.
 
-use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{
     CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
     ZYPPER_EXIT_INF_REPO_SKIPPED, log_failed,
 };
+use crate::update_workflow::{Family, UpdateError, family};
 
 /// The zypper downgrade check.
 ///
@@ -119,12 +119,13 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// unknown key.
 #[must_use]
 pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<CheckFn> {
-    match (release, transactional) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
-        ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
-        _ => None,
-    }
+    family(release, transactional).map(|f| -> CheckFn {
+        match f {
+            Family::Zypper => Box::new(zypper),
+            Family::Yum => Box::new(yum),
+            Family::Transactional => Box::new(transactional_update),
+        }
+    })
 }
 
 #[cfg(test)]

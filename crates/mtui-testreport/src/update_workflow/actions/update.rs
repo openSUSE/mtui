@@ -79,6 +79,7 @@
 //! keep the macOS CI leg working), so they cannot catch this.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
+use crate::update_workflow::{Family, family};
 
 /// yum update command.
 const YUM_UPDATE: &str = "
@@ -179,19 +180,18 @@ fn zypper() -> ActionCommands {
 }
 
 fn slmicro() -> ActionCommands {
-    ActionCommands::with_reboot(SLM_UPDATE, "systemctl reboot").with_mode(SubstMode::Safe)
+    ActionCommands::with_reboot(SLM_UPDATE).with_mode(SubstMode::Safe)
 }
 
 /// The update command for `(release, transactional)`, or `None` for an unknown
 /// key (provider maps `None` to `MissingUpdaterError`).
 #[must_use]
 pub(crate) fn updater(release: &str, transactional: bool) -> Option<ActionCommands> {
-    match (release, transactional) {
-        ("YUM", false) => Some(yum()),
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
-        ("slmicro", true) | ("16", true) => Some(slmicro()),
-        _ => None,
-    }
+    family(release, transactional).map(|f| match f {
+        Family::Zypper => zypper(),
+        Family::Yum => yum(),
+        Family::Transactional => slmicro(),
+    })
 }
 
 #[cfg(test)]

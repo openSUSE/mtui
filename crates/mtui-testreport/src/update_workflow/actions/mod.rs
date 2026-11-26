@@ -43,6 +43,9 @@ impl SubstMode {
     }
 }
 
+/// The reboot command every transactional entry carries.
+const REBOOT: &str = "systemctl reboot";
+
 /// The command templates for one resolved action.
 ///
 /// `command` is always present; the remaining fields are used only by specific
@@ -73,15 +76,22 @@ impl ActionCommands {
         }
     }
 
-    /// A strict command + reboot action set (the transactional shape).
+    /// A strict command + [`REBOOT`] action set (the transactional shape).
     #[must_use]
-    fn with_reboot(command: impl Into<String>, reboot: impl Into<String>) -> Self {
+    fn with_reboot(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
-            reboot: Some(reboot.into()),
+            reboot: Some(REBOOT.to_owned()),
             list_command: None,
             mode: SubstMode::Strict,
         }
+    }
+
+    /// Sets the package-listing probe (builder-style).
+    #[must_use]
+    fn with_list_command(mut self, list_command: impl Into<String>) -> Self {
+        self.list_command = Some(list_command.into());
+        self
     }
 
     /// Overrides the substitution [`mode`](Self::mode) (builder-style).

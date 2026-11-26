@@ -3,8 +3,8 @@
 //! Interpolates `$packages` (the space-joined package list). The `slmicro`
 //! entry is transactional and carries a `reboot`.
 
-use crate::update_workflow::WorkflowKey;
 use crate::update_workflow::actions::ActionCommands;
+use crate::update_workflow::{Family, family};
 
 /// zypper install.
 fn zypper() -> ActionCommands {
@@ -18,23 +18,18 @@ fn yum() -> ActionCommands {
 
 /// slmicro (transactional) install.
 fn slmicro() -> ActionCommands {
-    ActionCommands::with_reboot(
-        "transactional-update -n pkg install $packages",
-        "systemctl reboot",
-    )
+    ActionCommands::with_reboot("transactional-update -n pkg install $packages")
 }
 
 /// The install command for `(release, transactional)`, or `None` for an
 /// unknown key; the provider maps `None` to a "missing installer" error.
 #[must_use]
 pub(crate) fn installer(release: &str, transactional: bool) -> Option<ActionCommands> {
-    let key: WorkflowKey = (release.to_owned(), transactional);
-    match (key.0.as_str(), key.1) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
-        ("YUM", false) => Some(yum()),
-        ("slmicro", true) | ("16", true) => Some(slmicro()),
-        _ => None,
-    }
+    family(release, transactional).map(|f| match f {
+        Family::Zypper => zypper(),
+        Family::Yum => yum(),
+        Family::Transactional => slmicro(),
+    })
 }
 
 #[cfg(test)]
