@@ -254,6 +254,11 @@ expression: pretty
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
           "type": "boolean"
         },
+        "allow_removal": {
+          "default": false,
+          "description": "commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read",
+          "type": "boolean"
+        },
         "background": {
           "default": false,
           "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
@@ -324,6 +329,11 @@ expression: pretty
       "properties": {
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
+          "type": "boolean"
+        },
+        "allow_removal": {
+          "default": false,
+          "description": "commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read",
           "type": "boolean"
         },
         "background": {
@@ -923,6 +933,11 @@ expression: pretty
       "properties": {
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
+          "type": "boolean"
+        },
+        "allow_removal": {
+          "default": false,
+          "description": "commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read",
           "type": "boolean"
         },
         "background": {
@@ -1528,6 +1543,11 @@ expression: pretty
       "properties": {
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
+          "type": "boolean"
+        },
+        "allow_removal": {
+          "default": false,
+          "description": "commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read",
           "type": "boolean"
         },
         "background": {

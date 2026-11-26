@@ -9,7 +9,7 @@
 //! [`hostgroup`](super::hostgroup), resolving doers via the injected
 //! [`PlanProvider`]) and runs offline against mocks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mtui_types::shellquote::quote_args;
 
@@ -30,6 +30,9 @@ pub struct Doer {
     command_template: String,
     /// The reboot command, run only on transactional (read-only-root) hosts.
     reboot_template: String,
+    /// The command's dry run, read by the removal guard; `None` where the
+    /// package manager has none the guard can read.
+    probe_template: Option<String>,
 }
 
 impl Doer {
@@ -39,7 +42,23 @@ impl Doer {
         Self {
             command_template: command_template.into(),
             reboot_template: reboot_template.into(),
+            probe_template: None,
         }
+    }
+
+    /// Sets the dry-run template, interpolating `$packages` like the command.
+    #[must_use]
+    pub fn with_probe(mut self, probe_template: Option<String>) -> Self {
+        self.probe_template = probe_template;
+        self
+    }
+
+    /// Substitutes `$packages` in the dry-run template, if there is one.
+    #[must_use]
+    fn probe(&self, packages: &str) -> Option<String> {
+        self.probe_template
+            .as_ref()
+            .map(|t| t.replace("$packages", packages))
     }
 
     /// Substitutes the shell-quoted, space-joined package list into the command
@@ -138,6 +157,9 @@ pub struct HostPlan {
     pub(crate) transactional: bool,
     /// The resolved doer for this host.
     pub(crate) doer: Doer,
+    /// Whether the host is enabled; a disabled host runs nothing, so it has no
+    /// dry run to judge.
+    pub(crate) enabled: bool,
     /// The paired check callable for this host.
     pub(crate) check: Check,
 }
@@ -165,11 +187,12 @@ pub trait OperationGroup: Send {
     /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
-    /// Appends one colon-joined row to every enabled host's remote history file.
+    /// Appends one colon-joined row to the remote history file of each enabled host in
+    /// `hosts`.
     ///
     /// On the group seam because the reboot happens inside the template: a row written
     /// after `run` returns would be lost on exactly the hosts that never came back.
-    async fn add_history(&mut self, fields: &[String]);
+    async fn add_history(&mut self, hosts: &BTreeSet<String>, fields: &[String]);
 
     /// Reads back `hostname`'s post-run output, for the [`Check`] call.
     ///
@@ -214,6 +237,9 @@ pub struct OperationReport {
     /// depends on this. The aggregate warning belongs to `perform_operation` in
     /// `mtui-testreport`, which knows the operation name.
     pub unlock_failures: Vec<(String, String)>,
+    /// Each dry-run host's verdict: the packages the transaction removes there,
+    /// or why it was refused. A refused host ran nothing past its dry run.
+    pub dry_runs: BTreeMap<String, Result<Vec<String>, String>>,
 }
 
 /// Why a transactional host's post-operation reboot did not take effect.
@@ -293,13 +319,26 @@ impl OperationKind {
 pub struct Operation {
     kind: OperationKind,
     packages: Vec<String>,
+    /// Whether to skip the removal guard (`--allow-removal`).
+    allow_removal: bool,
 }
 
 impl Operation {
     /// An operation of `kind` over `packages`.
     #[must_use]
     pub fn new(kind: OperationKind, packages: Vec<String>) -> Self {
-        Self { kind, packages }
+        Self {
+            kind,
+            packages,
+            allow_removal: false,
+        }
+    }
+
+    /// Skips the removal guard when `allow` is set.
+    #[must_use]
+    pub fn with_allow_removal(mut self, allow: bool) -> Self {
+        self.allow_removal = allow;
+        self
     }
 
     /// Installs `packages` on every target in the group.
@@ -334,9 +373,12 @@ impl Operation {
 
     /// Executes the full `lock → run → check → reboot → unlock` skeleton.
     ///
-    /// If plan resolution fails, returns without taking any lock. A host whose check
-    /// fails is excluded from the reboot map; healthy transactional hosts still reboot
-    /// and the inert one is named at WARN.
+    /// If plan resolution fails, returns without taking any lock. Unless the operation
+    /// allows removals, each enabled host's dry run runs after the lock and every host
+    /// it refuses is left out of the rest of the run (see [`removal`](super::removal));
+    /// the verdicts land in [`OperationReport::dry_runs`]. A host whose check fails is
+    /// excluded from the reboot map; healthy transactional hosts still reboot and the
+    /// inert one is named at WARN.
     ///
     /// The reboot re-takes even the comment-less operation lock, though `unlock()`
     /// releases it right after, so a foreign claim in the gap is reported as a lost hold
@@ -365,19 +407,43 @@ impl Operation {
         group.update_lock().await?;
 
         // Everything past the lock must reach `unlock()`, so no `?` in this section.
+        let dry_runs = if self.allow_removal {
+            BTreeMap::new()
+        } else {
+            let packages = quote_args(&self.packages);
+            let probes = plans
+                .iter()
+                .filter(|p| p.enabled)
+                .map(|p| (p.hostname.clone(), p.doer.probe(&packages)))
+                .collect();
+            super::removal::probe_removals(group, probes, &self.packages).await
+        };
+        let refused: BTreeSet<String> = dry_runs
+            .iter()
+            .filter(|(_, verdict)| verdict.is_err())
+            .map(|(host, _)| host.clone())
+            .collect();
+        let commands: HostCommandMap = commands
+            .into_iter()
+            .filter(|(host, _)| !refused.contains(host))
+            .collect();
+        let dispatched: BTreeSet<String> = commands.iter().map(|(h, _)| h.clone()).collect();
         group.run(commands).await;
 
         // Record history after the command dispatched but before the reboot: a host that
         // never comes back cannot be written to afterwards.
         group
-            .add_history(&[
-                self.kind.history_label().to_owned(),
-                self.packages.join(" "),
-            ])
+            .add_history(
+                &dispatched,
+                &[
+                    self.kind.history_label().to_owned(),
+                    self.packages.join(" "),
+                ],
+            )
             .await;
 
         let mut check_failures: Vec<(String, CheckFailure)> = Vec::new();
-        for plan in &mut plans {
+        for plan in plans.iter_mut().filter(|p| !refused.contains(&p.hostname)) {
             let output = group.last_output(&plan.hostname).unwrap_or_else(|| {
                 // A planned host cannot be missing from the group; warn rather than pass silently.
                 tracing::warn!(
@@ -405,6 +471,9 @@ impl Operation {
         let reboot: HostCommandMap = reboot
             .into_iter()
             .filter(|(host, _)| {
+                if refused.contains(host) {
+                    return false;
+                }
                 let ok = !failed.contains(host.as_str());
                 if !ok {
                     tracing::warn!(host = %host, "check failed; skipping reboot");
@@ -432,6 +501,7 @@ impl Operation {
             reboot_failures,
             unlock_failures,
             lost_holds: reboot_report.lost_holds,
+            dry_runs,
         })
     }
 }
@@ -557,6 +627,10 @@ mod tests {
         /// When `true`, `last_output` returns `None` for every host, modelling
         /// a host outside the group despite having a [`HostPlan`].
         missing_output: bool,
+        /// What `last_output` answers per host.
+        outputs: BTreeMap<String, HostOutput>,
+        /// The host set of each `add_history` call, in order.
+        history_hosts: Vec<BTreeSet<String>>,
     }
 
     impl MockGroup {
@@ -580,7 +654,22 @@ mod tests {
                 lost_holds: Vec::new(),
                 unlock_outcomes: BTreeMap::new(),
                 missing_output: false,
+                outputs: BTreeMap::new(),
+                history_hosts: Vec::new(),
             }
+        }
+
+        /// Scripts `last_output` to answer `stdout` and `exitcode` for `host`.
+        fn with_output(mut self, host: &str, stdout: &str, exitcode: i32) -> Self {
+            self.outputs.insert(
+                host.to_owned(),
+                HostOutput {
+                    stdout: stdout.to_owned(),
+                    exitcode,
+                    ..HostOutput::default()
+                },
+            );
+            self
         }
 
         /// Marks `update_lock` to fail, modelling a foreign-locked host.
@@ -651,20 +740,21 @@ mod tests {
             self.events.lock().unwrap().push(Event::Run(commands));
         }
 
-        async fn add_history(&mut self, fields: &[String]) {
+        async fn add_history(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
+            self.history_hosts.push(hosts.clone());
             self.events
                 .lock()
                 .unwrap()
                 .push(Event::AddHistory(fields.to_vec()));
         }
 
-        fn last_output(&self, _hostname: &str) -> Option<HostOutput> {
+        fn last_output(&self, hostname: &str) -> Option<HostOutput> {
             if self.missing_output {
                 return None;
             }
-            // The tests below assert on the Check event log, not the output
-            // snapshot, so an empty snapshot is enough here.
-            Some(HostOutput::default())
+            // Unscripted hosts answer an empty snapshot: most tests below
+            // assert on the Check event log, not the output.
+            Some(self.outputs.get(hostname).cloned().unwrap_or_default())
         }
 
         async fn reboot(&mut self, reboot: HostCommandMap) -> RebootReport {
@@ -732,6 +822,7 @@ mod tests {
             hostname: hostname.to_owned(),
             transactional,
             doer,
+            enabled: true,
             check,
         }
     }
@@ -1161,6 +1252,7 @@ mod tests {
             hostname: "h1".to_owned(),
             transactional: true,
             doer: Doer::new("in $packages", "systemctl reboot"),
+            enabled: true,
             check,
         }];
         let mut group = MockGroup::new(Ok(plans)).with_missing_output();
@@ -1265,5 +1357,128 @@ mod tests {
             .expect("a clean run succeeds");
 
         assert_eq!(group.roles(), vec!["uninstaller".to_owned()]);
+    }
+
+    // --- run(): the removal guard -------------------------------------------
+
+    /// A complete `zypper -x` dry-run stream whose summary removes `names`.
+    fn dry_run_removing(names: &[&str]) -> String {
+        let solvables: String = names
+            .iter()
+            .map(|n| format!("<solvable type=\"package\" name=\"{n}\"/>\n"))
+            .collect();
+        format!(
+            "<?xml version='1.0'?>\n<stream>\n<install-summary>\n<to-remove>\n{solvables}\
+             </to-remove>\n</install-summary>\n</stream>\n"
+        )
+    }
+
+    fn guarded_doer() -> Doer {
+        Doer::new("rm $packages", "systemctl reboot").with_probe(Some("dry-rm $packages".into()))
+    }
+
+    #[tokio::test]
+    async fn a_refused_host_runs_nothing_past_its_dry_run() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![
+            plan_with_recording_check("h1", true, guarded_doer(), log.clone()),
+            plan_with_recording_check("h2", true, guarded_doer(), log.clone()),
+        ];
+        let mut group = MockGroup::with_event_log(Ok(plans), log)
+            .with_output("h1", &dry_run_removing(&["libfoo", "zypper"]), 0)
+            .with_output("h2", &dry_run_removing(&["libfoo", "libfoo-devel"]), 0);
+
+        let report = Operation::uninstall(strs(&["libfoo"]))
+            .run(&mut group)
+            .await
+            .expect("the run started");
+
+        let pair = |h: &str, c: &str| (h.to_owned(), c.to_owned());
+        assert_eq!(
+            group.events(),
+            vec![
+                Event::UpdateLock,
+                Event::Run(vec![
+                    pair("h1", "dry-rm libfoo"),
+                    pair("h2", "dry-rm libfoo")
+                ]),
+                Event::Run(vec![pair("h2", "rm libfoo")]),
+                Event::AddHistory(strs(&["uninstall", "libfoo"])),
+                Event::Check("h2".to_owned()),
+                Event::Reboot(vec![pair("h2", "systemctl reboot")]),
+                Event::Unlock,
+            ]
+        );
+        assert_eq!(group.history_hosts, vec![BTreeSet::from(["h2".to_owned()])]);
+        assert!(
+            report.dry_runs["h1"]
+                .as_ref()
+                .unwrap_err()
+                .contains("zypper")
+        );
+        assert_eq!(report.dry_runs["h2"], Ok(strs(&["libfoo", "libfoo-devel"])));
+    }
+
+    #[tokio::test]
+    async fn allow_removal_runs_no_dry_run() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check("h1", false, guarded_doer(), sink)];
+        let mut group =
+            MockGroup::new(Ok(plans)).with_output("h1", &dry_run_removing(&["zypper"]), 0);
+
+        let report = Operation::uninstall(strs(&["libfoo"]))
+            .with_allow_removal(true)
+            .run(&mut group)
+            .await
+            .expect("the run started");
+
+        let runs: Vec<Event> = group
+            .events()
+            .into_iter()
+            .filter(|e| matches!(e, Event::Run(_)))
+            .collect();
+        assert_eq!(
+            runs,
+            vec![Event::Run(vec![("h1".into(), "rm libfoo".into())])]
+        );
+        assert!(report.dry_runs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_disabled_host_or_one_without_a_dry_run_is_not_probed() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let mut disabled = plan_with_recording_check("h1", false, guarded_doer(), sink.clone());
+        disabled.enabled = false;
+        let plans = vec![
+            disabled,
+            plan_with_recording_check("h2", false, Doer::new("rm $packages", "r"), sink.clone()),
+            plan_with_recording_check("h3", false, guarded_doer(), sink),
+        ];
+        let mut group =
+            MockGroup::new(Ok(plans)).with_output("h3", &dry_run_removing(&["libfoo"]), 0);
+
+        let report = Operation::install(strs(&["libfoo"]))
+            .run(&mut group)
+            .await
+            .expect("the run started");
+
+        let runs: Vec<Event> = group
+            .events()
+            .into_iter()
+            .filter(|e| matches!(e, Event::Run(_)))
+            .collect();
+        assert_eq!(
+            runs[0],
+            Event::Run(vec![("h3".into(), "dry-rm libfoo".into())])
+        );
+        assert_eq!(
+            runs[1],
+            Event::Run(vec![
+                ("h1".into(), "rm libfoo".into()),
+                ("h2".into(), "rm libfoo".into()),
+                ("h3".into(), "rm libfoo".into()),
+            ])
+        );
+        assert_eq!(report.dry_runs.keys().collect::<Vec<_>>(), vec!["h3"]);
     }
 }

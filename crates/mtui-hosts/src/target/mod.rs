@@ -21,6 +21,7 @@ pub mod locks;
 pub mod operation;
 pub mod package_querier;
 pub mod parsers;
+pub mod removal;
 pub mod repo_manager;
 pub mod spinner;
 #[cfg(test)]

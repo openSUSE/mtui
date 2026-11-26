@@ -233,6 +233,12 @@ impl WorkflowRegistry {
         Self { force, testing }
     }
 
+    /// The removal guard's dry run of `role`'s command for
+    /// `(release, transactional)`, if it has one.
+    pub(crate) fn dry_run(&self, role: Role, release: &str, transactional: bool) -> Option<String> {
+        actions::dry_run::dry_run(role, release, transactional, self.force)
+    }
+
     /// Resolves the action command set for `role` at `(release, transactional)`.
     ///
     /// # Errors
@@ -307,7 +313,8 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
             // Only read back for a transactional host, which is exactly when the
             // table carries a reboot.
             commands.reboot_template().unwrap_or_default(),
-        ))
+        )
+        .with_probe(self.dry_run(role, release, transactional)))
     }
 
     fn check(&self, role: &str, release: &str, transactional: bool) -> mtui_hosts::Check {
@@ -701,14 +708,16 @@ mod tests {
         let expected_install = Doer::new(
             install_commands.command_template(),
             install_commands.reboot_template().unwrap_or_default(),
-        );
+        )
+        .with_probe(reg.dry_run(Role::Install, "15", false));
         let uninstall_commands = reg
             .action_commands(Role::Uninstall, "15", false)
             .expect("uninstall table entry");
         let expected_uninstall = Doer::new(
             uninstall_commands.command_template(),
             uninstall_commands.reboot_template().unwrap_or_default(),
-        );
+        )
+        .with_probe(reg.dry_run(Role::Uninstall, "15", false));
 
         assert_eq!(format!("{install:?}"), format!("{expected_install:?}"));
         assert_eq!(format!("{uninstall:?}"), format!("{expected_uninstall:?}"));

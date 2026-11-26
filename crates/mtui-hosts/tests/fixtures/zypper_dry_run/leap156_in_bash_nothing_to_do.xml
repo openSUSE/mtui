@@ -1,0 +1,159 @@
+<?xml version='1.0'?>
+<stream>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Update repository of openSUSE Backports.</message>
+<message type="info">  gpgkey=http://download.opensuse.org/update/leap/15.6/backports/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository of openSUSE Backports&apos; metadata" done="1"/>
+<progress id="17" name="Building repository &apos;Update repository of openSUSE Backports&apos; cache"/>
+<progress id="17" name="Building repository &apos;Update repository of openSUSE Backports&apos; cache" value="0"/>
+<progress id="18" name="Building repository &apos;Update repository of openSUSE Backports&apos; cache" value="100"/>
+<progress id="19" name="Building repository &apos;Update repository of openSUSE Backports&apos; cache" value="100"/>
+<progress id="19" name="Building repository &apos;Update repository of openSUSE Backports&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Non-OSS Repository.</message>
+<message type="info">  gpgkey=http://download.opensuse.org/distribution/leap/15.6/repo/non-oss/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<message type="warning">The gpg key signing file &apos;repomd.xml&apos; has expired.</message>
+<gpgkey-info><repository>Non-OSS Repository</repository><key-name>openSUSE Project Signing Key &lt;opensuse@opensuse.org&gt;</key-name><key-fingerprint>AD485664E901B867051AB15F35A2F86E29B700A4</key-fingerprint><key-algorithm>RSA 4096</key-algorithm><key-created time_t="1655733794" text="2022-06-20T14:03:14Z"/><key-expires time_t="1781877794" text="2026-06-19T14:03:14Z"/><rpm-name>gpg-pubkey-29b700a4-62b07e22</rpm-name></gpgkey-info><progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Non-OSS Repository&apos; metadata" done="1"/>
+<progress id="20" name="Building repository &apos;Non-OSS Repository&apos; cache"/>
+<progress id="20" name="Building repository &apos;Non-OSS Repository&apos; cache" value="0"/>
+<progress id="21" name="Building repository &apos;Non-OSS Repository&apos; cache" value="100"/>
+<progress id="22" name="Building repository &apos;Non-OSS Repository&apos; cache" value="100"/>
+<progress id="22" name="Building repository &apos;Non-OSS Repository&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Open H.264 Codec (openSUSE Leap)&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Open H.264 Codec (openSUSE Leap)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Open H.264 Codec (openSUSE Leap)&apos; metadata"/>
+<message type="warning">The gpg key signing file &apos;repomd.xml&apos; has expired.</message>
+<gpgkey-info><repository>Open H.264 Codec (openSUSE Leap)</repository><key-name>openSUSE Project Signing Key &lt;opensuse@opensuse.org&gt;</key-name><key-fingerprint>AD485664E901B867051AB15F35A2F86E29B700A4</key-fingerprint><key-algorithm>RSA 4096</key-algorithm><key-created time_t="1655733794" text="2022-06-20T14:03:14Z"/><key-expires time_t="1781877794" text="2026-06-19T14:03:14Z"/><rpm-name>gpg-pubkey-29b700a4-62b07e22</rpm-name></gpgkey-info><progress id="raw-refresh" name="Retrieving repository &apos;Open H.264 Codec (openSUSE Leap)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Open H.264 Codec (openSUSE Leap)&apos; metadata" done="1"/>
+<progress id="23" name="Building repository &apos;Open H.264 Codec (openSUSE Leap)&apos; cache"/>
+<progress id="23" name="Building repository &apos;Open H.264 Codec (openSUSE Leap)&apos; cache" value="0"/>
+<progress id="24" name="Building repository &apos;Open H.264 Codec (openSUSE Leap)&apos; cache" value="100"/>
+<progress id="25" name="Building repository &apos;Open H.264 Codec (openSUSE Leap)&apos; cache" value="100"/>
+<progress id="25" name="Building repository &apos;Open H.264 Codec (openSUSE Leap)&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Main Repository.</message>
+<message type="info">  gpgkey=http://download.opensuse.org/distribution/leap/15.6/repo/oss/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<message type="warning">The gpg key signing file &apos;repomd.xml&apos; has expired.</message>
+<gpgkey-info><repository>Main Repository</repository><key-name>openSUSE Project Signing Key &lt;opensuse@opensuse.org&gt;</key-name><key-fingerprint>AD485664E901B867051AB15F35A2F86E29B700A4</key-fingerprint><key-algorithm>RSA 4096</key-algorithm><key-created time_t="1655733794" text="2022-06-20T14:03:14Z"/><key-expires time_t="1781877794" text="2026-06-19T14:03:14Z"/><rpm-name>gpg-pubkey-29b700a4-62b07e22</rpm-name></gpgkey-info><progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Repository&apos; metadata" done="1"/>
+<progress id="26" name="Building repository &apos;Main Repository&apos; cache"/>
+<progress id="26" name="Building repository &apos;Main Repository&apos; cache" value="0"/>
+<progress id="27" name="Building repository &apos;Main Repository&apos; cache" value="100"/>
+<progress id="28" name="Building repository &apos;Main Repository&apos; cache" value="100"/>
+<progress id="28" name="Building repository &apos;Main Repository&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Update repository with updates from SUSE Linux Enterprise 15.</message>
+<message type="info">  gpgkey=http://download.opensuse.org/update/leap/15.6/sle/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; metadata" done="1"/>
+<progress id="29" name="Building repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; cache"/>
+<progress id="29" name="Building repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; cache" value="0"/>
+<progress id="30" name="Building repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; cache" value="100"/>
+<progress id="31" name="Building repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; cache" value="100"/>
+<progress id="31" name="Building repository &apos;Update repository with updates from SUSE Linux Enterprise 15&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Main Update Repository.</message>
+<message type="info">  gpgkey=http://download.opensuse.org/update/leap/15.6/oss/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Main Update Repository&apos; metadata" done="1"/>
+<progress id="32" name="Building repository &apos;Main Update Repository&apos; cache"/>
+<progress id="32" name="Building repository &apos;Main Update Repository&apos; cache" value="0"/>
+<progress id="33" name="Building repository &apos;Main Update Repository&apos; cache" value="100"/>
+<progress id="34" name="Building repository &apos;Main Update Repository&apos; cache" value="100"/>
+<progress id="34" name="Building repository &apos;Main Update Repository&apos; cache" done="1"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata" value="0"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<message type="info">Looking for gpg keys in repository Update Repository (Non-Oss).</message>
+<message type="info">  gpgkey=http://download.opensuse.org/update/leap/15.6/non-oss/repodata/repomd.xml.key</message>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata"/>
+<progress id="raw-refresh" name="Retrieving repository &apos;Update Repository (Non-Oss)&apos; metadata" done="1"/>
+<progress id="35" name="Building repository &apos;Update Repository (Non-Oss)&apos; cache"/>
+<progress id="35" name="Building repository &apos;Update Repository (Non-Oss)&apos; cache" value="0"/>
+<progress id="36" name="Building repository &apos;Update Repository (Non-Oss)&apos; cache" value="100"/>
+<progress id="37" name="Building repository &apos;Update Repository (Non-Oss)&apos; cache" value="100"/>
+<progress id="37" name="Building repository &apos;Update Repository (Non-Oss)&apos; cache" done="1"/>
+<message type="info">Loading repository data...</message>
+<message type="warning">Repository &apos;Update repository of openSUSE Backports&apos; metadata expired since 2026-07-10 11:19:15 UTC.</message>
+<message type="warning">Repository &apos;Main Update Repository&apos; metadata expired since 2026-10-13 22:33:04 UTC.</message>
+<message type="info">    Warning: Repository metadata expired: Check if &apos;autorefresh&apos; is turned on (zypper lr), otherwise
+    manually refresh the repository (zypper ref). If this does not solve the issue, it could be that
+    you are using a broken mirror or the server has actually discontinued to support the repository.</message>
+<message type="info">Reading installed packages...</message>
+<message type="info">&apos;bash&apos; is already installed.</message>
+<message type="info">No update candidate for &apos;bash-4.4-150400.27.6.1.aarch64&apos;. The highest available version is already installed.</message>
+<message type="info">Resolving package dependencies...</message>
+<install-summary download-size="0" space-usage-diff="0" space-usage-installed="0" space-usage-removed="0" packages-to-change="0" need-restart="0" need-reboot="0">
+</install-summary>
+<message type="info">Nothing to do.</message>
+</stream>

@@ -194,7 +194,12 @@ use mtui_types::system::{System, SystemProduct};
 /// (so `install` ran nothing) and made `perform_uninstall` look correct while
 /// asserting an *install* command.
 fn production_sles_group() -> (HostsGroup, MockConnection) {
-    let conn = MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1));
+    production_sles_group_on(
+        MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1)),
+    )
+}
+
+fn production_sles_group_on(conn: MockConnection) -> (HostsGroup, MockConnection) {
     let handle = conn.clone();
     let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
     t.set_system(
@@ -214,7 +219,7 @@ async fn perform_install_runs_a_command_on_a_production_built_group() {
     let (mut group, handle) = production_sles_group();
 
     let res = r
-        .perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+        .perform_install(&mut group, &["pkg-a".to_owned()], true, &mut Vec::new())
         .await;
 
     assert_eq!(
@@ -234,6 +239,7 @@ async fn perform_install_drives_installer_doer() {
         .perform_install(
             &mut group,
             &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            true,
             &mut Vec::new(),
         )
         .await;
@@ -251,12 +257,59 @@ async fn perform_uninstall_drives_uninstaller_doer() {
     let (mut group, handle) = production_sles_group();
 
     let res = r
-        .perform_uninstall(&mut group, &["pkg".to_owned()], &mut Vec::new())
+        .perform_uninstall(&mut group, &["pkg".to_owned()], true, &mut Vec::new())
         .await;
     assert!(res.is_ok(), "a clean uninstall returns Ok: {res:?}");
 
     // The *uninstaller* table, not the installer: `rm`, not `in`.
     assert_eq!(handle.commands(), vec!["zypper -n rm pkg".to_owned()]);
+}
+
+/// A `zypper -x` dry run whose summary removes `names`.
+fn dry_run_removing(names: &[&str]) -> CommandLog {
+    let solvables: String = names
+        .iter()
+        .map(|n| format!("<solvable type=\"package\" name=\"{n}\"/>\n"))
+        .collect();
+    let xml = format!(
+        "<?xml version='1.0'?>\n<stream>\n<install-summary>\n<to-remove>\n{solvables}\
+         </to-remove>\n</install-summary>\n</stream>\n"
+    );
+    CommandLog::new("", xml, "", 0, 1)
+}
+
+#[tokio::test]
+async fn perform_uninstall_resolves_a_dry_run_before_removing() {
+    let r = SlReport::new(config());
+    let (mut group, handle) = production_sles_group_on(
+        MockConnection::new("h1")
+            .with_default(CommandLog::new("", "done", "", 0, 1))
+            .with_response(
+                "zypper -x -n rm --dry-run pkg",
+                dry_run_removing(&["pkg", "pkg-devel"]),
+            ),
+    );
+    let mut diagnostics = Vec::new();
+
+    let res = r
+        .perform_uninstall(&mut group, &["pkg".to_owned()], false, &mut diagnostics)
+        .await;
+
+    assert!(res.is_ok(), "{res:?}");
+    assert_eq!(
+        handle.commands(),
+        vec![
+            "zypper -x -n rm --dry-run pkg".to_owned(),
+            "zypper -n rm pkg".to_owned()
+        ]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|d| d.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["h1: the transaction also removes pkg-devel"]
+    );
 }
 
 // --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------

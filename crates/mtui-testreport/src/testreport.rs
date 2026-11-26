@@ -527,16 +527,20 @@ pub trait TestReport {
     /// the reboot gap are degradation, not failure: each is pushed onto
     /// `diagnostics`. A report with no [`as_set_repo`](Self::as_set_repo) (the
     /// null object) is a no-op `Ok(())`; so is every `perform_*` default below.
+    ///
+    /// Unless `allow_removal`, each host first resolves the transaction with a
+    /// dry run and refuses it where a protected package would be removed.
     async fn perform_install(
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        allow_removal: bool,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         if self.as_set_repo().is_none() {
             return Ok(());
         }
-        update_flow::perform_install(targets, packages, diagnostics).await
+        update_flow::perform_install(targets, packages, allow_removal, diagnostics).await
     }
 
     /// Uninstalls `packages` from every host in `targets`.
@@ -547,12 +551,13 @@ pub trait TestReport {
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        allow_removal: bool,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         if self.as_set_repo().is_none() {
             return Ok(());
         }
-        update_flow::perform_uninstall(targets, packages, diagnostics).await
+        update_flow::perform_uninstall(targets, packages, allow_removal, diagnostics).await
     }
 
     /// Prepares `packages` on every host.
@@ -562,10 +567,12 @@ pub trait TestReport {
     /// transaction, run the preparer check, reboot transactional hosts.
     /// `testing` selects the repo-`add` vs repo-`remove` path and the testing
     /// preparer variant; `force` toggles `--force-resolution`; `installed_only`
-    /// only touches already-installed packages.
+    /// only touches already-installed packages; `allow_removal` skips the
+    /// removal guard, as for [`perform_install`](Self::perform_install).
     ///
     /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
     /// fan-out, a per-host prepare-command failure, or a prepare check failure.
+    #[allow(clippy::too_many_arguments)]
     async fn perform_prepare(
         &self,
         targets: &mut HostsGroup,
@@ -573,6 +580,7 @@ pub trait TestReport {
         force: bool,
         testing: bool,
         installed_only: bool,
+        allow_removal: bool,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let Some(report) = self.as_set_repo() else {
@@ -585,6 +593,7 @@ pub trait TestReport {
             force,
             testing,
             installed_only,
+            allow_removal,
             diagnostics,
         )
         .await
@@ -595,7 +604,8 @@ pub trait TestReport {
     /// Under the operation lock: remove the issue repos, resolve each package's
     /// available downgrade version, downgrade (per-package for non-transactional
     /// hosts, one transaction for transactional ones), run the check, reboot
-    /// transactional hosts.
+    /// transactional hosts. `allow_removal` skips the removal guard, as for
+    /// [`perform_install`](Self::perform_install).
     ///
     /// Returns `Err` on a missing downgrader, lock contention, or a per-host
     /// downgrade check failure.
@@ -603,13 +613,22 @@ pub trait TestReport {
         &self,
         targets: &mut HostsGroup,
         packages: &[String],
+        allow_removal: bool,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let Some(report) = self.as_set_repo() else {
             return Ok(());
         };
         let id = self.rrid().map(ToString::to_string);
-        update_flow::perform_downgrade(targets, report, packages, id.as_deref(), diagnostics).await
+        update_flow::perform_downgrade(
+            targets,
+            report,
+            packages,
+            id.as_deref(),
+            allow_removal,
+            diagnostics,
+        )
+        .await
     }
 
     /// Updates the hosts with this report's maintenance update.

@@ -1603,6 +1603,7 @@ impl OperationGroup for HostsGroup {
                 hostname: target.hostname().to_owned(),
                 transactional,
                 doer,
+                enabled: target.state() == mtui_types::enums::TargetState::Enabled,
                 check,
             });
         }
@@ -1618,8 +1619,8 @@ impl OperationGroup for HostsGroup {
         HostsGroup::run(self, Command::PerHost(map)).await;
     }
 
-    async fn add_history(&mut self, fields: &[String]) {
-        HostsGroup::add_history(self, fields, None).await;
+    async fn add_history(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
+        HostsGroup::add_history(self, fields, Some(hosts)).await;
     }
 
     fn last_output(&self, hostname: &str) -> Option<super::operation::HostOutput> {

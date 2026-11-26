@@ -9,6 +9,7 @@
 //! [`template`]: crate::update_workflow::template
 
 pub(crate) mod downgrade;
+pub(crate) mod dry_run;
 pub(crate) mod install;
 pub(crate) mod prepare;
 pub(crate) mod uninstall;

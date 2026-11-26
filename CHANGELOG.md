@@ -8,6 +8,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `install`, `uninstall`, `prepare` and `downgrade` now resolve each host's
+  transaction with a `zypper --dry-run` before committing it, and refuse it on
+  a host where the solver would remove a protected package the command did not
+  name (the kernel, `systemd`, `glibc`, `rpm`, `zypper`/`libzypp`, `openssh`,
+  `grub2`, `dracut`, `bash`, `pam`, …), or where the dry run fails or cannot be
+  read. A refused host runs nothing further and fails the command by name; the
+  other hosts carry on. Other removals are reported per host. The new
+  `--allow-removal` flag commits the transaction anyway. YUM hosts, `run`, and
+  the prepare and rollback inside `update` are not checked; see "Removal
+  guard" in the docs (#873). **MCP schema note:** the four tools gain an
+  optional boolean `allow_removal`.
+
+### Changed
+
+- `run`'s description (its help and its MCP tool description) now says that
+  package transactions belong in `install`/`uninstall`, where the removal check
+  applies (#873).
+
 ### Removed
 
 - MCP: the tool-call keys that 26.4 dropped from the schemas are now refused
