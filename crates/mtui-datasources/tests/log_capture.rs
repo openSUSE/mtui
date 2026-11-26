@@ -1,7 +1,8 @@
-//! Shared tracing-capture helper for the integration suite.
+//! Shared tracing-capture helper for the integration suite and, through a
+//! `#[path]` include in `lib.rs`, the unit tests.
 //!
-//! One copy for the whole `it` binary, because the subscriber it installs is
-//! **global** and `set_global_default` succeeds only once per process.
+//! One copy per test binary, because the subscriber it installs is **global**
+//! and `set_global_default` succeeds only once per process.
 //!
 //! ## Why global rather than `tracing::subscriber::set_default`
 //!
@@ -75,6 +76,20 @@ where
     install();
     SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
     f().await;
+    SINK.with(|s| s.borrow_mut().take())
+        .unwrap_or_default()
+        .join("\n")
+}
+
+/// [`capture_logs`] for synchronous code.
+#[allow(
+    dead_code,
+    reason = "used by the integration suite, not the unit tests"
+)]
+pub fn capture_logs_sync(f: impl FnOnce()) -> String {
+    install();
+    SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+    f();
     SINK.with(|s| s.borrow_mut().take())
         .unwrap_or_default()
         .join("\n")

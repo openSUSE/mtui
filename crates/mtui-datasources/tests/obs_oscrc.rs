@@ -18,6 +18,9 @@ use mtui_datasources::obs::oscrc::{self, ObsCredentials};
 use serial_test::serial;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use crate::log_capture::capture_logs_sync;
+
 const API: &str = "https://api.suse.de";
 
 /// Scoped isolation of the oscrc-discovery environment.
@@ -505,53 +508,11 @@ fn trailing_slash_section_header_matches() {
     assert_eq!(creds.user, "bob");
 }
 
-/// Run `f` under a scoped tracing subscriber that captures each event's message
-/// **synchronously** into an in-memory buffer, returning the joined records.
-///
-/// Appending the rendered message the instant the event fires — rather than
-/// through an `fmt` subscriber's `MakeWriter` — keeps the buffer independent of
-/// writer flush ordering under scheduler pressure, which is what made the
-/// previous `fmt`-based capture flake. The subscriber is a thread-local default;
-/// every caller is `#[serial(osc_config_env)]`, so nothing races it.
-#[cfg(unix)]
-fn capture_logs(f: impl FnOnce()) -> String {
-    use std::fmt::Write as _;
-    use std::sync::{Arc, Mutex};
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-    use tracing_subscriber::registry::Registry;
-
-    #[derive(Clone)]
-    struct CaptureLayer(Arc<Mutex<Vec<String>>>);
-
-    struct MessageVisitor(String);
-    impl Visit for MessageVisitor {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                let _ = write!(self.0, "{value:?}");
-            }
-        }
-    }
-
-    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            let mut visitor = MessageVisitor(String::new());
-            event.record(&mut visitor);
-            self.0.lock().unwrap().push(visitor.0);
-        }
-    }
-
-    let records = Arc::new(Mutex::new(Vec::new()));
-    let sub = Registry::default().with(CaptureLayer(records.clone()));
-    tracing::subscriber::with_default(sub, f);
-    records.lock().unwrap().join("\n")
-}
-
 /// Read `read_credentials` under a scoped tracing subscriber, returning the
 /// captured warning output so a permission warning can be asserted.
 #[cfg(unix)]
 fn read_capturing_logs() -> String {
-    capture_logs(|| {
+    capture_logs_sync(|| {
         let _ = read();
     })
 }
@@ -680,7 +641,7 @@ fn discovery_warns_when_both_locations_exist() {
     fs::write(&home, "").unwrap();
 
     let mut result = None;
-    let logs = capture_logs(|| result = Some(oscrc::default_conffile()));
+    let logs = capture_logs_sync(|| result = Some(oscrc::default_conffile()));
 
     assert_eq!(result.unwrap(), xdg);
     assert!(

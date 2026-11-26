@@ -652,6 +652,7 @@ mod tests {
     use super::document::MAX_DETAIL_LEN;
     use super::*;
     use crate::http::VerifyPolicy;
+    use crate::log_capture::capture_logs;
     use wiremock::matchers::{body_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -679,73 +680,6 @@ mod tests {
     fn unreachable_client() -> TeReGen {
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         TeReGen::with_client(http, CLOSED_PORT)
-    }
-
-    thread_local! {
-        /// The active capture buffer for this thread, if any. Events on a
-        /// thread with no active capture are dropped.
-        static SINK: std::cell::RefCell<Option<Vec<String>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-
-    /// Install — once per test binary — a permissive **global** subscriber that
-    /// forwards every event into the calling thread's [`SINK`].
-    ///
-    /// Global rather than `tracing::subscriber::set_default`'s thread-local
-    /// because `tracing` caches callsite *interest* process-wide: a callsite
-    /// first reached from a thread with no subscriber is cached
-    /// `Interest::never()` and stays silent for every later capture, which made
-    /// `regenerate_none_when_unreachable` flake ~30% of runs. Always installing
-    /// pins interest at `always`; scoping moves to the thread-local sink.
-    /// Canonical copy of the pattern: `tests/log_capture.rs`.
-    fn install_capture_subscriber() {
-        use std::fmt::Write as _;
-        use std::sync::OnceLock;
-        use tracing::field::{Field, Visit};
-        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-        use tracing_subscriber::registry::Registry;
-
-        struct CaptureLayer;
-        struct MessageVisitor(String);
-        impl Visit for MessageVisitor {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    let _ = write!(self.0, "{value:?}");
-                }
-            }
-        }
-        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-                SINK.with(|s| {
-                    if let Some(buf) = s.borrow_mut().as_mut() {
-                        let mut v = MessageVisitor(String::new());
-                        event.record(&mut v);
-                        buf.push(v.0);
-                    }
-                });
-            }
-        }
-
-        static ONCE: OnceLock<()> = OnceLock::new();
-        ONCE.get_or_init(|| {
-            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
-        });
-    }
-
-    /// Capture the `message` field of every tracing event emitted by `f` on
-    /// this thread. See [`install_capture_subscriber`] for why the subscriber
-    /// is global and only the sink is scoped.
-    async fn capture_logs<F, Fut>(f: F) -> String
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = ()>,
-    {
-        install_capture_subscriber();
-        SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
-        f().await;
-        SINK.with(|s| s.borrow_mut().take())
-            .unwrap_or_default()
-            .join("\n")
     }
 
     /// The `TeReGen GET … failed` line matching `needle`, or a panic naming the
