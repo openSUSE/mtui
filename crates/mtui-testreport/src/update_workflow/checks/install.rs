@@ -79,7 +79,7 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// The install check for `(release, transactional)`, or `None` for an unknown
 /// key.
 ///
-/// Shared with `uninstall` (see [`CheckProvider`](crate::update_workflow::CheckProvider)),
+/// Shared with `uninstall` (see [`WorkflowRegistry::check_fn`](crate::update_workflow::WorkflowRegistry)),
 /// so every reason here is worded role-neutrally.
 #[must_use]
 pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {

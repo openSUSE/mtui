@@ -29,7 +29,7 @@ use tracing::{debug, error, info, warn};
 use crate::update_workflow::actions::ActionCommands;
 use crate::update_workflow::actions::downgrade::TRANSACTIONAL_ROLLBACK;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic};
-use crate::update_workflow::{CheckProvider, DoerProvider, Role, UpdateError, WorkflowRegistry};
+use crate::update_workflow::{Role, UpdateError, WorkflowRegistry};
 
 /// A per-host command map paired with the transactional-host reboot map, as
 /// built by [`build_update_maps`] (`(commands, reboot)`).
@@ -550,7 +550,7 @@ fn resolve_doer(
     release: &str,
     transactional: bool,
 ) -> Option<ActionCommands> {
-    match registry.doer(role, release, transactional) {
+    match registry.action_commands(role, release, transactional) {
         Ok(cmds) => Some(cmds),
         Err(e) => {
             error!(role = ?role, release = %release, transactional, error = %e, "missing doer");
@@ -644,7 +644,7 @@ fn run_checks_where(
         let Some((release, transactional)) = target.workflow_key() else {
             continue;
         };
-        let Some(check): Option<CheckFn> = registry.check(role, &release, transactional) else {
+        let Some(check): Option<CheckFn> = registry.check_fn(role, &release, transactional) else {
             continue;
         };
         let res = check(CheckArgs {
@@ -894,7 +894,7 @@ pub async fn perform_install(
 /// Uninstalls `packages` from every host in `targets`.
 ///
 /// See [`perform_install`]; only the role and the summary label differ.
-/// Uninstall shares the *install* check table ([`CheckProvider`]) — a removal
+/// Uninstall shares the *install* check table ([`WorkflowRegistry::check_fn`]) — a removal
 /// is judged by the same package-manager outcomes.
 ///
 /// # Errors
@@ -3341,7 +3341,9 @@ fn host_has_doer(registry: &WorkflowRegistry, role: Role, target: &mtui_hosts::T
     target
         .workflow_key()
         .is_some_and(|(release, transactional)| {
-            registry.doer(role, &release, transactional).is_ok()
+            registry
+                .action_commands(role, &release, transactional)
+                .is_ok()
         })
 }
 
@@ -3427,7 +3429,7 @@ fn build_update_maps(
         };
         let (release, transactional) = target.workflow_key().ok_or_else(unresolved)?;
         let doer = registry
-            .doer(Role::Update, &release, transactional)
+            .action_commands(Role::Update, &release, transactional)
             .map_err(|_| unresolved())?;
         let vars: HashMap<&str, &str> = [("repa", repa), ("packages", packages)]
             .into_iter()
@@ -3617,11 +3619,11 @@ mod tests {
                 let key = format!("({release:?}, {state:?})");
                 let tables = roles
                     .iter()
-                    .filter(|&&role| reg.doer(role, &release, transactional).is_ok())
+                    .filter(|&&role| reg.action_commands(role, &release, transactional).is_ok())
                     .count()
                     + check_roles
                         .iter()
-                        .filter(|&&role| reg.check(role, &release, transactional).is_some())
+                        .filter(|&&role| reg.check_fn(role, &release, transactional).is_some())
                         .count();
                 assert!(
                     tables == 0 || tables == roles.len() + check_roles.len(),
@@ -5946,7 +5948,7 @@ mod tests {
     /// The rendered `("slmicro", true)` patch command for `pkg-a`.
     fn slmicro_patch_command() -> String {
         WorkflowRegistry::default()
-            .doer(Role::Update, "slmicro", true)
+            .action_commands(Role::Update, "slmicro", true)
             .expect("slmicro has an updater")
             .render_command(
                 &[
@@ -8504,7 +8506,7 @@ mod tests {
             // The verdict below is only the check's if there is one.
             assert!(
                 WorkflowRegistry::default()
-                    .check(Role::Install, &key.0, key.1)
+                    .check_fn(Role::Install, &key.0, key.1)
                     .is_some(),
                 "{product}: the install check table must cover this key"
             );
@@ -9197,7 +9199,7 @@ mod tests {
     /// so the two cannot drift apart into a fixture that scripts nothing.
     fn downgrade_list_command(packages: &[String]) -> String {
         WorkflowRegistry::default()
-            .doer(Role::Downgrade, "15", false)
+            .action_commands(Role::Downgrade, "15", false)
             .expect("zypper has a downgrader")
             .render_list_command(
                 &[("packages", quote_args(packages).as_str())]
@@ -9707,7 +9709,7 @@ mod tests {
     /// `with_default` would put it on the probes too, a state no run produces.
     fn slmicro_target_with_lost_update(hostname: &str) -> (Target, MockConnection) {
         let patch = WorkflowRegistry::default()
-            .doer(Role::Update, "slmicro", true)
+            .action_commands(Role::Update, "slmicro", true)
             .expect("slmicro has an updater")
             .render_command(
                 &[
@@ -11241,7 +11243,7 @@ mod tests {
     /// code rather than every command's.
     fn zypper_patch_command(packages: &[String]) -> String {
         WorkflowRegistry::default()
-            .doer(Role::Update, "15", false)
+            .action_commands(Role::Update, "15", false)
             .expect("zypper has an updater")
             .render_command(
                 &[
