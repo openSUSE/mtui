@@ -684,7 +684,7 @@ mod tests {
     /// A SMELT-backed read gives up after exactly [`SMELT_BACKED_TIMEOUT`]: the
     /// patient read timeout is set longer here, so only the request's own
     /// timeout can end the wait at that mark.
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn smelt_backed_reads_give_up_after_the_smelt_backed_timeout() {
         // Unpooled: virtual time can give up before the request lands, and a
         // pooled server would hand it to the next test's mock.
@@ -700,6 +700,10 @@ mod tests {
             Duration::from_secs(600),
         )
         .unwrap();
+        // Connect in real time first: under a paused clock the connect timeout
+        // can fire before a loopback connect completes.
+        http.inner().get(server.uri()).send().await.unwrap();
+        tokio::time::pause();
         let c = TeReGen::with_client(http, &server.uri());
         let start = tokio::time::Instant::now();
         let err = c.checkers(RRID).await.unwrap_err();
