@@ -431,29 +431,12 @@ enum PrepareFailure {
     Cancelled(UpdateError),
 }
 
-/// Resolves a host's `(release, transactional)` key; see
-/// [`mtui_hosts::Target::workflow_key`].
-///
-/// Returns `None` when the system has no release (an unknown/unparsed host) or
-/// its root mode is undecided; the callers treat a `None` as "no doer for this
-/// host".
-fn host_key(target: &mtui_hosts::Target) -> Option<(String, bool)> {
-    target.workflow_key()
-}
-
 /// One host's label for missing-doer errors: `host (Product version,
 /// transactional|non-transactional)`. Both halves of the
 /// `(release, transactional)` key are always spelled out, so the message never
 /// asks the operator to infer the key.
 fn unresolved_host_label(target: &mtui_hosts::Target) -> String {
-    format!("{} ({})", target.hostname(), unresolved_key(target))
-}
-
-/// [`unresolved_host_label`] without the host: `Product version,
-/// transactional|non-transactional`, or the undecided root mode that left the
-/// host without a key.
-fn unresolved_key(target: &mtui_hosts::Target) -> String {
-    HostProductKey::of(target).to_string()
+    format!("{} ({})", target.hostname(), HostProductKey::of(target))
 }
 
 /// Whether `name` is no product at all: empty, or the `unknown` sentinel of a
@@ -576,6 +559,19 @@ fn resolve_doer(
     }
 }
 
+/// One host's [`ActionCommands`] for `role`: `None` when the host has no
+/// `(release, transactional)` key (an unparsed system, or an undecided root
+/// mode; see [`mtui_hosts::Target::workflow_key`]) or no doer for it. A missing
+/// doer is logged by [`resolve_doer`]; a missing key is the caller's to report.
+fn doer_for(
+    registry: &WorkflowRegistry,
+    role: Role,
+    target: &mtui_hosts::Target,
+) -> Option<ActionCommands> {
+    let (release, transactional) = target.workflow_key()?;
+    resolve_doer(registry, role, &release, transactional)
+}
+
 /// Builds the transactional-only reboot map for `role` over `selected`
 /// (`None` is the whole group).
 ///
@@ -602,13 +598,9 @@ fn build_reboot_map<'t>(
         if selected.is_some_and(|s| !s.contains(target.hostname())) {
             continue;
         }
-        let Some((release, transactional)) = host_key(target) else {
-            // No parsed system: the host cannot be prepared or downgraded,
-            // so name it now rather than failing it key-less downstream.
-            unresolved.push(target);
-            continue;
-        };
-        let Some(doer) = resolve_doer(registry, role, &release, transactional) else {
+        // No parsed system: the host cannot be prepared or downgraded, so name
+        // it now rather than failing it key-less downstream.
+        let Some(doer) = doer_for(registry, role, target) else {
             unresolved.push(target);
             continue;
         };
@@ -649,7 +641,7 @@ fn run_checks_where(
         if !allowed(target.hostname()) {
             continue;
         }
-        let Some((release, transactional)) = host_key(target) else {
+        let Some((release, transactional)) = target.workflow_key() else {
             continue;
         };
         let Some(check): Option<CheckFn> = registry.check(role, &release, transactional) else {
@@ -1287,7 +1279,7 @@ async fn perform_prepare_classified(
                     .into_iter()
                     .map(|t| {
                         UpdateError::new(
-                            format!("missing preparer ({})", unresolved_key(t)),
+                            format!("missing preparer ({})", HostProductKey::of(t)),
                             t.hostname(),
                         )
                     })
@@ -1773,7 +1765,7 @@ fn build_prepare_map(
         if list.is_empty() {
             continue;
         }
-        let Some((release, transactional)) = host_key(target) else {
+        let Some((release, transactional)) = target.workflow_key() else {
             error!(host = %target.hostname(), "prepare: host release key unresolved; no command built");
             continue;
         };
@@ -1906,10 +1898,7 @@ async fn narrow_to_installed(
         if !lists.contains_key(target.hostname()) {
             continue;
         }
-        let Some((release, transactional)) = host_key(target) else {
-            continue;
-        };
-        let Some(doer) = resolve_doer(registry, Role::Prepare, &release, transactional) else {
+        let Some(doer) = doer_for(registry, Role::Prepare, target) else {
             continue;
         };
         if let Ok(Some(cmd)) = doer.render_list_command(&HashMap::new()) {
@@ -2203,11 +2192,7 @@ async fn downgrade_body(
             .targets()
             .filter(|t| hosts.contains(t.hostname()) && !repo_failed.contains_key(t.hostname()))
         {
-            let Some((release, transactional)) = host_key(target) else {
-                continue;
-            };
-            let Some(doer) = resolve_doer(registry, Role::Downgrade, &release, transactional)
-            else {
+            let Some(doer) = doer_for(registry, Role::Downgrade, target) else {
                 continue;
             };
             let vars: HashMap<&str, &str> = [("packages", joined.as_str())].into_iter().collect();
@@ -2315,11 +2300,7 @@ async fn downgrade_body(
             let Some(ver) = versions.get(hn).and_then(|m| m.get(package)) else {
                 continue;
             };
-            let Some((release, transactional)) = host_key(target) else {
-                continue;
-            };
-            let Some(doer) = resolve_doer(registry, Role::Downgrade, &release, transactional)
-            else {
+            let Some(doer) = doer_for(registry, Role::Downgrade, target) else {
                 continue;
             };
             // Both values reach the root downgrade command line; quote each.
@@ -2384,10 +2365,7 @@ async fn downgrade_body(
         let Some(target) = targets.get(hn) else {
             continue;
         };
-        let Some((release, transactional)) = host_key(target) else {
-            continue;
-        };
-        let Some(doer) = resolve_doer(registry, Role::Downgrade, &release, transactional) else {
+        let Some(doer) = doer_for(registry, Role::Downgrade, target) else {
             continue;
         };
         // Each `name=version` spec is quoted as a single argument.
@@ -3352,9 +3330,11 @@ fn reboot_not_taken(failures: &[RebootFailure]) -> Option<String> {
 /// and [`describe_start_failure`], so the three cannot disagree on which
 /// hosts count as unresolvable.
 fn host_has_doer(registry: &WorkflowRegistry, role: Role, target: &mtui_hosts::Target) -> bool {
-    host_key(target).is_some_and(|(release, transactional)| {
-        registry.doer(role, &release, transactional).is_ok()
-    })
+    target
+        .workflow_key()
+        .is_some_and(|(release, transactional)| {
+            registry.doer(role, &release, transactional).is_ok()
+        })
 }
 
 /// Why `target` has no update-workflow command set, or `None` when it has
@@ -3386,14 +3366,8 @@ pub fn missing_command_set(target: &mtui_hosts::Target) -> Option<CommandSetGap>
         .then(|| CommandSetGap::NoCommandSet(HostProductKey::of(target)))
 }
 
-/// Whether `target` resolves to no updater: an unknown release or no doer for
-/// its `(release, transactional)` key. See [`host_has_doer`].
-fn updater_unresolved(target: &mtui_hosts::Target, registry: &WorkflowRegistry) -> bool {
-    !host_has_doer(registry, Role::Update, target)
-}
-
 /// Names of `eligible` hosts with no updater doer, for an early return before
-/// the flow locks anything or touches repos. Shares [`updater_unresolved`]
+/// the flow locks anything or touches repos. Shares [`host_has_doer`]
 /// with [`build_update_maps`]; only command rendering is left to the late
 /// gate. Each entry pairs the hostname (for the error's `host` field) with its
 /// [`unresolved_host_label`] (for the message).
@@ -3405,7 +3379,7 @@ fn missing_updaters(
     targets
         .targets()
         .filter(|t| eligible.contains(t.hostname()))
-        .filter(|t| updater_unresolved(t, registry))
+        .filter(|t| !host_has_doer(registry, Role::Update, t))
         .map(|t| (t.hostname().to_owned(), unresolved_host_label(t)))
         .collect()
 }
@@ -3420,7 +3394,7 @@ fn missing_updaters(
 /// on its behalf would abort the peers it was excluded to spare.
 ///
 /// The early [`missing_updaters`] gate already applied the same
-/// [`updater_unresolved`] rule to the same set, and `render_command` cannot
+/// [`host_has_doer`] rule to the same set, and `render_command` cannot
 /// fail for this role (safe substitution), so the `Err` arms below are
 /// unreachable in production — defense in depth that still names the host
 /// with its key anyway, like the early abort does.
@@ -3443,10 +3417,7 @@ fn build_update_maps(
                 target.hostname(),
             )
         };
-        if updater_unresolved(target, registry) {
-            return Err(unresolved());
-        }
-        let (release, transactional) = host_key(target).ok_or_else(unresolved)?;
+        let (release, transactional) = target.workflow_key().ok_or_else(unresolved)?;
         let doer = registry
             .doer(Role::Update, &release, transactional)
             .map_err(|_| unresolved())?;
@@ -7365,7 +7336,7 @@ mod tests {
     }
 
     /// Builds an enabled *transactional* target with no parsed system, so
-    /// `host_key` resolves nothing and the label reads "unrecognised product".
+    /// `workflow_key` resolves nothing and the label reads "unrecognised product".
     fn unparsed_transactional_target(hostname: &str) -> (Target, MockConnection) {
         let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
@@ -8181,7 +8152,7 @@ mod tests {
         // format the project treats as an interop contract.
         let (good, good_handle) = sles_target("h1", "");
         // h2: enabled, answers commands, but has no parsed system — so
-        // `host_key` resolves nothing and no command is ever built for it.
+        // `workflow_key` resolves nothing and no command is ever built for it.
         let bad_conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
         let bad_handle = bad_conn.clone();
         let bad = Target::with_connection("h2", TargetState::Enabled, Box::new(bad_conn));
@@ -8498,7 +8469,7 @@ mod tests {
                 ),
                 transactional,
             );
-            let key = host_key(&t).expect("resolvable key");
+            let key = t.workflow_key().expect("resolvable key");
             // The verdict below is only the check's if there is one.
             assert!(
                 WorkflowRegistry::default()
@@ -12611,7 +12582,7 @@ mod tests {
     #[tokio::test]
     async fn perform_prepare_fails_a_host_no_command_was_built_for() {
         let (good, good_handle) = slmicro_target("h1", "", 0);
-        // h2: enabled but with no parsed system -> host_key resolves nothing.
+        // h2: enabled but with no parsed system -> workflow_key resolves nothing.
         let bad_conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
         let bad_handle = bad_conn.clone();
         let bad = Target::with_connection("h2", TargetState::Enabled, Box::new(bad_conn));
