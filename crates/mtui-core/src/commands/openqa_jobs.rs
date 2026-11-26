@@ -8,7 +8,10 @@ use mtui_datasources::oqa_search as oqa;
 
 use super::row_budget::{add_window_args, crush, window};
 use crate::command::{Command, Scope};
-use crate::commands::support::{require_update, resolve_dashboard_key, template_completion};
+use crate::commands::support::{
+    openqa_client_err, require_update, resolve_dashboard_key, session_http,
+    session_openqa_transport, template_completion,
+};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -207,17 +210,13 @@ impl Command for OpenQAJobs {
                     .to_owned()
             });
 
-        let http = session
-            .http_client()
-            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
-        let openqa_transport = session
-            .openqa_transport()
-            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
+        let http = session_http(session)?;
+        let openqa_transport = session_openqa_transport(session)?;
         let oqa_client = mtui_datasources::openqa::build_openqa_client_with_transport(
             openqa_transport,
             &url_openqa,
         )
-        .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
+        .map_err(openqa_client_err)?;
 
         // The incident id is the maintenance id, but SLFO's is not an integer
         // ("1.2"), so fall back to the review id there. As `openqa_overview`.

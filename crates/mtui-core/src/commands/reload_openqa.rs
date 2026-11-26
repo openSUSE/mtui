@@ -6,9 +6,10 @@ use mtui_types::Workflow;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{
-    build_auto_openqa, build_incident, build_kernel_openqa, require_update, template_completion,
+    OpenqaCtx, fetch_kernel, refresh_auto, refresh_kernel, require_update,
+    session_openqa_transport, template_completion,
 };
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Reloads information from the openQA instances onto the report's holder
@@ -45,88 +46,44 @@ impl Command for ReloadOpenQA {
         let rrid = require_update(session)?;
         // Snapshotted so no `&Session` borrow crosses an `.await`; it is not
         // `Sync`.
-        let http = session
-            .http_client()
-            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
-        let openqa_transport = session
-            .openqa_transport()
-            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
-        let dashboard_api = session.config.qem_dashboard_api.clone();
-        let openqa_instance = session.config.openqa_instance.clone();
-        let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
+        let ctx = OpenqaCtx::snapshot(session, rrid)?;
+        let openqa_transport = session_openqa_transport(session)?;
         let workflow = session.metadata().workflow();
-        let source = session.metadata().update_source();
-        let pr_url = session.metadata().base().giteapr.clone();
-
-        let incident = build_incident(
-            rrid.clone(),
-            dashboard_api,
-            http.clone(),
-            source,
-            pr_url.as_deref(),
-        )
-        .await;
+        let incident = ctx.incident().await;
 
         if workflow == Workflow::Kernel {
             if session.metadata().openqa().kernel.is_empty() {
                 tracing::info!("Getting data from kernel openQA");
-                for host in [openqa_instance.clone(), openqa_baremetal] {
-                    let oqa = build_kernel_openqa(&incident, &host, openqa_transport.clone())
-                        .map_err(openqa_fetch_err)?
-                        .run()
-                        .await
-                        .map_err(openqa_fetch_err)?;
-                    session.metadata_mut().openqa_mut().kernel.push(oqa);
-                }
+                fetch_kernel(
+                    &ctx,
+                    &incident,
+                    &openqa_transport,
+                    &mut session.metadata_mut().openqa_mut().kernel,
+                )
+                .await?;
             } else {
                 tracing::info!("Refreshing data from kernel openQA");
-                // `KernelOpenQA::run` consumes `self`, so drain-and-rebuild.
-                let stale = std::mem::take(&mut session.metadata_mut().openqa_mut().kernel);
-                let mut refreshed = Vec::with_capacity(stale.len());
-                for oqa in stale {
-                    refreshed.push(oqa.run().await.map_err(openqa_fetch_err)?);
-                }
-                session.metadata_mut().openqa_mut().kernel = refreshed;
+                refresh_kernel(session).await?;
             }
         }
 
         if session.metadata().openqa().auto.is_none() {
             tracing::info!("Getting data from QEM Dashboard");
-            let mut auto = build_auto_openqa(
-                openqa_instance,
-                &incident,
-                rrid,
-                session.config.max_parallel as usize,
-            );
-            auto.run().await.map_err(dashboard_fetch_err)?;
-            session.metadata_mut().openqa_mut().auto = Some(auto);
         } else {
             tracing::info!("Refreshing data from QEM Dashboard");
-            if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
-                auto.run().await.map_err(dashboard_fetch_err)?;
-            }
         }
+        refresh_auto(session, &ctx, &incident).await?;
 
         Ok(())
     }
 }
 
-/// Map a QEM Dashboard fetch failure to a user-facing command error.
-fn dashboard_fetch_err(e: mtui_datasources::QemDashboardError) -> CommandError {
-    CommandError::Other(format!(
-        "could not fetch openQA data from QEM Dashboard: {e}"
-    ))
-}
-
-/// Map an openQA jobs fetch failure to a user-facing command error.
-fn openqa_fetch_err(e: mtui_datasources::OpenQAError) -> CommandError {
-    CommandError::Other(format!("could not fetch openQA data: {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::support::{build_auto_openqa, build_incident};
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::error::CommandError;
 
     #[test]
     fn name_and_fanout_scope() {
@@ -237,5 +194,69 @@ mod tests {
         let args = matches(&ReloadOpenQA, &[]);
         ReloadOpenQA.call(&mut session, &args).await.unwrap();
         assert!(session.metadata().openqa().auto.is_some());
+    }
+
+    async fn mount_empty_jobs(server: &wiremock::MockServer) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/jobs"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"jobs": []})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn kernel_workflow_fetches_both_instances_then_refreshes_them_in_place() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_workflow(Workflow::Kernel);
+        let server = dashboard_server("1").await;
+        mount_empty_jobs(&server).await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        session.config.openqa_instance_baremetal = server.uri();
+
+        let args = matches(&ReloadOpenQA, &[]);
+        ReloadOpenQA.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.metadata().openqa().kernel.len(), 2);
+        ReloadOpenQA.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.metadata().openqa().kernel.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn kernel_fetch_failure_keeps_the_instances_fetched_before_it() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_workflow(Workflow::Kernel);
+        let server = dashboard_server("1").await;
+        mount_empty_jobs(&server).await;
+        let broken = wiremock::MockServer::start().await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        session.config.openqa_instance_baremetal = broken.uri();
+
+        let args = matches(&ReloadOpenQA, &[]);
+        let err = ReloadOpenQA.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.starts_with("could not fetch openQA data: ")),
+            "{err:?}"
+        );
+        assert_eq!(session.metadata().openqa().kernel.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dashboard_failure_names_the_dashboard() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_workflow(Workflow::Auto);
+        let server = wiremock::MockServer::start().await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+
+        let args = matches(&ReloadOpenQA, &[]);
+        let err = ReloadOpenQA.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.starts_with("could not fetch openQA data from QEM Dashboard: ")),
+            "{err:?}"
+        );
     }
 }
