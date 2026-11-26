@@ -395,10 +395,6 @@ pub trait TestReport {
         }
     }
 
-    /// Emits the per-host update commands for `targets`. The null object is a
-    /// no-op.
-    fn list_update_commands(&self, targets: &HostsGroup);
-
     /// The deduplicated list of every package named in the report metadata.
     ///
     /// Flattens the package **names** across all products of the nested
@@ -1116,7 +1112,6 @@ mod tests {
         fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
             HashMap::new()
         }
-        fn list_update_commands(&self, _targets: &HostsGroup) {}
         async fn check_hash(&self) -> HashCheck {
             HashCheck::Ok
         }

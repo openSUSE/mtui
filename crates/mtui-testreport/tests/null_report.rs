@@ -5,7 +5,6 @@
 use std::path::PathBuf;
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
 use mtui_testreport::{HashCheck, NullReport, TestReport};
 
 /// Builds a config whose `template_dir`/`target_tempdir` point under a
@@ -65,14 +64,6 @@ fn null_target_wd_returns_path_join() {
     let (cfg, target) = config_with_tmp("target-wd");
     let n = NullReport::new(cfg);
     assert_eq!(n.target_wd(&["a", "b"]), target.join("a").join("b"));
-}
-
-#[test]
-fn null_list_update_commands_noop() {
-    let (cfg, _) = config_with_tmp("list-update");
-    let n = NullReport::new(cfg);
-    // Must not panic and must not touch the (empty) host group.
-    n.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
 
 #[tokio::test]

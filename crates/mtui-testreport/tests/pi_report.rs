@@ -1,11 +1,7 @@
 //! Covers the `PiReport` surface: `id`, `parser`, `update_repos_parser`
 //! (delegating to `reporepoparse`), `check_hash` (constant) and `set_repo`.
-//!
-//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
-//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
 use mtui_testreport::{HashCheck, PiReport, TestReport};
 use mtui_types::RequestReviewID;
 
@@ -60,13 +56,6 @@ async fn check_hash_always_true() {
     let mut r = PiReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:PI:42:99"));
     assert_eq!(r.check_hash().await, HashCheck::Ok);
-}
-
-#[test]
-fn list_update_commands_is_a_noop_stub() {
-    let r = PiReport::new(config());
-    // Deferred doer-rendering: must not panic and must not require a doer seam.
-    r.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
 
 // --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------

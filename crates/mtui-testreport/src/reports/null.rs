@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
 use mtui_types::SystemProduct;
 
 use crate::testreport::{TestReport, TestReportBase};
@@ -42,10 +41,6 @@ impl TestReport for NullReport {
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         HashMap::new()
-    }
-
-    fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Null object: does nothing.
     }
 
     fn is_loaded(&self) -> bool {
