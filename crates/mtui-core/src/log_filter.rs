@@ -1,52 +1,37 @@
 //! The process-wide `tracing` filter policy both entrypoints resolve through.
 //!
-//! It lives in `mtui-core` because `mtui-cli` and `mtui-mcp` are sibling leaves:
-//! their only shared place for a *security* decision about logging is the
-//! composition root, which makes "raising mtui's verbosity must not switch on
-//! the HTTP transport's `DEBUG`" true by construction rather than true of
-//! whichever entrypoint remembered.
+//! It lives in `mtui-core` because `mtui-cli` and `mtui-mcp` are sibling leaves
+//! and the composition root is their only shared place, so "raising mtui's
+//! verbosity must not switch on the HTTP transport's `DEBUG`" holds for both.
 //!
 //! The policy is expressed as **directive strings**, not `EnvFilter` values, so
-//! `mtui-core` need not depend on `tracing-subscriber` — the same invariant that
-//! keeps subscriber types out of the lower crates. Each binary parses the
+//! `mtui-core` need not depend on `tracing-subscriber`; each binary parses the
 //! resolved string itself.
 
 use crate::session::LogLevel;
 
 /// The third-party HTTP transport targets whose `DEBUG` output must not be
-/// switched on as a side effect of raising *mtui's* own verbosity (#439).
+/// switched on as a side effect of raising *mtui's* own verbosity.
 ///
-/// `hyper-util`'s connection pool logs its pooled key at `DEBUG` — `(scheme,
-/// authority)`, and an `http::uri::Authority` retains userinfo. `reqwest` strips
-/// the first-hop userinfo at build time but never re-strips a redirect's
-/// `Location: https://user:pass@host/…`, so a hostile redirect puts a
-/// credential-shaped authority into that key.
+/// `hyper-util`'s connection pool logs its pooled `(scheme, authority)` key at
+/// `DEBUG`, and `reqwest` never re-strips userinfo from a redirect's `Location`,
+/// so a hostile redirect puts a credential-shaped authority into that key.
 ///
-/// `EnvFilter` matches a target as a raw `starts_with` prefix, so `hyper` alone
-/// would already cover `hyper_util::client::legacy::pool`; `hyper_util` is named
-/// anyway so the intent survives a rename or a narrowing of the `hyper` entry.
-///
-/// **These three are the whole surface, not a sample.** `h2` was checked and
-/// does not belong: its `DEBUG` lines are frame shapes and protocol-error
-/// breadcrumbs, and its `Debug for Headers` omits the header block
-/// (h2-0.4.15 `src/frame/headers.rs`), so header-bearing lines are `TRACE` only.
+/// `hyper_util` is named although `hyper` already prefix-matches it, so the
+/// intent survives a narrowing of the `hyper` entry. These three are the whole
+/// surface: `h2`'s `DEBUG` lines carry no header block.
 pub const TRANSPORT_LOG_TARGETS: &[&str] = &["hyper_util", "hyper", "reqwest"];
 
 /// The `EnvFilter` directives that cap [`TRANSPORT_LOG_TARGETS`] at `INFO`.
 ///
 /// Appended to a `debug` directive string mtui builds for itself, and to a
 /// `RUST_LOG` that would otherwise raise those targets (see
-/// [`resolve_log_directives_from`]). `INFO` rather than `WARN`/`OFF` on purpose:
-/// real transport warnings and errors must still reach the operator.
-///
-/// A literal, pinned as a literal by the tests, so a respelling `EnvFilter`'s
-/// prefix match would silently absorb (`hyper-util` for `hyper_util`, swallowed
-/// by the `hyper=info` entry) still shows up as a diff.
+/// [`resolve_log_directives_from`]). `INFO` rather than `WARN`/`OFF` so real
+/// transport warnings still reach the operator. Pinned as a literal by the tests.
 pub const TRANSPORT_LOG_CARVE_OUT: &str = "hyper_util=info,hyper=info,reqwest=info";
 
-/// The one-line notice printed at startup when `RUST_LOG` explicitly opts the
-/// HTTP transport into `DEBUG` — the one remaining way to get the credential
-/// -shaped pool authority into the log, so it says so out loud.
+/// The startup notice printed when `RUST_LOG` explicitly opts the HTTP transport
+/// into `DEBUG`.
 pub const TRANSPORT_DEBUG_NOTICE: &str = "warn: RUST_LOG names a transport target at debug/trace: \
      hyper/hyper_util/reqwest may print connection-pool authorities, which a redirect can load \
      with credentials";
@@ -57,8 +42,7 @@ pub const TRANSPORT_DEBUG_NOTICE: &str = "warn: RUST_LOG names a transport targe
 pub struct LogDirectives {
     /// The `EnvFilter` directive string the entrypoint should parse.
     pub directives: String,
-    /// Set when `RUST_LOG` explicitly names a transport target at `debug`/
-    /// `trace`, i.e. when the carve-out was deliberately stood down.
+    /// Set when `RUST_LOG` explicitly names a transport target at `debug`/`trace`.
     pub transport_debug_opt_in: bool,
 }
 
@@ -66,10 +50,8 @@ impl LogDirectives {
     /// The startup notice to print on stderr, or `None` when the transport is
     /// capped.
     ///
-    /// Printed rather than `tracing::warn!`-ed on purpose: the triggering
-    /// `RUST_LOG` is often target-scoped (`RUST_LOG=hyper_util=debug`), enabling
-    /// no `mtui_*` target — a `WARN` would be filtered out by the very filter it
-    /// warns about.
+    /// Printed rather than `tracing::warn!`-ed: a target-scoped `RUST_LOG` would
+    /// filter the `WARN` out.
     #[must_use]
     pub fn notice(&self) -> Option<&'static str> {
         self.transport_debug_opt_in
@@ -78,10 +60,7 @@ impl LogDirectives {
 }
 
 /// Resolve the process log filter from `$RUST_LOG` and the entrypoint's own
-/// defaults.
-///
-/// See [`resolve_log_directives_from`] for the policy; this only reads the
-/// environment variable.
+/// defaults; see [`resolve_log_directives_from`] for the policy.
 #[must_use]
 pub fn resolve_log_directives(defaults: &str) -> LogDirectives {
     resolve_log_directives_from(std::env::var("RUST_LOG").ok().as_deref(), defaults)
@@ -90,25 +69,20 @@ pub fn resolve_log_directives(defaults: &str) -> LogDirectives {
 /// Resolve the process log filter from an explicit `RUST_LOG` value and the
 /// entrypoint's own defaults.
 ///
-/// * `RUST_LOG` **unset** → `defaults` verbatim. The entrypoint has already put
-///   [`TRANSPORT_LOG_CARVE_OUT`] where it belongs there.
+/// * `RUST_LOG` **unset** → `defaults` verbatim.
 /// * `RUST_LOG` **set** → the operator's directives, with
 ///   [`TRANSPORT_LOG_CARVE_OUT`] applied *on top* for every transport target the
 ///   operator did not name — but only when their directives carry a *global*
 ///   `debug`/`trace`, which is the only way an unnamed target reaches `DEBUG`.
 ///
 /// The narrow trigger keeps the carve-out from becoming a *raise*: appending
-/// `hyper=info` to `RUST_LOG=error`, `off` or `mtui_core=trace` would push the
-/// transport **up** to `INFO`, above the level the operator chose. With a global
-/// `debug`/`trace` present the added directive can only lower a target.
+/// `hyper=info` to `RUST_LOG=error` would push the transport **up** to `INFO`.
 ///
 /// "Named" — which stands the cap down and sets [`LogDirectives::notice`] —
 /// means the operator's target is a prefix of (or equal to) the transport's, the
-/// only shape `EnvFilter`'s longest-match resolution lets a `<transport>=info`
-/// cap *overrule*. So `RUST_LOG=hyper=debug` hands over the whole hyper stack
-/// rather than having the cap fight the request, while
-/// `RUST_LOG=debug,hyper_util=warn` still caps `hyper` and `reqwest` because a
-/// `hyper=info` beside it cannot overrule the longer `hyper_util`.
+/// only shape where `EnvFilter`'s longest-match resolution lets the cap
+/// *overrule* it. So `RUST_LOG=hyper=debug` hands over the whole hyper stack,
+/// while `RUST_LOG=debug,hyper_util=warn` still caps `hyper` and `reqwest`.
 #[must_use]
 pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> LogDirectives {
     let Some(user) = rust_log else {
@@ -120,9 +94,7 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
 
     let mut verbose_global = false;
     let mut opt_in = false;
-    // Which transport targets the operator's directives already speak for.
-    // Sized from the list, not a literal, so a target added to
-    // `TRANSPORT_LOG_TARGETS` cannot fall off a `zip` and stop being capped.
+    // Sized from the list so a new target cannot fall off a `zip` uncapped.
     let mut named = vec![false; TRANSPORT_LOG_TARGETS.len()];
 
     for chunk in user.split(',') {
@@ -137,15 +109,10 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
             continue;
         };
         for (slot, transport) in named.iter_mut().zip(TRANSPORT_LOG_TARGETS) {
-            // `EnvFilter` resolves an event through the *longest* matching
-            // target, so a `<transport>=info` cap overrules the operator only
-            // when their target is a prefix of (or equal to) the transport's.
-            // That, and only that, stands the cap down — regardless of level,
-            // since the raise direction is the one that surprises.
+            // The cap stands down only for a prefix-or-equal target, regardless
+            // of level.
             *slot |= transport.starts_with(target);
-            // Warning is the broader question: a *longer* target
-            // (`hyper_util::client::legacy::pool=debug`) beats the cap for the
-            // events it matches, so it is an opt-in even though the cap goes on.
+            // A *longer* target beats the cap for its events: opt-in, cap stays.
             if verbose && (transport.starts_with(target) || target.starts_with(transport)) {
                 opt_in = true;
             }
@@ -173,22 +140,18 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
 /// INFO)`.
 ///
 /// A `None` target means the directive applies to everything: a bare global
-/// level (`debug`), or a span-only directive (`[span]=debug`), lumped in with
-/// the globals because it too can match a transport event.
+/// level, or a span-only directive, which can match a transport event too.
 ///
-/// Deliberately lenient — it only decides whether to *add* a cap, and the binary
-/// parses the real string afterwards, so a misread input is at worst an
-/// unnecessary cap. The one direction that must not be wrong is reading a
-/// verbose directive as non-verbose, hence "no explicit level" is `TRACE`, which
-/// is what `EnvFilter` does with it.
+/// Deliberately lenient: a misread is at worst an unnecessary cap. Never read a
+/// verbose directive as non-verbose, hence "no explicit level" is `TRACE`, as in
+/// `EnvFilter`.
 fn parse_directive(chunk: &str) -> (Option<&str>, bool) {
-    // `target[span{field=value}]=level`: the level follows the *last* `=`, and
-    // only when level-shaped — otherwise the `=` belonged to a field filter.
+    // `target[span{field=value}]=level`: the level follows the last `=`, when
+    // level-shaped.
     let (head, level) = match chunk.rsplit_once('=') {
         Some((head, level)) if is_level(level) => (head, Some(level)),
         _ => (chunk, None),
     };
-    // A bare level-shaped directive is the *global* level, not a target.
     if level.is_none() && is_level(head) {
         return (None, is_verbose_level(head));
     }
@@ -232,15 +195,12 @@ fn is_verbose_level(text: &str) -> bool {
         )
 }
 
-/// The `EnvFilter` directive string for a [`LogLevel`] — the lowercased
-/// [`tracing::Level`] name — that a runtime `set_log_level` reloads the process
-/// filter with (and the REPL's startup fallback).
+/// The `EnvFilter` directive string for a [`LogLevel`] (the lowercased
+/// [`tracing::Level`] name), used by a runtime `set_log_level` and the REPL's
+/// startup fallback.
 ///
-/// At `debug` the base level is followed by [`TRANSPORT_LOG_CARVE_OUT`], holding
-/// the third-party HTTP stack at `INFO`: raising mtui's verbosity must not print
-/// hyper-util's connection-pool key, whose authority can carry
-/// redirect-supplied userinfo (#439). The coarser levels stay bare — appending
-/// the carve-out would *raise* those targets above an operator's `error`/`warn`.
+/// At `debug` it is followed by [`TRANSPORT_LOG_CARVE_OUT`]; the coarser levels
+/// stay bare, since the carve-out would *raise* those targets.
 #[must_use]
 pub fn level_directive(level: LogLevel) -> String {
     let base = level.as_tracing().as_str().to_ascii_lowercase();

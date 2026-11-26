@@ -458,26 +458,20 @@ pub(crate) const TRUNCATION_MARK: &str = "…[truncated]";
 /// Renders externally-sourced `text` safe to print, optionally cut to `limit`
 /// **kept** characters.
 ///
-/// Text mtui did not author — a host command's stdout, a checker's output —
-/// reaches the terminal and the MCP transcript verbatim otherwise, where a
-/// control sequence can repaint the screen, forge the lines printed around it,
-/// or trigger a terminal feature such as an OSC 52 clipboard write. Everything a
-/// terminal would *act* on is dropped, the way the terminal itself would consume
-/// it: `ESC`-introduced sequences (CSI, OSC/DCS/SOS/PM/APC and their string
-/// terminators, and the two-character forms), the 8-bit C1 introducers — U+009B
-/// is CSI and U+009D is OSC, live on most terminals and invisible to an
-/// `ESC`-only filter — every other control character, and the bidi
-/// overrides/isolates, which reorder a line into something it does not say.
+/// Text mtui did not author (a host command's stdout, a checker's output) could
+/// otherwise repaint the screen, forge surrounding lines, or trigger a terminal
+/// feature such as an OSC 52 clipboard write. Everything a terminal would *act*
+/// on is dropped: `ESC`-introduced sequences (CSI, OSC/DCS/SOS/PM/APC and their
+/// terminators, and the two-character forms), the 8-bit C1 introducers (U+009B
+/// is CSI and U+009D is OSC, invisible to an `ESC`-only filter), every other
+/// control character, and the bidi overrides/isolates.
 ///
-/// `\n` and `\t` are ordinary whitespace and survive; `\r` does not, because
-/// alone it returns the cursor to column 0 and lets a line overwrite the prefix
-/// already printed before it (`str::lines`/`trim_end_matches` have dropped a
-/// CRLF's own `\r` before this sees it).
+/// `\n` and `\t` survive; `\r` does not, because alone it lets a line overwrite
+/// the prefix already printed before it.
 ///
 /// `limit` counts characters **after** filtering, so a body made of escapes
-/// cannot spend the budget; the cut is on a `char`, never a byte, and is marked
-/// with [`TRUNCATION_MARK`]. `None` is unbounded — for the pager, whose caller
-/// already splits into lines, and for `checkers --full-output`.
+/// cannot spend the budget; the cut is on a `char` and is marked with
+/// [`TRUNCATION_MARK`]. `None` is unbounded (the pager, `checkers --full-output`).
 #[must_use]
 pub(crate) fn sanitize_external(text: &str, limit: Option<usize>) -> String {
     let limit = limit.unwrap_or(usize::MAX);

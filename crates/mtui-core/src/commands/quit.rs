@@ -13,8 +13,7 @@ use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 /// for completion.
 const BOOT_ACTIONS: [&str; 2] = ["reboot", "poweroff"];
 
-/// The per-template close budget: always [`HOST_CLOSE_TIMEOUT`] in production,
-/// overridable in tests so the straggler path need not wait it out.
+/// The per-template close budget; overridable in tests.
 #[cfg(not(test))]
 fn close_timeout() -> Duration {
     HOST_CLOSE_TIMEOUT
@@ -27,22 +26,19 @@ fn close_timeout() -> Duration {
 /// Disconnects from all hosts and exits the interactive session.
 ///
 /// For every connected host group
-/// ([`Session::take_teardown_units`](crate::Session::take_teardown_units) —
-/// every loaded template *and* hosts attached while nothing was loaded) it
-/// releases the pool claims (arbiter ownership + remote pool locks), then closes
-/// the group per the optional positional `bootarg ∈ {reboot, poweroff}`
-/// (`poweroff` → shell `halt`), or just disconnects. Each close runs under
-/// [`HOST_CLOSE_TIMEOUT`] so a hung host never blocks exit, and one that fails
-/// or is still disconnecting at the budget is named. It then flips
-/// [`Session::request_exit`](crate::Session::request_exit), which the REPL reads
-/// via [`should_exit`](crate::Session::should_exit) to break its loop.
+/// ([`Session::take_teardown_units`](crate::Session::take_teardown_units),
+/// including hosts attached while nothing was loaded) it releases the pool
+/// claims, then closes the group per the optional positional
+/// `bootarg ∈ {reboot, poweroff}` (`poweroff` → shell `halt`), or just
+/// disconnects. Each close runs under [`HOST_CLOSE_TIMEOUT`] so a hung host never
+/// blocks exit, and one that fails or straggles is named. It then flips
+/// [`Session::request_exit`](crate::Session::request_exit).
 ///
-/// A report whose document holds edits no `commit` has uploaded is named in a
-/// warning, never refused: the teardown must always be able to release locks.
+/// A report whose document holds uncommitted edits is named in a warning, never
+/// refused: the teardown must always be able to release locks.
 ///
-/// [`Scope::Single`] and REPL-only — on the MCP deny-list, a headless client
-/// having no session loop to quit. The aliases `exit`/`EOF` dispatch here, so
-/// `exit reboot` and `Ctrl-D` inherit the bootarg + close behaviour.
+/// [`Scope::Single`] and REPL-only (on the MCP deny-list). The aliases
+/// `exit`/`EOF` dispatch here.
 pub struct Quit;
 
 #[async_trait]

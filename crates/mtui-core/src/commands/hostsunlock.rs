@@ -14,22 +14,19 @@ use crate::session::Session;
 /// Unlocks hosts previously locked with `lock`.
 ///
 /// By default releases only the operation lock **this session's own group
-/// took** on the target hosts (or only those named with `-t`), fanning
-/// [`HostsGroup::unlock_taken`](mtui_hosts::HostsGroup::unlock_taken) out — a
-/// lock this session never took (a stranger's, or a sibling loaded template's
-/// hold on a shared refhost) is skipped rather than swept up, since the wire's
-/// PID-based ownership check cannot tell two same-process holders apart.
-/// `-f`/`--force` also removes locks set by other users or sessions
-/// regardless of who took them, fanning
-/// [`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force) out under
-/// the [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown
-/// budget so a dead peer cannot hold the session.
+/// took** on the target hosts (or only those named with `-t`), via
+/// [`HostsGroup::unlock_taken`](mtui_hosts::HostsGroup::unlock_taken). A lock
+/// this session never took (a stranger's, or a sibling template's hold on a
+/// shared refhost) is skipped, since the wire's PID-based ownership check cannot
+/// tell two same-process holders apart. `-f`/`--force` also removes locks set by
+/// others
+/// ([`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force)), under
+/// the [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget so a
+/// dead peer cannot hold the session.
 ///
-/// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead,
-/// fanning
-/// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
-/// out under the same budget; with `--force` a claim owned by another template
-/// goes too.
+/// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead
+/// ([`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting));
+/// with `--force` a claim owned by another template goes too.
 pub struct HostsUnlock;
 
 #[async_trait]

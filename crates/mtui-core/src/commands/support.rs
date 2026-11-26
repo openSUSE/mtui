@@ -17,15 +17,12 @@ use crate::command::Command;
 use crate::error::CommandError;
 use crate::session::Session;
 
-/// The wall-clock budget for remote work over an already-established link
-/// (`remove_host`'s close fan-out, `unlock --force`, `reload_products`), whose
-/// peer may have vanished without closing the link and so never answer. The
-/// value is [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT).
+/// The wall-clock budget for remote work over an established link whose peer may
+/// have vanished (`remove_host`'s close fan-out, `unlock --force`,
+/// `reload_products`): [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT).
 ///
-/// Concurrent fan-outs spend one budget for the whole call; serial work
-/// (`reload_products`) spends one *per host*, since sharing one across a serial
-/// pass would tie success to fleet size and fail healthy-but-slow fleets.
-/// `testkit` shrinks it so the abandon path costs milliseconds.
+/// Concurrent fan-outs spend one budget for the whole call; serial work spends
+/// one *per host*, or success would depend on fleet size.
 #[cfg(not(test))]
 pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::session::HOST_CLOSE_TIMEOUT
@@ -35,10 +32,7 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::commands::testkit::host_op_budget_override()
 }
 
-// The REPL steer/scope pair for contended lines lives with the shared renderer
-// (`mtui_hosts::ContendedSurface::Repl`): plain `list_locks`, and `--force`'s
-// `-t`-scoped whole-group caveat so a `-t`-scoped line never reads as "force
-// this one host" (#521).
+// The REPL steer/scope text for contended lines lives in `mtui_hosts::ContendedSurface::Repl`.
 
 /// Resolves the dashboard identity of the loaded update for the commands that
 /// query the dashboard directly.
@@ -75,7 +69,7 @@ pub(crate) async fn resolve_dashboard_key(
 /// search path, keyed on the instance host; call [`KernelOpenQA::run`] to
 /// populate it. Takes an already-built transport (from
 /// [`Session::openqa_transport`](crate::session::Session::openqa_transport)) so
-/// a per-host loop (primary + baremetal instances) reuses one connection pool.
+/// a per-host loop reuses one connection pool.
 ///
 /// # Errors
 ///
@@ -160,10 +154,9 @@ impl OpenqaCtx {
         })
     }
 
-    /// The report's [`QemIncident`], threaded into both `DashboardAutoOpenQA`
-    /// and `KernelOpenQA` so they share one incident state. `source` is the
-    /// incident's fallback when the dashboard has no record; `pr_url` names a
-    /// git incident's project.
+    /// The report's [`QemIncident`], shared by `DashboardAutoOpenQA` and
+    /// `KernelOpenQA`. `source` is the fallback when the dashboard has no record;
+    /// `pr_url` names a git incident's project.
     pub(crate) async fn incident(&self) -> QemIncident {
         let client = QemDashboardClient::with_client(self.http.clone(), self.dashboard_api.clone());
         QemIncident::with_client(
@@ -319,20 +312,13 @@ pub(crate) fn require_document(session: &Session) -> Result<(), CommandError> {
 /// a reviewer or marker onto the document) against a template that loaded with
 /// a stale Gitea hash, unless `allow_stale` is set.
 ///
-/// `load_template --force-continue` only gets a stale template loaded — it
-/// does not repair the recorded mismatch (`TestReportBase::stale_hash_warning`
-/// stays set on the report for as long as it is loaded) — so without a gate
-/// here, those writes could publish or overwrite content non-interactively
-/// from a template known, at load time, to disagree with the Gitea PR.
-/// `approve`'s own live `check_hash()` re-query replaces this verdict for its
-/// record step: it passes `allow_stale` once that check has passed.
+/// `load_template --force-continue` loads a stale template without repairing
+/// the mismatch (`TestReportBase::stale_hash_warning` stays set), so without
+/// this gate those writes could publish content known to disagree with the PR.
+/// `approve` passes `allow_stale` once its own live `check_hash()` has passed.
 ///
-/// **Gap, not a guarantee:** this reads a load-time snapshot, not a live
-/// check — a report that loaded clean and only goes stale once the session
-/// is already open (a maintainer pushes to the PR while `mtui-mcp` still
-/// holds it loaded) passes silently. A live re-check here would need its own
-/// Gitea round-trip per call and is a separate change; this gate only ever
-/// catches what `load_template` already knew.
+/// **Gap, not a guarantee:** this reads a load-time snapshot; a report that
+/// goes stale after loading passes silently.
 pub(crate) fn stale_hash_gate(session: &Session, allow_stale: bool) -> Result<(), CommandError> {
     if allow_stale {
         return Ok(());
@@ -436,7 +422,6 @@ pub(crate) fn complete_choices(
     line: &str,
     text: &str,
 ) -> Vec<String> {
-    // De-duplicated, first-seen order preserved.
     let mut choices: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push =
@@ -454,8 +439,7 @@ pub(crate) fn complete_choices(
         push(e, &mut choices, &mut seen);
     }
 
-    // Drop any synonym group the already-typed tokens (minus the command name)
-    // committed to.
+    // Drop any synonym group the already-typed tokens committed to.
     let mut tokens: Vec<String> = line.split(' ').map(str::to_owned).collect();
     if !tokens.is_empty() {
         tokens.remove(0);
@@ -465,7 +449,6 @@ pub(crate) fn complete_choices(
         let tok = tokens[i].clone();
         let bytes = tok.as_bytes();
         if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] != b'-' {
-            // Bundled short flags: enqueue each as its own `-x` token.
             for ch in tok[1..].chars() {
                 tokens.push(format!("-{ch}"));
             }
@@ -481,7 +464,6 @@ pub(crate) fn complete_choices(
         i += 1;
     }
 
-    // Exact match short-circuits to just that candidate.
     if let Some(exact) = choices.iter().find(|c| c.as_str() == text) {
         return vec![exact.clone()];
     }
@@ -512,10 +494,8 @@ pub(crate) fn complete_with_templates(
 }
 
 /// Completion for a host-phase (fan-out) command: `-t/--target`, the loaded
-/// template RRIDs, and the connected host names, with `extra_flags` prepended
-/// as additional synonym groups (a command's own `--force`/`--installed`). The
-/// shared shape behind `run`, `reboot`, `prepare`, `update`, `downgrade`,
-/// `install`, `uninstall`, `set_repo` and `add_host`.
+/// template RRIDs, and the connected host names, with `extra_flags` added as
+/// synonym groups.
 #[must_use]
 pub(crate) fn complete_fanout(
     session: &Session,
@@ -538,11 +518,10 @@ pub(crate) fn complete_fanout(
 pub(crate) type CompletionFlags = Vec<Vec<String>>;
 
 /// The spellings of the flags `ids` name in `command`'s parser, one synonym
-/// group per ID in the order given, so the menu keeps its established order
-/// rather than Clap's declaration order. Each group is the short spelling, the
-/// long one, then their visible aliases.
+/// group per ID in the order given (not Clap's declaration order): the short
+/// spelling, the long one, then their visible aliases.
 ///
-/// Built once per command (a `LazyLock` at the call site), never per keystroke.
+/// Built once per command (a `LazyLock` at the call site).
 ///
 /// # Panics
 ///
@@ -612,8 +591,7 @@ pub(crate) fn complete_fanout_flags(
 ///
 /// Directory entries under the directory part of `text` (basename-prefix
 /// filtered, directories carrying a trailing `/`) merged with
-/// [`complete_choices`]. A `~` prefix expands; an unreadable directory yields
-/// no candidates, so a transient typo does not tear down completion.
+/// [`complete_choices`]. An unreadable directory yields no candidates.
 #[must_use]
 pub(crate) fn complete_choices_filelist(
     synonyms: &[&[&str]],
@@ -627,15 +605,13 @@ pub(crate) fn complete_choices_filelist(
 }
 
 /// Expands a leading tilde in a completion path: `~`/`~/…` → `$HOME`,
-/// `~user`/`~user/…` → that user's home (getpwnam). Best-effort, per the
-/// completer's "transient input must not tear down completion" convention: an
-/// unknown user, no `$HOME`, or a non-Unix target leaves `text` unexpanded.
+/// `~user`/`~user/…` → that user's home (getpwnam). An unknown user, no `$HOME`,
+/// or a non-Unix target leaves `text` unexpanded.
 fn expand_tilde(text: &str) -> String {
     let Some(rest) = text.strip_prefix('~') else {
         return text.to_owned();
     };
 
-    // Bare `~` or `~/…`: the user segment is empty.
     if rest.is_empty() || rest.starts_with('/') {
         return match std::env::var_os("HOME") {
             Some(home) => format!("{}{rest}", home.to_string_lossy()),
@@ -643,7 +619,6 @@ fn expand_tilde(text: &str) -> String {
         };
     }
 
-    // `~user` or `~user/…`: resolve the named user's home via getpwnam.
     let (user, tail) = match rest.find('/') {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, ""),
@@ -651,9 +626,8 @@ fn expand_tilde(text: &str) -> String {
     resolve_user_home(user).map_or_else(|| text.to_owned(), |home| format!("{home}{tail}"))
 }
 
-/// The home directory of a named user via getpwnam, or `None` when it can't be
-/// resolved — including every non-Unix target, where the caller leaves the
-/// tilde unexpanded.
+/// The home directory of a named user via getpwnam, or `None` (always on
+/// non-Unix).
 #[cfg(unix)]
 fn resolve_user_home(user: &str) -> Option<String> {
     nix::unistd::User::from_name(user)
@@ -667,10 +641,9 @@ fn resolve_user_home(_user: &str) -> Option<String> {
     None
 }
 
-/// Directory entries matching the basename prefix in `text`, shared by the
-/// `edit`/`put` file completers. Directories carry a trailing `/`; a `~`/`~user`
-/// prefix expands; a bare prefix completes against the current directory.
-/// Best-effort: an unreadable directory yields no candidates.
+/// Directory entries matching the basename prefix in `text`. Directories carry a
+/// trailing `/`; a `~`/`~user` prefix expands; a bare prefix completes against
+/// the current directory. An unreadable directory yields no candidates.
 #[must_use]
 pub(crate) fn complete_path(text: &str) -> Vec<String> {
     use std::path::Path;
@@ -678,7 +651,6 @@ pub(crate) fn complete_path(text: &str) -> Vec<String> {
     let expanded = expand_tilde(text);
 
     let (dir, prefix) = match expanded.rfind('/') {
-        // Keep the trailing slash so the re-joined candidate stays anchored.
         Some(idx) => (expanded[..=idx].to_owned(), expanded[idx + 1..].to_owned()),
         None => (String::new(), expanded.clone()),
     };
@@ -724,9 +696,8 @@ pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
     )
 }
 
-/// The parsed `-t/--target` hostnames, or `None` when the flag was omitted.
-/// `None` is distinct from `Some([])` (which clap never produces for an
-/// `Append` arg): callers read it as "all enabled hosts".
+/// The parsed `-t/--target` hostnames, or `None` when the flag was omitted
+/// (callers read it as "all enabled hosts").
 #[must_use]
 pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
     args.try_get_many::<String>("hosts")
@@ -735,9 +706,8 @@ pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
         .map(|it| it.cloned().collect())
 }
 
-/// Whether the invocation named explicit `-t` hosts. The fan-out skip rule keys
-/// on this: with no explicit `-t` a host-phase command may be skipped on a
-/// template with no connected host, but a typo'd `-t` must fail loudly.
+/// Whether the invocation named explicit `-t` hosts: the fan-out skip rule keys
+/// on this, so a typo'd `-t` fails loudly.
 #[must_use]
 pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
     hosts_arg(args).is_some_and(|v| !v.is_empty())
@@ -759,9 +729,8 @@ pub(crate) fn selects_hosts(args: &ArgMatches) -> bool {
 /// * the deprecated `-t all` → every enabled host, with a warning.
 ///
 /// Names rather than a new group, because `HostsGroup::select` consumes the
-/// group and drops the unselected hosts — which a state-preserving command
-/// (`run`, `reboot`) must not do. The caller drives the subset in place via a
-/// [`Command::PerHost`](mtui_hosts::Command) map keyed on them.
+/// group and drops the unselected hosts. The caller drives the subset in place
+/// via a [`Command::PerHost`](mtui_hosts::Command) map keyed on them.
 ///
 /// # Errors
 ///
@@ -832,12 +801,9 @@ pub(crate) fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
 }
 
 /// Pages `output` through the session's display: the REPL drives
-/// [`page_interactive`](crate::display::page_interactive), reading the Enter/`q`
-/// continuation through the session's serialised
+/// [`page_interactive`](crate::display::page_interactive) through the session's
 /// [`Prompter`](mtui_hosts::Prompter); headless callers take
-/// [`page`](crate::display::page), which forwards every line unpaged so output
-/// stays byte-identical. The prompter is cloned before the mutable `display`
-/// borrow to sidestep the split borrow.
+/// [`page`](crate::display::page), which forwards every line unpaged.
 pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
     if session.is_repl {
         let prompter = session.prompter().cloned();

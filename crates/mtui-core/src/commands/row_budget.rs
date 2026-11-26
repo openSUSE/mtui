@@ -3,7 +3,7 @@
 //! Row budget: keep first-40 + last-10 + all anomaly rows, exact-dedup identical rows, hard cap 100.
 //! Row-cap is not byte-cap: MCP `max_output_bytes` can still cut mid-array on huge rows.
 //!
-//! Shared truncation-notice convention (converged for #610/#611/#620):
+//! Shared truncation-notice convention:
 //! - Emit a truncation notice only on a real row-budget cut
 //!   (`crushed.truncated > 0`); user `--limit`/`--offset` windowing alone
 //!   never notices.

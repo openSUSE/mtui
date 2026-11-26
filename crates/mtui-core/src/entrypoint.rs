@@ -1,29 +1,24 @@
 //! The process exit-code contract shared by mtui's two process entrypoints
 //! (`mtui`, `mtui-mcp`).
 //!
-//! Three distinct argparse layers exist; do not conflate them:
+//! Two argparse layers exist; do not conflate them:
 //!
 //! 1. **App invocation** — [`Args`](crate::args::Args); `Args::parse` exits the
 //!    process on `--help`/`--version`/error, the clap convention.
-//! 2. **REPL commands** — the per-command parsers the [`engine`](crate::engine)
-//!    synthesises from the [`Registry`](crate::registry::Registry) and `mtui-mcp`
-//!    reuses as tools. These never exit the process; they return a typed
+//! 2. **Commands** — the per-command parsers the [`engine`](crate::engine)
+//!    synthesises from the [`Registry`](crate::registry::Registry). These never
+//!    exit the process; they return a typed
 //!    [`EngineError`](crate::engine::EngineError).
-//! 3. **MCP tool schema** — `mtui-mcp` translating each command's parser into
-//!    JSON parameters. Not touched here.
 //!
-//! Neither entrypoint has a headless single-command CLI mode: the only surfaces
-//! are the interactive REPL (`mtui-cli::seed_session` + `Repl`) and `mtui-mcp`,
-//! and neither takes a positional command.
+//! Neither entrypoint has a headless single-command CLI mode.
 //!
 //! ## Exit-code contract
 //!
-//! `0` success or help/version, `1` runtime failure, `2` clap/argparse's
-//! usage-error convention, `130` (128 + `SIGINT`) a REPL force-quit by a double
-//! Ctrl-C, and `129`/`143` (128 + `SIGHUP`/`SIGTERM`) a REPL that tore down on
-//! that signal — each the status the process had when the signal still killed
-//! it outright. That is the whole vocabulary; downstream packaging, wrapper scripts and CI
-//! can rely on it and nothing else. See [`ExitStatus`] and `mtui_cli::ReplExit`.
+//! `0` success or help/version, `1` runtime failure, `2` usage error, `130`
+//! (128 + `SIGINT`) a REPL force-quit by a double Ctrl-C, and `129`/`143`
+//! (128 + `SIGHUP`/`SIGTERM`) a REPL that tore down on that signal. That is the
+//! whole vocabulary callers can rely on. See [`ExitStatus`] and
+//! `mtui_cli::ReplExit`.
 
 /// A process exit status of either entrypoint.
 ///
@@ -47,9 +42,7 @@ pub enum ExitStatus {
     Usage,
     /// Force-quit by a double Ctrl-C. Process exit code `130`.
     ///
-    /// Not an argparse outcome: 128 + `SIGINT`, so a caller already reading
-    /// "killed by signal N" as 128 + N sees what it saw before mtui handled the
-    /// signal at all.
+    /// 128 + `SIGINT`, as a caller reading "killed by signal N" would expect.
     Interrupted,
     /// Torn down on `SIGHUP`. Process exit code `129` (128 + `SIGHUP`).
     Hangup,

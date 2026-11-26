@@ -1,22 +1,18 @@
 //! The collection of loaded templates plus an active pointer.
 //!
-//! [`TestReport`]s keyed by RRID (`report.id()`), each an individually lockable
-//! [`ReportEntry`] a dispatch acquires via [`handle`](TemplateRegistry::handle).
-//! The empty-session null-object fallback lives on [`Session`](crate::Session).
-//! The stable per-instance [`id`](TemplateRegistry::id) is the owner-key seed
-//! host arbitration keys on as `(registry.id, RRID)` (RFC §5.7); one registry
-//! per REPL process, one per MCP session.
+//! [`TestReport`]s keyed by RRID, each an individually lockable [`ReportEntry`]
+//! a dispatch acquires via [`handle`](TemplateRegistry::handle). The stable
+//! per-instance [`id`](TemplateRegistry::id) seeds the `(registry.id, RRID)`
+//! owner key host arbitration uses.
 //!
 //! ## Teardown
 //!
-//! Dropping a removed report closes every `Target`'s transport on `Drop`, but
-//! cannot release its *async* ownership: the in-process arbiter claim, the
-//! remote pool-claim lock (`/var/lock/mtui-pool.lock`) and the remote operation
-//! lock (`/var/lock/mtui.lock`) all need an `await`, and a wedged host must not
-//! hang removal. So [`remove`](TemplateRegistry::remove) and the same-RRID
-//! replacement path in `add_or_replace` are **async** and run the same bounded
-//! teardown as the REPL `quit` (release pool claims, then `targets.close(None)`
-//! under a per-report budget) before the entry is dropped and active repointed.
+//! Dropping a removed report closes every transport but cannot release its
+//! *async* ownership (the arbiter claim, the remote pool-claim and operation
+//! locks), and a wedged host must not hang removal. So
+//! [`remove`](TemplateRegistry::remove) and the same-RRID replacement in
+//! `add_or_replace` are **async** and run the REPL `quit`'s bounded teardown
+//! before the entry is dropped and active repointed.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,10 +28,8 @@ use crate::session::HOST_CLOSE_TIMEOUT;
 /// A loaded report behind its own lock.
 ///
 /// A dispatch takes the [`OwnedMutexGuard`](tokio::sync::OwnedMutexGuard) of
-/// exactly the entry it acts on (via [`TemplateRegistry::handle`]), so per-call
-/// active-report handling need not borrow the whole registry. While the MCP
-/// monolithic session `Mutex` remains in place these entry locks are
-/// uncontended.
+/// exactly the entry it acts on (via [`TemplateRegistry::handle`]), so it need
+/// not borrow the whole registry.
 pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 
 /// What a `list_templates` row could be read from a loaded entry.
@@ -47,8 +41,7 @@ pub(crate) enum TemplateRow {
     Busy,
 }
 
-/// The per-report close budget: always [`HOST_CLOSE_TIMEOUT`] in production,
-/// test-overridable so the wedged-host path need not wait the full budget.
+/// The per-report close budget; test-overridable.
 #[cfg(not(test))]
 fn remove_close_timeout() -> Duration {
     HOST_CLOSE_TIMEOUT
@@ -71,8 +64,7 @@ pub struct RemoveReport {
 
 /// Holds the loaded templates and tracks the active one.
 pub struct TemplateRegistry {
-    /// Loaded reports keyed by RRID, in insertion order (for fan-out order).
-    /// Each entry is individually lockable — see [`ReportEntry`].
+    /// Loaded reports keyed by RRID, in insertion (fan-out) order.
     entries: IndexMap<String, ReportEntry>,
     /// The active RRID, or `None` when nothing is loaded.
     active: Option<String>,
@@ -82,9 +74,6 @@ pub struct TemplateRegistry {
 
 impl TemplateRegistry {
     /// Builds an empty registry.
-    ///
-    /// `config` is retained for future arbiter wiring; the null-object fallback
-    /// lives on [`Session`](crate::Session), not here.
     #[must_use]
     pub fn new(_config: Config) -> Self {
         Self {
@@ -104,17 +93,13 @@ impl TemplateRegistry {
     ///
     /// The first template added becomes active; re-adding an existing RRID
     /// replaces the stored report but leaves the active pointer alone. An empty
-    /// RRID is the failed-load sentinel
-    /// ([`NullReport`](mtui_testreport::NullReport)), ignored so it never becomes
-    /// a phantom entry that breaks fan-out.
+    /// RRID (the [`NullReport`](mtui_testreport::NullReport) sentinel) is ignored.
     pub fn add(&mut self, mut report: Box<dyn TestReport + Send + Sync>) {
         let rrid = report.id();
         if rrid.is_empty() {
             return;
         }
-        // With the arbiter and `(registry_id, RRID)` owner key both set,
-        // autoconnect takes the pool-selection path (one host per slot) instead
-        // of connecting every candidate.
+        // Both set: autoconnect takes the pool-selection path (one host per slot).
         {
             let base = report.base_mut();
             base.arbiter = Some(get_arbiter());
@@ -131,13 +116,10 @@ impl TemplateRegistry {
     /// Inserts `report`, first tearing down any report already loaded under the
     /// same RRID.
     ///
-    /// Re-adding an existing RRID must release the *old* report's async
-    /// ownership (arbiter claim + remote pool/operation locks) and close its
-    /// hosts before the new report is stored, or the replaced report leaks both.
-    /// A brand-new RRID is a plain [`add`](Self::add) with no teardown; the
-    /// empty-RRID null sentinel is ignored the same way. Returns the old
-    /// report's per-host teardown failures (empty for a new insert) to log
-    /// best-effort.
+    /// The *old* report's async ownership (arbiter claim, remote locks) and
+    /// hosts are released before the new one is stored, or both leak. A new RRID
+    /// is a plain [`add`](Self::add). Returns the old report's per-host teardown
+    /// failures (empty for a new insert).
     pub(crate) async fn add_or_replace(
         &mut self,
         report: Box<dyn TestReport + Send + Sync>,
@@ -146,8 +128,6 @@ impl TemplateRegistry {
         if rrid.is_empty() {
             return RemoveReport::default();
         }
-        // Release the previous occupant's claims/locks/connections before the
-        // insert below drops it.
         let removed = if self.entries.contains_key(&rrid) {
             self.teardown(&rrid).await
         } else {
@@ -159,15 +139,12 @@ impl TemplateRegistry {
 
     /// Releases `rrid`'s async ownership, closes its hosts, then drops it.
     ///
-    /// The bounded teardown the REPL `quit` runs, applied to one removed report:
+    /// The bounded teardown the REPL `quit` runs:
     /// [`release_pool_claims`](mtui_testreport::TestReport::release_pool_claims)
-    /// (arbiter ownership + remote pool-claim lock) then
-    /// [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)` (per-host operation
-    /// lock + graceful disconnect) under `remove_close_timeout`. Only once that
-    /// returns is the entry dropped and, if active, the pointer repointed to the
-    /// next remaining entry — so a reader never observes a half-torn-down active
-    /// report. A no-op if `rrid` is absent. Returns per-host teardown failures
-    /// and straggler names for best-effort logging.
+    /// then [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)` under
+    /// `remove_close_timeout`. Only then is the entry dropped and, if active, the
+    /// pointer repointed, so a reader never sees a half-torn-down active report.
+    /// A no-op if `rrid` is absent. Returns per-host failures and stragglers.
     pub async fn remove(&mut self, rrid: &str) -> RemoveReport {
         if !self.entries.contains_key(rrid) {
             return RemoveReport::default();
@@ -175,17 +152,16 @@ impl TemplateRegistry {
         self.teardown(rrid).await
     }
 
-    /// Shared teardown body for [`remove`](Self::remove) and
-    /// [`add_or_replace`](Self::add_or_replace). Assumes `rrid` is loaded.
+    /// Shared body of [`remove`](Self::remove) and
+    /// [`add_or_replace`](Self::add_or_replace); assumes `rrid` is loaded.
     async fn teardown(&mut self, rrid: &str) -> RemoveReport {
         let mut result = RemoveReport::default();
         let timeout = remove_close_timeout();
         if let Some(entry) = self.entries.get(rrid).cloned() {
             let mut report = entry.lock().await;
-            // Best-effort, and before disconnecting: a no-op without pooling.
+            // Before disconnecting; a no-op without pooling.
             report.release_pool_claims().await;
-            // Snapshot hostnames so a straggler (the whole close exceeding the
-            // budget) can still be named per host.
+            // So a straggler can still be named per host.
             let hosts = report.base_mut().targets.names();
             let close = report.base_mut().targets.close(None);
             match tokio::time::timeout(timeout, close).await {
@@ -199,7 +175,6 @@ impl TemplateRegistry {
                 Err(_) => result.stragglers = hosts,
             }
         }
-        // Ownership released: now drop the entry and repoint active.
         self.entries.shift_remove(rrid);
         if self.active.as_deref() == Some(rrid) {
             self.active = self.entries.keys().next().cloned();
@@ -210,9 +185,7 @@ impl TemplateRegistry {
     /// Returns a cloned handle (lockable [`ReportEntry`]) for `rrid`, or `None`
     /// if absent.
     ///
-    /// The caller `.lock()`s it to read/mutate the report: how a dispatch (via
-    /// [`Session`](crate::Session)) acquires exactly the entry it acts on
-    /// without borrowing the whole registry.
+    /// The caller `.lock()`s it to read or mutate the report.
     #[must_use]
     pub fn handle(&self, rrid: &str) -> Option<ReportEntry> {
         self.entries.get(rrid).map(Arc::clone)
@@ -273,14 +246,11 @@ impl TemplateRegistry {
     /// Builds a cheap per-call view of this registry that **shares** the same
     /// per-entry report locks.
     ///
-    /// The structure (entry map + active pointer) is cloned, but each entry is
-    /// an `Arc<Mutex<..>>`, so both registries point at the *same* lockable
-    /// report: a per-RRID command acting through a snapshot mutates content the
-    /// canonical registry sees. Used by
-    /// [`Session::fork_for_call`](crate::Session::fork_for_call) to let a
-    /// headless MCP dispatch run without a session-wide lock, different-RRID
-    /// calls taking distinct entry locks. The stable [`id`](Self::id) is
-    /// preserved so a snapshot keeps the same arbitration owner-key seed.
+    /// The entry map and active pointer are cloned, but each entry is an
+    /// `Arc<Mutex<..>>`, so a command acting through a snapshot mutates content
+    /// the canonical registry sees. Used by
+    /// [`Session::fork_for_call`](crate::Session::fork_for_call); the
+    /// [`id`](Self::id) is preserved.
     #[must_use]
     pub(crate) fn snapshot(&self) -> Self {
         Self {

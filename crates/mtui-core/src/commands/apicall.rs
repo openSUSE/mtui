@@ -87,9 +87,8 @@ pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
 }
 
 /// The native OBS backend for `rrid` over the session-scoped
-/// [`HttpClient`](mtui_datasources::HttpClient), like [`gitea_client`]: the
-/// concurrent MCP forks share one connection pool instead of each operation
-/// building its own (#594).
+/// [`HttpClient`](mtui_datasources::HttpClient), like [`gitea_client`], so
+/// concurrent MCP forks share one connection pool.
 pub(crate) fn osc_client(session: &Session, rrid: &RequestReviewID) -> Result<Osc, CommandError> {
     let http = session
         .http_client()

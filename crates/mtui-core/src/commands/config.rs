@@ -97,10 +97,9 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
     }
 }
 
-/// MCP surface criterion (#410): a headless client (`!is_repl`) gets only what
-/// it needs to operate the session — endpoint URLs (userinfo-stripped) and
-/// operational tunables. Operator-local values stay on the REPL, whose operator
-/// owns the machine and can read mtui.toml directly. Secrets stay `<set>` on
+/// MCP surface criterion: a headless client (`!is_repl`) gets only what it needs
+/// to operate the session — endpoint URLs (userinfo-stripped) and operational
+/// tunables. Operator-local values stay on the REPL. Secrets stay `<set>` on
 /// both surfaces.
 ///
 /// Single-change unit with `attr_value`, `MCP_URL_ATTRS` and `ATTRS`: adding an
@@ -359,7 +358,7 @@ impl Command for ConfigCmd {
         false
     }
 
-    /// `set` writes `session.config`, which a fork clones by value (#523).
+    /// `set` writes `session.config`, which a fork clones by value.
     ///
     /// Only a positively-identified `show` is scoped: an unknown subcommand, an
     /// empty argv and a parse failure fall through to the canonical session —

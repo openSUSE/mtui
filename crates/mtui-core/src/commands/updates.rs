@@ -61,14 +61,11 @@ const STATUS_ALL: &str = "all";
 /// Lists the update queue (unassigned + in-testing by default), fetched live
 /// from the TeReGen API.
 ///
-/// The default view is the actionable pickup queue: **unassigned** updates that
-/// are **in testing**. `--assignee`/`--mine`/`--all-assignees` pick another
-/// assignment view (dropping the unassigned default); `--status X` asks for
-/// that status alone and `--status all` for every status. TeReGen scopes
-/// assignment to testing updates, so the assignment views and the unassigned
-/// default exist only for `--status testing`, and the views are refused with
-/// any other status. Session-global, so [`Scope::Single`] rather than a per-template
-/// fan-out — though it issues one TeReGen query per `--mine` login.
+/// The default view is the pickup queue: **unassigned** updates that are **in
+/// testing**. `--assignee`/`--mine`/`--all-assignees` pick another assignment
+/// view; `--status X` asks for that status alone and `--status all` for every
+/// status. TeReGen scopes assignment to testing updates, so the assignment views
+/// are refused with any other status. Session-global, hence [`Scope::Single`].
 pub struct Updates;
 
 #[async_trait]
@@ -88,7 +85,6 @@ impl Command for Updates {
     }
 
     fn reads_resolved_report(&self) -> bool {
-        // Session-global query against the datasource.
         false
     }
 
@@ -181,8 +177,7 @@ impl Command for Updates {
 
     fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
         // Right after `-F`/`--field`, offer the field names, not more flags.
-        // Empty tokens are dropped: a trailing space would otherwise read as an
-        // empty "previous token" and hide the names just as `-F ` was typed.
+        // Empty tokens are dropped so a trailing space does not hide them.
         let tokens: Vec<&str> = line.split(' ').filter(|t| !t.is_empty()).collect();
         let prev = if text.is_empty() {
             tokens.last().copied()
@@ -203,8 +198,7 @@ impl Command for Updates {
                 .filter(|c| c.starts_with(text))
                 .collect();
         }
-        // `-G`/`-F` are repeatable, so they ride in `extra`: a synonym group
-        // would stop offering them once they first appear on the line.
+        // Repeatable, so in `extra`: a synonym group stops offering once used.
         super::support::complete_choices(
             &[
                 &["--status"],
@@ -224,14 +218,13 @@ impl Command for Updates {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // A repeated `-G` is sent once.
         let review_groups: Vec<String> = {
             let mut seen = HashSet::new();
             args.get_many::<String>("review_group")
                 .map(|v| v.filter(|g| seen.insert((*g).clone())).cloned().collect())
                 .unwrap_or_default()
         };
-        // Resolve every -F name up front so a typo errors before any query.
+        // Resolved up front so a typo errors before any query.
         let specs = args
             .get_many::<String>("field")
             .map(|v| v.map(|f| resolve_field(f)).collect::<Result<Vec<_>, _>>())
@@ -286,20 +279,17 @@ impl Command for Updates {
             (assignee.into_iter().collect::<Vec<_>>(), None)
         };
 
-        // '--status all' widens by sending no status filter at all.
         let status_all = status_arg == STATUS_ALL;
         let status = if status_all { None } else { Some(status_arg) };
 
-        // Assignment is scoped to testing server-side: sending any assignment
-        // param forces `status=testing`, so any other status asks for none.
-        // The default testing view is the unassigned pickup queue, which
-        // --assignee/--mine/--all-assignees opt out of.
+        // Assignment is scoped to testing server-side: any assignment param
+        // forces `status=testing`. The default testing view is the unassigned
+        // pickup queue, which the assignment flags opt out of.
         let is_testing = status.as_deref() == Some("testing");
         let unassigned = is_testing && assignees.is_empty() && !all_assignees;
 
-        // Without `with_assignment` TeReGen omits assignee/assignees on SLFO
-        // rows, so an assignment-derived field would render a false
-        // "unassigned".
+        // Without `with_assignment` TeReGen omits assignees on SLFO rows, so an
+        // assignment-derived field would render a false "unassigned".
         if !is_testing && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
             return Err(CommandError::Other(format!(
                 "field '{}' needs assignment data, which TeReGen serves for \
@@ -309,8 +299,8 @@ impl Command for Updates {
         }
 
         let teregen = teregen_client(session)?;
-        // One query per assignee (none = one unfiltered query), carrying every
-        // `-G` group: TeReGen serves the union of a repeated `review_group`.
+        // One query per assignee (none = one unfiltered), carrying every `-G`
+        // group: TeReGen serves their union.
         let groups: Vec<&str> = review_groups.iter().map(String::as_str).collect();
         let status_filter = status.as_deref();
         let assignee_filters: Vec<Option<&str>> = if assignees.is_empty() {
@@ -330,8 +320,8 @@ impl Command for Updates {
             })
             .collect();
         let multi = queries.len() > 1;
-        // `buffered` keeps batches in login order. Materialised eagerly: a lazy
-        // `map` closure trips a higher-ranked-lifetime limit.
+        // `buffered` keeps login order. Eager: a lazy `map` trips a
+        // higher-ranked-lifetime limit.
         let futures: Vec<_> = queries.iter().map(|q| teregen.updates(q)).collect();
         let cancel = session.cancel_token();
         let results: Vec<_> = tokio::select! {
@@ -343,8 +333,8 @@ impl Command for Updates {
             results = stream::iter(futures).buffered(4).collect() => results,
         };
 
-        // `Err` (transport/API failure) is surfaced, `Ok(None)` (no `updates`
-        // key) skipped: only a *successful* empty result is an empty queue.
+        // `Err` is surfaced, `Ok(None)` (no `updates` key) skipped: only a
+        // *successful* empty result is an empty queue.
         let mut rows: Vec<Value> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for result in results {
@@ -359,9 +349,8 @@ impl Command for Updates {
                 CommandError::Other("Update queue query returned a malformed response".to_owned())
             })?;
             for row in batch {
-                // A row can sit in several groups, or under both `--mine`
-                // logins. One without an id is kept, never silently dropped.
-                // A single query cannot repeat a row.
+                // A row can sit in several groups or under both `--mine` logins;
+                // one without an id is kept, never dropped.
                 let fresh = !multi
                     || match row.get("id").and_then(Value::as_str) {
                         Some(id) => seen.insert(id.to_owned()),
@@ -373,8 +362,7 @@ impl Command for Updates {
             }
         }
         if multi {
-            // Restore the server's priority-descending order across the merge
-            // (stable, so ties keep server order).
+            // Restore priority-descending order across the merge (stable).
             rows.sort_by_key(|r| {
                 std::cmp::Reverse(
                     r.get("priority")
@@ -388,7 +376,6 @@ impl Command for Updates {
             session.display.println(&format!("note: {note}"));
         }
         if rows.is_empty() {
-            // Keep --json output parseable even for an empty queue.
             let empty = if as_json {
                 "[]".to_owned()
             } else if assignees.is_empty() {
@@ -403,19 +390,16 @@ impl Command for Updates {
             return Ok(());
         }
 
-        // Paging via --offset (pre-crush) makes any middle slice recoverable; chosen over an
-        // explicit-window notice as it fits the existing --limit plumbing.
+        // Paging via --offset (pre-crush) makes any middle slice recoverable.
         let windowed = window(args, rows);
-        // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
-        // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
+        // The row budget backstops `--limit 0=all`; it is not a byte cap.
         let crushed = crush(windowed, update_key, anomaly_severity);
         let notice = crushed.notice(UPDATES_HINT);
         let meta = crushed.meta(UPDATES_HINT);
         let mut shown = crushed.kept;
 
         if as_json {
-            // Over-cap --json stays in-band like the byte-cap convention, but as a
-            // structured envelope so stdout stays valid JSON for jq/MCP parsers.
+            // An over-cap envelope keeps stdout valid JSON.
             if let Some(meta) = meta {
                 session
                     .display
@@ -447,19 +431,15 @@ impl Command for Updates {
             }
         } else {
             if needs_obs {
-                // The transport builds only when a shown row can be looked up:
-                // an all-idless (or all-non-OBS) listing answers without
-                // credentials. Non-OBS rows are stamped first so their
-                // fields render n/a rather than dashes.
+                // Built only when a shown row can be looked up, so an all-idless
+                // listing needs no credentials. Non-OBS rows are stamped first.
                 let (targets, _non_obs) = partition_obs_rows(&mut shown);
                 if targets.is_empty() {
                     tracing::debug!(
                         "OBS enrichment skipped: no shown row has a parseable RequestReviewID"
                     );
                 } else {
-                    // The transport builds only for a lookup that will run;
-                    // `Session` is `!Sync`, so the call below takes owned
-                    // values and borrows nothing across its awaits.
+                    // `Session` is `!Sync`: the call below takes owned values.
                     let http = session.http_client().map_err(|e| {
                         CommandError::Other(format!("could not build OBS client: {e}"))
                     })?;
@@ -489,11 +469,9 @@ struct MineLogins {
 }
 
 /// `--mine` asks about the logins assignments are recorded under: the oscrc
-/// `user` for `obs_api_url` (`principal`), which OBS review actions record,
-/// and the Gitea token owner's login (`gitea`, `None` without a token), which
-/// Gitea markers record. Either alone still answers for the updates recorded
-/// under it, so a failed one becomes a note; with neither there is nobody to
-/// ask about.
+/// `user` for `obs_api_url` (`principal`) and the Gitea token owner's login
+/// (`gitea`, `None` without a token). Either alone still answers, so a failed
+/// one becomes a note; with neither there is nobody to ask about.
 fn mine_logins(
     obs_api_url: &str,
     principal: Result<String, String>,

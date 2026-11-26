@@ -1,10 +1,9 @@
 //! The `Command` trait, its fan-out [`Scope`], and the template fan-out engine.
 //!
-//! Every command implements [`Command`] and is discovered through the registry —
-//! the one thing the REPL, tab completion, and the MCP tool synthesiser all
-//! iterate. A command supplies its abstract body in [`call`](Command::call); the
-//! provided [`run`](Command::run) drives it across the templates the invocation
-//! resolves to:
+//! Every command implements [`Command`] and is discovered through the registry.
+//! A command supplies its body in [`call`](Command::call); the provided
+//! [`run`](Command::run) drives it across the templates the invocation resolves
+//! to:
 //!
 //! * `-T/--template RRID` — exactly that loaded template (declared only by
 //!   commands that address one, see [`addresses_template`]).
@@ -31,25 +30,21 @@ use crate::template_scope::{SingleTemplate, canonical_template_name};
 /// Fan-out scope policy for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Scope {
-    /// Run once against the active template. Under MCP with several templates
-    /// loaded this defaults to fan-out (there is no addressable active pointer).
+    /// Run once against the active template; under MCP with several templates
+    /// loaded, fan out instead.
     #[default]
     Active,
     /// Run once per loaded template. Action commands safe to repeat opt in.
     Fanout,
     /// Never implicitly fans out: with no `-T`/`--all-templates`, resolves to
     /// exactly one template via
-    /// [`Session::resolve_single_template`](crate::Session::resolve_single_template) —
-    /// the sole loaded one, the active one in the REPL, or
-    /// [`CommandError::AmbiguousTemplate`]
-    /// headlessly with several loaded. Fan-out is opt-in only, via an explicit
-    /// `--all-templates`. For destructive or remote-write commands (`update`,
-    /// `downgrade`, `approve`, …) where every-template-by-default is the bug,
-    /// not the feature (#575).
+    /// [`Session::resolve_single_template`](crate::Session::resolve_single_template),
+    /// or [`CommandError::AmbiguousTemplate`] headlessly with several loaded.
+    /// For destructive or remote-write commands (`update`, `downgrade`,
+    /// `approve`, …).
     Explicit,
-    /// Run exactly once regardless of how many templates are loaded — for
-    /// commands that name their own target template (`load_template`, `unload
-    /// <rrid>`) and must never auto-fan-out. Never declares `--all-templates`;
+    /// Run exactly once, for commands that name their own target template
+    /// (`load_template`, `unload <rrid>`). Never declares `--all-templates`;
     /// [`addresses_template`] decides `-T`.
     Single,
 }
@@ -64,9 +59,8 @@ pub fn addresses_template<C: Command + ?Sized>(command: &C) -> bool {
 
 /// An executable mtui command.
 ///
-/// Concrete commands implement [`name`](Command::name) and the abstract
-/// [`call`](Command::call) body; the rest default. The engine dispatches a
-/// parsed line to the matching command and awaits [`run`](Command::run).
+/// Concrete commands implement [`name`](Command::name) and
+/// [`call`](Command::call); the rest default.
 #[async_trait]
 pub trait Command: Send + Sync {
     /// The user-facing command string (the registry key), e.g. `"run"`.
@@ -92,14 +86,13 @@ pub trait Command: Send + Sync {
 
     /// Whether the body reads the report [`run`](Self::run) resolved for it.
     ///
-    /// `true` by default: a body that reads it must be refused when the entry
-    /// cannot be claimed, never answered off the null sentinel (#524). `false`
-    /// on a [`Scope::Single`] command exempts it from that refusal and drops
-    /// `-T/--template` from its parser ([`addresses_template`]): it addressed
-    /// no template and ignores the one it was handed.
+    /// `true` by default: a body that reads it is refused when the entry cannot
+    /// be claimed, never answered off the null sentinel. `false` on a
+    /// [`Scope::Single`] command exempts it from that refusal and drops
+    /// `-T/--template` from its parser ([`addresses_template`]).
     ///
-    /// Reading *a* report is not the test: `load_template` prints the host
-    /// count of the template it just loaded, never the one it was handed.
+    /// Reading *a* report is not the test: `load_template` reports the template
+    /// it just loaded, never the one it was handed.
     fn reads_resolved_report(&self) -> bool {
         true
     }
@@ -107,22 +100,18 @@ pub trait Command: Send + Sync {
     /// Whether this *invocation* must dispatch against the **canonical** session
     /// rather than a [`fork_for_call`](crate::Session::fork_for_call), because it
     /// mutates state the fork clones by value (`config`) or owns outright (the
-    /// [`TemplateRegistry`](crate::TemplateRegistry) *structure* — loading,
+    /// [`TemplateRegistry`](crate::TemplateRegistry) structure: loading,
     /// replacing or removing an entry, or re-pointing the active template).
     ///
-    /// Per-**invocation**, not per-command, hence `argv`: several MCP tools may be
-    /// synthesised from one registry command and differ only in argv
-    /// (`config_show` and `config_set` are both `config`), so a whole-command
-    /// answer would put the read-only ones on the exclusive gate too.
+    /// Per-invocation, hence `argv`: `config_show` and `config_set` are both
+    /// `config` but only `set` needs the exclusive gate.
     ///
-    /// `false` by default; `load_template`, `unload`, `switch` and `regenerate`
-    /// override it unconditionally, `config` for its `set` subcommand. It forces
-    /// the headless MCP dispatch gate
+    /// `false` by default. When `true`, the headless MCP dispatch gate
     /// ([`McpSession::command_lock`](../../mtui_mcp/session/struct.McpSession.html))
-    /// onto the **exclusive** arm even at a single template, so the mutation
-    /// lands on the canonical session rather than a discarded per-call fork. A
-    /// command that only mutates an already-loaded report's *content* may run on
-    /// a fork: those mutations reach the shared report through the entry lock.
+    /// goes exclusive even at a single template, so the mutation lands on the
+    /// canonical session rather than a discarded fork. Mutating an already-loaded
+    /// report's *content* may run on a fork: it reaches the shared report through
+    /// the entry lock.
     fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         false
     }
@@ -130,11 +119,9 @@ pub trait Command: Send + Sync {
     /// Whether the fan-out driver may skip a resolved template that has no
     /// connected hosts (when the invocation named no `-t` host).
     ///
-    /// `true` by default: a host-action command (`run`, `reboot`, …) has nothing
-    /// to do on a host-less template. A command whose work does not require
-    /// connected hosts — notably `export`, which under `Auto`/`Kernel` sources
-    /// its data from openQA — overrides it to `false` so it is dispatched at
-    /// zero hosts and applies its own per-template rule.
+    /// `true` by default: a host-action command has nothing to do on a host-less
+    /// template. `export` (which can source from openQA) overrides it to `false`
+    /// and applies its own per-template rule.
     fn skip_hostless_templates(&self) -> bool {
         true
     }
@@ -144,9 +131,8 @@ pub trait Command: Send + Sync {
     /// hosts.
     ///
     /// `false` by default: a removed host is gone, so a host-action command
-    /// must skip the template rather than fail it with `HostNotConnected`.
-    /// `show_log` answers removed hosts from their retained log and opts in,
-    /// so a detached-only template still dispatches for it.
+    /// skips the template rather than fail it with `HostNotConnected`. `show_log`
+    /// answers removed hosts from their retained log and opts in.
     fn includes_detached_hosts(&self) -> bool {
         false
     }
@@ -155,28 +141,23 @@ pub trait Command: Send + Sync {
     /// so [`run`](Self::run) must keep the move instead of restoring the
     /// pre-dispatch pointer.
     ///
-    /// `false` by default; only honoured on the single-template path, which is
-    /// where a [`Scope::Single`] command always lands. `switch`, whose entire
-    /// point is to leave the pointer moved, and `load_template`/`regenerate`,
-    /// whose loaded RRID must become active, override it unconditionally.
+    /// `false` by default; only honoured on the single-template path. `switch`,
+    /// `load_template` and `regenerate` override it.
     fn repoints_active(&self) -> bool {
         false
     }
 
     /// Contributes this command's arguments to its `clap` subcommand.
     ///
-    /// Default is the identity: a command with no arguments. `REMAINDER`,
-    /// no-exit-on-error and per-command `--help` come from the shared base
-    /// parser in [`command_parser`](crate::engine::command_parser); this is the
-    /// hook it extends.
+    /// The identity by default. The shared base parser is
+    /// [`command_parser`](crate::engine::command_parser).
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd
     }
 
     /// Tab-completion candidates for the current input. Empty by default.
     ///
-    /// `text` is the token being completed and `line` the whole input line; the
-    /// readline-style `begidx`/`endidx` are supplied by the reedline completer.
+    /// `text` is the token being completed and `line` the whole input line.
     fn complete(&self, _session: &Session, _text: &str, _line: &str) -> Vec<String> {
         Vec::new()
     }
@@ -184,67 +165,47 @@ pub trait Command: Send + Sync {
     /// The command body, run once per resolved template.
     ///
     /// [`run`](Self::run) has already pointed `session`'s active template at the
-    /// template being acted on, so `session.metadata()` / `session.targets()`
-    /// reflect it.
+    /// one being acted on.
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult;
 
     /// Drives [`call`](Self::call) across the resolved templates.
     ///
-    /// Single-template resolution calls [`call`](Self::call) directly so the
-    /// error contract is unchanged (errors propagate), then restores the
-    /// pre-dispatch active pointer — unless [`Command::repoints_active`] says the
-    /// body's move is deliberate, in which case the new pointer stands. Beyond
-    /// one, each template gets a banner and its own boundary: failures are
-    /// collected, the loop continues, and [`CommandError::FanOut`] is returned
-    /// if any failed. A host-less template is skipped up front when the
-    /// invocation named no `-t` hosts; every template skipped means the command
-    /// ran nowhere and yields [`CommandError::NoRefhostsDefined`].
+    /// A single resolved template propagates [`call`](Self::call)'s error
+    /// directly, then restores the pre-dispatch active pointer unless
+    /// [`Command::repoints_active`] says the move is deliberate. Beyond one, each
+    /// template gets a banner and its own error boundary, and
+    /// [`CommandError::FanOut`] is returned if any failed. A host-less template
+    /// is skipped when no `-t` host was named; every template skipped yields
+    /// [`CommandError::NoRefhostsDefined`].
     ///
     /// A template whose report entry cannot be claimed is refused
     /// ([`CommandError::TemplateBusy`]) rather than dispatched against the null
-    /// sentinel; under fan-out that refusal is that template's failure alone,
-    /// and a contended entry is never mistaken for a host-less one and skipped.
-    /// The exception is a command that addresses no template
-    /// ([`addresses_template`]): it points the session but releases the entry
-    /// for the call.
+    /// sentinel; under fan-out that is that template's failure alone, and a
+    /// contended entry is never mistaken for a host-less one. A command that
+    /// addresses no template ([`addresses_template`]) points the session but
+    /// releases the entry for the call.
     ///
-    /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
-    /// bails with [`CommandError::Cancelled`] before dispatching, and re-checks
-    /// between templates so a cancelled fan-out stops at the next boundary. A
-    /// cancel arriving *mid*-`call` is observed only if the body opts in
-    /// ([`Session::cancel_requested`]); otherwise the MCP job layer hard-aborts
-    /// after its grace period. A body's own [`CommandError::Cancelled`] *is* the
-    /// cancel — break at the boundary keeping the flow's detail, never collect
-    /// it as a template failure. A real failure banked before the cancel
-    /// outranks it and still surfaces as the [`CommandError::FanOut`] aggregate,
-    /// with the stop riding along as that aggregate's `stop` note, so it neither
-    /// pads the failure list nor leaves never-reached templates looking clean.
+    /// Cancellation: the driver bails with [`CommandError::Cancelled`] before
+    /// dispatching and re-checks between templates. A cancel arriving mid-`call`
+    /// is observed only if the body opts in ([`Session::cancel_requested`]). A
+    /// body's own [`CommandError::Cancelled`] *is* the cancel: break keeping its
+    /// detail, never collect it as a template failure. A real failure banked
+    /// before the cancel outranks it and surfaces as [`CommandError::FanOut`],
+    /// with the stop in that aggregate's `stop` note.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         session.check_cancelled()?;
         let resolved = resolve_templates(self.name(), self.scope(), session, args)?;
 
         if resolved.len() <= 1 {
-            // `repoints_active` opts out of the restore below: the body's move
-            // (`switch`, a loading `load_template`/`regenerate`) is the point of
-            // the call, not a side effect to undo.
             let restore = (!self.repoints_active())
                 .then(|| session.templates.active_rrid().map(str::to_owned))
                 .flatten();
-            // Install this call's active handle (the entry's lock). An empty
-            // RRID (empty session) clears the guard so `metadata()` falls back
-            // to the null report. `activate` drops the prior guard first, so a
-            // registry-mutating command (`load_template`) can re-point/re-lock
-            // the active entry from inside `call` without self-deadlocking.
+            // `activate` drops the prior guard first, so a registry-mutating
+            // command can re-lock the active entry inside `call` without
+            // self-deadlocking.
             let target_rrid = resolved.first().map_or("", String::as_str);
-            // A command that addresses no template got whatever was active
-            // from `resolve_templates`; refusing it because some *other*
-            // dispatch holds that entry fails a command over a template the
-            // operator never named. Per-command, not per-scope: `regenerate`
-            // is also `Scope::Single` but reads what it was handed (#524).
-            //
-            // `claim` runs either way — it is what points the session at the
-            // template. Only the *refusal* is conditional, so the order here
-            // matters and must not be flipped.
+            // `claim` runs either way (it points the session at the template);
+            // only the refusal is conditional, so the order must not be flipped.
             let exempt = !addresses_template(self);
             if let Err(exc) = claim(self.name(), session, target_rrid)
                 && !exempt
@@ -252,7 +213,8 @@ pub trait Command: Send + Sync {
                 restore_active(session, restore);
                 return Err(exc);
             }
-            // Exempt commands never touch the handed report, so holding the guard would fail concurrent calls with `template busy` (#666).
+            // Exempt commands never touch the handed report; holding the guard
+            // would fail concurrent calls with `template busy`.
             if exempt && !self.repoints_active() {
                 session.release_active_guard();
             }
@@ -261,11 +223,8 @@ pub trait Command: Send + Sync {
             return out;
         }
 
-        // A `-t`-taking command invoked without explicit hosts applies
-        // opportunistically, so a host-less template is skipped rather than
-        // failing the fan-out. `try_get_many` separates "never declared `-t`"
-        // (`Err`) from "declared but unset" (`Ok(None)`) and "named hosts"
-        // (`Ok(Some)`).
+        // `try_get_many` separates "never declared `-t`" (`Err`) from
+        // "declared but unset" (`Ok(None)`) and "named hosts" (`Ok(Some)`).
         let hosts = args.try_get_many::<String>("hosts");
         let declares_hosts = hosts.is_ok();
         let named: Vec<String> = hosts
@@ -275,22 +234,14 @@ pub trait Command: Send + Sync {
             .unwrap_or_default();
         let skippable_hostless =
             declares_hosts && named.is_empty() && self.skip_hostless_templates();
-        // Named hosts must still fail loudly *within* a template that owns at
-        // least one of them (an unknown host is a real error there) — only a
-        // template owning **none** of the named hosts is skippable, mirroring
-        // the host-less skip above so `--all-templates -t <host-of-one>` does
-        // not fail every sibling template with `HostNotConnected`.
+        // Only a template owning **none** of the named hosts is skippable; an
+        // unknown host within one that owns some is a real error.
         let skippable_unowned = declares_hosts && !named.is_empty();
 
         let restore = session.templates.active_rrid().map(str::to_owned);
-        // `is_hostless` locks the entry it inspects, so a guard still held on it
-        // would make that entry unreadable. Each iteration re-activates. This
-        // sheds only *our* guard; a foreign holder is the `None` case below.
+        // `is_hostless` locks the entry it inspects, so our own guard must go.
         session.release_active_guard();
-        // Retained-log ownership for commands that read detached logs (see
-        // [`Command::includes_detached_hosts`]): snapshotted once, under one
-        // lock, before the loop — never per host. Any other command skips a
-        // template owning none of the named hosts outright.
+        // Snapshotted once, before the loop, for [`Command::includes_detached_hosts`].
         let detached = if self.includes_detached_hosts() {
             session.detached_snapshot(&resolved)
         } else {
@@ -300,14 +251,10 @@ pub trait Command: Send + Sync {
         let mut skipped: Vec<String> = Vec::new();
 
         let mut cancelled = false;
-        // Templates whose body returned `Ok`, counted — never derived. Deriving
-        // it (`resolved` minus `skipped` minus `failures`) counted every
-        // never-reached template as done, reporting "stopped after M of M" for a
-        // fan-out that stopped at the first.
+        // Counted, never derived: deriving it from `resolved` would count every
+        // never-reached template as done.
         let mut completed: Vec<&str> = Vec::new();
-        // The flow's own verdict detail when the break came from a body-level
-        // cancel: `CommandError::Cancelled` promises the payload names what the
-        // flow managed to do, so it is preserved rather than flattened.
+        // The flow's own cancel detail, preserved in the `Cancelled` payload.
         let mut body_stop: Option<(String, String)> = None;
         for rrid in &resolved {
             // Template boundary = cancellation checkpoint.
@@ -315,18 +262,14 @@ pub trait Command: Send + Sync {
                 cancelled = true;
                 break;
             }
-            // `None` = held elsewhere, host set unreadable. Only a *readable*
-            // empty entry is skippable: treating the contended one as hostless
-            // skipped it with this warning and exited 0, which is the #524
-            // symptom, reached before `claim` below could refuse it.
+            // `None` = held elsewhere, host set unreadable: only a *readable*
+            // empty entry is skippable, so a contended one reaches `claim`.
             if skippable_hostless && session.is_hostless(rrid) == Some(true) {
                 tracing::warn!(command = self.name(), rrid = %rrid, "skipped: no connected hosts");
                 skipped.push(rrid.clone());
                 continue;
             }
-            // Same contention contract: a contended entry must fall through to
-            // `claim` and be refused, never be mistaken for one that simply
-            // does not own the named host.
+            // Same contention contract as above.
             if skippable_unowned && session.owns_none_of(rrid, &named) == Some(true) {
                 let retained = detached
                     .get(rrid)
@@ -342,9 +285,7 @@ pub trait Command: Send + Sync {
                     continue;
                 }
             }
-            // A template that cannot be claimed is this fan-out's failure, not
-            // the whole command's: bank it and keep going, like any other
-            // per-template error.
+            // An unclaimable template is that template's failure: bank it.
             if let Err(exc) = claim(self.name(), session, rrid) {
                 failures.push((rrid.clone(), exc));
                 continue;
@@ -353,9 +294,8 @@ pub trait Command: Send + Sync {
             match self.call(session, args).await {
                 Ok(()) => completed.push(rrid.as_str()),
                 // A body stopped at its own checkpoint
-                // (`commands::perform::map_flow_error`) *is* the cancel verdict:
-                // pushing it into `failures` would let a cancel impersonate a
-                // broken template and surface as a `FanOut` aggregate.
+                // (`commands::perform::map_flow_error`) *is* the cancel verdict,
+                // not a template failure.
                 Err(CommandError::Cancelled(detail)) => {
                     tracing::info!(command = self.name(), rrid = %rrid, "template body cancelled");
                     body_stop = Some((rrid.clone(), detail));
@@ -370,11 +310,8 @@ pub trait Command: Send + Sync {
         }
 
         restore_active(session, restore);
-        // How far the fan-out got, in one shape for both verdicts: the
-        // `Cancelled` payload when the stop *is* the verdict, the `FanOut`
-        // aggregate's `stop` note when a real failure outranks it. Without it a
-        // caller told only "template X failed" would read the templates the
-        // break never reached as having run clean.
+        // How far the fan-out got: the `Cancelled` payload, or the `FanOut`
+        // aggregate's `stop` note when a real failure outranks the cancel.
         let stop_summary = || {
             let mut msg = format!(
                 "stopped after {} of {} templates",
@@ -390,10 +327,8 @@ pub trait Command: Send + Sync {
         };
 
         if cancelled && failures.is_empty() {
-            // Only when nothing failed: a real per-template failure outranks the
-            // stop and falls through to the `FanOut` aggregate below, because
-            // burying a broken template behind a bare "cancelled" is the one
-            // thing the caller must not be told.
+            // A real per-template failure outranks the stop and falls through
+            // to the `FanOut` aggregate below.
             tracing::info!(command = self.name(), "fan-out cancelled");
             return Err(CommandError::Cancelled(stop_summary()));
         }
@@ -420,13 +355,10 @@ pub trait Command: Send + Sync {
 
 /// Points the session at `rrid` for this dispatch, or refuses.
 ///
-/// An empty rrid is the legitimate nothing-loaded session and dispatches on the
-/// sentinel as before. Anything else that fails to claim the entry is the #524
-/// race, and running anyway is what made it silent: `report_wd()` errors on the
-/// sentinel now, but a body that only reads hosts/metadata (`list_hosts`,
-/// `list_packages`) would still answer about nothing, with exit 0. Refuse
-/// instead, and name the template — the ERROR log alone never reaches the MCP
-/// caller, whose reply is a per-call display capture.
+/// An empty rrid is the nothing-loaded session and dispatches on the sentinel.
+/// Anything else that fails to claim the entry is refused and named: running
+/// anyway would answer about nothing with exit 0, and the ERROR log alone never
+/// reaches an MCP caller.
 fn claim(command: &'static str, session: &mut Session, rrid: &str) -> CommandResult {
     match session.activate(rrid) {
         Activation::Active | Activation::Empty => Ok(()),
@@ -434,8 +366,7 @@ fn claim(command: &'static str, session: &mut Session, rrid: &str) -> CommandRes
             tracing::error!(command, rrid = %rrid, "activate lost the entry race");
             Err(CommandError::TemplateBusy(rrid.to_owned()))
         }
-        // Resolution already checked the registry, so this is an unload that
-        // landed in between — not a user naming a bad rrid.
+        // Resolution already checked the registry: an unload landed in between.
         Activation::NotLoaded => {
             tracing::error!(command, rrid = %rrid, "activate found no entry");
             Err(CommandError::TemplateNotLoaded(rrid.to_owned()))
@@ -446,11 +377,9 @@ fn claim(command: &'static str, session: &mut Session, rrid: &str) -> CommandRes
 /// Restores the active-template pointer (and its per-call handle) after
 /// dispatch.
 ///
-/// A prior active template is re-activated. `restore` is `None` both when
-/// nothing was active before *and* when [`Command::repoints_active`] opted the
-/// call out of the restore — either way the guard is refreshed onto whatever
-/// the call left active, so a body that deliberately moved the pointer
-/// (`switch`, a loading `load_template`/`regenerate`) keeps the move.
+/// `restore` is `None` when nothing was active before or when
+/// [`Command::repoints_active`] opted out; the guard is then refreshed onto
+/// whatever the call left active.
 fn restore_active(session: &mut Session, restore: Option<String>) {
     match restore {
         Some(rrid) => {
@@ -465,9 +394,8 @@ fn restore_active(session: &mut Session, restore: Option<String>) {
 
 /// Returns the ordered RRIDs this invocation should act on.
 ///
-/// An empty session resolves to a single empty-RRID entry (the active null
-/// report), so `run` takes the single-call fast path. `command` names the
-/// invocation for [`CommandError::AmbiguousTemplate`]'s payload.
+/// An empty session resolves to a single empty-RRID entry (the null report), so
+/// `run` takes the single-call path.
 fn resolve_templates(
     command: &'static str,
     scope: Scope,
@@ -484,21 +412,18 @@ fn resolve_templates(
 
     let active = || vec![session.templates.active_rrid().unwrap_or("").to_owned()];
 
-    // Self-targeting single-shot commands run exactly once, never fanned out.
     if scope == Scope::Single {
         return Ok(active());
     }
 
-    // `Forced` (bare `--all-templates`) fans out regardless of scope.
+    // Bare `--all-templates` fans out regardless of scope.
     let all_templates = arg_all_templates(args);
     if all_templates == Some(true) {
         let all = session.templates.rrids();
         return Ok(if all.is_empty() { active() } else { all });
     }
 
-    // `Suppressed` (`--all-templates=false`), and `Unset` on `Scope::Explicit`:
-    // narrow to one template via the same "one template, or refuse" rule the
-    // MCP tools use, rather than any implicit fan-out.
+    // `--all-templates=false`, or unset on `Scope::Explicit`: one template or refuse.
     if all_templates == Some(false) || scope == Scope::Explicit {
         return match session.resolve_single_template(None, session.is_repl) {
             SingleTemplate::One(rrid) => Ok(vec![rrid]),
@@ -510,15 +435,12 @@ fn resolve_templates(
         };
     }
 
-    // `Unset` on `Scope::Fanout`: always fan out.
     if scope == Scope::Fanout {
         let all = session.templates.rrids();
         return Ok(if all.is_empty() { active() } else { all });
     }
 
-    // `Unset` on `Scope::Active`: headless with several loaded, no interactive
-    // `switch`, so the active pointer is unaddressable state — fan out rather
-    // than silently pick one.
+    // Headless with several loaded has no addressable active pointer: fan out.
     if !session.is_repl && session.templates.len() > 1 {
         return Ok(session.templates.rrids());
     }
@@ -527,17 +449,12 @@ fn resolve_templates(
 }
 
 /// Resolves the ordered *real* RRIDs a `command`/`argv` invocation would act on,
-/// for out-of-crate callers that must know the target templates *before*
-/// dispatch (the MCP per-template lock gate).
-///
-/// Runs the same `resolve_templates` logic `run` uses, then drops the empty-RRID
-/// null-report sentinel so the caller sees only genuinely-loaded templates.
+/// for callers that must know the targets *before* dispatch (the MCP
+/// per-template lock gate).
 ///
 /// `None` means the argv does not parse here, or resolves only to the null
-/// report. The caller treats that (and the multi-RRID case) as "take the
-/// registry gate exclusively". Never errors: a `-T <unloaded-rrid>` yields
-/// `None` so the caller serialises conservatively, and the real error surfaces
-/// later at dispatch.
+/// report; the caller then serialises conservatively. Never errors: the real
+/// error surfaces at dispatch.
 #[must_use]
 pub fn resolve_command_rrids(
     command: &dyn Command,
@@ -556,8 +473,7 @@ pub fn resolve_command_rrids(
 pub enum ResolvedTemplates {
     /// These loaded templates, in dispatch order.
     Loaded(Vec<String>),
-    /// Nothing loaded and no template named: the null report, whose hosts are
-    /// the ones attached while nothing is loaded.
+    /// Nothing loaded and no template named: the null report.
     NullReport,
     /// The argv does not parse here, names a template that is not loaded, or
     /// is ambiguous; the real error surfaces at dispatch.
@@ -577,7 +493,6 @@ pub fn resolve_command_templates(
         return ResolvedTemplates::Unresolved;
     };
     match resolve_templates(command.name(), command.scope(), session, &matches) {
-        // The null report is the lone empty RRID; the registry never holds one.
         Ok(resolved) if resolved == [""] => ResolvedTemplates::NullReport,
         Ok(resolved) => ResolvedTemplates::Loaded(resolved),
         Err(_) => ResolvedTemplates::Unresolved,

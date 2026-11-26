@@ -14,14 +14,11 @@ use crate::session::Session;
 /// without waiting since the SSH connection is expected to drop, then
 /// reconnecting each with retries and backoff. Transactional or not.
 ///
-/// A reboot clears `/var/lock` (tmpfs), so the reservations (`lock -c`) and
-/// pool claims this session held are re-applied once the host is back:
-/// another owner's lock is never overwritten. A hold that could not be
-/// re-taken is reported on its own display line naming the host and the
-/// hold — the reboot outcome itself stays a success — alongside the usual
-/// per-host verdicts. A Product Increment's per-host testing lock (from the report's
-/// `lock_comment`, empty when no PI assignment is active) is re-applied the
-/// same way.
+/// A reboot clears `/var/lock` (tmpfs), so the reservations (`lock -c`), pool
+/// claims and a Product Increment's testing lock (the report's `lock_comment`)
+/// this session held are re-applied once the host is back; another owner's lock
+/// is never overwritten. A hold that could not be re-taken is reported on its own
+/// line naming the host and the hold, and the reboot outcome stays a success.
 pub struct Reboot;
 
 #[async_trait]

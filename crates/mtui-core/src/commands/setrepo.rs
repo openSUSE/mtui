@@ -101,8 +101,7 @@ impl Command for SetRepo {
         let has_set_repo = session.metadata().as_set_repo().is_some();
         let result = if has_set_repo {
             // Serialize against other testers' zypper transactions, as
-            // prepare/update do: refuse while another owner holds a host
-            // rather than changing its repos under them (#665).
+            // prepare/update do.
             let locked: BTreeSet<String> = selected.names().into_iter().collect();
             if let Err(e) = selected.update_lock(Some(&locked)).await {
                 session.restore_split_targets(selected, remainder);
