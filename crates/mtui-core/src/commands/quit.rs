@@ -474,11 +474,13 @@ mod tests {
     #[tokio::test]
     async fn quit_bounds_a_pool_claim_release_that_hangs() {
         let _guard = CLOSE_TIMEOUT_LOCK.lock().await;
-        CLOSE_TIMEOUT_MS.store(50, Ordering::SeqCst);
+        CLOSE_TIMEOUT_MS.store(500, Ordering::SeqCst);
 
         let rrid = "SUSE:Maintenance:1:1";
-        let healthy =
-            MockConnection::new("healthy").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));
+        // A delay under the budget, so a zero budget leaves this release unfinished.
+        let healthy = MockConnection::new("healthy")
+            .with_file(POOL_LOCK_PATH, own_pool_claim(rrid))
+            .with_sftp_session_delay(Duration::from_millis(50));
         let mut healthy_target =
             Target::with_connection("healthy", TargetState::Enabled, Box::new(healthy.clone()));
         healthy_target.set_rrid(rrid);
@@ -510,8 +512,8 @@ mod tests {
             logged.contains(&"still disconnecting from dead after 0 seconds".to_owned()),
             "dead: the close was still attempted: {logged:?}"
         );
-        // Exact lines: catches naming no host, every claimed host, or a healthy
-        // one a serial release never reached.
+        // Exact lines: catches naming no host, every claimed host, a healthy one
+        // a serial release never reached, or a zero budget.
         let releasing: Vec<&String> = logged
             .iter()
             .filter(|m| m.starts_with("pool-claim release"))

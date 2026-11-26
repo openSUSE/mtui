@@ -146,6 +146,35 @@ mod tests {
     }
 
     #[test]
+    fn summary_counts_a_failed_only_unload() {
+        let removed = RemoveReport {
+            failed: vec![("h1".to_owned(), "boom".to_owned())],
+            ..RemoveReport::default()
+        };
+        assert_eq!(
+            summary("SUSE:Maintenance:1:1", &removed),
+            "unloaded SUSE:Maintenance:1:1 (0 pool-claim release unfinished, 1 failed, 0 still disconnecting)"
+        );
+    }
+
+    #[test]
+    fn summary_keeps_each_count_in_its_own_slot() {
+        let removed = RemoveReport {
+            release_unfinished: vec!["r1".to_owned()],
+            failed: vec![
+                ("f1".to_owned(), "boom".to_owned()),
+                ("f2".to_owned(), "boom".to_owned()),
+            ],
+            stragglers: vec!["s1".to_owned(), "s2".to_owned(), "s3".to_owned()],
+            ..RemoveReport::default()
+        };
+        assert_eq!(
+            summary("SUSE:Maintenance:1:1", &removed),
+            "unloaded SUSE:Maintenance:1:1 (1 pool-claim release unfinished, 2 failed, 3 still disconnecting)"
+        );
+    }
+
+    #[test]
     fn name_and_single_scope() {
         assert_eq!(Unload.name(), "unload");
         assert_eq!(Unload.scope(), Scope::Single);

@@ -130,8 +130,8 @@ enum OnPress {
     Cancel,
     /// The `quit` teardown, however asked for (Ctrl-D or a typed `quit`/`exit`): a
     /// press **never** cancels, because cancelling the cleanup strands the locks, but it
-    /// still counts toward the force-quit, since the teardown can genuinely hang
-    /// (`quit`'s pool-claim release has no timeout of its own).
+    /// still counts toward the force-quit, since the teardown can take up to 90 s
+    /// per loaded template.
     EscalateOnly,
 }
 
@@ -983,8 +983,8 @@ mod tests {
     }
 
     /// A `quit` that takes its time — the real one's shape when a refhost
-    /// blackholes, since its pool-claim release has no timeout. Records whether
-    /// anything cancelled its token, which nothing on this path may do.
+    /// blackholes, up to 90 s per template. Records whether anything cancelled
+    /// its token, which nothing on this path may do.
     struct SlowQuitCmd {
         go: Mutex<Option<oneshot::Receiver<()>>>,
         observed_cancel: Arc<AtomicBool>,
@@ -1558,10 +1558,9 @@ mod tests {
         );
     }
 
-    /// The teardown can genuinely hang — `quit`'s pool-claim release has no
-    /// timeout, so a blackholed refhost parks it indefinitely. With the handler
-    /// armed, a second press must offer the way out that a fatal Ctrl-C used to,
-    /// or Ctrl-C does nothing at all on this path.
+    /// A blackholed refhost can hold the teardown up to 90 s per template. With
+    /// the handler armed, a second press must offer the way out that a fatal
+    /// Ctrl-C used to, or Ctrl-C does nothing at all on this path.
     #[test]
     fn two_presses_during_the_teardown_force_quit() {
         // No `go` sender is ever fired: this teardown never finishes.
