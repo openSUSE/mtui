@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
 
-use super::row_budget::crush;
+use super::row_budget::{add_window_args, crush, window};
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, resolve_dashboard_key, template_completion};
 use crate::error::{CommandError, CommandResult};
@@ -106,73 +106,51 @@ impl Command for OpenQAJobs {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        cmd.arg(
-            Arg::new("all")
-                .long("all")
-                .action(ArgAction::SetTrue)
-                .help(
-                    "list every attempt: earlier runs of a retriggered scenario and \
+        let cmd = cmd
+            .arg(Arg::new("all").long("all").action(ArgAction::SetTrue).help(
+                "list every attempt: earlier runs of a retriggered scenario and \
                      obsoleted jobs too (default: the newest non-obsoleted job of each scenario)",
-                ),
-        )
-        .arg(
-            Arg::new("failed")
-                .long("failed")
-                .action(ArgAction::SetTrue)
-                .help("show only genuinely failed jobs (pending/unfinished excluded)"),
-        )
-        .arg(
-            Arg::new("arch")
-                .long("arch")
-                .value_name("ARCH")
-                .help("only jobs for this architecture"),
-        )
-        .arg(
-            Arg::new("test")
-                .long("test")
-                .value_name("GLOB")
-                .help("only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'"),
-        )
-        .arg(
-            Arg::new("flavor")
-                .long("flavor")
-                .value_name("FLAVOR")
-                .help("only jobs with this FLAVOR setting"),
-        )
-        .arg(
-            Arg::new("version")
-                .long("version")
-                .value_name("VERSION")
-                .help("only jobs with this VERSION setting, e.g. 15-SP6"),
-        )
-        .arg(
-            Arg::new("limit")
-                .long("limit")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("cap the number of rows after --offset (0 = all)"),
-        )
-        .arg(
-            Arg::new("offset")
-                .long("offset")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
-        )
-        .arg(
-            Arg::new("url_openqa")
-                .long("url-openqa")
-                .value_name("URL")
-                .help("Override openQA URL (default: config openqa_instance)"),
-        )
-        .arg(
-            Arg::new("url_dashboard_qam")
-                .long("url-dashboard-qam")
-                .value_name("URL")
-                .help("Override QAM Dashboard base URL (default: derived from config)"),
-        )
+            ))
+            .arg(
+                Arg::new("failed")
+                    .long("failed")
+                    .action(ArgAction::SetTrue)
+                    .help("show only genuinely failed jobs (pending/unfinished excluded)"),
+            )
+            .arg(
+                Arg::new("arch")
+                    .long("arch")
+                    .value_name("ARCH")
+                    .help("only jobs for this architecture"),
+            )
+            .arg(Arg::new("test").long("test").value_name("GLOB").help(
+                "only jobs whose test name matches this glob (* and ?), e.g. '*incidentinstall*'",
+            ))
+            .arg(
+                Arg::new("flavor")
+                    .long("flavor")
+                    .value_name("FLAVOR")
+                    .help("only jobs with this FLAVOR setting"),
+            )
+            .arg(
+                Arg::new("version")
+                    .long("version")
+                    .value_name("VERSION")
+                    .help("only jobs with this VERSION setting, e.g. 15-SP6"),
+            );
+        add_window_args(cmd)
+            .arg(
+                Arg::new("url_openqa")
+                    .long("url-openqa")
+                    .value_name("URL")
+                    .help("Override openQA URL (default: config openqa_instance)"),
+            )
+            .arg(
+                Arg::new("url_dashboard_qam")
+                    .long("url-dashboard-qam")
+                    .value_name("URL")
+                    .help("Override QAM Dashboard base URL (default: derived from config)"),
+            )
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
@@ -211,8 +189,6 @@ impl Command for OpenQAJobs {
             .transpose()?;
         let flavor_filter = args.get_one::<String>("flavor").cloned();
         let version_filter = args.get_one::<String>("version").cloned();
-        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
-        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
 
         let url_openqa = args
             .get_one::<String>("url_openqa")
@@ -350,13 +326,7 @@ impl Command for OpenQAJobs {
         // Header counts above cover the full filtered set; only the listing
         // is windowed (--offset/--limit) and then crushed to the row budget,
         // as in `list_refhosts`.
-        let windowed: Vec<oqa::JobResult> = {
-            let mut v: Vec<oqa::JobResult> = jobs.into_iter().skip(offset).collect();
-            if limit > 0 && limit < v.len() {
-                v.truncate(limit);
-            }
-            v
-        };
+        let windowed = window(args, jobs);
         let crushed = crush(windowed, |j| j.url.clone(), anomaly_severity);
         for j in &crushed.kept {
             let result = if is_pending(j) {

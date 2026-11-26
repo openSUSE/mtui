@@ -21,7 +21,7 @@ use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush, json_envelope};
+use super::row_budget::{add_window_args, crush, json_envelope, window};
 
 /// Narrowing flags named in the row-budget notice.
 const UPDATES_HINT: &str = "--limit/--offset/--field/-G";
@@ -93,26 +93,27 @@ impl Command for Updates {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        cmd.arg(
-            Arg::new("review_group")
-                .short('G')
-                .long("review-group")
-                .value_name("GROUP")
-                .action(ArgAction::Append)
-                .help(
-                    "filter by review group, e.g. qam-sle or the \
+        let cmd = cmd
+            .arg(
+                Arg::new("review_group")
+                    .short('G')
+                    .long("review-group")
+                    .value_name("GROUP")
+                    .action(ArgAction::Append)
+                    .help(
+                        "filter by review group, e.g. qam-sle or the \
                      '<group>-review' login form; repeatable — updates in any of \
                      the groups are listed (one server query)",
-                ),
-        )
-        .arg(
-            Arg::new("field")
-                .short('F')
-                .long("field")
-                .value_name("FIELD")
-                .action(ArgAction::Append)
-                .help(
-                    "select output fields by osc-qam name (e.g. -F Rating \
+                    ),
+            )
+            .arg(
+                Arg::new("field")
+                    .short('F')
+                    .long("field")
+                    .value_name("FIELD")
+                    .action(ArgAction::Append)
+                    .help(
+                        "select output fields by osc-qam name (e.g. -F Rating \
                      -F 'Assigned Roles'); repeatable, rendered as one block per \
                      update; names match case-insensitively, ignoring \
                      spaces/hyphens/underscores; Package-Streams/Issues/Comments \
@@ -121,48 +122,33 @@ impl Command for Updates {
                      non-OBS (SLFO) rows render n/a, a row OBS refuses renders \
                      unavailable (an unreadable comments document marks \
                      Comments alone), comments are sanitised and capped per row",
-                ),
-        )
-        .arg(
-            Arg::new("json")
-                .long("json")
-                .action(ArgAction::SetTrue)
-                .conflicts_with("field")
-                .help(
-                    "print the raw TeReGen rows as a JSON array (each row \
+                    ),
+            )
+            .arg(
+                Arg::new("json")
+                    .long("json")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("field")
+                    .help(
+                        "print the raw TeReGen rows as a JSON array (each row \
                      emitted whole, unlike -F; honours --limit/--offset; not combinable \
                      with -F); an empty queue prints []; over-cap stdout is a JSON \
                      envelope {\"rows\": [...], \"truncation\": {...}} so stdout stays \
                      valid JSON",
-                ),
-        )
-        .arg(
-            Arg::new("status")
-                .long("status")
-                .value_name("STATUS")
-                .default_value("testing")
-                .help(
-                    "filter by status (default: testing); use 'all' for every status; \
+                    ),
+            )
+            .arg(
+                Arg::new("status")
+                    .long("status")
+                    .value_name("STATUS")
+                    .default_value("testing")
+                    .help(
+                        "filter by status (default: testing); use 'all' for every status; \
                      the unassigned default and --assignee/--mine/--all-assignees \
                      apply to testing only",
-                ),
-        )
-        .arg(
-            Arg::new("limit")
-                .long("limit")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("cap the number of rows after --offset (0 = all)"),
-        )
-        .arg(
-            Arg::new("offset")
-                .long("offset")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
-        )
+                    ),
+            );
+        add_window_args(cmd)
         .arg(
             Arg::new("assignee")
                 .long("assignee")
@@ -257,8 +243,6 @@ impl Command for Updates {
             .get_one::<String>("status")
             .cloned()
             .unwrap_or_else(|| "testing".to_owned());
-        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
-        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
         let all_assignees = args.get_flag("all_assignees");
         if status_arg != "testing"
             && (all_assignees || args.get_flag("mine") || args.contains_id("assignee"))
@@ -433,14 +417,7 @@ impl Command for Updates {
 
         // Paging via --offset (pre-crush) makes any middle slice recoverable; chosen over an
         // explicit-window notice as it fits the existing --limit plumbing.
-        let windowed: Vec<Value> = {
-            let skipped = offset.min(rows.len());
-            let mut v: Vec<Value> = rows.into_iter().skip(skipped).collect();
-            if limit > 0 && limit < v.len() {
-                v.truncate(limit);
-            }
-            v
-        };
+        let windowed = window(args, rows);
         // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
         // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
         let crushed = crush(windowed, update_key, anomaly_severity);
