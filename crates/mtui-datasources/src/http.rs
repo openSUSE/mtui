@@ -434,6 +434,30 @@ pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
     root_cause(e).unwrap_or_else(|| e.to_string())
 }
 
+/// Convert a failed send into an [`HttpError`], logging it first.
+///
+/// A TLS verification failure logs the actionable hint (at `error`, naming
+/// `host` when known) and the root cause at `debug`; anything else is left to
+/// `plain`, which owns the message and level because they differ per service.
+/// The raw `reqwest::Error` is never rendered: its `Display` appends the
+/// request URL (#431).
+pub(crate) fn log_send_error(
+    service: &str,
+    host: Option<&str>,
+    e: reqwest::Error,
+    plain: impl FnOnce(&HttpError),
+) -> HttpError {
+    let ssl = is_ssl_verification_error(&e);
+    let e = HttpError::from(e);
+    if ssl {
+        tracing::error!("{}", ssl_verification_hint(host));
+        tracing::debug!("{service} TLS error detail: {}", ssl_error_detail(&e));
+    } else {
+        plain(&e);
+    }
+    e
+}
+
 /// Walks `e`'s source chain to the deepest cause, deliberately skipping `e`
 /// itself (whose `Display` may embed a URL — reqwest's appends the request URL,
 /// `ruoqa::Error::Connection`'s renders a redacted one), and returns it through

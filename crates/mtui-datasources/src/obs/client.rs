@@ -21,10 +21,9 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use reqwest::{Method, RequestBuilder};
 
-use crate::error::HttpError;
 use crate::http::{
-    HttpClient, MAX_API_BODY, is_ssl_verification_error, join_url, query_string, read_body_capped,
-    sanitize_url, ssl_error_detail, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, join_url, log_send_error, query_string, read_body_capped,
+    sanitize_url,
 };
 use crate::obs::errors::ObsError;
 
@@ -193,17 +192,9 @@ impl ObsClient {
         builder: RequestBuilder,
     ) -> Result<reqwest::Response, ObsError> {
         builder.send().await.map_err(|e| {
-            // Never render the raw `reqwest::Error`; convert first (#431).
-            let ssl = is_ssl_verification_error(&e);
-            let e = HttpError::from(e);
-            if ssl {
-                let host = host_of(url);
-                tracing::error!("{}", ssl_verification_hint(host.as_deref()));
-                tracing::debug!("OBS TLS error detail: {}", ssl_error_detail(&e));
-            } else {
+            ObsError::Http(log_send_error("OBS", host_of(url).as_deref(), e, |e| {
                 tracing::error!("OBS {method} {} failed: {e}", sanitize_url(url));
-            }
-            ObsError::Http(e)
+            }))
         })
     }
 
