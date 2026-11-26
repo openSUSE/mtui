@@ -44,6 +44,14 @@ use crate::template_registry::{ReportEntry, TemplateRegistry, TemplateRow};
 /// the straggler.
 pub const HOST_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// The `[lock]` wait and poll budgets as the signed seconds the arbiter takes.
+fn lock_wait_secs(config: &Config) -> (i64, i64) {
+    (
+        i64::try_from(config.lock_wait).unwrap_or(i64::MAX),
+        i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX),
+    )
+}
+
 /// Cache slot for [`Session::http_client`], shared across [`fork_for_call`](Session::fork_for_call).
 type HttpClientCache = Arc<Mutex<Option<(VerifyPolicy, HttpClient)>>>;
 
@@ -567,34 +575,7 @@ impl Session {
     /// `interactive` is `true` for the REPL, `false` for MCP.
     #[must_use]
     pub fn new(config: Config, is_repl: bool) -> Self {
-        let templates = TemplateRegistry::new(config.clone());
-        let null: Box<dyn TestReport + Send + Sync> = Box::new(NullReport::new(config.clone()));
-        Self {
-            config,
-            templates,
-            active_guard: None,
-            null,
-            display: CommandPromptDisplay::stdout(),
-            is_repl,
-            should_exit: false,
-            log_level_sink: None,
-            notify_sink: None,
-            prompter: None,
-            shuffle: random_shuffle,
-            cancel: CancellationToken::new(),
-            http_client: Arc::new(Mutex::new(None)),
-            openqa_transport: Arc::new(Mutex::new(None)),
-            detached_logs: Arc::new(Mutex::new(BTreeMap::new())),
-            op_lock_holders: OpLockHolders::default(),
-            #[cfg(test)]
-            http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            #[cfg(test)]
-            openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            #[cfg(test)]
-            teregen_token_dir: Arc::new(tempfile::tempdir().expect("temp token dir")),
-            #[cfg(test)]
-            mock_conns: std::collections::HashMap::new(),
-        }
+        Self::with_display(config, is_repl, CommandPromptDisplay::stdout())
     }
 
     /// Builds a session with an explicit display sink (test/embedding seam).
@@ -783,22 +764,35 @@ impl Session {
     /// Propagates [`HttpError`] when the client cannot be built (e.g. an
     /// unreadable CA bundle).
     pub(crate) fn http_client(&self) -> Result<HttpClient, HttpError> {
+        self.cached(&self.http_client, |policy| {
+            let client = HttpClient::new(policy.clone())?;
+            #[cfg(test)]
+            self.http_builds
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(client)
+        })
+    }
+
+    /// The cached value in `slot` when it was built under the current
+    /// [`VerifyPolicy`], otherwise a fresh `build`. Keying on the policy turns a
+    /// mid-session `config set ssl_verify` into a rebuild, never a stale hand-out.
+    fn cached<T: Clone>(
+        &self,
+        slot: &Mutex<Option<(VerifyPolicy, T)>>,
+        build: impl FnOnce(&VerifyPolicy) -> Result<T, HttpError>,
+    ) -> Result<T, HttpError> {
         let policy = VerifyPolicy::from_config(&self.config.ssl_verify);
-        let mut cache = self
-            .http_client
+        let mut cache = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((cached_policy, client)) = cache.as_ref()
+        if let Some((cached_policy, value)) = cache.as_ref()
             && *cached_policy == policy
         {
-            return Ok(client.clone());
+            return Ok(value.clone());
         }
-        let client = HttpClient::new(policy.clone())?;
-        #[cfg(test)]
-        self.http_builds
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        *cache = Some((policy, client.clone()));
-        Ok(client)
+        let value = build(&policy)?;
+        *cache = Some((policy, value.clone()));
+        Ok(value)
     }
 
     /// The teregen token cache: the operator's data dir in production, a
@@ -868,22 +862,13 @@ impl Session {
     /// Propagates [`HttpError`] when the transport cannot be built (e.g. an
     /// unreadable CA bundle).
     pub(crate) fn openqa_transport(&self) -> Result<reqwest::Client, HttpError> {
-        let policy = VerifyPolicy::from_config(&self.config.ssl_verify);
-        let mut cache = self
-            .openqa_transport
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((cached_policy, transport)) = cache.as_ref()
-            && *cached_policy == policy
-        {
-            return Ok(transport.clone());
-        }
-        let transport = HttpClient::openqa_transport(policy.clone())?;
-        #[cfg(test)]
-        self.openqa_builds
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        *cache = Some((policy, transport.clone()));
-        Ok(transport)
+        self.cached(&self.openqa_transport, |policy| {
+            let transport = HttpClient::openqa_transport(policy.clone())?;
+            #[cfg(test)]
+            self.openqa_builds
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(transport)
+        })
     }
 
     /// Makes `rrid` the active template *and* installs its per-call active
@@ -1943,8 +1928,7 @@ impl Session {
         let store = Self::build_refhosts_store(config).await;
         let holders = self.op_lock_holders.clone();
 
-        let wait = i64::try_from(config.lock_wait).unwrap_or(i64::MAX);
-        let poll = i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX);
+        let (wait, poll) = lock_wait_secs(config);
 
         let mut attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
@@ -2382,40 +2366,6 @@ impl Session {
         }
     }
 
-    /// Resolves the inventory on demand and searches it per testplatform; a
-    /// resolver failure degrades to an empty result.
-    ///
-    /// Production dispatch always has the arbiter/owner wired (see
-    /// [`resolve_and_record_pool`](Self::resolve_and_record_pool)), so this
-    /// survives only as the offline baseline
-    /// [`autoconnect_hosts_of`](tests::autoconnect_hosts_of) tests pool
-    /// selection against.
-    #[cfg(test)]
-    async fn resolve_testplatform_hosts(config: &Config, testplatforms: &[String]) -> Vec<String> {
-        if testplatforms.is_empty() {
-            return Vec::new();
-        }
-
-        let Some(store) = Self::build_refhosts_store(config).await else {
-            return Vec::new();
-        };
-
-        let mut hosts: Vec<String> = Vec::new();
-        for tp in testplatforms {
-            let attrs = Attributes::from_testplatform(tp);
-            let found = store.search(&attrs);
-            if found.is_empty() {
-                info!("autoconnect: nothing found for testplatform {tp:?}");
-            }
-            for host in found {
-                if !hosts.contains(&host) {
-                    hosts.push(host);
-                }
-            }
-        }
-        hosts
-    }
-
     /// Pick one distinct free host per test-target slot via the arbiter, run
     /// per testplatform.
     ///
@@ -2543,13 +2493,14 @@ impl Session {
         let tp_hosts = match (arbiter, owner) {
             (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
                 if let Some(store) = Self::build_refhosts_store(config).await {
+                    let (wait, poll) = lock_wait_secs(config);
                     let (chosen, slot_candidates, not_served) = Self::pool_select(
                         &store,
                         &testplatforms,
                         arbiter,
                         &owner,
-                        i64::try_from(config.lock_wait).unwrap_or(i64::MAX),
-                        i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX),
+                        wait,
+                        poll,
                         shuffle,
                     )
                     .await;
@@ -2663,6 +2614,47 @@ mod tests {
 
     fn config() -> Config {
         Config::default()
+    }
+
+    /// Resolves the inventory on demand and searches it per testplatform; a
+    /// resolver failure degrades to an empty result.
+    ///
+    /// Production dispatch always has the arbiter/owner wired (see
+    /// [`Session::resolve_and_record_pool`]), so this survives only as the
+    /// offline baseline [`autoconnect_hosts_of`] tests pool selection against.
+    async fn resolve_testplatform_hosts(config: &Config, testplatforms: &[String]) -> Vec<String> {
+        if testplatforms.is_empty() {
+            return Vec::new();
+        }
+
+        let Some(store) = Session::build_refhosts_store(config).await else {
+            return Vec::new();
+        };
+
+        let mut hosts: Vec<String> = Vec::new();
+        for tp in testplatforms {
+            let attrs = Attributes::from_testplatform(tp);
+            let found = store.search(&attrs);
+            if found.is_empty() {
+                info!("autoconnect: nothing found for testplatform {tp:?}");
+            }
+            for host in found {
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+        }
+        hosts
+    }
+
+    #[test]
+    fn lock_wait_secs_orders_wait_before_poll_and_saturates() {
+        let mut c = config();
+        c.lock_wait = 7;
+        c.lock_wait_poll = 3;
+        assert_eq!(lock_wait_secs(&c), (7, 3));
+        c.lock_wait = u64::MAX;
+        assert_eq!(lock_wait_secs(&c), (i64::MAX, 3));
     }
 
     #[test]
@@ -3076,7 +3068,7 @@ mod tests {
         let mut wanted = ref_hosts;
         wanted.sort();
         wanted.dedup();
-        for host in Session::resolve_testplatform_hosts(&config, &testplatforms).await {
+        for host in resolve_testplatform_hosts(&config, &testplatforms).await {
             if !wanted.contains(&host) {
                 wanted.push(host);
             }
@@ -4784,7 +4776,7 @@ mod tests {
         let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
-        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        let candidates = resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
         assert!(
             candidates.len() >= 2,
             "a slot needs a sibling: {candidates:?}"
@@ -5260,7 +5252,7 @@ mod tests {
         let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
-        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        let candidates = resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
         assert!(
             candidates.len() >= 2,
             "a slot needs a sibling: {candidates:?}"
@@ -5295,7 +5287,7 @@ mod tests {
         let (_refhosts_dir, mut config) = config_with_path_refhosts();
         config.connect_timeout = 1;
         let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
-        let candidates = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
+        let candidates = resolve_testplatform_hosts(&config, &[tp.to_owned()]).await;
         let (mut s, buf) = locking_session(config, &[], &[tp]);
         for h in &candidates {
             s.inject_mock_connection(h, product_host(h, "SLES", "15", "5", true));
@@ -5317,7 +5309,7 @@ mod tests {
     async fn refused_host_names_its_product_problem_and_keeps_its_drift() {
         let (_refhosts_dir, config) = config_with_path_refhosts();
         let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
-        let inventoried = Session::resolve_testplatform_hosts(&config, &[tp.to_owned()])
+        let inventoried = resolve_testplatform_hosts(&config, &[tp.to_owned()])
             .await
             .remove(0);
         let (mut s, buf) = locking_session(config, &[], &[]);
