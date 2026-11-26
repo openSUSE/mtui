@@ -33,7 +33,7 @@ pub struct Collected {
 }
 
 /// Errors from [`collect_artifacts`] — every one is checked before any network
-/// request is sent (A1).
+/// request is sent.
 #[derive(Debug, Error)]
 pub enum CollectError {
     /// A file's basename is not a valid teregen artifact name (the server's
@@ -137,9 +137,9 @@ fn collect_dir(
 }
 
 /// Collects every regular file directly under `<report_wd>/<install_logs>/`,
-/// under `<report_wd>/results/`, plus `<report_wd>/checkers.log` (6b-D1). Absent
+/// under `<report_wd>/results/`, plus `<report_wd>/checkers.log`. Absent
 /// sources contribute nothing; a subdirectory or a symlink is skipped rather
-/// than followed or erroring (A3).
+/// than followed or erroring.
 ///
 /// # Errors
 ///
@@ -199,8 +199,8 @@ pub struct CommitReport {
 /// [`CommitReport::artifacts`].
 #[derive(Debug, Error)]
 pub enum CommitUploadError {
-    /// The report carries no loaded document, or no stored `ETag` (A2: mtui
-    /// never falls back to an unconditional write).
+    /// The report carries no loaded document, or no stored `ETag` (mtui never
+    /// falls back to an unconditional write).
     #[error("no document ETag on this report — reload before committing")]
     NoEtag,
     /// The document upload itself failed.
@@ -213,9 +213,8 @@ pub enum CommitUploadError {
 /// server's per-id guard would fail the second write with a `503`).
 ///
 /// Only on a successful document upload are `base.document`/`document_etag`
-/// adopted from the server's response (P5-D4); a `412`, or any other
-/// document-upload failure, returns before touching `base` or sending a
-/// single artifact.
+/// adopted from the server's response; a `412`, or any other document-upload
+/// failure, returns before touching `base` or sending an artifact.
 ///
 /// # Errors
 ///
@@ -247,12 +246,9 @@ pub async fn upload_current(
     for (name, path) in artifacts {
         let outcome = match tokio::fs::read(&path).await {
             Ok(bytes) => client.upload_artifact(&id, &name, bytes).await,
-            // A read failure here is a rare TOCTOU (the file vanished or lost
-            // permissions between `collect_artifacts` and this upload, since
-            // `collect_artifacts` already proved it stat'd as a regular
-            // file): no distinct variant exists for a local read failure, so
-            // it is reported the same way any other failure to *send* this
-            // artifact is.
+            // A rare TOCTOU (the file vanished between `collect_artifacts` and
+            // now); there is no distinct local-read variant, so it is reported
+            // like any other failure to send the artifact.
             Err(e) => Err(ArtifactUploadError::Transport(format!(
                 "reading {}: {e}",
                 path.display()

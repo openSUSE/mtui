@@ -3,9 +3,8 @@
 //!
 //! Each action's templates are keyed by `(release, transactional)` and resolved
 //! through `substitute`, preserving `$$` escaping and `${}` bracing (see
-//! [`template`] docs). The value type is [`ActionCommands`]; not every action
-//! uses every field — `installed_only` is prepare-only, `list_command`
-//! downgrade-only, `reboot` transactional-only — so absent templates are `None`.
+//! [`template`] docs). Not every action uses every [`ActionCommands`] field, so
+//! absent templates are `None`.
 //!
 //! [`template`]: crate::update_workflow::template
 
@@ -47,9 +46,6 @@ impl SubstMode {
 const REBOOT: &str = "systemctl reboot";
 
 /// The command templates for one resolved action.
-///
-/// `command` is always present; the remaining fields are used only by specific
-/// actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionCommands {
     /// The primary command template, always present.
@@ -115,12 +111,12 @@ impl ActionCommands {
         self.mode.render(&self.command, vars)
     }
 
-    /// Renders [`reboot`](Self::reboot) if present. The template has no
-    /// placeholders, so it is rendered strictly against an empty map.
+    /// Renders [`reboot`](Self::reboot) if present, strictly against an empty
+    /// map as it has no placeholders.
     ///
     /// # Errors
     ///
-    /// Propagates [`TemplateError`]; never expected, for the reason above.
+    /// Propagates [`TemplateError`]; never expected.
     pub(crate) fn render_reboot(&self) -> Result<Option<String>, TemplateError> {
         match &self.reboot {
             Some(t) => Ok(Some(substitute(t, &HashMap::new())?)),
@@ -128,19 +124,15 @@ impl ActionCommands {
         }
     }
 
-    /// The raw, unrendered [`command`](Self::command) template.
-    ///
-    /// Needed by the [`PlanProvider`](mtui_hosts::PlanProvider) adapter, whose
-    /// [`Doer`](mtui_hosts::Doer) substitutes `$packages` itself — the package
-    /// list is only known inside `mtui-hosts`, at
-    /// [`Operation::collect`](mtui_hosts::Operation::collect) time. Prefer
+    /// The raw, unrendered [`command`](Self::command) template, for the
+    /// [`PlanProvider`](mtui_hosts::PlanProvider) adapter whose
+    /// [`Doer`](mtui_hosts::Doer) substitutes `$packages` itself. Prefer
     /// [`render_command`](Self::render_command) everywhere else.
     pub(crate) fn command_template(&self) -> &str {
         &self.command
     }
 
-    /// The raw, unrendered [`reboot`](Self::reboot) template, if any. See
-    /// [`command_template`](Self::command_template).
+    /// The raw [`reboot`](Self::reboot) template, if any.
     pub(crate) fn reboot_template(&self) -> Option<&str> {
         self.reboot.as_deref()
     }

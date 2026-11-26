@@ -1,13 +1,11 @@
 //! The [`TestReport`] trait and its shared-state carrier [`TestReportBase`].
 //!
-//! Rust has no class inheritance, so the state every concrete report
-//! (SL/PI/OBS/Null) shares lives in a plain [`TestReportBase`] they embed,
-//! reached through the [`TestReport::base`]/[`TestReport::base_mut`] accessors
-//! so trait-default and caller code need no downcast.
+//! The state every concrete report (SL/PI/OBS/Null) shares lives in a plain
+//! [`TestReportBase`] they embed, reached through [`TestReport::base`] /
+//! [`TestReport::base_mut`] so trait-default and caller code need no downcast.
 //!
-//! Only the shared state and the abstract surface land here: the concrete
-//! lifecycle (load/refresh/commit/export) is [`crate::lifecycle`], document
-//! ingest [`crate::ingest`], per-report host-connect logic
+//! The concrete lifecycle (load/refresh/commit/export) is [`crate::lifecycle`],
+//! document ingest [`crate::ingest`], per-report host-connect logic
 //! [`crate::reports`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -27,8 +25,7 @@ use crate::reports::update_flow;
 /// The concrete openQA state holder carried on a report.
 ///
 /// Monomorphizes [`OpenQAResults`] to the QEM-dashboard "auto" result, the
-/// per-instance "kernel" results and the `openqa_overview` payload; pinning
-/// them here adds no new crate edge (`mtui-datasources` is already a dep).
+/// per-instance "kernel" results and the `openqa_overview` payload.
 pub type ReportOpenQA = OpenQAResults<DashboardAutoOpenQA, KernelOpenQA, OpenQAOverviewResult>;
 
 /// Shared state common to every [`TestReport`] implementation.
@@ -48,18 +45,16 @@ pub struct TestReportBase {
     ///
     /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple, as
     /// the `*repoparse` helpers build and
-    /// [`RepoManager::run_zypper`](mtui_hosts) consumes; the refhost `Product`
-    /// has no `arch`, so keying on it would be lossy.
+    /// [`RepoManager::run_zypper`](mtui_hosts) consumes.
     pub update_repos: HashMap<SystemProduct, String>,
     /// Known hostnames for this report.
     pub hostnames: HashSet<String>,
     /// When non-empty, newly connected hosts are locked with this comment
     /// (set while a PI assignment is active).
     pub lock_comment: String,
-    /// Process-global host arbiter (RFC §5.7). A borrow of the singleton
+    /// Process-global host arbiter: a borrow of the singleton
     /// ([`get_arbiter`](mtui_hosts::get_arbiter)); `None` for
-    /// directly-constructed reports, which fall back to the legacy
-    /// remote-lock-only connect path.
+    /// directly-constructed reports, which use the remote-lock-only connect path.
     pub arbiter: Option<&'static HostArbiter>,
     /// Composite `(registry_id, RRID)` ownership key. `None` until wired by the
     /// template registry.
@@ -74,17 +69,14 @@ pub struct TestReportBase {
     pub autoconnect_pending: bool,
     /// The reason a load failed, stashed on the [`NullReport`](crate::reports::NullReport)
     /// substituted by [`make_testreport`](crate::make_testreport) so the caller
-    /// can surface *why* (teregen / gitea / hash failure) rather than
-    /// a bare "could not load". `None` on a successfully loaded report.
+    /// can surface *why* (teregen / gitea / hash failure). `None` on a
+    /// successfully loaded report.
     pub load_error: Option<String>,
     /// Set when this report **loaded successfully but its checked-out hash
-    /// still differs from the Gitea PR** — the operator (interactively) or
-    /// caller (`force_continue`, openSUSE/mtui#517) chose to proceed with
-    /// stale content anyway. `None` on every other load. A REPL session
-    /// already saw the equivalent `warn!` line on its own terminal; this
-    /// field exists so a non-interactive caller (`mtui-mcp`), which never
-    /// sees `tracing` output, can surface the same fact from the tool
-    /// result instead of silently trusting content that may be out of date.
+    /// still differs from the Gitea PR** and the operator or caller
+    /// (`force_continue`) proceeded with stale content anyway. A non-interactive
+    /// caller (`mtui-mcp`) never sees the `warn!` line, so it surfaces this from
+    /// the tool result instead.
     pub stale_hash_warning: Option<String>,
     /// Bugzilla `id -> title` map.
     pub bugs: HashMap<String, String>,
@@ -103,8 +95,7 @@ pub struct TestReportBase {
     /// The Slack message this update's review was requested on, if any.
     ///
     /// Written by `request_review` and read back on load so a later `approve`
-    /// verifies the ack against the exact message rather than trusting that a
-    /// review happened.
+    /// verifies the ack against the exact message.
     pub slack_review: Option<SlackReviewMarker>,
     /// Update repository string.
     pub repository: String,
@@ -149,8 +140,7 @@ pub struct TestReportBase {
     /// `NullReport`/unloaded report.
     pub document: Option<mtui_types::report_document::ReportDocument>,
     /// The [`document`](Self::document)'s response `ETag`, when the server
-    /// sent one — the conditional-GET/`If-Match` key a later write path would
-    /// need. `None` alongside `document`.
+    /// sent one. `None` alongside `document`.
     pub document_etag: Option<String>,
     /// How teregen's live report schema differs from the one this build ships
     /// (the first differing pointer), or `None` when it matches or could not be
@@ -166,9 +156,8 @@ impl TestReportBase {
     ///
     /// `targets` starts headless (`is_repl = false`);
     /// [`make_testreport`](crate::make_testreport) reconciles it to the session
-    /// mode once via [`set_is_repl`](HostsGroup::set_is_repl) before handing the
-    /// report over — the session is the single source of truth, and the flag is
-    /// never mutated afterwards.
+    /// mode once via [`set_is_repl`](HostsGroup::set_is_repl); the flag is never
+    /// mutated afterwards.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -223,14 +212,12 @@ impl TestReportBase {
         }
     }
 
-    /// The working directory of the loaded report: scratch space for install
-    /// logs and other artifacts.
-    ///
-    /// The parent directory of [`path`](Self::path), created if absent.
+    /// The working directory of the loaded report: the parent directory of
+    /// [`path`](Self::path), created if absent, for install logs and other
+    /// artifacts.
     ///
     /// Returns [`std::io::ErrorKind::NotFound`] when no report is loaded, and
-    /// propagates any directory-creation error, so callers can degrade
-    /// explicitly rather than panic.
+    /// propagates any directory-creation error.
     pub fn report_wd(&self) -> std::io::Result<PathBuf> {
         let path = self
             .path
@@ -314,11 +301,10 @@ fn required_package(name: &str, ver: &str) -> Package {
 ///
 /// Concrete reports embed a [`TestReportBase`] and expose it through
 /// [`base`](Self::base) / [`base_mut`](Self::base_mut); the other required
-/// methods are the abstract surface. Non-abstract lifecycle methods (`read`,
-/// `release_pool_claims`, `perform_install`, …) are trait defaults below.
+/// methods are the abstract surface, the rest trait defaults.
 ///
 /// `#[async_trait]` because [`check_hash`](Self::check_hash) drives async I/O
-/// for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
+/// for git-backed reports.
 #[async_trait::async_trait]
 pub trait TestReport {
     /// Borrows the shared state.
@@ -332,9 +318,7 @@ pub trait TestReport {
         self.rrid().map(ToString::to_string).unwrap_or_default()
     }
 
-    /// The update-repository parser table.
-    ///
-    /// Keyed on the flat [`SystemProduct`] to match the `*repoparse` helpers and
+    /// The update-repository parser table, keyed like
     /// [`TestReportBase::update_repos`].
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String>;
 
@@ -347,10 +331,7 @@ pub trait TestReport {
     /// ownership via
     /// [`HostArbiter::release_owner`](mtui_hosts::HostArbiter::release_owner).
     ///
-    /// Idempotent, and a no-op when pool selection was never used
-    /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
-    /// then `None`). Called from the exit path (`quit`,
-    /// `TemplateRegistry.release_claims`).
+    /// Idempotent, and a no-op when pool selection was never used.
     async fn release_pool_claims(&mut self) {
         let base = self.base_mut();
         // Snapshot so the `pool_claims` borrow ends before the `&mut` target calls.
@@ -372,17 +353,14 @@ pub trait TestReport {
     ///
     /// The per-host analogue of
     /// [`release_pool_claims`](Self::release_pool_claims), called from
-    /// `remove_host`: there is no `unload` over MCP, so without it a
-    /// disconnected refhost stays claimed in the process-global
-    /// [`HostArbiter`] for the server's lifetime.
-    /// [`Target::close`](mtui_hosts::Target::close) drops the remote
-    /// operation/pool-lock files; this clears the in-process ownership those
-    /// locks and the `--free` probe never see.
+    /// `remove_host`: without it a disconnected refhost stays claimed in the
+    /// process-global [`HostArbiter`] for the server's lifetime.
+    /// [`Target::close`](mtui_hosts::Target::close) drops the remote lock files;
+    /// this clears the in-process ownership.
     ///
-    /// Only `host` leaves each slot's candidate list — siblings stay available
-    /// as backup-refhost fallbacks (RFC §5.7) — and a slot is pruned only once
-    /// empty; the whole-report variant clears the map instead. Idempotent, and
-    /// a no-op when pool selection was never used.
+    /// Only `host` leaves each slot's candidate list (siblings stay available as
+    /// fallbacks) and a slot is pruned only once empty. Idempotent, and a no-op
+    /// when pool selection was never used.
     fn release_pool_claim(&mut self, host: &str) {
         let base = self.base_mut();
         base.pool_claims.remove(host);
@@ -398,8 +376,8 @@ pub trait TestReport {
     /// The deduplicated list of every package named in the report metadata.
     ///
     /// Flattens the package **names** across all products of the nested
-    /// [`packages`](TestReportBase::packages) map. Sorted for reproducible
-    /// snapshots; no caller depends on the order.
+    /// [`packages`](TestReportBase::packages) map, sorted for reproducible
+    /// snapshots.
     fn get_package_list(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .base()
@@ -425,8 +403,7 @@ pub trait TestReport {
     /// The Bugzilla `id -> title` and Jira `id -> title` maps.
     ///
     /// Sorted [`BTreeMap`](std::collections::BTreeMap)s so the display renders
-    /// ids in a stable order; the `list_bugs` command renders the
-    /// "No bugs…"/"No Jira…" sentinels for an empty map.
+    /// ids in a stable order.
     fn bug_maps(
         &self,
     ) -> (
@@ -448,8 +425,7 @@ pub trait TestReport {
 
     /// The aligned `(label, value)` metadata rows for `list_metadata`.
     ///
-    /// Rows with an empty value are dropped, and the whole set is sorted by
-    /// label. The caller renders each surviving row as `{label:15}: {value}`.
+    /// Rows with an empty value are dropped, and the set is sorted by label.
     fn show_yourself_data(&self) -> Vec<(String, String)> {
         let base = self.base();
         let mut bug_ids: Vec<&String> = base.bugs.keys().collect();
@@ -525,18 +501,15 @@ pub trait TestReport {
 
     /// Installs `packages` on every host in `targets`.
     ///
-    /// Drives the install [`Operation`](mtui_hosts::Operation) template
-    /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
-    /// which resolves each host's installer doer/check via the `PlanProvider`
-    /// injected by `update_flow::perform_install` (the shared body behind this
-    /// method).
+    /// Drives the install [`Operation`](mtui_hosts::Operation) template, which
+    /// resolves each host's installer doer/check via the `PlanProvider` injected
+    /// by `update_flow::perform_install`.
     ///
     /// Returns `Err` when the install command failed on one or more hosts
     /// (non-zero exit or non-empty stderr after the fan-out). Holds lost in
     /// the reboot gap are degradation, not failure: each is pushed onto
-    /// `diagnostics` as a degradation. A report with no
-    /// [`as_set_repo`](Self::as_set_repo) (the null object) is a no-op
-    /// `Ok(())`; the same holds for every `perform_*` default below.
+    /// `diagnostics`. A report with no [`as_set_repo`](Self::as_set_repo) (the
+    /// null object) is a no-op `Ok(())`; so is every `perform_*` default below.
     async fn perform_install(
         &self,
         targets: &mut HostsGroup,
@@ -551,10 +524,8 @@ pub trait TestReport {
 
     /// Uninstalls `packages` from every host in `targets`.
     ///
-    /// Drives the uninstall [`Operation`](mtui_hosts::Operation)
-    /// template; see [`perform_install`](Self::perform_install). Default no-op
-    /// `Ok(())`; returns `Err` on a per-host command failure. Holds lost in
-    /// the reboot gap are reported on `diagnostics` as degradations.
+    /// Drives the uninstall [`Operation`](mtui_hosts::Operation) template; see
+    /// [`perform_install`](Self::perform_install).
     async fn perform_uninstall(
         &self,
         targets: &mut HostsGroup,
@@ -571,16 +542,13 @@ pub trait TestReport {
     ///
     /// The bespoke (non-template) preparer flow, all under the operation lock:
     /// fan the issue repo add/remove out, install every package in a single
-    /// transaction (per-package for `installed_only`), run the preparer check,
-    /// reboot transactional hosts. `testing` selects the repo-`add` (testing) vs
-    /// repo-`remove` path and the testing preparer variant; `force` toggles
-    /// `--force-resolution`; `installed_only` only touches already-installed
-    /// packages.
+    /// transaction, run the preparer check, reboot transactional hosts.
+    /// `testing` selects the repo-`add` vs repo-`remove` path and the testing
+    /// preparer variant; `force` toggles `--force-resolution`; `installed_only`
+    /// only touches already-installed packages.
     ///
     /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
     /// fan-out, a per-host prepare-command failure, or a prepare check failure.
-    /// Holds lost in the reboot gap are reported on `diagnostics` as
-    /// degradations.
     async fn perform_prepare(
         &self,
         targets: &mut HostsGroup,
@@ -608,13 +576,12 @@ pub trait TestReport {
     /// Downgrades `packages` on every host.
     ///
     /// Under the operation lock: remove the issue repos, resolve each package's
-    /// available downgrade version via the downgrader `list_command`, downgrade
-    /// (per-package for non-transactional hosts, one transaction for
-    /// transactional ones), run the check, reboot transactional hosts.
+    /// available downgrade version, downgrade (per-package for non-transactional
+    /// hosts, one transaction for transactional ones), run the check, reboot
+    /// transactional hosts.
     ///
     /// Returns `Err` on a missing downgrader, lock contention, or a per-host
-    /// downgrade check failure. Holds lost in the reboot gap are reported on
-    /// `diagnostics` as degradations.
+    /// downgrade check failure.
     async fn perform_downgrade(
         &self,
         targets: &mut HostsGroup,
@@ -630,12 +597,11 @@ pub trait TestReport {
 
     /// Updates the hosts with this report's maintenance update.
     ///
-    /// The full bespoke update flow: optional prepare, pre/post package checks,
-    /// repo add, `updater` command render (with the `$repa` RRID selector), the
-    /// per-host update check with failure aggregation, transactional reboot, and
-    /// the two-phase repo cleanup — remove on success, **keep** on failure for
-    /// retry/diagnosis. `noprepare` skips the initial prepare; `newpackage`
-    /// runs a testing prepare afterwards.
+    /// The full bespoke update flow: optional prepare, package checks, repo add,
+    /// the per-host update check, transactional reboot, and the two-phase repo
+    /// cleanup — remove on success, **keep** on failure for retry/diagnosis.
+    /// `noprepare` skips the initial prepare; `newpackage` runs a testing
+    /// prepare afterwards.
     ///
     /// Returns `Err` on a per-host `updater` check failure (after a best-effort
     /// downgrade rollback) or a hard missing-updater failure; non-fatal
@@ -665,19 +631,18 @@ pub trait TestReport {
 
     /// Verifies the loaded template hash.
     ///
-    /// Returns a [`HashCheck`] rather than raising, so the async load
-    /// orchestrator ([`make_testreport`](crate::make_testreport)) can branch on
-    /// it. The default, for the null object and the non-git reports (OBS/PI),
-    /// is [`HashCheck::Ok`], having nothing to verify; async because git-backed
-    /// reports compare against a hash fetched from Gitea.
+    /// Returns a [`HashCheck`] rather than raising, so
+    /// [`make_testreport`](crate::make_testreport) can branch on it. The default,
+    /// for the null object and the non-git reports (OBS/PI), is
+    /// [`HashCheck::Ok`]; git-backed reports compare against a hash from Gitea.
     async fn check_hash(&self) -> HashCheck {
         HashCheck::Ok
     }
 
     /// The working directory for target artifacts.
     ///
-    /// Defaults to joining `config.target_tempdir` with `paths`, matching the
-    /// null object; concrete reports override to root under the loaded report.
+    /// Defaults to joining `config.target_tempdir` with `paths`; concrete
+    /// reports override to root under the loaded report.
     fn target_wd(&self, paths: &[&str]) -> PathBuf {
         let mut p = self.base().config.target_tempdir.clone();
         for part in paths {
@@ -694,19 +659,15 @@ pub trait TestReport {
 
     /// Exposes this report as a [`SetRepo`] when it can add/remove issue repos.
     ///
-    /// `SetRepo` is a distinct object-safe trait a `dyn TestReport` cannot be
-    /// downcast to, but `set_repo` needs a `&dyn SetRepo` for
-    /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup). SL/PI/OBS
-    /// override this to return `Some(self)`; the null report keeps the `None`
-    /// default, which the command surfaces as "no update loaded" and which makes
+    /// A `dyn TestReport` cannot be downcast to the object-safe `SetRepo`, but
+    /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup) needs one.
+    /// SL/PI/OBS return `Some(self)`; the null report keeps `None`, which makes
     /// every `perform_*` default a no-op.
     fn as_set_repo(&self) -> Option<&dyn SetRepo> {
         None
     }
 
-    /// The report's parsed [`RequestReviewID`], if loaded.
-    ///
-    /// Reads [`TestReportBase::rrid`]; `None` for the null report.
+    /// The report's parsed [`RequestReviewID`]; `None` for the null report.
     fn rrid(&self) -> Option<&RequestReviewID> {
         self.base().rrid.as_ref()
     }
@@ -716,17 +677,14 @@ pub trait TestReport {
         self.base().workflow
     }
 
-    /// The report's openQA state holder.
-    ///
-    /// Reads [`TestReportBase::openqa`]; empty for the null report.
+    /// The report's openQA state holder; empty for the null report.
     fn openqa(&self) -> &ReportOpenQA {
         &self.base().openqa
     }
 
     /// Mutably borrows the report's openQA state holder.
     ///
-    /// The mutable counterpart of [`openqa`](Self::openqa); the
-    /// `reload_openqa` / `set_workflow` commands populate it in place.
+    /// The mutable counterpart of [`openqa`](Self::openqa).
     fn openqa_mut(&mut self) -> &mut ReportOpenQA {
         &mut self.base_mut().openqa
     }
@@ -743,16 +701,14 @@ pub trait TestReport {
 
     /// Which update workflow mtui drives for this report.
     ///
-    /// See [`UpdateSource`]; resolved once at load from the document's
-    /// `workflow`.
+    /// See [`UpdateSource`].
     fn update_source(&self) -> UpdateSource {
         self.base().update_source
     }
 
     /// The openQA incident id used by the QEM Dashboard / oqa-search queries.
     ///
-    /// Uses `rrid.maintenance_id` as the incident number. `None` for the null
-    /// report (no RRID).
+    /// Uses `rrid.maintenance_id`; `None` for the null report.
     fn incident_id(&self) -> Option<String> {
         self.base().rrid.as_ref().map(|r| r.maintenance_id.clone())
     }

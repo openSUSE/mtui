@@ -17,21 +17,16 @@ use crate::update_workflow::{Family, UpdateError, family};
 /// The exit code reaching here **is the patch's own** — the template captures
 /// `$?` before the post-state `grep` and the repo-cleanup loop can clobber it
 /// (see [`crate::update_workflow::actions::update`]) — so [`classify_exit`]
-/// judges it, with the same three sets the install check uses. The one status
-/// that is *not* the patch's is a probe failure, gated ahead of the
-/// classification by [`probe_failure`]: the script exits with the failed
-/// probe's status, which shares the patch's numeric space, so only the marker
-/// line tells the two apart.
+/// judges it. A probe failure is the one status that is not the patch's; it is
+/// gated first by [`probe_failure`], since only the marker line tells it apart.
 ///
-/// The informational carve-out is the load-bearing part, not the failure rule:
-/// `102` ("reboot needed" after a kernel patch) and `107` (`%post` failed but
-/// the package is installed and registered) are routine outcomes, and failing
-/// either would fire the rollback downgrade over every healthy patched host.
-/// Every failing status except `104` and the `-1` sentinel
-/// gives the stdout/stderr [`markers`] first refusal, because they name the
-/// failure where a class label only admits there was one. All of it is gated on
-/// the command text containing `zypper` — inert in production, but it keeps
-/// these codes from being read as zypper's on a transcript that is not.
+/// The informational carve-out is the load-bearing part: `102` ("reboot
+/// needed") and `107` (`%post` failed but the package is installed) are routine
+/// outcomes, and failing either would fire the rollback over every healthy
+/// patched host. Every failing status except `104` and `-1` gives the
+/// [`markers`] first refusal, because they name the failure where a class label
+/// only admits there was one. All of it is gated on the command text containing
+/// `zypper`, so these codes are not read as zypper's on another transcript.
 ///
 /// # Errors
 ///
@@ -62,42 +57,32 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// The transactional-update update check, for `("slmicro", true)` and
 /// `("16", true)`.
 ///
-/// Judged on the exit code as well as the markers: the slmicro template
-/// captures the `transactional-update --continue -n pkg in … -t patch` status
-/// and exits with it, so the verdict is the patch's, not the trailing
-/// repo-cleanup loop's `0`.
+/// Judged on the exit code as well as the markers: the slmicro template exits
+/// with the `transactional-update … -t patch` status, so the verdict is the
+/// patch's, not the trailing repo-cleanup loop's `0`.
 ///
 /// It shares zypper's [`classify_exit`], which here reduces to "`0` passes,
 /// anything else fails", because **`transactional-update` does not propagate
-/// zypper's exit code** — verified against `openSUSE/transactional-update`
-/// `sbin/transactional-update.in` @ `aee1e1b5` (v6.1.3, identical back to
-/// v2.28.3): zypper's status lands in `RETVAL` (`:1197`), is tested against a
-/// hardcoded tolerance list of `0 | 102 | 103 | (106 unless dup)` (`:1214`),
-/// otherwise flattened to `EXITCODE=1` (`:1232`), and never reaches the single
-/// `exit $EXITCODE` (`:1505`); `man/transactional-update.8.xml` documents only
-/// `0`, `1` and `2`, and `2` comes solely from `apply`, which this template
-/// does not use. The informational carve-out and the `PackageNotFound` arm are
-/// therefore inert here; the classifier is shared anyway so this key cannot
-/// drift from the zypper one, and a future version that *did* propagate would
-/// be classified correctly from day one.
+/// zypper's exit code**: `sbin/transactional-update.in` (v6.1.3, same back to
+/// v2.28.3) tests zypper's status against a hardcoded tolerance list and
+/// flattens everything else to `EXITCODE=1`, and the manual documents only `0`,
+/// `1` and `2` (`2` comes solely from `apply`, unused here). The informational
+/// carve-out and the `PackageNotFound` arm are therefore inert; the classifier
+/// is shared so the two keys cannot drift.
 ///
 /// Two consequences. `0` is also what `pkg in` returns when its dry run finds
-/// nothing to do (`quit 0` at `:1192`), so a clean exit cannot distinguish
-/// "patched" from "had nothing to patch". And with `1` classified `Unknown`,
-/// this key fails on any non-zero status — firing the rollback, which
-/// downgrades and reboots every patched host — including on failures
-/// that are not the patch's (an already-open transaction, a snapshot that could
-/// not be created or deleted), which `transactional-update` flattens into that
-/// same `1`. Accepted with the blast radius understood: the alternative reports
-/// a failed patch as a successful update.
+/// nothing to do, so a clean exit cannot tell "patched" from "nothing to
+/// patch". And this key fails on any non-zero status, firing the rollback
+/// (which downgrades and reboots every patched host) even for failures that are
+/// not the patch's, such as an already-open transaction or a snapshot error.
+/// Accepted: the alternative reports a failed patch as a successful update.
 ///
-/// Unlike [`zypper`] there is no command-text gate — this template carries both
+/// Unlike [`zypper`] there is no command-text gate: this template carries both
 /// tokens, so a guard would only add a second way for the rule to stop firing
-/// silently. One accepted residual: the markers' `Error:` rule reads stderr
-/// from the whole `exec`, and the sibling commands (`zypper -n lr -puU`, the
-/// `zypper -n rr` cleanup loop) can emit it too. Tolerated because every
-/// command here is zypper, whose vocabulary [`markers`] was written against,
-/// whereas on [`yum`] the same rule would judge a transcript it was not.
+/// silently. Residual: the markers' `Error:` rule reads stderr from the whole
+/// `exec`, so a sibling command (`zypper -n lr -puU`, the `zypper -n rr`
+/// cleanup loop) can trip it. Tolerated because every command here is zypper,
+/// whose vocabulary [`markers`] was written against.
 ///
 /// # Errors
 ///
@@ -114,30 +99,26 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// stdout/stderr [`markers`].
 ///
 /// Also the install/uninstall check's `("slmicro", true)` verdict
-/// ([`super::install`]), which reuses it so the two `transactional-update` keys
-/// cannot drift apart; that caller gates `-1` itself, with its own role-neutral
-/// reason, so [`ExitClass::NotRun`]'s `update` wording never surfaces on it.
+/// ([`super::install`]), so the two `transactional-update` keys cannot drift;
+/// that caller gates `-1` itself with its own reason.
 ///
-/// The interleaving is the whole content: `104` is a named verdict and returns
-/// straight away, while every other failing status lets the markers speak first
-/// — "update stack locked" is a diagnosis, "Unknown Error" an admission. A
-/// success status runs the markers too: a dependency prompt (`(c): c`) leaves
-/// the transaction unfinished with a perfectly clean exit status.
+/// `104` is a named verdict and returns straight away; every other failing
+/// status lets the markers speak first — "update stack locked" is a diagnosis,
+/// "Unknown Error" an admission. A success status runs the markers too: a
+/// dependency prompt (`(c): c`) leaves the transaction unfinished with a clean
+/// exit status.
 ///
 /// **Only `104` skips them.** Of the `104 | 4 | 5 | 8` class only `104`
 /// (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) means "capability not found"; `4`/`5`/`8`
-/// (`ERR_ZYPP`, `ERR_PRIVILEGES`, `ERR_COMMIT`) mean the package *was* found
-/// and the transaction failed — `8` with `Error:` on stderr is the likeliest
-/// genuinely failed patch, `5` with `System management is locked` a busy update
-/// stack — so letting the not-found label outrank the markers made both
-/// headline diagnoses wrong, not merely vaguer. The class stays the install
-/// check's, unsplit, so no exit code lands in two classes; the *message* is
-/// this check's to choose, and nothing branches on these strings.
+/// mean the package *was* found and the transaction failed (`8` with `Error:`
+/// on stderr, `5` with `System management is locked`), so letting the
+/// not-found label outrank the markers made both diagnoses wrong. The class
+/// stays the install check's, so no exit code lands in two classes; nothing
+/// branches on the message strings.
 ///
 /// `103` (`ZYPPER_EXIT_INF_RESTART_NEEDED`) is a success even though the
-/// *remaining* patches are not installed — inherited from the install check's
-/// set and left identical so the two keys cannot drift; the template's
-/// post-state `zypper -n patches | grep $repa` surfaces it.
+/// *remaining* patches are not installed; the template's post-state
+/// `zypper -n patches | grep $repa` surfaces it.
 ///
 /// # Errors
 ///
@@ -162,30 +143,23 @@ pub(super) fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateE
             log_failed(args);
             Err(UpdateError::new("Unknown Error", args.hostname))
         }
-        // Unreachable — both checks gate on `not_run` first — but a class
-        // rather than a fallthrough, so a caller that forgets cannot report a
-        // host mtui never reached as a failed patch. Deliberately the same
-        // error the gate raises; the gate stays because it is the cheaper
-        // check and reads at the top of each key.
+        // Both checks gate on `not_run` first; a class rather than a fallthrough
+        // so a caller that forgets cannot report an unreached host as a failed patch.
         ExitClass::NotRun => Err(not_run_error(args)),
     }
 }
 
 /// The yum update check.
 ///
-/// Deliberately gates **only** on the [`not_run`] sentinel — narrow is the
-/// point on a key whose failures route the rollback downgrade,
-/// and neither other signal survives scrutiny. The **exit code**: `("YUM",
-/// false)` is not one package manager (`System::get_release` maps *every*
-/// `rhel` version to it, and on RHEL 8/9 `yum` is `dnf`, which differs from yum
-/// 3 on a spec matching nothing installed) and mtui hands the updater the whole
-/// package list while a refhost routinely carries a subset (why `prepare
-/// --installed-only` exists), so a bare `!= 0` risks failing a host that
-/// upgraded all it had. The **markers**: three of [`markers`]' four strings are
-/// zypper-only, and this template runs three commands in one remote `exec`, so
-/// the fourth (`Error:` in stderr) would let a GPG complaint from `yum
-/// repolist` fail an update whose patch succeeded. Settling either needs
-/// observed `yum`/`dnf` output from a real RHEL refhost, not inference.
+/// Deliberately gates **only** on the [`not_run`] sentinel, because this key's
+/// failures route the rollback downgrade. The **exit code** is unreliable:
+/// `("YUM", false)` covers every `rhel` version (on RHEL 8/9 `yum` is `dnf`,
+/// which differs from yum 3 on a spec matching nothing installed), and a refhost
+/// routinely carries only a subset of the package list, so a bare `!= 0` risks
+/// failing a host that upgraded all it had. The **markers** are mostly
+/// zypper-only, and the template runs three commands in one `exec`, so `Error:`
+/// in stderr would let a GPG complaint from `yum repolist` fail a successful
+/// patch. Settling either needs observed `yum`/`dnf` output from a real refhost.
 ///
 /// # Errors
 ///
@@ -199,10 +173,8 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Raises when the command never produced a real exit status.
 ///
 /// `Target::run` records `-1` on a timeout, a mid-command connection failure
-/// and a target that is not connected at all, so it means "never ran to
-/// completion" on every key. Without this gate a timed-out patch reports
-/// success: stdout and stderr are both empty, so no marker matches. Mirrors the
-/// identical sentinel in the downgrade check.
+/// and an unconnected target. Without this gate a timed-out patch reports
+/// success: stdout and stderr are both empty, so no marker matches.
 ///
 /// # Errors
 ///
@@ -216,11 +188,9 @@ const NOT_RUN_REASON: &str = "update command timed out or failed to run";
 
 /// The `-1` verdict, in one place.
 ///
-/// Built here so [`not_run`] and [`classified`]'s [`ExitClass::NotRun`] arm
-/// cannot drift into two spellings of the same sentinel. The flow's veto of the
-/// rollback keys on `lastexit()` being `-1`, not on this string; the
-/// string only decides what the operator is told, which for a host mtui never
-/// reached must not read as a package problem.
+/// Shared by [`not_run`] and [`classified`]'s [`ExitClass::NotRun`] arm. The
+/// rollback veto keys on `lastexit()` being `-1`, not on this string; it only
+/// tells the operator, and for an unreached host must not read as a package problem.
 fn not_run_error(args: CheckArgs<'_>) -> UpdateError {
     log_failed(args);
     UpdateError::new(NOT_RUN_REASON, args.hostname)
@@ -230,35 +200,29 @@ fn not_run_error(args: CheckArgs<'_>) -> UpdateError {
 /// the contract between them and [`probe_failure`].
 ///
 /// The templates append `": <probe> exited <status>"`, so this is a prefix
-/// match on a line. The text is mtui's own — nothing in zypper's or
-/// `transactional-update`'s vocabulary resembles it — and reads as a sentence
-/// because an operator meets it in a `show_log` transcript.
+/// match on a line. The text is mtui's own and reads as a sentence because an
+/// operator meets it in a `show_log` transcript.
 ///
 /// The templates assemble it from a `printf` format string *and* its argument
 /// so that **this string does not occur in the script's own text**: a
-/// transcript that put the command into stdout or stderr (a `set -x` in the
-/// host's profile, a verbose transport) would otherwise make every update on
-/// that host report a probe failure. Pinned by
-/// `the_rendered_update_templates_do_not_trip_the_gate` from this side and
-/// `assert_status_comes_from_the_patch` from the template's.
+/// transcript that echoed the command (a `set -x` in the host's profile) would
+/// otherwise make every update on that host report a probe failure. Pinned by
+/// `the_rendered_update_templates_do_not_trip_the_gate` and
+/// `assert_status_comes_from_the_patch`.
 pub(crate) const PROBE_FAILURE_MARKER: &str = "mtui: could not determine what to patch";
 
 /// Raises when the update script could not work out what to patch.
 ///
-/// The templates decide whether to patch from `zypper -n patches`, and a
-/// failure there yields an *empty* patch list indistinguishable from a host
-/// carrying none of the update's products — so the script names it with
-/// [`PROBE_FAILURE_MARKER`] and exits with the probe's own status. Without this
-/// gate the script exited `0` and mtui reported an update it never installed
-/// (#447).
+/// A failure of `zypper -n patches` yields an *empty* patch list, which looks
+/// like a host carrying none of the update's products — so the script names it
+/// with [`PROBE_FAILURE_MARKER`] and exits with the probe's own status. Without
+/// this gate mtui reported an update it never installed.
 ///
-/// Gated on the **marker**, not the exit code, because no exit code could carry
-/// it: a POSIX `exit N` truncates to `0..=255`, so the script's status sits
-/// inside the package manager's own space. It runs before [`classified`] for
-/// that reason, and before [`zypper`]'s `zypper`-token gate for [`not_run`]'s
-/// — this is mtui's verdict about its own script, not a reading of a package
-/// manager's transcript. Both streams are read: the templates print to stdout,
-/// but a transport merging the two would otherwise disarm the gate.
+/// Gated on the **marker**, not the exit code: a POSIX `exit N` truncates to
+/// `0..=255`, so the status sits inside the package manager's own space. It runs
+/// before [`classified`] and [`zypper`]'s `zypper`-token gate because this is
+/// mtui's verdict about its own script. Both streams are read, so a transport
+/// merging them cannot disarm the gate.
 ///
 /// # Errors
 ///
@@ -286,14 +250,12 @@ fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
 /// The stdout/stderr classification shared by every update check.
 ///
 /// Exit-code handling stays in the per-key wrappers because it differs by key
-/// (see [`transactional_update`]); everything here reads only the command's
-/// output, so it is valid on all of them.
+/// (see [`transactional_update`]); everything here reads only the output.
 ///
-/// Also the `("slmicro", true)` *prepare* check's whole verdict beyond its `-1`
-/// gate ([`super::prepare`]), where it closes the exit-`0`-with-a-lock-message
-/// hole the prepare reboot gate cannot see. The `Error:`-from-a-sibling-command
-/// exposure documented on [`transactional_update`] does not arise there: the
-/// prepare and install templates are a *single* command.
+/// Also the `("slmicro", true)` *prepare* check's verdict beyond its `-1` gate
+/// ([`super::prepare`]); the sibling-command `Error:` exposure noted on
+/// [`transactional_update`] does not arise there, as that template is a single
+/// command.
 ///
 /// # Errors
 ///

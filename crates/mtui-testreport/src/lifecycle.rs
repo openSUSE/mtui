@@ -4,10 +4,9 @@
 //! teregen v2 document, and applies workflow selection + the
 //! deferred-autoconnect flag for the auto/kernel update kinds.
 //!
-//! This crate stays free of the host-connect layer: the connect belongs to the
-//! composition root (`mtui-core::Session::load_update`), which owns the arbiter
-//! wiring and the refhosts-from-testplatform resolution, so `make_testreport`
-//! only records the intent via
+//! The host connect belongs to the composition root
+//! (`mtui-core::Session::load_update`), which owns the arbiter wiring, so
+//! `make_testreport` only records the intent via
 //! [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending).
 //! The QEM Dashboard / auto-openQA enrichment does run here, for the `-a` kind,
 //! and autoconnect fires only on its downgrade-to-[`Workflow::Manual`] path.
@@ -106,17 +105,16 @@ fn downgrade_to_manual(base: &mut TestReportBase, autoconnect: bool) {
 ///    (or an unreachable dashboard) the workflow is **downgraded to
 ///    [`Workflow::Manual`]**.
 ///
-/// `autoconnect` is the caller's explicit choice, but the deferred connect (via
+/// The deferred connect (via
 /// [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending),
 /// honoured by the composition root *after* wiring the host arbiter) is armed
-/// **only** when it is `true` **and** the auto load downgraded to `MANUAL` —
-/// never on the auto happy path, never for the kernel kind.
+/// **only** when `autoconnect` is `true` **and** the auto load downgraded to
+/// `MANUAL` — never on the auto happy path, never for the kernel kind.
 ///
 /// `force_continue` is the non-interactive escape hatch for a stale hash
-/// (`handle_stale_hash`): when `is_repl && prompter.is_some()`, the REPL's
-/// own "Force continue loading template ?" prompt governs and this argument
-/// is ignored; otherwise it takes the prompt's place. `false` reproduces the
-/// pre-existing non-interactive behaviour (abandon the load) exactly.
+/// (`handle_stale_hash`): when `is_repl && prompter.is_some()`, the REPL's own
+/// "Force continue loading template ?" prompt governs and this is ignored;
+/// otherwise it takes the prompt's place. `false` abandons the load.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
@@ -266,10 +264,9 @@ pub async fn make_testreport(
 /// `prompter` is `Some` only in interactive mode, so every prompt is gated on
 /// `is_repl && prompter.is_some()` and otherwise takes the non-interactive
 /// answer — **except** the force-continue question, whose non-interactive
-/// default is `force_continue_arg` rather than a hard-coded `false` (#517).
-/// It reaches exactly the outcome the REPL's own "y" answer does — [`StaleHash::ForceContinue`]
-/// — and does nothing else: no regeneration, no re-checkout, no write. The
-/// `regenerate` question is unaffected and stays interactive-only.
+/// default is `force_continue_arg`. It reaches exactly the outcome the REPL's
+/// "y" answer does ([`StaleHash::ForceContinue`]) and nothing else. The
+/// `regenerate` question stays interactive-only.
 async fn handle_stale_hash(
     update: &UpdateID,
     config: &Config,
@@ -321,14 +318,12 @@ async fn handle_stale_hash(
 }
 
 /// Regenerates a stale template via TeReGen, then reloads it by re-fetching the
-/// v2 document (passing `prev_etag`, so a `304` means the regenerate did not
-/// actually change the document and is reported as such rather than misread as
-/// success).
+/// v2 document (passing `prev_etag`, so a `304` is reported as "unchanged"
+/// rather than misread as success).
 ///
-/// Returns the freshly loaded, hash-verified report on success, or `None` so the
-/// caller falls back to the manual force/decline handling. Any TeReGen failure,
-/// reload failure, or a *still*-failing hash on the fresh template is a
-/// `None` (logged as "Reload after regeneration failed").
+/// Returns the freshly loaded, hash-verified report, or `None` so the caller
+/// falls back to the manual force/decline handling. Any TeReGen failure, reload
+/// failure, or *still*-failing hash is a `None`.
 async fn regenerate_via_teregen(
     update: &UpdateID,
     config: &Config,
@@ -398,16 +393,13 @@ async fn regenerate_via_teregen(
 ///
 /// Fetches `config.teregen_api_v2`'s document for `rrid`, conditional on
 /// `prev_etag` (the initial load passes `None`; [`regenerate_via_teregen`]
-/// passes the just-superseded report's etag, so a `304` after a regenerate
-/// job is reported as "unchanged" rather than misread as fresh). Every
-/// non-`Fresh` outcome maps to a distinct, actionable message rather than
-/// falling back to anything else — a fallback would mask exactly the corpus
+/// passes the superseded report's etag). Every non-`Fresh` outcome maps to a
+/// distinct, actionable message, never a fallback, which would mask the corpus
 /// gap this path exists to surface. A `503 generating` response is retried on
-/// the same bounded poll budget [`TeReGen::wait_for_template`] uses (5s /
-/// 600s) before refusing with the same message. On success, applies the
-/// document (see [`crate::ingest::apply_document`]), creates the report's
-/// scratch directory (nothing is checked out), and finally derives
-/// `update_repos`.
+/// the poll budget [`TeReGen::wait_for_template`] uses (5s / 600s) before
+/// refusing. On success, applies the document (see
+/// [`crate::ingest::apply_document`]), creates the scratch directory, and
+/// derives `update_repos`.
 async fn load_via_document(
     report: &mut Box<dyn TestReport + Send + Sync>,
     rrid: &mtui_types::RequestReviewID,

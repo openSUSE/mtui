@@ -50,9 +50,8 @@ pub struct ResultsMissingError {
 /// A download failure surfaced under [`ErrorMode::Full`].
 ///
 /// Separates a *download* failure from a *write* failure (fetched, but not
-/// persistable locally, or its off-thread write task failed to join), giving
-/// callers a distinct local-write signal. Not `Clone`/`Eq`: the
-/// [`Write`](DownloadError::Write) variant carries a [`std::io::Error`].
+/// persistable locally). Not `Clone`/`Eq`: the [`Write`](DownloadError::Write)
+/// variant carries a [`std::io::Error`].
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     /// The openQA log could not be downloaded.
@@ -131,8 +130,7 @@ fn host_tail(host: &str) -> &str {
 /// `test.name`) into local write paths; a separator, a `..` component or a
 /// control byte would let a hostile response escape the export directories and
 /// overwrite arbitrary files. Mirrors
-/// `mtui_hosts::connection::ssh::validate_sftp_component`, ported rather than
-/// shared because `mtui-testreport` must not depend on the lower `mtui-hosts`.
+/// `mtui_hosts::connection::ssh::validate_sftp_component`.
 pub(super) fn is_safe_component(s: &str) -> bool {
     // `\` is rejected regardless of host OS: the *local* side may be Windows.
     if s.is_empty()
@@ -241,8 +239,8 @@ fn with_job_suffix(local: &Path, id: i64, n: u32) -> PathBuf {
 ///
 /// Jobs that would write the same path get a job-ID suffix; a path claimed by
 /// only one job is left alone. Names are assigned in `(test_id, remote)` order
-/// over the whole batch, so they depend on the set of jobs, never on input or
-/// completion order. An identical `(remote, local)` pair is one download.
+/// over the whole batch, so they never depend on input or completion order. An
+/// identical `(remote, local)` pair is one download.
 fn resolve_collisions(jobs: Vec<Job>) -> Vec<Job> {
     let mut seen = HashSet::new();
     let mut jobs: Vec<Job> = jobs

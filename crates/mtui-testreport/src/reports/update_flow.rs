@@ -7,13 +7,10 @@
 //! `update`) a two-phase try/finally that cleans the test repos up on success
 //! while **keeping** them on failure for retry/diagnosis.
 //!
-//! They live here — as the concrete reports' `perform_*` bodies, alongside
-//! `perform_install` — because they need `get_package_list` / `set_repo`, which
-//! keeps `mtui-hosts` free of a `mtui-testreport` dependency and reuses the
-//! report's own [`SetRepo`] hook and package list. Each host's command
-//! templates come straight from the [`WorkflowRegistry`] (`ActionCommands` +
-//! `CheckFn`) — the same tables the `PlanProvider` adapter uses — keyed on
-//! `(system.get_release(), transactional)`.
+//! They need `get_package_list` / `set_repo`, so they live in this crate and
+//! `mtui-hosts` stays free of a `mtui-testreport` dependency. Each host's
+//! command templates come from the [`WorkflowRegistry`] (`ActionCommands` +
+//! `CheckFn`), keyed on `(system.get_release(), transactional)`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -38,16 +35,15 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 /// Why an update did not apply.
 ///
 /// The variants answer one question — **can the rollback downgrade repair any
-/// host that failed?** — because that is what [`perform_update_with_rollback`]
-/// has to decide, and the rollback reverts *every* patched host it can repair,
-/// the healthy ones included. `Check` and `RebootNotTaken` answer yes, and
-/// carry those hosts as their [`RollbackScope`]; the rest answer no for reasons
-/// an operator needs kept apart. All collapse to a single [`UpdateError`] at
-/// the command boundary.
+/// host that failed?** — because the rollback reverts *every* patched host it
+/// can repair, the healthy ones included. `Check` and `RebootNotTaken` answer
+/// yes and carry those hosts as their [`RollbackScope`]; the rest answer no for
+/// reasons an operator needs kept apart. All collapse to a single
+/// [`UpdateError`] at the command boundary.
 ///
 /// "No patch was dispatched" is not "the host is untouched": an abort after a
-/// *completed* `prepare` leaves that prepare's packages installed, so the
-/// prepare writes its own `/var/log/mtui.log` row (#407).
+/// *completed* `prepare` leaves its packages installed, so the prepare writes
+/// its own `/var/log/mtui.log` row.
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
@@ -59,48 +55,41 @@ pub enum UpdateFailure {
     /// failure warns and lets the update proceed (see `PrepareFailure`).
     Prepare(UpdateError),
     /// A concrete target has no updater doer; a hard failure rather than a
-    /// logged success, so a target that cannot be updated never reports
-    /// "finished".
+    /// logged success.
     MissingUpdater(UpdateError),
-    /// Cooperative cancellation was requested (MCP `job_cancel`) and the flow
-    /// stopped at a step boundary. Skips the rollback: a rollback is itself a
-    /// multi-minute downgrade, so it would *extend* the work the caller just
-    /// asked to stop.
+    /// Cooperative cancellation stopped the flow at a step boundary. Skips the
+    /// rollback: it is itself a multi-minute downgrade, so it would *extend* the
+    /// work the caller just asked to stop.
     Cancelled(UpdateError),
     /// A transactional host rebooted after a successful patch and did not
     /// reconnect. Skips the rollback: the host is unreachable, and the rollback
-    /// reaches every patched host, so running it would revert the *healthy*
-    /// hosts on behalf of one that cannot be reached either way.
+    /// reaches every patched host, so it would revert the *healthy* hosts on
+    /// behalf of one that cannot be reached either way.
     Reboot(UpdateError),
     /// A transactional host was patched but its reboot never took effect while
     /// the host stayed **reachable**: the command was never dispatched, or the
-    /// host answered with an unchanged boot id. Unlike [`Reboot`](Self::Reboot)
-    /// this *does* roll back — it is up, serving the old snapshot while the
-    /// group runs the new packages (the split-brain the rollback undoes), and
-    /// the downgrade can reach it. Also used when such a reboot follows a
-    /// [`ProbeFailed`](Self::ProbeFailed) peer, which leaves no host with an
-    /// unknown patch result; that peer ran no patch, so the rollback skips it.
+    /// boot id was unchanged. Unlike [`Reboot`](Self::Reboot) this *does* roll
+    /// back — the host serves the old snapshot while the group runs the new
+    /// packages (the split-brain the rollback undoes). Also used when such a
+    /// reboot follows a [`ProbeFailed`](Self::ProbeFailed) peer; that peer ran no
+    /// patch, so the rollback skips it.
     RebootNotTaken(UpdateError, RollbackScope),
     /// The update command never ran to completion on any host whose patch
     /// failed — it timed out, or the connection dropped part-way
     /// (`Target::run`'s `-1`).
     ///
-    /// Skips the rollback, but not by [`Reboot`](Self::Reboot)'s reachability
-    /// argument: `-1` is a sentinel, not a liveness verdict. Either the flow
-    /// lost the host, and the rollback would revert the *healthy* patched
-    /// hosts on behalf of one it cannot reach either way; or the command
-    /// outlived its timeout on a host that is up, and since rpm masks signals
-    /// inside its transaction, dispatching the downgrade now fires a second
-    /// transaction at the one host whose first was never observed to end.
-    /// Either way the state is unknown, not known-bad as under
+    /// Skips the rollback, but `-1` is a sentinel, not a liveness verdict: the
+    /// flow either lost the host, or the command outlived its timeout on a host
+    /// that is up, and since rpm masks signals inside its transaction, a
+    /// downgrade would fire a second transaction at a host whose first was never
+    /// observed to end. The state is unknown, not known-bad as under
     /// [`Check`](Self::Check).
     ///
     /// Used when **no** failed host is repairable and at least one is `-1`,
-    /// including a mix with [`ProbeFailed`](Self::ProbeFailed) hosts, since
-    /// this is the more conservative label. A mix with a real check failure
-    /// still rolls back, on behalf of the repairable host, and for the same two
-    /// reasons that rollback leaves the `-1` host alone: its lock, unreadable
-    /// on a lost host, would stop the rollback of the peer that needs it.
+    /// including a mix with [`ProbeFailed`](Self::ProbeFailed) hosts (the more
+    /// conservative label). A mix with a real check failure still rolls back on
+    /// behalf of the repairable host, leaving the `-1` host alone: its lock,
+    /// unreadable on a lost host, would stop the peer's rollback.
     ///
     /// The transactional peers whose patch passed are still rebooted, and one
     /// whose reboot then fails is named beside the failed host, never rolled
@@ -112,44 +101,35 @@ pub enum UpdateFailure {
     /// [`NotRun`](Self::NotRun), except that a reachable peer whose reboot did
     /// not take routes to [`RebootNotTaken`](Self::RebootNotTaken).
     ///
-    /// Skips the rollback for a *stronger* reason than
-    /// [`NotRun`](Self::NotRun)'s: a definite verdict, not the absence of one.
-    /// Nothing is half-applied, so the rollback would revert every healthy
-    /// patched peer over a probe that broke on one host. It is the operator's
-    /// `zypper` view that needs attention (no repositories, a ZYpp lock, a
-    /// broken awk), not the packages. A run mixing one of these with a `-1`
-    /// host is labelled [`NotRun`](Self::NotRun).
+    /// Skips the rollback for a *stronger* reason than [`NotRun`](Self::NotRun):
+    /// a definite verdict. Nothing is half-applied, so the rollback would revert
+    /// every healthy patched peer over a probe that broke on one host; it is the
+    /// operator's `zypper` view that needs attention, not the packages. A run
+    /// mixing one of these with a `-1` host is labelled [`NotRun`](Self::NotRun).
     ProbeFailed(UpdateError),
-    /// The patch left out one or more hosts the update does not cover: the
-    /// pre-update `prepare` refused them because their products compose none
-    /// of the update's packages, so no package baseline was established on
-    /// them, or the update's repositories would not reach them
-    /// ([`RepoOutcome::reach`]), so the updater would find nothing to
-    /// patch there and pass. The other hosts were patched normally; when every
-    /// enabled host was left out, nothing was dispatched at all.
+    /// The patch left out one or more hosts the update does not cover: `prepare`
+    /// refused them because their products compose none of the update's
+    /// packages, or the update's repositories would not reach them
+    /// ([`RepoOutcome::reach`]). The other hosts were patched normally; when
+    /// every enabled host was left out, nothing was dispatched at all.
     ///
-    /// Skips the rollback: an excluded host received no patch to undo, and the
-    /// downgrade would revert the peers that updated correctly. A patched
-    /// peer's [`Check`](Self::Check) or
-    /// [`RebootNotTaken`](Self::RebootNotTaken) failure outranks it, and that
-    /// rollback leaves the excluded hosts alone.
+    /// Skips the rollback: an excluded host received no patch to undo. A patched
+    /// peer's [`Check`](Self::Check) or [`RebootNotTaken`](Self::RebootNotTaken)
+    /// failure outranks it, and that rollback leaves the excluded hosts alone.
     Excluded(UpdateError),
-    /// One or more hosts' test update repository genuinely failed to
-    /// register (a verified `zypper ar` failure, a failed `rr`, the
-    /// unknown-cmd safeguard, or a failed refresh on a read-only-root host)
-    /// after the `RepoOp::Add` fan-out. Each such host
-    /// is excluded, its partial add undone, and its lock released before the
-    /// patch is dispatched to its peers; when every eligible host failed,
-    /// nothing was dispatched at all.
+    /// One or more hosts' test update repository genuinely failed to register
+    /// (a verified `zypper ar` failure, a failed `rr`, the unknown-cmd
+    /// safeguard, or a failed refresh on a read-only-root host) after the
+    /// `RepoOp::Add` fan-out. Each such host is excluded, its partial add
+    /// undone, and its lock released before the patch is dispatched to its
+    /// peers; when every eligible host failed, nothing was dispatched at all.
     ///
-    /// Skips the rollback for the same reason as
-    /// [`Excluded`](Self::Excluded): an excluded host received no patch,
-    /// and the downgrade would revert the peers that did.
+    /// Skips the rollback for the same reason as [`Excluded`](Self::Excluded).
     RepoAdd(UpdateError),
     /// The operation lock could not be taken on every eligible host: another
     /// owner holds it, its state was unreadable, or the lockfile could not be
-    /// written. The locks that were taken are already released, no repository
-    /// was added and no patch dispatched, so there is nothing to roll back.
+    /// written. The locks taken are already released and no repository was added
+    /// or patch dispatched, so there is nothing to roll back.
     LockFailed(UpdateError),
 }
 
@@ -228,24 +208,22 @@ mod rollback_scope {
 
 /// Drives [`perform_update`] for the report's `rrid` (`$repa` selector and
 /// history id) and rolls the packages back via [`perform_downgrade_for`],
-/// before re-surfacing the original error, on the
-/// two failures that leave the group repairable: a *check* failure, and a
-/// reboot that did not take effect on a host still reachable
-/// ([`UpdateFailure::RebootNotTaken`]), as [`UpdateFailure::rollback`] decides.
+/// before re-surfacing the original error, on the two failures that leave the
+/// group repairable: a *check* failure, and a reboot that did not take effect
+/// on a reachable host ([`UpdateFailure::RebootNotTaken`]), as
+/// [`UpdateFailure::rollback`] decides.
 ///
 /// The rollback reaches only the failure's [`RollbackScope`]: the hosts the
-/// patch was dispatched to, less any it cannot repair. A host the update
-/// excluded, or whose probe failed so that it could not work out what to patch,
-/// has nothing to undo, and one whose patch result is unknown is left alone
-/// (see [`UpdateFailure::NotRun`]).
+/// patch was dispatched to, less any it cannot repair (see
+/// [`UpdateFailure::NotRun`]).
 ///
 /// Every other failure re-surfaces without a rollback attempt: it installed
 /// nothing, or only on hosts that completed, which it names (see
-/// [`UpdateError::completed`]). The rollback is best-effort, but it *can* fail —
-/// [`perform_downgrade_for`] returns a `Result`, and a host whose version probe
-/// never answered raises it (#451). The call site logs that error at WARN and
-/// re-surfaces the original update error, so a failed rollback can never bury
-/// the failure it was trying to repair; do not simplify the call away.
+/// [`UpdateError::completed`]). The rollback is best-effort and *can* fail
+/// ([`perform_downgrade_for`] raises when a host's version probe never
+/// answered); the call site logs that at WARN and re-surfaces the original
+/// update error, so a failed rollback can never bury the failure it was
+/// repairing.
 pub async fn perform_update_with_rollback(
     report: &dyn SetRepo,
     rrid: Option<&RequestReviewID>,
@@ -364,14 +342,13 @@ pub async fn perform_update_with_rollback(
 /// does not come back can no longer be written to.
 ///
 /// `id_field` carries the RRID for the ops that log one (`update`,
-/// `downgrade`) and is `None` for `prepare`. `install`/`uninstall` write a row
-/// of the same shape from `OperationGroup::run` instead, so this function's
-/// callers are not the full list of ops in `/var/log/mtui.log`.
+/// `downgrade`) and is `None` for `prepare`. `install`/`uninstall` write their
+/// row from `OperationGroup::run` instead.
 ///
-/// Scoped because no op's fan-out is guaranteed to reach the whole group.
-/// `prepare` drops a host whose release key does not resolve or whose template
-/// does not render, and fails it with "nothing was installed", so a group-wide
-/// row would contradict its own verdict in a file other tools parse (#407).
+/// Scoped because no op's fan-out is guaranteed to reach the whole group:
+/// `prepare` drops hosts whose release key does not resolve or whose template
+/// does not render, so a group-wide row would contradict its own verdict in a
+/// file other tools parse.
 pub async fn add_op_history_for(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
@@ -401,28 +378,24 @@ fn repa_for(maintenance_id: &str, review_id: &str) -> String {
 /// Why a pre-update `prepare` did not succeed, split by whether the update
 /// may still proceed.
 ///
-/// `host_command_failures` counts any stderr as a failure, and
 /// `transactional-update` writes progress to stderr on a *successful* run (see
 /// `prepare_body`'s note on the reboot gate), so a per-host package-manager
 /// complaint is too noisy to hard-abort `update` on. Whether prepare could even
-/// *run* is a different, reliable signal.
+/// *run* is a reliable signal.
 enum PrepareFailure {
     /// Prepare never ran: no preparer for a host's key, the operation lock
     /// was contended, or the issue repo could not be set. Nothing was
     /// installed and the update's premise is broken — the update aborts.
     DidNotRun(UpdateError),
     /// Prepare ran and one or more hosts reported trouble from the package
-    /// manager. Warn and continue. Also carries #396's per-host
-    /// no-command-built failures: `update` intentionally warns there because
-    /// `build_update_maps` re-detects the unresolved-key cause moments later
-    /// and aborts with `MissingUpdater`.
+    /// manager. Warn and continue. Also carries per-host no-command-built
+    /// failures: `update` warns there because `build_update_maps` re-detects the
+    /// unresolved-key cause moments later and aborts with `MissingUpdater`.
     ///
-    /// `uncomposed` names, as `host -> its products`, the hosts refused for the
-    /// one reason the "too noisy to gate on" argument does not cover: their
-    /// products compose none of the packages, so nothing was installed on them
-    /// at all. `update` excludes exactly those from its patch — without the
-    /// split it cannot tell them from the package-manager noise this variant
-    /// exists to tolerate.
+    /// `uncomposed` names, as `host -> its products`, the hosts whose products
+    /// compose none of the packages, so nothing was installed on them. `update`
+    /// excludes exactly those from its patch; it cannot otherwise tell them from
+    /// the package-manager noise this variant tolerates.
     HostReported {
         error: UpdateError,
         uncomposed: BTreeMap<String, String>,
@@ -578,11 +551,10 @@ fn doer_for(
 /// Returns the hosts it could not resolve, so the caller can name them
 /// instead of failing the whole group with a bare role name.
 ///
-/// Scoping does not change which host is rebooted — [`prepare_body`]'s retain
-/// filter already refuses a host nothing was dispatched to — it changes what
-/// the operator is told: an out-of-scope host left in the map draws that
-/// filter's "skipping reboot" WARN, naming a host the caller had already
-/// reported as excluded from this run.
+/// Scoping only changes what the operator is told: [`prepare_body`]'s retain
+/// filter already refuses a host nothing was dispatched to, but an out-of-scope
+/// host left in the map would draw its "skipping reboot" WARN for a host the
+/// caller had already reported as excluded.
 fn build_reboot_map<'t>(
     targets: &'t HostsGroup,
     registry: &WorkflowRegistry,
@@ -623,12 +595,10 @@ fn build_reboot_map<'t>(
 /// `update` check currently emits diagnostics.
 ///
 /// Every caller fans out to a subset of the group, so the predicate is
-/// mandatory, and it is applied *before* the check runs rather than to its
-/// verdict: a check calls [`log_failed`](crate::update_workflow::checks) on the
-/// way to its `Err`, so a post-filter still emits an operator-facing ERROR for
-/// a host whose verdict is then thrown away — once per package under
-/// `prepare --installed-only`, against a snapshot from a fan-out that host was
-/// not part of.
+/// mandatory and applied *before* the check runs: a check calls
+/// [`log_failed`](crate::update_workflow::checks) on the way to its `Err`, so a
+/// post-filter would still emit an operator-facing ERROR for a host whose
+/// verdict is thrown away.
 fn run_checks_where(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -680,14 +650,8 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
     } else {
         let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         hosts.sort();
-        // One host can contribute two failures with two distinct causes
-        // (`downgrade_body` seeds its list from the issue-repo removal scan,
-        // then adds that host's check verdict), and "failed on h1, h1" reads as
-        // two hosts. `detail` still carries both causes. Not the place to fix
-        // one signal reported by two rules: arriving here means the verbatim
-        // branch was skipped and `host` is already lost, which is why
-        // `prepare_body` and `downgrade_body` each drop their coarse exit-code
-        // entry for a host their check already named.
+        // One host can contribute two failures with distinct causes; `detail`
+        // still carries both, but "failed on h1, h1" would read as two hosts.
         hosts.dedup();
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
         let mut aggregate = UpdateError::reason_only(format!(
@@ -695,27 +659,18 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
             hosts.join(", "),
             detail.join("; ")
         ));
-        // The typed flags are the declared routing contract, so they must
-        // survive the summary as well as the verbatim branch. `all`, not `any`:
-        // a summary claiming "no patch was dispatched" while one host had
-        // dispatched one would be worse than no claim at all.
+        // The typed routing flags must survive the summary. `all`, not `any`: a
+        // summary claiming "no patch was dispatched" while one host dispatched
+        // one is worse than no claim.
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
-        // `cancelled` is deliberately NOT propagated — THE AUTHORITATIVE
-        // STATEMENT OF THAT CLAIM LIVES HERE, at the omission it justifies.
-        // `perform_operation_with` builds `UpdateError { cancelled:
-        // failure.cancelled, .. }` from `report.check_failures`, so a cancelled
-        // check *can* cross the `Operation` seam into a `failures` list — but
-        // no check in `update_workflow::checks` emits `CheckFailure::cancelled`
-        // and this module's own cancellations are early `return Err`s. Empty by
-        // producer, not by type: do not read that as a structural guarantee.
-        //
-        // A lone cancelled failure keeps its flag via the verbatim branch; only
-        // the summary drops it, which for the mixed case *is* the outranking
-        // rule — a real host failure collected beside a cancel must not be
+        // `cancelled` is deliberately NOT propagated. `perform_operation_with`
+        // copies `CheckFailure::cancelled` into the list, but no check in
+        // `update_workflow::checks` emits it today (empty by producer, not by
+        // type). A lone cancelled failure keeps its flag via the verbatim
+        // branch; for a mix, a real host failure beside a cancel must not be
         // re-routed to `CommandError::Cancelled` and excused as "the operator
-        // stopped it" (`commands/perform.rs::map_flow_error`, the flag's only
-        // non-test reader). It routes *reporting*, not the rollback, which
-        // follows the `UpdateFailure` variant `update_run_phase` picks.
+        // stopped it" (`commands/perform.rs::map_flow_error`). The flag routes
+        // *reporting*, not the rollback.
         Err(aggregate)
     }
 }
@@ -757,8 +712,7 @@ fn is_enabled(targets: &HostsGroup, host: &str) -> bool {
 /// failed host, keyed on `reason`.
 ///
 /// The analogue of [`run_checks_where`] for the flows with no registry check
-/// of their own: the shared install/uninstall template and the
-/// prepare/downgrade repo/command fan-outs.
+/// of their own.
 fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError> {
     let mut failures = Vec::new();
     for target in targets.targets() {
@@ -788,10 +742,7 @@ fn is_only_discard_notice(stderr: &str) -> bool {
 /// its metadata may be stale). A transactional host's failed refresh blocks:
 /// the patch would chain on whatever snapshot is still the default.
 ///
-/// `Some(Ok(_))` — every `RepoOutcome` — and `None` are both
-/// benign and produce nothing: `None` covers a report with no RRID yet and
-/// every `SetRepo` test stub that never drives `run_zypper`, neither of which
-/// attempted a repo change worth judging.
+/// `Some(Ok(_))` and `None` (no repo change attempted) produce nothing.
 fn repo_add_failures(
     targets: &HostsGroup,
     hosts: &BTreeSet<String>,
@@ -816,9 +767,9 @@ fn repo_add_failures(
 /// One refusal per enabled `in_scope` host an add of `report`'s repositories
 /// would not reach, saying why and ending with `consequence`.
 ///
-/// Known before the add: it applies the one rule `run_zypper` adds and records
-/// its outcome by ([`RepoOutcome::reach`]) to the same map and products. A report
-/// that does not expose its repositories refuses no host.
+/// Known before the add: it applies [`RepoOutcome::reach`], the rule
+/// `run_zypper` records its outcome by. A report that does not expose its
+/// repositories refuses no host.
 fn repo_unreached(
     targets: &HostsGroup,
     report: &dyn SetRepo,
@@ -844,12 +795,9 @@ fn repo_unreached(
 /// Reads every in-scope host's [`Target::last_repo`](mtui_hosts::Target::last_repo)
 /// verdict, returning one [`UpdateError`] per recorded failure.
 ///
-/// The `host_command_failures`-shaped analogue for a caller whose own gate is
-/// already all-or-nothing ([`prepare_body`]) or best-effort
-/// ([`remove_test_repos`]): unlike [`repo_add_failures`], every
-/// [`RepoFailure`] variant is treated alike here — there is no `Refresh`
-/// carve-out, because neither caller's decision (abort everything / warn and
-/// move on) depends on which zypper step failed.
+/// Unlike [`repo_add_failures`], every [`RepoFailure`] variant is treated alike:
+/// neither caller ([`prepare_body`]: abort; [`remove_test_repos`]: warn) depends
+/// on which zypper step failed.
 fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> Vec<UpdateError> {
     targets
         .targets()
@@ -870,10 +818,8 @@ fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> V
 /// [`Check`](mtui_hosts::Check) produces the verdict before the reboot.
 ///
 /// Injecting here rather than where the group is built is deliberate:
-/// [`OperationGroup::plans`] has exactly one consumer, so this is the one place
-/// that cannot forget. Construction sites can: for the whole life of the Rust
-/// port none of them injected a provider, so `plans()` failed with
-/// `NoPlanProvider`, the template logged and returned, and `install` reported
+/// [`OperationGroup::plans`] has one consumer, so this is the one place that
+/// cannot forget. A group built without a provider makes `install` report
 /// success having run nothing.
 ///
 /// # Errors
@@ -894,8 +840,7 @@ pub async fn perform_install(
 /// Uninstalls `packages` from every host in `targets`.
 ///
 /// See [`perform_install`]; only the role and the summary label differ.
-/// Uninstall shares the *install* check table ([`WorkflowRegistry::check_fn`]) — a removal
-/// is judged by the same package-manager outcomes.
+/// Uninstall shares the *install* check table ([`WorkflowRegistry::check_fn`]).
 ///
 /// # Errors
 ///
@@ -953,12 +898,10 @@ async fn perform_operation(
 /// spelled out as a parameter, so a test can script the check seam.
 ///
 /// Production must not reach this except through [`perform_operation`]. The
-/// parameter exists because there is no other way in: the injection below
-/// overwrites unconditionally (`HostsGroup::set_plan_provider`), so a provider
-/// installed on the group beforehand never survives to
-/// [`OperationGroup::plans`]. That single call site stays in this body, keeping
-/// [`perform_install`]'s inject-at-the-point-of-use rule intact. On cancelled
-/// check failures see the `cancelled` comment in [`aggregate_failures`].
+/// injection below overwrites unconditionally (`HostsGroup::set_plan_provider`),
+/// so a provider installed on the group beforehand never survives to
+/// [`OperationGroup::plans`]. For cancelled check failures see the `cancelled`
+/// comment in [`aggregate_failures`].
 async fn perform_operation_with(
     targets: &mut HostsGroup,
     op: Op,
@@ -982,8 +925,8 @@ async fn perform_operation_with(
         Op::Uninstall => Operation::uninstall(packages.to_vec()).run(targets).await,
     };
 
-    // The template ran nothing at all (missing doer, or a host held by another
-    // tester). Falling through would read stale `last*` values as success.
+    // The template ran nothing (missing doer, or a host held by another tester);
+    // falling through would read stale `last*` values as success.
     let report = match outcome {
         Err(e) => {
             return Err(UpdateError::reason_only(describe_start_failure(
@@ -995,19 +938,16 @@ async fn perform_operation_with(
         Ok(report) => report,
     };
 
-    // No history write here: `Operation::run` writes the row itself, between
-    // the fan-out and the reboot, because a row written after this call returns
-    // would be lost on the transactional hosts that never came back.
+    // No history write here: `Operation::run` writes the row between the fan-out
+    // and the reboot, as a later row would be lost on hosts that never came back.
 
-    // A stranded operation lock does not turn a good install/uninstall into a
-    // failed one — warn rather than joining `failures` below.
+    // A stranded operation lock does not fail a good install/uninstall; warn only.
     if !report.unlock_failures.is_empty() {
         warn!("{}", unlock_failure_message(label, &report.unlock_failures));
     }
 
-    // A hold lost in the reboot gap is degradation, not failure: the host did
-    // reboot. No `warn!` here — the re-apply helper already warned once per
-    // loss, and the diagnostic below is what reaches the display.
+    // A hold lost in the reboot gap is degradation, not failure; the re-apply
+    // helper already warned, and the diagnostic is what reaches the display.
     for loss in &report.lost_holds {
         diagnostics.push(Diagnostic::degradation(loss.describe()));
     }
@@ -1051,9 +991,6 @@ fn join_hosts<'a>(hosts: impl IntoIterator<Item = &'a String>) -> String {
 
 /// Renders the WARN for an `install`/`uninstall` operation lock that did not
 /// release, naming the affected hosts and the manual remedy.
-///
-/// A pure helper so the message is unit-testable without driving the whole
-/// [`Operation`] template.
 fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> String {
     let detail: Vec<String> = unlock_failures
         .iter()
@@ -1067,11 +1004,8 @@ fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> Str
 }
 
 /// Warns about any [`LockOutcome::Failed`] host in a [`HostsGroup::unlock`]
-/// outcome map, via the same message builder `perform_operation` uses for
-/// `install`/`uninstall`.
-///
-/// [`LockOutcome::Contended`] is excluded — benign, another tester owns the
-/// lock — so this only warns on a real transport/SFTP error. Returns the
+/// outcome map. [`LockOutcome::Contended`] is benign (another tester owns the
+/// lock), so only a real transport/SFTP error warns. Returns the
 /// `(host, reason)` pairs it warned about.
 pub fn warn_on_unlock_failures(
     op: &str,
@@ -1092,9 +1026,8 @@ pub fn warn_on_unlock_failures(
 
 /// Renders a [`RebootFailure`] as the operator-facing per-host error.
 ///
-/// The three causes deliberately read differently: they send an operator to
-/// opposite places. "Did not come back" means go find the machine; "never
-/// rebooted" means it is right there, still serving, with an inert snapshot.
+/// The causes deliberately read differently: "did not come back" means go find
+/// the machine; "never rebooted" means it is still serving, with an inert snapshot.
 fn reboot_error(failure: RebootFailure) -> UpdateError {
     let what = match failure.cause {
         RebootFailureCause::Unreachable => "did not come back after the reboot",
@@ -1108,10 +1041,9 @@ fn reboot_error(failure: RebootFailure) -> UpdateError {
 /// hosts responsible.
 ///
 /// `plans()` aborts on the first host it cannot resolve and reports only the
-/// role and release — and a host whose product never parsed has no release, so
-/// the bare error reads `Missing Installer for `, with nothing actionable in
-/// it. The whole group is aborted, so re-resolve every host here and name each
-/// one that has no command.
+/// role and release, which is empty for a host whose product never parsed. The
+/// whole group is aborted, so re-resolve every host here and name each one with
+/// no command.
 fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> String {
     if !matches!(
         err,
@@ -1142,15 +1074,13 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
 /// Reboots the transactional hosts named in `reboot`, returning one
 /// [`RebootFailure`] per host whose reboot did not demonstrably take effect.
 ///
-/// Such a host must fail the flow by name, not vanish into a discarded `()`;
-/// the caller renders these through [`reboot_error`] into its own failure list
-/// before aggregating. The cause is carried rather than flattened to a string
-/// because `update` routes its rollback on it.
+/// The caller renders these through [`reboot_error`] into its own failure list.
+/// The cause is carried rather than flattened to a string because `update`
+/// routes its rollback on it.
 ///
 /// A hold the reboot wiped that could not be re-taken is degradation, not
-/// failure: each is pushed onto `diagnostics` as
-/// [`Diagnostic::degradation`], so an unattended MCP caller sees the loss.
-/// No `warn!` here — the re-apply helper already warned once per loss.
+/// failure: it is pushed onto `diagnostics` as [`Diagnostic::degradation`] so an
+/// unattended MCP caller sees the loss.
 async fn reboot_transactional(
     targets: &mut HostsGroup,
     reboot: BTreeMap<String, String>,
@@ -1169,13 +1099,13 @@ async fn reboot_transactional(
 /// Runs the prepare step: adds/removes the issue repo, then installs
 /// `packages`.
 ///
-/// `report` is the [`SetRepo`] hook for the issue repos, and also supplies the
+/// `report` is the [`SetRepo`] hook for the issue repos, and supplies the
 /// update's composition, which narrows every host's list to what its own
-/// products compose (see [`narrow_to_composed`]); `packages` the list to
-/// prepare. `testing` selects repo-`add` + the testing preparer variant;
-/// `force` toggles `--force-resolution`; `installed_only` narrows the list to
-/// what each host already carries. Every host installs its list in a **single**
-/// transaction either way, so transactional hosts land it in one snapshot.
+/// products compose (see [`narrow_to_composed`]). `testing` selects repo-`add` +
+/// the testing preparer variant; `force` toggles `--force-resolution`;
+/// `installed_only` narrows the list to what each host already carries. Every
+/// host installs its list in a **single** transaction, so transactional hosts
+/// land it in one snapshot.
 pub async fn perform_prepare(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
@@ -1215,11 +1145,10 @@ fn flatten_prepare_failure(result: Result<(), PrepareFailure>) -> Result<(), Upd
 
 /// The classified body of [`perform_prepare`] (`selected` `None` is the whole
 /// group) and of the `--newpackage` prepare, which is restricted to the hosts an
-/// update completed on:
-/// it distinguishes a prepare that never ran ([`PrepareFailure::DidNotRun`])
-/// from one that ran and reported a host failure
-/// ([`PrepareFailure::HostReported`]) — the split [`perform_update`] gates its
-/// abort on, and the reason it calls this directly.
+/// update completed on. It distinguishes a prepare that never ran
+/// ([`PrepareFailure::DidNotRun`]) from one that ran and reported a host failure
+/// ([`PrepareFailure::HostReported`]), the split [`perform_update`] gates its
+/// abort on.
 #[allow(clippy::too_many_arguments)]
 async fn perform_prepare_classified(
     targets: &mut HostsGroup,
@@ -1240,10 +1169,9 @@ async fn perform_prepare_classified(
         .cloned()
         .collect();
 
-    // An install there would draw only on the repositories the host already
-    // had. Known without I/O, so such a host is refused before the preparer
-    // lookup and the lock, where it would otherwise fail its peers' prepare;
-    // unlike the composition refusal, also on an empty list.
+    // An install there would draw only on repositories the host already had.
+    // Known without I/O, so refused before the preparer lookup and the lock,
+    // where it would otherwise fail its peers' prepare; also on an empty list.
     let refused = if testing {
         let in_scope = |host: &str| selected.is_none_or(|s| s.contains(host));
         repo_unreached(targets, report, in_scope, "nothing was installed")
@@ -1266,8 +1194,7 @@ async fn perform_prepare_classified(
     let reboot = match build_reboot_map(targets, &registry, Role::Prepare, selected) {
         Ok(reboot) => reboot,
         Err(unresolved) => {
-            // Beside a refusal, one failure per host, so the summary's header
-            // names each and no host's clause runs into another's.
+            // Beside a refusal, one failure per host, so the summary names each.
             let stopped = if refused.is_empty() {
                 let labels: Vec<String> =
                     unresolved.into_iter().map(unresolved_host_label).collect();
@@ -1292,9 +1219,8 @@ async fn perform_prepare_classified(
 
     let locked = targets.update_lock(selected).await;
     if let Err(e) = locked {
-        // Beside a refusal, one failure per locked host, as for a missing
-        // preparer above; the prefix keeps a non-contention reason (a
-        // transport error, an SFTP timeout) reading as the lock's.
+        // As for a missing preparer; the prefix keeps a non-contention reason
+        // (transport error, SFTP timeout) reading as the lock's.
         let stopped = match e {
             HostError::HostsLocked(hosts) if !refused.is_empty() => hosts
                 .into_iter()
@@ -1321,8 +1247,8 @@ async fn perform_prepare_classified(
         diagnostics,
     )
     .await;
-    // Exactly the set locked above: releasing a host we never locked would
-    // report a failure for a lock nobody took.
+    // Exactly the set locked above: unlocking another would report a failure
+    // for a lock nobody took.
     let unlocked = targets.unlock(selected).await;
     warn_on_unlock_failures("prepare", &unlocked);
     result
@@ -1330,11 +1256,10 @@ async fn perform_prepare_classified(
 
 /// `stopped`, the failures that ended a prepare before its verdict, followed
 /// by the refusals that verdict would have named, so a refused host is named
-/// whatever stopped the prepare, and in the error alone, as on the normal path.
+/// whatever stopped the prepare.
 ///
-/// Any refusal makes the result [`aggregate_failures`]' summary,
-/// `prepare failed on <hosts> (<detail>)`, which carries no `host` even when a
-/// single host failed beside it.
+/// Any refusal makes the result [`aggregate_failures`]' summary, which carries
+/// no `host` even when a single host failed beside it.
 fn and_refused(stopped: Vec<UpdateError>, refused: Vec<UpdateError>) -> Result<(), UpdateError> {
     aggregate_failures("prepare", stopped.into_iter().chain(refused).collect())
 }
@@ -1342,15 +1267,13 @@ fn and_refused(stopped: Vec<UpdateError>, refused: Vec<UpdateError>) -> Result<(
 /// The locked body of [`perform_prepare`], factored out so the caller's
 /// `unlock()` runs unconditionally.
 ///
-/// `selected` scopes every fan-out and every by-host scan below; `None` is the
-/// whole group. Everything past the repo fan-out is driven by `lists`, so
-/// narrowing that one map carries the scope through `narrow_to_composed`,
-/// `narrow_to_installed` and `build_prepare_map`. `reboot` is the exception:
-/// it arrives already scoped from [`build_reboot_map`], because the retain
-/// filter below warns a host by name *before* `dispatched` (⊆ `lists`) gets to
-/// drop it. A hold lost in the reboot gap is reported on `diagnostics`.
-/// `refused` names hosts the caller already left out of `selected`, joined to
-/// this prepare's own verdicts, or to the failures that stop it early.
+/// `selected` scopes every fan-out and by-host scan; `None` is the whole group.
+/// Everything past the repo fan-out is driven by `lists`, so narrowing that one
+/// map carries the scope through `narrow_to_composed`, `narrow_to_installed` and
+/// `build_prepare_map`. `reboot` arrives already scoped from
+/// [`build_reboot_map`], because the retain filter below warns a host by name
+/// *before* `dispatched` (⊆ `lists`) drops it. `refused` names hosts the caller
+/// already left out of `selected`, joined to this prepare's own verdicts.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -1368,13 +1291,10 @@ async fn prepare_body(
 
     targets.fanout_set_repo(operation, report, selected).await;
 
-    // The issue repo could not be set on some host, so prepare never ran.
-    // Reads the aggregated `Target::last_repo` verdict rather than
-    // `host_command_failures`' `lasterr()`/`lastexit()`, which only see the
-    // *last* zypper command of the fan-out and so miss an earlier `ar`/`rr`
-    // failure masked by a successful trailing `ref` (#551). Every
-    // `RepoFailure` variant aborts here — prepare's own gate is already
-    // all-or-nothing, so what changes is what it can see, not what it does.
+    // The issue repo could not be set on some host, so prepare never ran. Reads
+    // the aggregated `Target::last_repo` verdict, not `lasterr()`/`lastexit()`,
+    // which see only the *last* zypper command and miss an earlier `ar`/`rr`
+    // failure masked by a successful trailing `ref`.
     let repo_failures: Vec<UpdateError> = repo_set_failures(targets, in_scope);
     if !repo_failures.is_empty() {
         for e in &repo_failures {
@@ -1388,27 +1308,22 @@ async fn prepare_body(
     }
 
     // Hosts a prepare command reached, and hosts a package failed on. Both are
-    // accumulated *inside* the loop below, which runs one fan-out per package:
-    // a single post-loop read of `lastexit()` sees only the last package, and
-    // under `--installed-only` that is very often a no-op `if rpm -q …` exiting
-    // 0, masking an earlier failure and letting the host reboot into it.
+    // accumulated per fan-out: a post-loop read of `lastexit()` sees only the
+    // last package, often a no-op `if rpm -q …` exiting 0 that masks an earlier
+    // failure and lets the host reboot into it.
     let mut dispatched: BTreeSet<String> = BTreeSet::new();
     let mut inert: BTreeSet<String> = BTreeSet::new();
-    // The check verdicts, per fan-out for the same reason: the checks read
-    // the `last*` snapshot too. `note_dispatch` closes the exit-code half of
-    // that hole; this closes the marker half, or an exit-`0` lock message on
-    // package 1 of 2 is overwritten by package 2's clean run and the host
-    // reboots into it (#406). `check_failed` keeps it to one verdict per host —
-    // a second entry would push `aggregate_failures` out of its single-failure
-    // verbatim branch, where `host` is `Some`.
+    // The check verdicts, per fan-out for the same reason (the marker half: an
+    // exit-`0` lock message on package 1 of 2 must not be overwritten by package
+    // 2's clean run). `check_failed` keeps it to one verdict per host, as a
+    // second entry would push `aggregate_failures` out of its verbatim branch.
     let mut check_failed: BTreeSet<String> = BTreeSet::new();
     let mut check_failures: Vec<UpdateError> = Vec::new();
 
-    // An empty list is not a host failure, but it must never be a silent
-    // success either — only the issue repositories were touched (#396). Above
-    // the branch so the `installed_only` path (zero iterations) warns too; the
-    // operator-facing refusal lives in the `prepare`/`update` command
-    // pre-flights, this covers embedded callers.
+    // An empty list is not a host failure, but never a silent success either:
+    // only the issue repositories were touched. Above the branch so the
+    // `installed_only` path warns too; the command pre-flights hold the
+    // operator-facing refusal.
     if pkgs.is_empty() {
         warn!("no packages to prepare");
     }
@@ -1421,26 +1336,22 @@ async fn prepare_body(
         .map(|t| (t.hostname().to_owned(), pkgs.to_vec()))
         .collect();
 
-    // Hosts we deliberately did not dispatch to. Each already has its own
-    // verdict, so neither the failure scan nor the "no command could be built"
-    // rule below may judge them a second time, and their failures are collected
-    // apart from that scan.
+    // Hosts deliberately not dispatched to. Each already has its own verdict, so
+    // neither the failure scan nor the "no command built" rule may judge it again.
     let mut accounted: BTreeSet<String> = BTreeSet::new();
     let mut accounted_failures: Vec<UpdateError> = refused;
-    // Kept apart from `accounted`, which also holds the `--installed` probe's
-    // dead and skipped hosts: only these have no package baseline, and only
-    // they are excluded from an embedded `update`.
+    // Apart from `accounted` (which also holds the `--installed` probe's dead and
+    // skipped hosts): only these have no package baseline and are excluded from
+    // an embedded `update`.
     let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
 
-    // Before the `--installed` probe, so a host the update composes nothing
-    // for is never probed either. Skipped on an empty list for the same reason
-    // the probe is: every host would then compose "none of" it, and an empty
-    // list is not a host failure (the warn above owns that case).
+    // Before the `--installed` probe, so a host the update composes nothing for
+    // is never probed. Skipped on an empty list, where every host would compose
+    // "none of" it.
     if !pkgs.is_empty() {
         for (host, products) in narrow_to_composed(targets, report, &mut lists) {
-            // Named refusal, not a fallback to the full list: the full list is
-            // exactly the `zypper 104` this narrowing exists to prevent, and a
-            // silent skip would let the group's success speak for this host (#396).
+            // A named refusal, not a fallback to the full list (the `zypper 104`
+            // this narrowing prevents) or a silent skip.
             accounted_failures.push(UpdateError::new(
                 format!(
                     "this host's products ({products}) compose none of the requested packages \
@@ -1496,41 +1407,23 @@ async fn prepare_body(
         );
     }
 
-    // A prepare installs packages, so it owes its own history row — and it is
-    // what closes #407 for `update`, whose post-prepare aborts correctly write
-    // no `update` row while this prepare's packages stay on every host. Placed
-    // after the dispatch (no row may claim work that never started) and before
-    // `reboot_transactional` (a host that does not come back can no longer be
-    // written to), so on a transactional host it records what was *staged*
-    // rather than leaving those packages unrecorded entirely.
+    // A prepare installs packages, so it owes its own history row: `update`'s
+    // post-prepare aborts write no `update` row while this prepare's packages
+    // stay on every host. Placed after the dispatch (no row may claim work that
+    // never started) and before `reboot_transactional` (a host that does not
+    // come back can no longer be written to), so a transactional host records
+    // what was *staged*.
     //
-    // It is also what closes #407 for `update`: both of that flow's
-    // post-prepare aborts (the pre-dispatch cancel gate and the missing-updater
-    // abort) return without an `update` row — correctly, since no updater
-    // command dispatched — but the packages this prepare installed stay on
-    // every host. Writing the row where the side effect is produced records
-    // them for the standalone `prepare`, the initial prepare inside `update`,
-    // and the `--newpackage` prepare alike.
+    // A row claiming an install that never started is worse than no row, so:
+    // * **Per host, not group-wide.** `dispatched` excludes hosts whose release
+    //   key does not resolve or whose template does not render — the hosts
+    //   failed below with "nothing was installed"; the row is an interop
+    //   contract and must not contradict that verdict.
+    // * **The host's own list.** Under `--installed` hosts of one group receive
+    //   different lists.
     //
-    // Two things keep the row from over-claiming, both instances of "a row
-    // claiming an install that never started is worse than no row":
-    //
-    // * **Per host, not group-wide.** `dispatched` is a per-host set and
-    //   `build_prepare_map` drops a host whose release key does not resolve or
-    //   whose template does not render — the very hosts the block below fails
-    //   with "nothing was installed". A group-wide fan-out would hand exactly
-    //   those hosts a `:prepare:` row contradicting their own verdict, in a
-    //   file the project treats as an interop contract, so the write is scoped
-    //   to the hosts a command actually reached.
-    // * **The host's own list, not the requested set.** Under `--installed`
-    //   two hosts of one group receive different lists, and a row naming a
-    //   package that host never installed is the same over-claim.
-    //
-    // An empty list, a cancel before the dispatch, or a prepare for which no
-    // command could be built for any host therefore leaves no row at all.
-    //
-    // Grouped by list: one fan-out per distinct list, so up to one per host
-    // when every host narrowed differently.
+    // An empty list, a cancel before dispatch, or no command built leaves no row.
+    // One fan-out per distinct list.
     let mut by_list: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
     for host in &dispatched {
         if let Some(list) = lists.get(host) {
@@ -1544,39 +1437,19 @@ async fn prepare_body(
         add_op_history_for(targets, &hosts, "prepare", None, &list).await;
     }
 
-    // Surface any per-host command failure from the install fan-out; the
-    // prepare check's own failures were collected with it above.
-    //
-    // A host the check already named is dropped here: the two rules overlap on
-    // one signal. `Target::run` records exit `-1` for a timeout, a dropped
-    // connection or an unconnected host, which trips this scan's
-    // `lastexit() != 0` *and* the `("slmicro", true)` / `("YUM", false)`
-    // checks' never-ran gate; a lock message on stderr trips the stderr half
-    // and the marker check. Both would name one host twice, which pushes
-    // `aggregate_failures` out of its single-failure verbatim branch into the
-    // summary — where `host` becomes `None` and the MCP client loses the one
-    // field that says *which* refhost to go and look at. The check's verdict
-    // is the one kept because it is the more specific of the two ("timed out
-    // or failed to run" and "update stack locked" both say more than "prepare
-    // command failed"); dropping the check's instead would trade attribution
-    // back for a coarser diagnosis. `downgrade_body` resolves the identical
-    // overlap the identical way — its `failed_downgrade.insert` gates the
-    // exit-code entry behind the check's verdict for the same host.
-    //
-    // An `accounted` host is dropped for a second, distinct reason: no install
-    // command was built for it, so its last snapshot is the `--installed`
-    // probe's. Scoring that as a prepare invents a verdict — a dead probe would
-    // be named twice (the coarser reason on top of "package probe failed"), and
-    // a skipped one named at all, since `rpm -qa` warns on stderr while exiting
-    // `0` and this scan's stderr half fires on that. Same rule `note_dispatch`
-    // and `note_check` impose by scoping to the fan-out's own command map.
-    //
-    // An out-of-scope host is dropped for a third: it was in no fan-out of this
-    // prepare at all, so its `last*` is some earlier phase's — an rpm warning
-    // from `package_check` is enough to fail a prepare it was never part of.
-    //
-    // A transactional host is dropped for a fourth when its clean exit wrote
-    // only the discard notice to stderr, which 4.8 prints on a no-op prepare.
+    // Surface per-host command failures from the install fan-out; the prepare
+    // check's own failures were collected above. Dropped from this scan:
+    // * A host the check already named: the two rules overlap on one signal
+    //   (`-1` trips both this scan and the never-ran gate; a lock message trips
+    //   the stderr half and the marker check). Naming a host twice pushes
+    //   `aggregate_failures` into its summary, where `host` becomes `None` and
+    //   the MCP client loses *which* refhost to look at. The check's verdict is
+    //   kept as the more specific; `downgrade_body` resolves the overlap alike.
+    // * An `accounted` host: no install command was built for it, so its last
+    //   snapshot is the `--installed` probe's, and scoring that invents a verdict.
+    // * An out-of-scope host: its `last*` is some earlier phase's.
+    // * A transactional host whose clean exit wrote only the discard notice to
+    //   stderr, which transactional-update prints on a no-op prepare.
     let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
         .into_iter()
         .filter(|e| {
@@ -1595,31 +1468,20 @@ async fn prepare_body(
     failures.extend(accounted_failures);
 
     // A host whose prepare failed must not reboot into the failed transaction,
-    // while a healthy peer still must. The skip set is built from the check
-    // verdicts and non-zero exit codes only — never from the stderr rule
-    // `host_command_failures` also applies, because `transactional-update`
-    // writes progress to stderr on a *successful* run and skipping that host's
-    // reboot would leave a healthy snapshot silently inert. The prepare
-    // templates are single commands, so the exit code is the prepare's own.
-    //
-    // The check verdicts are the other half of the gate, and on
-    // ("slmicro", true) they are what makes it complete: a prepare that
-    // reported a locked update stack, a dependency prompt or an RPM error and
-    // still exited `0` is invisible to the exit-code rule above, and its
-    // reboot would activate the failed transaction. A marker-failed prepare
-    // therefore skips its reboot, while a host whose only stderr is progress
-    // still gets one (#406).
+    // while a healthy peer still must. The skip set uses check verdicts and
+    // non-zero exit codes only, never the stderr rule `host_command_failures`
+    // also applies: `transactional-update` writes progress to stderr on a
+    // *successful* run, and skipping that reboot would leave a healthy snapshot
+    // inert. The prepare templates are single commands, so the exit code is the
+    // prepare's own. The check verdicts cover a prepare that reported a locked
+    // stack, dependency prompt or RPM error yet exited `0`.
     inert.extend(check_failed.iter().cloned());
     failures.extend(check_failures);
 
-    // A host the fan-out never reached must fail by name, not ride the
-    // group's success (#396): `build_prepare_map` drops a host whose release
-    // key does not resolve or whose template does not render, and nothing else
-    // records that. Skipped when the flow was cancelled before the dispatch
-    // (nothing was expected to dispatch) and when the list was empty (the warn
-    // above owns that case); `accounted` excuses the hosts that already carry
-    // their own verdict, which is what keeps this from being a second entry for
-    // one host.
+    // A host the fan-out never reached must fail by name, not ride the group's
+    // success: `build_prepare_map` drops hosts whose release key does not
+    // resolve or whose template does not render. Skipped on a cancel before
+    // dispatch and on an empty list; `accounted` hosts already carry a verdict.
     if !pkgs.is_empty() && !cancelled {
         for target in targets.targets() {
             if target.state() != mtui_types::TargetState::Enabled || !in_scope(target.hostname()) {
@@ -1645,9 +1507,8 @@ async fn prepare_body(
     let reboot: BTreeMap<String, String> = reboot
         .into_iter()
         .filter(|(host, _)| {
-            // Nothing staged, nothing to activate — and in the `update`
-            // rollback path a reboot would activate whatever the failed update
-            // left staged.
+            // Nothing staged, nothing to activate (in the `update` rollback path
+            // a reboot would activate whatever the failed update left staged).
             if !dispatched.contains(host) {
                 warn!(host = %host, "no prepare command was staged; skipping reboot");
                 return false;
@@ -1688,10 +1549,9 @@ async fn prepare_body(
 /// Records which hosts a prepare fan-out reached, and which of them it failed
 /// on, into the two sets the reboot gate consults.
 ///
-/// Called after *every* fan-out, not once at the end: the per-package
-/// `--installed-only` loop runs one fan-out per package and `lastexit()` keeps
-/// only the last. Scoped to `cmd`'s keys so a host outside this fan-out is
-/// never judged on another phase's record.
+/// Called after *every* fan-out, as `lastexit()` keeps only the last. Scoped to
+/// `cmd`'s keys so a host outside this fan-out is never judged on another
+/// phase's record.
 fn note_dispatch(
     targets: &HostsGroup,
     cmd: &BTreeMap<String, String>,
@@ -1714,19 +1574,14 @@ fn note_dispatch(
 /// first failure per host.
 ///
 /// The companion to [`note_dispatch`], for the same reason:
-/// [`run_checks_where`] reads the `last*` snapshot, so a single post-loop call
-/// would judge only the last package — under `--installed-only` very often a
-/// clean no-op, masking an exit-`0` lock message on an earlier one and letting
-/// the host reboot into it (#406). First-failure-wins per host keeps
-/// `aggregate_failures` in its single-failure verbatim branch, where `host`
-/// survives.
+/// [`run_checks_where`] reads the `last*` snapshot, so a post-loop call would
+/// judge only the last package, masking an exit-`0` lock message on an earlier
+/// one. First-failure-wins per host keeps `aggregate_failures` in its verbatim
+/// branch, where `host` survives.
 ///
-/// Scoped to `cmd`'s keys through [`run_checks_where`], so an out-of-fan-out
-/// host is never *judged* on an earlier phase's record rather than judged and
-/// then filtered after its ERROR breadcrumb has fired. A host
-/// [`build_prepare_map`] dropped is therefore never check-judged, but it is not
-/// excused: `prepare_body`'s dispatch accounting fails it by name with "no
-/// prepare command could be built for this host" (#396).
+/// Scoped to `cmd`'s keys through [`run_checks_where`]. A host
+/// [`build_prepare_map`] dropped is never check-judged but is not excused:
+/// `prepare_body`'s dispatch accounting fails it by name.
 fn note_check(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1750,9 +1605,8 @@ fn note_check(
 ///
 /// A host absent from `lists`, or carrying an empty one, gets no command: an
 /// empty list would render an argument-less install. The caller owns that
-/// host's verdict (see [`prepare_body`]'s `accounted`); the ERROR logs here stay
-/// for the two cases the caller cannot see — an unresolved release key and a
-/// template that does not render (#396).
+/// host's verdict (see [`prepare_body`]'s `accounted`); the ERROR logs here
+/// cover an unresolved release key and a template that does not render.
 fn build_prepare_map(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1773,15 +1627,13 @@ fn build_prepare_map(
         let Some(doer) = resolve_doer(registry, Role::Prepare, &release, transactional) else {
             continue;
         };
-        // Quoting lives here alone, so no entry can reach the template
-        // unquoted.
+        // Quoting lives here alone, so no entry reaches the template unquoted.
         let joined = quote_args(list);
         let vars: HashMap<&str, &str> = [("package", joined.as_str())].into_iter().collect();
         if let Ok(cmd) = doer.render_command(&vars) {
             map.insert(target.hostname().to_owned(), cmd);
         } else {
-            // `prepare_body`'s dispatch accounting turns the drop into a named
-            // failure; this log says why (#396).
+            // `prepare_body`'s dispatch accounting names the drop; this says why.
             error!(
                 host = %target.hostname(), release = %release,
                 "prepare: no command rendered for this host; nothing will be installed on it"
@@ -1806,17 +1658,15 @@ fn fmt_products(products: &BTreeSet<mtui_types::SystemProduct>) -> String {
 ///
 /// A composition that names none of the host's products keeps the full list and
 /// warns: narrowing on an index that does not describe the host would drop
-/// every package, and keeping it silently would be indistinguishable from
-/// today.
+/// every package.
 fn narrow_to_composed(
     targets: &HostsGroup,
     report: &dyn SetRepo,
     lists: &mut BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, String> {
     let mut refused = BTreeMap::new();
-    // The `!known` fallback below would keep the full list anyway; this returns
-    // early for the *log*, so a report that simply carries no composition does
-    // not warn once per host and drown the case that matters.
+    // Returns early for the *log*: a report with no composition must not warn
+    // once per host.
     let Some(composed) = report.composition().filter(|c| !c.is_empty()) else {
         return refused;
     };
@@ -1853,8 +1703,7 @@ fn narrow_to_composed(
         list.retain(|p| composes.contains(p));
         if !dropped.is_empty() {
             // INFO, not DEBUG: a package installable only through a capability
-            // is dropped here too, and this line is the only thing that makes
-            // that visible.
+            // is dropped here too, and this is the only trace.
             info!(
                 host = %host, dropped = %dropped.join(", "),
                 "these packages are not composed for this host's products; not installing them"
@@ -1883,8 +1732,8 @@ struct ProbeOutcome {
 /// carries, dropping the hosts left with nothing.
 ///
 /// Unlike `downgrade_body`'s version probe there is no all-dead shortcut and no
-/// history row: prepare has dispatched nothing at this point, so the caller's
-/// ordinary fall-through already names every dead host and writes no row.
+/// history row: nothing is dispatched yet, so the caller's fall-through names
+/// every dead host.
 async fn narrow_to_installed(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
@@ -1915,10 +1764,8 @@ async fn narrow_to_installed(
         let Some(target) = targets.get(hostname) else {
             continue;
         };
-        // Non-zero is the whole signal, and `rpm -qa` is what makes it
-        // trustworthy: it exits `0` on success, so non-zero is the probe
-        // failing rather than "this host carries none of them" (#451). The
-        // `-1` never-ran sentinel is one of its values, not the predicate.
+        // Non-zero is the whole signal: `rpm -qa` exits `0` on success, so
+        // non-zero is the probe failing, not "this host carries none of them".
         if target.lastexit().is_some_and(|c| c != 0) {
             error!(
                 host = %hostname,
@@ -2065,10 +1912,8 @@ async fn reset_default_snapshot<'a>(
 /// row, its reboot and its verdict.
 ///
 /// For the `update` rollback, which reaches only the hosts the patch was
-/// dispatched to: any other host has nothing to undo, yet would have its
-/// repositories removed and its packages moved to the release versions, and
-/// its contended lock or dead probe would fail the rollback of the peers that
-/// need it.
+/// dispatched to: any other host has nothing to undo, and its contended lock or
+/// dead probe would fail the rollback of the peers that need it.
 ///
 /// A transactional host whose repository step failed is not downgraded but
 /// gets [`TRANSACTIONAL_ROLLBACK`], so nothing staged stays the default
@@ -2085,9 +1930,8 @@ async fn perform_downgrade_for(
     rollback: Option<AfterPatch>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    // Return before locking or touching repos. Also keeps the probe template
-    // from rendering with no package names, where `zypper se` would list the
-    // entire repository catalog.
+    // Before locking or touching repos; also keeps the probe template from
+    // rendering with no package names, where `zypper se` lists the whole catalog.
     if packages.is_empty() {
         warn!("no packages to downgrade");
         return Ok(());
@@ -2147,11 +1991,9 @@ async fn downgrade_body(
         .fanout_set_repo(RepoOp::Remove, report, Some(hosts))
         .await;
 
-    // Per-host failures (repo removal + per-package/combined checks) are
-    // aggregated at the end, so a downgrade failure surfaces rather than only
-    // being logged.
-    // A failed `rr` can mask a failed refresh, so any repo failure counts: the
-    // downgrade would chain on whatever snapshot is still the default.
+    // Per-host failures are aggregated at the end. A failed `rr` can mask a
+    // failed refresh, so any repo failure counts: the downgrade would chain on
+    // whatever snapshot is still the default.
     let repo_failed = transactional_repo_failures(targets, hosts);
     let mut failures: Vec<UpdateError> =
         host_command_failures(targets, "failed to remove issue repo")
@@ -2211,19 +2053,16 @@ async fn downgrade_body(
     // carries no versions, so the flow would "complete" having run zero
     // downgrade commands and left every package at the update version.
     //
-    // Non-zero is the whole signal, and the guarded template is what makes it
-    // trustworthy in both directions (#451): it guards the commands that
-    // *produce* the list and exits with the failed tool's own status, so a
-    // non-zero status is SSH-level death (the `-1` sentinel) or zypper's/awk's
-    // own — never "package not found", which the guard accepts as `104` and
-    // reports as `0`. And `0` genuinely means the probe answered. (As one
-    // pipeline the status was awk's, which succeeds on empty input, so a failed
-    // `zypper se` recorded `0`.)
+    // Non-zero is the whole signal: the guarded template guards the commands
+    // that *produce* the list and exits with the failed tool's own status, so
+    // non-zero is SSH-level death (`-1`) or zypper's/awk's own, never "package
+    // not found" (accepted as `104`, reported as `0`), and `0` means the probe
+    // answered.
     //
-    // Handled per host: this downgrade is often the repair for an update that
-    // already failed on the group, so aborting over one host's broken zypper
-    // would strand the healthy peers half-applied. They still roll back (and
-    // reboot); the dead ones are raised at the end. All probes dead aborts now.
+    // Handled per host: this downgrade is often the repair for a failed update,
+    // so one host's broken zypper must not strand the healthy peers half-applied.
+    // They still roll back (and reboot); the dead ones are raised at the end.
+    // All probes dead aborts now.
     let dead_probes: std::collections::BTreeSet<String> = list_map
         .keys()
         .filter(|hn| {
@@ -2396,12 +2235,11 @@ async fn downgrade_body(
             failures.push(e);
         }
         // The transactional check only gates "timed out or failed to run", but
-        // the downgrade template is a single command, so a non-zero exit is the
-        // downgrade's own status and the host must not reboot into the failed
-        // transaction. Pushed as a failure too — a skipped reboot behind an
-        // `Ok` would be a quiet no-op — unless the check already named this
-        // host (`insert` is `false` for the `-1` case it covers). Scoped to
-        // `combined`, since hosts outside it carry a stale record.
+        // the template is a single command, so a non-zero exit is the
+        // downgrade's own and the host must not reboot into the failed
+        // transaction. Pushed as a failure too (a skipped reboot behind `Ok`
+        // would be silent) unless the check already named the host. Scoped to
+        // `combined`, as other hosts carry a stale record.
         for hostname in combined.keys() {
             let exit = targets.get(hostname).and_then(mtui_hosts::Target::lastexit);
             if exit.is_some_and(|c| c != 0) && failed_downgrade.insert(hostname.clone()) {
@@ -2420,11 +2258,10 @@ async fn downgrade_body(
     let healthy_reboot: BTreeMap<String, String> = reboot
         .into_iter()
         .filter(|(h, _)| {
-            // Nothing staged. A transactional host drops out of `combined`
-            // when the probe resolved no versions for it, which an exit-0 probe
-            // can do, so `dead_probes` does not cover it. When this downgrade
-            // *is* the `update` rollback, rebooting would activate the snapshot
-            // the failed update left staged.
+            // Nothing staged: a host drops out of `combined` when an exit-0 probe
+            // resolved no versions for it, which `dead_probes` does not cover. In
+            // the `update` rollback a reboot would activate the failed update's
+            // staged snapshot.
             if !combined.contains_key(h) {
                 warn!(host = %h, "no downgrade was staged; skipping reboot");
                 return false;
@@ -2470,7 +2307,7 @@ async fn downgrade_body(
     });
     let completed = completed_hosts(targets, verified, &failures);
 
-    // A per-host check failure aborts first (matches the pre-#336 aggregation).
+    // A per-host check failure aborts first.
     aggregate_failures("downgrade", failures).map_err(|e| e.with_completed(completed.clone()))?;
 
     // Then the dead probes, now that the healthy hosts have rolled back.
@@ -2487,10 +2324,9 @@ async fn downgrade_body(
         return Err(UpdateError::reason_only("downgrade not completed").with_completed(completed));
     }
 
-    // Cancellation last: a real verdict above outranks it. The message names
-    // only the non-transactional per-package progress (transactional hosts go
-    // through the combined block) and notes the repo removal, which ran before
-    // the loop and so applies to every host in scope.
+    // Cancellation last: a real verdict above outranks it. The message covers
+    // only non-transactional per-package progress; the repo removal ran before
+    // the loop and applies to every host in scope.
     if let Some(i) = cancelled_at {
         let done: Vec<&str> = packages[..i].iter().map(String::as_str).collect();
         let left: Vec<&str> = packages[i..].iter().map(String::as_str).collect();
@@ -2524,12 +2360,11 @@ async fn downgrade_body(
 /// Returns the `hostname -> ["name (at <current>, update ships <required>)", …]`
 /// map, empty on a completed rollback, in sorted hostname order.
 ///
-/// The all-clear is withheld while `probe_dead` is non-empty: this verdict
-/// flags a package only when the report carries a `required` version, so on a
-/// standalone `downgrade` an unmeasured host yields the same empty map a
-/// completed rollback does, and logging `done` over it would restate #451's
-/// silent success one layer up. Those hosts are named at WARN instead, as are
-/// `left_out`, the hosts whose repository step failed and were never probed.
+/// The all-clear is withheld while `probe_dead` is non-empty: a package is
+/// flagged only when the report carries a `required` version, so on a standalone
+/// `downgrade` an unmeasured host yields the same empty map a completed rollback
+/// does. Those hosts are named at WARN instead, as are `left_out`, the hosts
+/// whose repository step failed and were never probed.
 async fn downgrade_verdict(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
@@ -2545,10 +2380,8 @@ async fn downgrade_verdict(
     {
         let hostname = target.hostname().to_owned();
         for pkg in target.packages_mut() {
-            // Rotate the whole check, not just its version: a never-checked
-            // slot must not land in the next one as "checked, not installed",
-            // or a standalone downgrade exports "is not installed" for a slot
-            // nobody looked at (#396, and #437 for `current` -> `after`).
+            // Rotate the whole check, not just its version: a never-checked slot
+            // must not land in the next as "checked, not installed".
             pkg.set_before_check(pkg.after_check().clone());
             pkg.set_after_check(pkg.current_check().clone());
             if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
@@ -2650,15 +2483,13 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 /// recognised-but-non-fatal output sections for the command layer.
 ///
 /// A run that excluded hosts but patched the rest fails with
-/// [`UpdateFailure::Excluded`] or [`UpdateFailure::RepoAdd`], whose error
-/// lists the patched hosts in [`UpdateError::completed`]. So do the failures
-/// that roll nothing back ([`UpdateFailure::NotRun`],
-/// [`UpdateFailure::ProbeFailed`], [`UpdateFailure::Reboot`]): the
-/// transactional peers whose patch passed are rebooted, and the hosts it
-/// completed on are finished by the same [`finish_update`] step as a
-/// successful run's, leaving the test repositories on the hosts it did not.
-/// A failure that rolls back carries the hosts its rollback reaches as its
-/// [`RollbackScope`].
+/// [`UpdateFailure::Excluded`] or [`UpdateFailure::RepoAdd`], whose error lists
+/// the patched hosts in [`UpdateError::completed`]. So do the failures that roll
+/// nothing back ([`UpdateFailure::NotRun`], [`UpdateFailure::ProbeFailed`],
+/// [`UpdateFailure::Reboot`]): the hosts it completed on are finished by the
+/// same [`finish_update`] step as a successful run's, leaving the test
+/// repositories on the hosts it did not. A failure that rolls back carries the
+/// hosts its rollback reaches as its [`RollbackScope`].
 // Grouping these into a struct would only obscure the call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
@@ -2681,9 +2512,9 @@ pub async fn perform_update(
         )));
     }
 
-    // The updater finds no patch on a host the add does not reach and exits
-    // 0, which the check would pass as an update that installed nothing. That
-    // is known without I/O, so such a host is left out before anything runs.
+    // The updater finds no patch on a host the add does not reach and exits 0,
+    // which the check would pass as a no-op update. Known without I/O, so such a
+    // host is left out before anything runs.
     let mut excluded = repo_unreached(targets, report, |_| true, "it was excluded from the update");
     let unreached: BTreeSet<String> = excluded.iter().filter_map(|e| e.host.clone()).collect();
     for e in &excluded {
@@ -2715,9 +2546,8 @@ pub async fn perform_update(
     let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
     if !noprepare {
         // Default flags (remove-repo prepare). A prepare that could not run
-        // aborts rather than patching hosts on a broken premise; `--noprepare`
-        // opts out. One that ran and only reported a host failure is too noisy
-        // to gate on (see `PrepareFailure`), so it warns and the update goes on.
+        // aborts; one that ran and reported a host failure only warns (see
+        // `PrepareFailure`).
         match perform_prepare_classified(
             targets,
             report,
@@ -2746,10 +2576,8 @@ pub async fn perform_update(
         }
     }
 
-    // A refused host has no package baseline, so patching it would patch on the
-    // premise the refusal denied. It is dropped from the fan-out below and
-    // named in the verdict — a skip the group's success spoke for is #396
-    // itself, one layer up.
+    // A refused host has no package baseline, so it is dropped from the fan-out
+    // below and named in the verdict rather than covered by the group's success.
     let refused: Vec<UpdateError> = uncomposed
         .iter()
         .map(|(host, products)| {
@@ -2762,9 +2590,8 @@ pub async fn perform_update(
             )
         })
         .collect();
-    // Host-attributed, pushed here so it reaches an MCP caller on both the
-    // success and the failure path — not only via the final `Excluded`
-    // return, which a later failure could otherwise win over (#543).
+    // Pushed here so it reaches an MCP caller on both the success and failure
+    // paths, not only via the final `Excluded` return.
     for e in &refused {
         diagnostics.push(Diagnostic::degradation(e.to_string()));
     }
@@ -2780,17 +2607,12 @@ pub async fn perform_update(
         return aggregate_failures("update", excluded).map_err(UpdateFailure::Excluded);
     }
 
-    // The set the rest of the flow operates on, fixed once here rather than
-    // filtered again at each fan-out. Every step below is group-wide by
-    // default, and leaving a refused host in one is a distinct defect per step:
-    // `update_lock` fails closed on *any* member, so a refused host with a
-    // contended or unreadable lock aborts the update for the peers that do
-    // compose it; the repo fan-out reconfigures a host already reported as
-    // excluded; `build_update_maps` turns a refused host's missing updater
-    // into the whole group's `MissingUpdater`; and `package_check` would query
-    // and judge a host that drew no patch, earning it an update-sanity warning
-    // for work it never received. Filtering after the fact — as the
-    // `commands`/`reboot` retain used to — is too late for all four.
+    // The set the rest of the flow operates on, fixed once rather than filtered
+    // at each fan-out: `update_lock` fails closed on *any* member, so a refused
+    // host's contended lock would abort the update for its peers; the repo
+    // fan-out would reconfigure an excluded host; `build_update_maps` would turn
+    // its missing updater into the group's `MissingUpdater`; and `package_check`
+    // would judge a host that drew no patch. Filtering later is too late.
     let mut eligible: BTreeSet<String> = targets
         .names()
         .into_iter()
@@ -2828,10 +2650,9 @@ pub async fn perform_update(
         .fanout_set_repo(RepoOp::Add, report, Some(&eligible))
         .await;
 
-    // A repo genuinely absent after the add means the patch below would find
-    // nothing to patch and exit 0, masking a no-op as a success (#551). Read
-    // each host's aggregated verdict rather than trusting the trailing
-    // `zypper ref`'s exit code, which cannot see an earlier masked `ar`/`rr`.
+    // A repo absent after the add means the patch below would find nothing and
+    // exit 0. Read each host's aggregated verdict, not the trailing `zypper ref`
+    // exit code, which cannot see an earlier masked `ar`/`rr`.
     let mut repo_add_seen = false;
     let (blocking, degraded_repo_hosts) = repo_add_failures(targets, &eligible);
     for host in &degraded_repo_hosts {
@@ -2848,9 +2669,8 @@ pub async fn perform_update(
             hosts = %join_hosts(&failed),
             "test update repository failed to register or refresh; excluding from the patch"
         );
-        // Undo the partial add and release the lock while it is still scoped
-        // to these hosts — `eligible` shrinks right after, and the lock scope
-        // must shrink with it or these hosts strand a lock nobody releases.
+        // Undo the partial add and release the lock while still scoped to these
+        // hosts: `eligible` shrinks next, and these hosts would strand a lock.
         targets
             .fanout_set_repo(RepoOp::Remove, report, Some(&failed))
             .await;
@@ -2891,8 +2711,7 @@ pub async fn perform_update(
     {
         Ok(maps) => maps,
         Err(e) => {
-            // Remove the repo we just added and abort. A hard failure rather
-            // than a logged success, so it never reports "finished".
+            // Remove the repo we just added and abort.
             abandon_add(targets, &eligible, report).await;
             return Err(UpdateFailure::MissingUpdater(e));
         }
@@ -2900,14 +2719,11 @@ pub async fn perform_update(
 
     // Last checkpoint before the point of no return: past this line a cancel
     // could leave a half-applied transaction, so cancellation is NOT checked
-    // again inside or after the run phase — the flow finishes its bookkeeping
-    // instead. Fan-outs are never interrupted part-way, so the cleanup below
-    // genuinely undoes the repo add and the lock.
+    // again inside or after the run phase.
     if targets.cancel_requested() {
         tracing::info!("cancelled: stopping before the update command was dispatched");
         abandon_add(targets, &eligible, report).await;
-        // With a prepare behind us the host is not untouched: the repo add is
-        // undone, a completed prepare's packages are not.
+        // A completed prepare's packages stay, though the repo add is undone.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
             if noprepare {
                 "cancelled before the update command was dispatched".to_owned()
@@ -2920,9 +2736,8 @@ pub async fn perform_update(
         )));
     }
 
-    // Two-phase: run + check + reboot under the lock (unlock always), then the
-    // repo cleanup only on the hosts it completed on. The history row is
-    // written inside `update_run_phase`, between the fan-out and the reboot.
+    // Two-phase: run + check + reboot under the lock (unlock always), then repo
+    // cleanup only on the hosts it completed on.
     let update_result = update_run_phase(
         targets,
         &registry,
@@ -2955,8 +2770,8 @@ pub async fn perform_update(
                     unfinished.join(", ")
                 )
             } else {
-                // Nothing has run on them since the patch, so `lastexit` is
-                // still the patch's: the rule the run phase left them out by.
+                // Nothing has run on them since the patch, so `lastexit` is still
+                // the patch's.
                 let (unknown, unpatched): (Vec<String>, Vec<String>) =
                     kept.iter().cloned().partition(|h| {
                         targets.get(h).and_then(mtui_hosts::Target::lastexit) == Some(-1)
@@ -3041,10 +2856,9 @@ async fn finish_update(
     newpackage: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Scoped like every other step: this one *adds* the test repo, and
-    // `remove_test_repos` below only removes it from `hosts`, so a group-wide
-    // add here strands it on an excluded host (#409). It also composes nothing
-    // for that host, so there is nothing to prepare on it.
+    // Scoped to `hosts`: this *adds* the test repo and `remove_test_repos` only
+    // removes it from `hosts`, so a group-wide add would strand it on an
+    // excluded host.
     if newpackage
         && let Err(e) = flatten_prepare_failure(
             perform_prepare_classified(
@@ -3077,16 +2891,12 @@ async fn finish_update(
 /// Scoped to `hosts`: every eligible host of a successful run, or the hosts a
 /// partial run completed on, which keeps the repos on the others. A host it
 /// excluded never received one, and locking it here would let its contention
-/// strand the repos on every peer (#409) over a cleanup it does not need.
+/// strand the repos on every peer.
 ///
-/// Best-effort: a lock failure here does not turn a successful update into a
-/// failed one, so it warns — naming the error, that the repos are left
-/// configured, and the manual remedy. Each of the three ways this can degrade
-/// (lock failure, a removal command failing, an unlock failing) also pushes a
-/// [`Diagnostic`] onto `diagnostics`, alongside the `warn!`: `tracing` reaches
-/// an operator's terminal but not an MCP caller's tool result (#543), and a
-/// stale test repo or a stranded lock on a shared reference host is exactly
-/// the kind of degradation that must not be silent there.
+/// Best-effort: a lock failure does not fail a successful update, so it warns.
+/// Each of the three ways this can degrade (lock failure, a failed removal, a
+/// failed unlock) also pushes a [`Diagnostic`] onto `diagnostics`, because
+/// `tracing` does not reach an MCP caller's tool result.
 async fn remove_test_repos(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
@@ -3109,11 +2919,9 @@ async fn remove_test_repos(
     targets
         .fanout_set_repo(RepoOp::Remove, report, Some(hosts))
         .await;
-    // The lock succeeded but the removal command may still have failed on a
-    // host — #409's complaint (a stale test repo) can happen silently here too,
-    // not only on a lock failure. Reads `Target::last_repo` rather than
-    // `host_command_failures`, which only sees the *last* zypper command and
-    // so misses a failed `rr` masked by a successful trailing `ref` (#551).
+    // The removal may still have failed on a host. Reads `Target::last_repo`,
+    // not `host_command_failures`, which misses a failed `rr` masked by a
+    // successful trailing `ref`.
     let failures: Vec<UpdateError> = repo_set_failures(targets, |h| hosts.contains(h));
     if !failures.is_empty() {
         let failed: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
@@ -3143,9 +2951,8 @@ async fn remove_test_repos(
 ///
 /// `commands` and `reboot` are the whole scope: a host the caller excluded is
 /// absent from both and is neither judged, rebooted, nor counted a success.
-/// `locked` is the set the caller took the operation lock on, which the final
-/// unlock must match exactly — releasing a host we never locked would report a
-/// stranded lock against a host that has none.
+/// `locked` is the set the caller locked, which the final unlock must match
+/// exactly.
 ///
 /// Returns `Ok(())` when every check passed and every transactional host's
 /// reboot took effect — reconnecting is not sufficient, since a host can answer
@@ -3157,8 +2964,8 @@ async fn remove_test_repos(
 /// transactional peers whose patch passed and names each one whose reboot then
 /// failed. Beside a probe failure a reboot that did not take rolls back, as on
 /// success; beside a host whose patch result is unknown (`-1`) it does not. The
-/// [`UpdateFailure`] variant is what routes the caller's rollback, and its
-/// [`RollbackScope`] what bounds it; a single failure is returned verbatim, more
+/// [`UpdateFailure`] variant routes the caller's rollback and its
+/// [`RollbackScope`] bounds it; a single failure is returned verbatim, more
 /// than one is summarised into `"update failed on {hosts} ({detail})"`.
 #[allow(clippy::too_many_arguments)]
 async fn update_run_phase(
@@ -3176,9 +2983,8 @@ async fn update_run_phase(
     let dispatched: BTreeSet<String> = commands.keys().cloned().collect();
     targets.run(Command::PerHost(commands)).await;
 
-    // Recorded after the run started but *before* the reboot: a transactional
-    // host that never comes back cannot be written to afterwards, and that is
-    // the host whose state an operator most needs to reconstruct.
+    // Before the reboot: a host that never comes back cannot be written to
+    // afterwards, and its state is what an operator most needs to reconstruct.
     add_op_history_for(targets, &dispatched, "update", id, packages).await;
 
     let mut failures = run_checks_where(targets, registry, Role::Update, diagnostics, |h| {
@@ -3197,11 +3003,9 @@ async fn update_run_phase(
     for e in &failures {
         error!(error = %e, "update failed");
     }
-    // `-1` and a probe failure both veto the rollback
-    // (`UpdateFailure::NotRun` / `ProbeFailed` carry the arguments). The probe
-    // verdict is a typed flag rather than re-derived here; matching the reason
-    // string would be the first place in the tree where control flow read a
-    // message's text.
+    // `-1` and a probe failure both veto the rollback (see
+    // `UpdateFailure::NotRun` / `ProbeFailed`). The probe verdict is a typed
+    // flag; control flow never reads a message's text.
     let repairable = |e: &UpdateError| {
         !e.probe_failed
             && e.host
@@ -3211,7 +3015,7 @@ async fn update_run_phase(
                 != Some(-1)
     };
     // A rollback reaches every patched host except one whose failure it cannot
-    // repair, for the reasons it cannot repair it.
+    // repair.
     let rollback_hosts: BTreeSet<String> = dispatched
         .iter()
         .filter(|h| {
@@ -3225,12 +3029,9 @@ async fn update_run_phase(
     // A check failure keeps precedence: a transactional host whose patch failed
     // must not be rebooted into it.
     let result = if !failures.is_empty() {
-        // The rollback question is one bit — "can the rollback repair *any*
-        // host that failed?" — so a run mixing a lost host with a genuine
-        // check failure still rolls back, on behalf of the repairable host.
-        // Only the label on the non-repairable runs is split further.
-        //
-        // `run_checks_where` names the host of every failure it returns.
+        // The rollback question is one bit — can it repair *any* failed host? —
+        // so a lost host beside a genuine check failure still rolls back, on
+        // behalf of the repairable host. `run_checks_where` names every host.
         let repaired = failures
             .iter()
             .filter(|e| repairable(e))
@@ -3299,11 +3100,10 @@ async fn update_run_phase(
 /// which [`UpdateFailure::RebootNotTaken`] rolls back, the first such host, to
 /// build that rollback's [`RollbackScope`] around.
 ///
-/// Routes on *why* the reboot failed, not on the fact that it did (see
-/// `Reboot` vs `RebootNotTaken`). `all`, not `any`: with one host unreachable
-/// and one merely inert, rolling back cannot reach the first, leaves the
-/// second needing manual work anyway, and reverts the hosts that did
-/// everything right. Both are still named in the error.
+/// Routes on *why* the reboot failed (see `Reboot` vs `RebootNotTaken`). `all`,
+/// not `any`: with one host unreachable and one merely inert, a rollback cannot
+/// reach the first and reverts the hosts that did everything right. Both are
+/// still named in the error.
 fn reboot_not_taken(failures: &[RebootFailure]) -> Option<String> {
     if failures.iter().all(|f| f.cause.host_still_reachable()) {
         failures.first().map(|f| f.host.clone())
@@ -3313,10 +3113,9 @@ fn reboot_not_taken(failures: &[RebootFailure]) -> Option<String> {
 }
 
 /// Whether `target` resolves to a doer for `role`: a known release plus a
-/// registered command for its `(release, transactional)` key. The one
-/// resolvability rule shared by [`missing_updaters`], [`build_update_maps`]
-/// and [`describe_start_failure`], so the three cannot disagree on which
-/// hosts count as unresolvable.
+/// registered command for its `(release, transactional)` key. Shared by
+/// [`missing_updaters`], [`build_update_maps`] and [`describe_start_failure`]
+/// so they agree on which hosts are unresolvable.
 fn host_has_doer(registry: &WorkflowRegistry, role: Role, target: &mtui_hosts::Target) -> bool {
     target
         .workflow_key()
@@ -3357,10 +3156,8 @@ pub fn missing_command_set(target: &mtui_hosts::Target) -> Option<CommandSetGap>
 }
 
 /// Names of `eligible` hosts with no updater doer, for an early return before
-/// the flow locks anything or touches repos. Shares [`host_has_doer`]
-/// with [`build_update_maps`]; only command rendering is left to the late
-/// gate. Each entry pairs the hostname (for the error's `host` field) with its
-/// [`unresolved_host_label`] (for the message).
+/// the flow locks anything or touches repos. Each entry pairs the hostname (for
+/// the error's `host` field) with its [`unresolved_host_label`].
 fn missing_updaters(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -3376,18 +3173,14 @@ fn missing_updaters(
 
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
 /// transactional reboot map, over the hosts in `eligible`. Returns `Err` with
-/// the offending host's [`UpdateError`] if one of them is missing an updater —
-/// a hard failure in mtui.
+/// the offending host's [`UpdateError`] if one of them is missing an updater.
 ///
-/// A host outside `eligible` is not resolved at all, not resolved and then
-/// dropped: the update has already excluded it, and a `MissingUpdater` raised
+/// A host outside `eligible` is not resolved at all: a `MissingUpdater` raised
 /// on its behalf would abort the peers it was excluded to spare.
 ///
-/// The early [`missing_updaters`] gate already applied the same
-/// [`host_has_doer`] rule to the same set, and `render_command` cannot
-/// fail for this role (safe substitution), so the `Err` arms below are
-/// unreachable in production — defense in depth that still names the host
-/// with its key anyway, like the early abort does.
+/// The early [`missing_updaters`] gate applies the same [`host_has_doer`] rule
+/// and `render_command` cannot fail for this role, so the `Err` arms are
+/// unreachable in production; they still name the host with its key.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
