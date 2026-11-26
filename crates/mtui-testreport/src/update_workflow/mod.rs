@@ -202,14 +202,7 @@ impl Role {
     /// `(release, transactional)` key.
     #[must_use]
     fn missing_error(self, release: &str) -> HostError {
-        let release = release.to_owned();
-        match self {
-            Role::Install => HostError::MissingInstaller { release },
-            Role::Uninstall => HostError::MissingUninstaller { release },
-            Role::Update => HostError::MissingUpdater { release },
-            Role::Prepare => HostError::MissingPreparer { release },
-            Role::Downgrade => HostError::MissingDowngrader { release },
-        }
+        HostError::missing_for(self.as_operation_role(), release)
     }
 }
 
@@ -318,9 +311,7 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
         // Only "installer" and "uninstaller" ever reach here
         // (`Operation::role`); anything else is reported rather than panicked on.
         let Some(role) = Role::from_operation_role(role) else {
-            return Err(HostError::MissingInstaller {
-                release: release.to_owned(),
-            });
+            return Err(HostError::missing_for(role, release));
         };
         let commands = DoerProvider::doer(self, role, release, transactional)?;
         // Raw templates, not rendered strings: the package list is only known

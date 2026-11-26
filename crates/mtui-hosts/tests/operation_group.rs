@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use mtui_hosts::{
-    Check, CheckArgs, CheckFailure, Doer, HostError, HostsGroup, InstallOperation, Operation,
-    OperationGroup, PlanProvider, RebootFailure, RebootFailureCause, Target, UninstallOperation,
+    Check, CheckArgs, CheckFailure, Doer, HostError, HostsGroup, Operation, OperationGroup,
+    PlanProvider, RebootFailure, RebootFailureCause, Target,
 };
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
@@ -126,7 +126,7 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     let (h2, m2) = target("h2", "SL-Micro", "6.0", true);
     let mut group = HostsGroup::new(vec![h1, h2], false).with_plan_provider(Arc::new(provider));
 
-    let report = InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
+    let report = Operation::install(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
@@ -224,7 +224,7 @@ async fn install_check_sees_the_hosts_post_run_output() {
     let (h1, _m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    let _ = InstallOperation::new(vec!["pkg-a".to_owned()])
+    let _ = Operation::install(vec!["pkg-a".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
@@ -262,7 +262,7 @@ async fn install_reports_a_transactional_host_that_never_reconnects() {
     t.set_system(system, true);
     let mut group = HostsGroup::new(vec![t], false).with_plan_provider(Arc::new(provider));
 
-    let report = InstallOperation::new(vec!["pkg-a".to_owned()])
+    let report = Operation::install(vec!["pkg-a".to_owned()])
         .run(&mut group)
         .await
         .expect("the run started even though the reboot failed");
@@ -301,7 +301,7 @@ async fn a_cancelled_check_failure_arrives_in_the_report_with_the_flag_intact() 
     let mut group =
         HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(CancellingProvider));
 
-    let report = InstallOperation::new(vec!["pkg-a".to_owned()])
+    let report = Operation::install(vec!["pkg-a".to_owned()])
         .run(&mut group)
         .await
         .expect("the run started even though the check failed");
@@ -324,7 +324,7 @@ async fn install_shell_quotes_malicious_package_name_end_to_end() {
     let (h1, m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    let _ = InstallOperation::new(vec!["foo; rm -rf /".to_owned()])
+    let _ = Operation::install(vec!["foo; rm -rf /".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
@@ -359,7 +359,7 @@ async fn uninstall_uses_uninstaller_role() {
     let (h1, _m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    let _ = UninstallOperation::new(vec!["pkg".to_owned()])
+    let _ = Operation::uninstall(vec!["pkg".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group uninstalls");
@@ -407,7 +407,7 @@ async fn select_preserves_injected_provider() {
     // Selecting a subset must carry the provider through so the sub-group can
     // still drive an operation.
     let mut sub = group.select(Some(&["h1".to_owned()]), false).unwrap();
-    let _ = InstallOperation::new(vec!["pkg".to_owned()])
+    let _ = Operation::install(vec!["pkg".to_owned()])
         .run(&mut sub)
         .await
         .expect("a wired group installs");

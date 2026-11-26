@@ -11,7 +11,7 @@
 //!
 //! 1. [`collect`](Operation::collect) the per-host command map + the
 //!    transactional-only reboot map (early-return on the configured
-//!    `missing_error`),
+//!    plan error),
 //! 2. `group.update_lock()`,
 //! 3. in a fallible section: `group.run(commands)` → `group.add_history(...)`
 //!    → per-host `check(...)` → `group.reboot(reboot)`,
@@ -215,7 +215,7 @@ pub trait OperationGroup: Send {
     ///
     /// `role` is `"installer"` or `"uninstaller"`. An implementation looks up
     /// each target's doer/check for the role and returns one [`HostPlan`] per
-    /// host, in a deterministic order. Returning `Err(missing_error)` signals
+    /// host, in a deterministic order. Returning an `Err` (see [`HostError::missing_for`]) signals
     /// that a doer is undefined for some host's product release — the template
     /// logs and returns before any lock is taken.
     fn plans(&mut self, role: &str) -> Result<Vec<HostPlan>, HostError>;
@@ -351,16 +351,26 @@ pub struct RebootFailure {
     pub reason: String,
 }
 
-/// The install/uninstall template method.
-///
-/// A concrete operation names its [`role`](Operation::role) (`"installer"` /
-/// `"uninstaller"`) and how to build its [`missing_error`](Operation::missing_error);
-/// the provided [`collect`](Operation::collect) and [`run`](Operation::run)
-/// methods reproduce the control flow behaviour-for-behaviour.
-#[async_trait::async_trait]
-pub trait Operation: Send + Sync {
+/// Which install-family template an [`Operation`] drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationKind {
+    /// Install packages; doer role `"installer"`.
+    Install,
+    /// Uninstall packages; doer role `"uninstaller"`. The uninstaller
+    /// deliberately consults the *install* checks; that role→check mapping
+    /// lives in the doer/check registry injected via [`PlanProvider`]
+    /// (implemented in `mtui-testreport`), not here.
+    Uninstall,
+}
+
+impl OperationKind {
     /// The doer/check dispatch role: `"installer"` or `"uninstaller"`.
-    fn role(&self) -> &'static str;
+    const fn role(self) -> &'static str {
+        match self {
+            Self::Install => "installer",
+            Self::Uninstall => "uninstaller",
+        }
+    }
 
     /// The operation's label in the remote history file: `"install"` or
     /// `"uninstall"`.
@@ -370,14 +380,43 @@ pub trait Operation: Send + Sync {
     /// interop contract whose readers match the command verb. A substring
     /// check for `"uninstall"` would also match `"uninstaller"`, so the wrong
     /// value here is one a naive assertion cannot catch.
-    fn history_label(&self) -> &'static str;
+    const fn history_label(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Uninstall => "uninstall",
+        }
+    }
+}
 
-    /// The packages to interpolate into each host's command template.
-    fn packages(&self) -> &[String];
+/// The install/uninstall template: `lock → run → check → reboot → unlock` over
+/// an [`OperationGroup`], for one [`OperationKind`] and package list.
+///
+/// [`collect`](Self::collect) and [`run`](Self::run) reproduce the control flow
+/// behaviour-for-behaviour.
+#[derive(Debug, Clone)]
+pub struct Operation {
+    kind: OperationKind,
+    packages: Vec<String>,
+}
 
-    /// Builds the "missing doer" error for `release`, used both as the
-    /// early-return sentinel and for logging.
-    fn missing_error(&self, release: &str) -> HostError;
+impl Operation {
+    /// An operation of `kind` over `packages`.
+    #[must_use]
+    pub fn new(kind: OperationKind, packages: Vec<String>) -> Self {
+        Self { kind, packages }
+    }
+
+    /// Installs `packages` on every target in the group.
+    #[must_use]
+    pub fn install(packages: Vec<String>) -> Self {
+        Self::new(OperationKind::Install, packages)
+    }
+
+    /// Uninstalls `packages` from every target in the group.
+    #[must_use]
+    pub fn uninstall(packages: Vec<String>) -> Self {
+        Self::new(OperationKind::Uninstall, packages)
+    }
 
     /// Builds the per-host command map and the transactional-only reboot map.
     ///
@@ -389,7 +428,7 @@ pub trait Operation: Send + Sync {
     fn collect(&self, plans: Vec<HostPlan>) -> (HostCommandMap, HostCommandMap, Vec<HostPlan>) {
         // Package names are substituted into a root command template; quote each
         // so a malicious name is a single literal argument, not injected shell.
-        let packages = quote_args(self.packages());
+        let packages = quote_args(&self.packages);
         let mut commands = Vec::with_capacity(plans.len());
         let mut reboot = Vec::new();
         for plan in &plans {
@@ -403,7 +442,7 @@ pub trait Operation: Send + Sync {
 
     /// Executes the full `lock → run → check → reboot → unlock` skeleton.
     ///
-    /// * resolve per-host plans; on the configured `missing_error`, return
+    /// * resolve per-host plans; on a plan error, return
     ///   **without** taking any lock,
     /// * `update_lock()`,
     /// * run the commands, invoke each host's check over its post-run output,
@@ -439,8 +478,8 @@ pub trait Operation: Send + Sync {
     /// from "could not even start" will print success for an update that never
     /// touched a host — the same reasoning that makes
     /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
-    async fn run(&self, group: &mut dyn OperationGroup) -> Result<OperationReport, HostError> {
-        let plans = group.plans(self.role())?;
+    pub async fn run(&self, group: &mut dyn OperationGroup) -> Result<OperationReport, HostError> {
+        let plans = group.plans(self.kind.role())?;
 
         let (commands, reboot, mut plans) = self.collect(plans);
 
@@ -462,7 +501,10 @@ pub trait Operation: Send + Sync {
         // to afterwards, and the row would be lost on exactly the host whose
         // state an operator most needs to reconstruct.
         group
-            .add_history(&[self.history_label().to_owned(), self.packages().join(" ")])
+            .add_history(&[
+                self.kind.history_label().to_owned(),
+                self.packages.join(" "),
+            ])
             .await;
 
         let mut check_failures: Vec<(String, CheckFailure)> = Vec::new();
@@ -525,81 +567,6 @@ pub trait Operation: Send + Sync {
             unlock_failures,
             lost_holds: reboot_report.lost_holds,
         })
-    }
-}
-
-/// Install `packages` on every target in the group.
-///
-/// Role `"installer"`, missing sentinel
-/// [`HostError::MissingInstaller`].
-pub struct InstallOperation {
-    packages: Vec<String>,
-}
-
-impl InstallOperation {
-    /// Builds an install operation for `packages`.
-    #[must_use]
-    pub fn new(packages: Vec<String>) -> Self {
-        Self { packages }
-    }
-}
-
-impl Operation for InstallOperation {
-    fn role(&self) -> &'static str {
-        "installer"
-    }
-
-    fn history_label(&self) -> &'static str {
-        "install"
-    }
-
-    fn packages(&self) -> &[String] {
-        &self.packages
-    }
-
-    fn missing_error(&self, release: &str) -> HostError {
-        HostError::MissingInstaller {
-            release: release.to_owned(),
-        }
-    }
-}
-
-/// Uninstall `packages` from every target in the group.
-///
-/// Role `"uninstaller"`, missing sentinel
-/// [`HostError::MissingUninstaller`]. Note the uninstaller deliberately
-/// consults the *install* checks; that role→check mapping lives in the doer/check
-/// registry injected via [`PlanProvider`] (implemented in `mtui-testreport`),
-/// not here.
-pub struct UninstallOperation {
-    packages: Vec<String>,
-}
-
-impl UninstallOperation {
-    /// Builds an uninstall operation for `packages`.
-    #[must_use]
-    pub fn new(packages: Vec<String>) -> Self {
-        Self { packages }
-    }
-}
-
-impl Operation for UninstallOperation {
-    fn role(&self) -> &'static str {
-        "uninstaller"
-    }
-
-    fn history_label(&self) -> &'static str {
-        "uninstall"
-    }
-
-    fn packages(&self) -> &[String] {
-        &self.packages
-    }
-
-    fn missing_error(&self, release: &str) -> HostError {
-        HostError::MissingUninstaller {
-            release: release.to_owned(),
-        }
     }
 }
 
@@ -947,7 +914,7 @@ mod tests {
             ),
         ];
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let (commands, reboot, returned) = op.collect(plans);
 
         assert_eq!(
@@ -975,7 +942,7 @@ mod tests {
             Doer::new("in $packages", "r"),
             sink,
         )];
-        let op = InstallOperation::new(strs(&["pkg-a", "pkg-b", "pkg-c"]));
+        let op = Operation::install(strs(&["pkg-a", "pkg-b", "pkg-c"]));
         let (commands, _reboot, _plans) = op.collect(plans);
         assert_eq!(commands[0].1, "in pkg-a pkg-b pkg-c");
     }
@@ -991,7 +958,7 @@ mod tests {
             Doer::new("in $packages", "r"),
             sink,
         )];
-        let op = InstallOperation::new(strs(&["foo; rm -rf /"]));
+        let op = Operation::install(strs(&["foo; rm -rf /"]));
         let (commands, _reboot, _plans) = op.collect(plans);
         let cmd = &commands[0].1;
         assert!(
@@ -1013,7 +980,7 @@ mod tests {
             release: "opensuse-15.4".to_owned(),
         }));
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let err = op
             .run(&mut group)
             .await
@@ -1043,7 +1010,7 @@ mod tests {
         )];
         let mut group = MockGroup::new(Ok(plans));
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         // This test asserts on the recorded events, not the report.
         let _ = op.run(&mut group).await.expect("a clean run succeeds");
 
@@ -1074,7 +1041,7 @@ mod tests {
         )];
         let mut group = MockGroup::new(Ok(plans)).failing_update_lock();
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let err = op
             .run(&mut group)
             .await
@@ -1097,7 +1064,7 @@ mod tests {
         ];
         let mut group = MockGroup::new(Ok(plans));
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         // This test asserts on the recorded events, not the report.
         let _ = op.run(&mut group).await.expect("a clean run succeeds");
 
@@ -1127,7 +1094,7 @@ mod tests {
         )];
         let mut group = MockGroup::with_event_log(Ok(plans), log);
 
-        let _ = InstallOperation::new(strs(&["pkg-a"]))
+        let _ = Operation::install(strs(&["pkg-a"]))
             .run(&mut group)
             .await
             .expect("a clean run succeeds");
@@ -1170,7 +1137,7 @@ mod tests {
         )];
         let mut group = MockGroup::with_event_log(Ok(plans), log);
 
-        let _ = UninstallOperation::new(strs(&["pkg-a"]))
+        let _ = Operation::uninstall(strs(&["pkg-a"]))
             .run(&mut group)
             .await
             .expect("a clean run succeeds");
@@ -1203,7 +1170,7 @@ mod tests {
             reason: "failed to reconnect to h1".to_owned(),
         }]);
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let report = op
             .run(&mut group)
             .await
@@ -1244,7 +1211,7 @@ mod tests {
             proof: LostHoldProof::Proven,
         }]);
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let report = op
             .run(&mut group)
             .await
@@ -1288,7 +1255,7 @@ mod tests {
         ];
         let mut group = MockGroup::with_event_log(Ok(plans), log);
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let report = op.run(&mut group).await.expect("the run started");
 
         assert_eq!(
@@ -1351,7 +1318,7 @@ mod tests {
             "the fixture must really be scripting a missing snapshot"
         );
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let report = op.run(&mut group).await.expect("the run started");
 
         assert!(
@@ -1395,7 +1362,7 @@ mod tests {
             .collect(),
         );
 
-        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let op = Operation::install(strs(&["pkg-a"]));
         let report = op.run(&mut group).await.expect("the run started");
 
         assert_eq!(
@@ -1406,34 +1373,24 @@ mod tests {
         );
     }
 
-    // --- role strings + missing_error sentinels -----------------------------
+    // --- role strings + missing-doer sentinels ------------------------------
 
     #[test]
     fn install_operation_uses_installer_role_and_sentinel() {
-        let op = InstallOperation::new(strs(&["pkg"]));
-        assert_eq!(op.role(), "installer");
-        assert_eq!(
-            op.missing_error("rel").to_string(),
-            "Missing Installer for rel"
-        );
-        assert!(matches!(
-            op.missing_error("rel"),
-            HostError::MissingInstaller { .. }
-        ));
+        let role = Operation::install(strs(&["pkg"])).kind.role();
+        assert_eq!(role, "installer");
+        let err = HostError::missing_for(role, "rel");
+        assert_eq!(err.to_string(), "Missing Installer for rel");
+        assert!(matches!(err, HostError::MissingInstaller { .. }));
     }
 
     #[test]
     fn uninstall_operation_uses_uninstaller_role_and_sentinel() {
-        let op = UninstallOperation::new(strs(&["pkg"]));
-        assert_eq!(op.role(), "uninstaller");
-        assert_eq!(
-            op.missing_error("rel").to_string(),
-            "Missing Uninstaller for rel"
-        );
-        assert!(matches!(
-            op.missing_error("rel"),
-            HostError::MissingUninstaller { .. }
-        ));
+        let role = Operation::uninstall(strs(&["pkg"])).kind.role();
+        assert_eq!(role, "uninstaller");
+        let err = HostError::missing_for(role, "rel");
+        assert_eq!(err.to_string(), "Missing Uninstaller for rel");
+        assert!(matches!(err, HostError::MissingUninstaller { .. }));
     }
 
     #[tokio::test]
@@ -1447,7 +1404,7 @@ mod tests {
         )];
         let mut group = MockGroup::new(Ok(plans));
 
-        let _ = UninstallOperation::new(strs(&["pkg"]))
+        let _ = Operation::uninstall(strs(&["pkg"]))
             .run(&mut group)
             .await
             .expect("a clean run succeeds");

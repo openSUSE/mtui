@@ -1911,14 +1911,7 @@ impl OperationGroup for HostsGroup {
             // without one (an unknown / unparsed system, or an undecided root
             // mode) surfaces as the role's Missing*Error.
             let (release, transactional) = target.workflow_key().ok_or_else(|| {
-                let release = target.system().get_release().unwrap_or_default();
-                match role {
-                    "uninstaller" => HostError::MissingUninstaller { release },
-                    "updater" => HostError::MissingUpdater { release },
-                    "preparer" => HostError::MissingPreparer { release },
-                    "downgrader" => HostError::MissingDowngrader { release },
-                    _ => HostError::MissingInstaller { release },
-                }
+                HostError::missing_for(role, target.system().get_release().unwrap_or_default())
             })?;
             let doer = provider.doer(role, &release, transactional)?;
             let check = provider.check(role, &release, transactional);

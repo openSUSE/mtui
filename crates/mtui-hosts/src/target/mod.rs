@@ -55,9 +55,8 @@ pub use locks::{
     sibling_holder_name,
 };
 pub use operation::{
-    Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
-    OperationGroup, OperationReport, PlanProvider, RebootFailure, RebootFailureCause,
-    UninstallOperation,
+    Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, Operation, OperationGroup,
+    OperationKind, OperationReport, PlanProvider, RebootFailure, RebootFailureCause,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::{Transactional, parse_system};
