@@ -520,45 +520,21 @@ impl HostsGroup {
     /// Selection **moves** the chosen targets out of `self` (a `Target` owns a
     /// live `Box<dyn Connection>` and is not `Clone`); `self` is consumed.
     pub fn select(self, hosts: Option<&[String]>, enabled: bool) -> Result<HostsGroup> {
-        let is_repl = self.is_repl;
-        let provider = self.plan_provider.clone();
-        // Carry the pushed-down session state across the split. Before this,
-        // only `plan_provider` was copied, so a `-t` subset operation silently
-        // reverted `max_parallel` to the fan-out default and would likewise
-        // have dropped the cancellation token.
-        let max_parallel = self.max_parallel;
-        let cancel = self.cancel.clone();
-        let prompter = self.prompter.clone();
-        let holders = self.op_lock_holders.clone();
-        let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
+        self.select_split(hosts, enabled)
+            .map(|(selected, _)| selected)
+    }
 
-        let selected: Vec<Target> = match hosts {
-            None => self
-                .data
-                .into_values()
-                .filter(|t| !enabled || is_enabled(t))
-                .collect(),
-            Some(names) => {
-                for name in names {
-                    if !self.data.contains_key(name) {
-                        return Err(HostError::NotConnected { host: name.clone() });
-                    }
-                }
-                self.data
-                    .into_iter()
-                    .filter(|(hn, t)| names.contains(hn) && (!enabled || is_enabled(t)))
-                    .map(|(_, t)| t)
-                    .collect()
-            }
-        };
-
-        let mut group = HostsGroup::new(selected, is_repl);
-        group.plan_provider = provider;
-        group.max_parallel = max_parallel;
-        group.cancel = cancel;
-        group.prompter = prompter;
-        group.op_lock_holders = holders;
-        Ok(group)
+    /// A group over `targets` carrying this group's pushed-down session state:
+    /// session mode, plan provider, `max_parallel`, cancellation token,
+    /// prompter and operation-lock registry.
+    fn sibling_group(&self, targets: Vec<Target>) -> HostsGroup {
+        let mut group = HostsGroup::new(targets, self.is_repl);
+        group.plan_provider = self.plan_provider.clone();
+        group.max_parallel = self.max_parallel;
+        group.cancel = self.cancel.clone();
+        group.prompter = self.prompter.clone();
+        group.op_lock_holders = self.op_lock_holders.clone();
+        group
     }
 
     /// Splits the group into the `-t` selection and the unselected remainder,
@@ -590,17 +566,10 @@ impl HostsGroup {
     ///
     /// [`HostError::NotConnected`] when a named host is not a member of the group.
     pub fn select_split(
-        self,
+        mut self,
         hosts: Option<&[String]>,
         enabled: bool,
     ) -> Result<(HostsGroup, HostsGroup)> {
-        let is_repl = self.is_repl;
-        let provider = self.plan_provider.clone();
-        // Carry the pushed-down session state across the split (see `select`).
-        let max_parallel = self.max_parallel;
-        let cancel = self.cancel.clone();
-        let prompter = self.prompter.clone();
-        let holders = self.op_lock_holders.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         if let Some(names) = hosts {
@@ -613,7 +582,7 @@ impl HostsGroup {
 
         let mut selected: Vec<Target> = Vec::new();
         let mut remainder: Vec<Target> = Vec::new();
-        for (hn, t) in self.data {
+        for (hn, t) in std::mem::take(&mut self.data) {
             let named = hosts.is_none_or(|names| names.contains(&hn));
             if named && (!enabled || is_enabled(&t)) {
                 selected.push(t);
@@ -622,19 +591,7 @@ impl HostsGroup {
             }
         }
 
-        let mut selected = HostsGroup::new(selected, is_repl);
-        selected.plan_provider = provider.clone();
-        selected.max_parallel = max_parallel;
-        selected.cancel = cancel.clone();
-        selected.prompter = prompter.clone();
-        selected.op_lock_holders = holders.clone();
-        let mut remainder = HostsGroup::new(remainder, is_repl);
-        remainder.plan_provider = provider;
-        remainder.max_parallel = max_parallel;
-        remainder.cancel = cancel;
-        remainder.prompter = prompter;
-        remainder.op_lock_holders = holders;
-        Ok((selected, remainder))
+        Ok((self.sibling_group(selected), self.sibling_group(remainder)))
     }
 
     /// Folds every target of `other` into `self`, keyed by hostname.
