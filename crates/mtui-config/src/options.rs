@@ -6,8 +6,8 @@
 //! mirrors it for serde, [`Config`] is the flattened, fully-typed view the rest
 //! of the workspace consumes. Every serde field defaults, so an empty or
 //! partial document deserialises into all-defaults. Scalar defaults are values
-//! operators rely on, pinned by the default-scalars test below; the few
-//! deliberate deviations are flagged on their `default_*` fn.
+//! operators rely on, pinned by the tests below; the rationale for the ones
+//! that need one is on the [`Config`] field.
 
 use std::path::PathBuf;
 
@@ -158,183 +158,12 @@ fn is_relative_dir_name(raw: &str) -> bool {
         && token != ".."
 }
 
-// -- Default helpers (used both by serde and by `Config::default`). --
-
-fn default_connection_timeout() -> u64 {
-    300
-}
-fn default_connect_timeout() -> u64 {
-    60
-}
-fn default_reboot_timeout() -> u64 {
-    10
-}
-fn default_reboot_retries() -> u64 {
-    10
-}
-fn default_max_parallel() -> u64 {
-    50
-}
-fn default_max_oqa_parallel() -> u64 {
-    8
-}
-fn default_bugzilla_url() -> String {
-    "https://bugzilla.suse.com".to_owned()
-}
-fn default_reports_url() -> String {
-    "https://qam.suse.de/testreports".to_owned()
-}
-fn default_fancy_reports_url() -> String {
-    "https://qam.suse.de/reports".to_owned()
-}
-fn default_qem_dashboard_api() -> String {
-    "http://dashboard.qam.suse.de/api".to_owned()
-}
-fn default_teregen_api() -> String {
-    "https://qam.suse.de/api/v1".to_owned()
-}
-fn default_teregen_api_v2() -> String {
-    "https://qam.suse.de/api/v2".to_owned()
-}
-fn default_openqa_instance() -> String {
-    "https://openqa.suse.de".to_owned()
-}
-fn default_openqa_instance_baremetal() -> String {
-    "http://openqa.qam.suse.cz".to_owned()
-}
-/// Default trusted Gitea origin the PR-review token may be sent to.
-///
-/// The token is only attached to requests whose origin matches this value, so
-/// it defaults to the internal SUSE Gitea (`src.suse.de`) serving SLFO; point
-/// it elsewhere (e.g. `https://src.opensuse.org`) for other instances.
-fn default_gitea_url() -> String {
-    "https://src.suse.de".to_owned()
-}
-/// The Slack integration is **opt-in**: posting to a chat workspace is an
-/// outward-facing side effect that must never follow from a default, so it
-/// stays dark (and says why when invoked) until an explicit `enabled = true`.
-fn default_slack_enabled() -> bool {
-    false
-}
-/// Trusted Slack API origin the [`slack_token`](Config::slack_token) may be
-/// sent to, mirroring `gitea_url`: the token only ever goes to this base, so
-/// aiming it elsewhere is an explicit, auditable act rather than something a
-/// checked-out template can influence. Overridable mainly for a mock server.
-fn default_slack_api_url() -> String {
-    "https://slack.com/api".to_owned()
-}
-/// Seconds between reaction polls while watching a review request. Slack's
-/// Web API tier-3 methods allow ~50 requests/minute; two minutes per poll keeps
-/// a multi-template watch far inside that even before jitter.
-fn default_slack_poll_interval() -> u64 {
-    120
-}
-/// Seconds a `request_review` watch runs before giving up: long enough for a
-/// reviewer to notice, short enough that a forgotten foreground watch does not
-/// pin a terminal indefinitely.
-fn default_slack_watch_timeout() -> u64 {
-    3600
-}
-fn default_refhosts_resolvers() -> String {
-    "https,path".to_owned()
-}
-fn default_refhosts_https_uri() -> String {
-    "https://qam.suse.de/refhosts/refhosts.yml".to_owned()
-}
-fn default_refhosts_https_expiration() -> u64 {
-    3600 * 12
-}
-fn default_refhosts_path() -> PathBuf {
-    // mtui is per-user by design: no system-wide refhosts database path.
-    expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
-}
-fn default_install_logs() -> PathBuf {
-    PathBuf::from("install_logs")
-}
-fn default_target_tempdir() -> PathBuf {
-    PathBuf::from("/tmp")
-}
-fn default_ssh_strict_host_key_checking() -> String {
-    "auto_add".to_owned()
-}
-fn default_template_dir() -> PathBuf {
-    std::env::var_os("TEMPLATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-fn default_session_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_owned())
-}
-fn default_lock_reap_stale() -> bool {
-    true
-}
-fn default_lock_stale_age() -> u64 {
-    86400
-}
-fn default_pool_reap_stale() -> bool {
-    true
-}
-fn default_pool_stale_age() -> u64 {
-    86400
-}
-fn default_lock_pi_autolock() -> bool {
-    true
-}
-fn default_lock_wait() -> u64 {
-    0
-}
-fn default_lock_wait_poll() -> u64 {
-    15
-}
-fn default_mcp_max_output_bytes() -> usize {
-    100_000
-}
-fn default_mcp_max_input_bytes() -> usize {
-    10_000_000
-}
-fn default_mcp_max_request_bytes() -> usize {
-    10_000_000
-}
-fn default_mcp_audit_log_max_bytes() -> u64 {
-    // 256 MiB: large enough that an ordinary deployment never rotates, small
-    // enough that an unattended one cannot fill a partition unnoticed.
-    256 * 1024 * 1024
-}
 /// Floor under a non-zero `[mcp] audit_log_max_bytes`.
 ///
 /// Below roughly one record's worth the sink rotates on every append, so the
 /// five kept generations hold five lines and the audit trail is gone. `0` is a
 /// separate, documented setting ("unbounded") and is not floored.
 const MIN_MCP_AUDIT_LOG_MAX_BYTES: u64 = 4096;
-fn default_mcp_session_cap() -> usize {
-    32
-}
-fn default_mcp_session_idle_timeout() -> u64 {
-    // 4h, above a bare keep-alive floor: this also pins the rmcp
-    // streamable-HTTP session keep-alive, whose own 300s default tore down idle
-    // http sessions mid-conversation.
-    14_400
-}
-fn default_mcp_sweep_parallel() -> usize {
-    4
-}
-fn default_mcp_max_active_jobs() -> usize {
-    16
-}
-fn default_mcp_max_completed_jobs() -> usize {
-    128
-}
-fn default_mcp_profile() -> String {
-    "full".to_owned()
-}
-fn default_obs_api_url() -> String {
-    "https://api.suse.de".to_owned()
-}
-fn default_obs_request_timeout() -> u64 {
-    180
-}
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
 
@@ -633,7 +462,8 @@ pub struct Config {
     pub refhosts_https_uri: String,
     /// Seconds before a cached refhosts HTTPS fetch is considered stale.
     pub refhosts_https_expiration: u64,
-    /// Local filesystem path to a refhosts database.
+    /// Local filesystem path to a refhosts database. Per-user by design: the
+    /// default is under `~/.local/share`, with no system-wide location.
     pub refhosts_path: PathBuf,
 
     // [url]
@@ -666,7 +496,9 @@ pub struct Config {
     pub gitea_token: String,
     /// Trusted Gitea origin (scheme/host/port) the
     /// [`gitea_token`](Self::gitea_token) may be sent to; a metadata-supplied PR
-    /// URL pointing anywhere else is refused. Defaults to `https://src.suse.de`.
+    /// URL pointing anywhere else is refused. Defaults to the internal SUSE
+    /// Gitea (`https://src.suse.de`) serving SLFO; point it elsewhere (e.g.
+    /// `https://src.opensuse.org`) for other instances.
     pub gitea_url: String,
 
     // [slack]
@@ -680,11 +512,17 @@ pub struct Config {
     /// `#name`). Empty by default; `request_review` refuses without it.
     pub slack_channel: String,
     /// Trusted Slack API origin the [`slack_token`](Self::slack_token) may be
-    /// sent to. Defaults to `https://slack.com/api`.
+    /// sent to: aiming it elsewhere is an explicit, auditable act, not something
+    /// a checked-out template can influence. Defaults to `https://slack.com/api`;
+    /// overridable mainly for a mock server.
     pub slack_api_url: String,
-    /// Seconds between reaction polls while watching a review request.
+    /// Seconds between reaction polls while watching a review request. Slack's
+    /// tier-3 Web API methods allow ~50 requests/minute; the 120 s default keeps
+    /// a multi-template watch far inside that.
     pub slack_poll_interval: u64,
-    /// Seconds a `request_review` watch runs before giving up.
+    /// Seconds a `request_review` watch runs before giving up. The 3600 s
+    /// default is long enough for a reviewer to notice, short enough that a
+    /// forgotten foreground watch does not pin a terminal.
     pub slack_watch_timeout: u64,
 
     // [target]
@@ -777,7 +615,9 @@ pub struct Config {
     /// is raised to it with a warning, since a cap under one record's worth
     /// rotates the trail away. Rotation is
     /// housekeeping: it never blocks the dispatch worker and never refuses a
-    /// call. Default 268435456 (256 MiB).
+    /// call. Default 268435456 (256 MiB): large enough that an ordinary
+    /// deployment never rotates, small enough that an unattended one cannot fill
+    /// a partition unnoticed.
     pub mcp_audit_log_max_bytes: u64,
     /// Opt-in allowlist for the MCP `put` tool's `source` argument: directories
     /// on the `mtui-mcp` server host whose files `put` may upload without the
@@ -801,61 +641,65 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            template_dir: default_template_dir(),
-            session_user: default_session_user(),
-            install_logs: default_install_logs(),
+            template_dir: std::env::var_os("TEMPLATE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(".")),
+            session_user: std::env::var("USER")
+                .or_else(|_| std::env::var("LOGNAME"))
+                .unwrap_or_else(|_| "unknown".to_owned()),
+            install_logs: PathBuf::from("install_logs"),
             ssl_verify: SslVerify::Enabled,
-            connection_timeout: default_connection_timeout(),
-            connect_timeout: default_connect_timeout(),
-            reboot_timeout: default_reboot_timeout(),
-            reboot_retries: default_reboot_retries(),
-            max_parallel: default_max_parallel(),
-            max_oqa_parallel: default_max_oqa_parallel(),
-            ssh_strict_host_key_checking: default_ssh_strict_host_key_checking(),
-            refhosts_resolvers: default_refhosts_resolvers(),
-            refhosts_https_uri: default_refhosts_https_uri(),
-            refhosts_https_expiration: default_refhosts_https_expiration(),
-            refhosts_path: default_refhosts_path(),
-            bugzilla_url: default_bugzilla_url(),
-            reports_url: default_reports_url(),
-            fancy_reports_url: default_fancy_reports_url(),
-            qem_dashboard_api: default_qem_dashboard_api(),
-            teregen_api: default_teregen_api(),
-            teregen_api_v2: default_teregen_api_v2(),
-            openqa_instance: default_openqa_instance(),
-            openqa_instance_baremetal: default_openqa_instance_baremetal(),
+            connection_timeout: 300,
+            connect_timeout: 60,
+            reboot_timeout: 10,
+            reboot_retries: 10,
+            max_parallel: 50,
+            max_oqa_parallel: 8,
+            ssh_strict_host_key_checking: "auto_add".to_owned(),
+            refhosts_resolvers: "https,path".to_owned(),
+            refhosts_https_uri: "https://qam.suse.de/refhosts/refhosts.yml".to_owned(),
+            refhosts_https_expiration: 3600 * 12,
+            refhosts_path: expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml")),
+            bugzilla_url: "https://bugzilla.suse.com".to_owned(),
+            reports_url: "https://qam.suse.de/testreports".to_owned(),
+            fancy_reports_url: "https://qam.suse.de/reports".to_owned(),
+            qem_dashboard_api: "http://dashboard.qam.suse.de/api".to_owned(),
+            teregen_api: "https://qam.suse.de/api/v1".to_owned(),
+            teregen_api_v2: "https://qam.suse.de/api/v2".to_owned(),
+            openqa_instance: "https://openqa.suse.de".to_owned(),
+            openqa_instance_baremetal: "http://openqa.qam.suse.cz".to_owned(),
             gitea_token: String::new(),
-            gitea_url: default_gitea_url(),
-            slack_enabled: default_slack_enabled(),
+            gitea_url: "https://src.suse.de".to_owned(),
+            slack_enabled: false,
             slack_token: String::new(),
             slack_channel: String::new(),
-            slack_api_url: default_slack_api_url(),
-            slack_poll_interval: default_slack_poll_interval(),
-            slack_watch_timeout: default_slack_watch_timeout(),
-            target_tempdir: default_target_tempdir(),
-            lock_reap_stale: default_lock_reap_stale(),
-            lock_stale_age: default_lock_stale_age(),
-            pool_reap_stale: default_pool_reap_stale(),
-            pool_stale_age: default_pool_stale_age(),
-            lock_pi_autolock: default_lock_pi_autolock(),
-            lock_wait: default_lock_wait(),
-            lock_wait_poll: default_lock_wait_poll(),
-            mcp_max_output_bytes: default_mcp_max_output_bytes(),
-            mcp_max_input_bytes: default_mcp_max_input_bytes(),
-            mcp_max_request_bytes: default_mcp_max_request_bytes(),
-            mcp_max_active_jobs: default_mcp_max_active_jobs(),
-            mcp_max_completed_jobs: default_mcp_max_completed_jobs(),
-            mcp_session_cap: default_mcp_session_cap(),
-            mcp_session_idle_timeout: default_mcp_session_idle_timeout(),
-            mcp_sweep_parallel: default_mcp_sweep_parallel(),
-            mcp_profile: default_mcp_profile(),
+            slack_api_url: "https://slack.com/api".to_owned(),
+            slack_poll_interval: 120,
+            slack_watch_timeout: 3600,
+            target_tempdir: PathBuf::from("/tmp"),
+            lock_reap_stale: true,
+            lock_stale_age: 86400,
+            pool_reap_stale: true,
+            pool_stale_age: 86400,
+            lock_pi_autolock: true,
+            lock_wait: 0,
+            lock_wait_poll: 15,
+            mcp_max_output_bytes: 100_000,
+            mcp_max_input_bytes: 10_000_000,
+            mcp_max_request_bytes: 10_000_000,
+            mcp_max_active_jobs: 16,
+            mcp_max_completed_jobs: 128,
+            mcp_session_cap: 32,
+            mcp_session_idle_timeout: 14_400,
+            mcp_sweep_parallel: 4,
+            mcp_profile: "full".to_owned(),
             mcp_tools_allow: Vec::new(),
             mcp_tools_deny: Vec::new(),
             mcp_audit_log: None,
-            mcp_audit_log_max_bytes: default_mcp_audit_log_max_bytes(),
+            mcp_audit_log_max_bytes: 256 * 1024 * 1024,
             mcp_put_dirs: Vec::new(),
-            obs_api_url: default_obs_api_url(),
-            obs_request_timeout: default_obs_request_timeout(),
+            obs_api_url: "https://api.suse.de".to_owned(),
+            obs_request_timeout: 180,
         }
     }
 }
