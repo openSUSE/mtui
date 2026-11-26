@@ -866,7 +866,6 @@ mod tests {
         fn update_repos_parser(&self) -> HashMap<mtui_types::SystemProduct, String> {
             HashMap::new()
         }
-        fn list_update_commands(&self, _t: &mtui_hosts::HostsGroup) {}
         async fn check_hash(&self) -> HashCheck {
             self.verdict.clone()
         }

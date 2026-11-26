@@ -154,7 +154,6 @@ impl TestReport for FakeReport {
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         HashMap::new()
     }
-    fn list_update_commands(&self, _targets: &HostsGroup) {}
     async fn check_hash(&self) -> HashCheck {
         HashCheck::Ok
     }

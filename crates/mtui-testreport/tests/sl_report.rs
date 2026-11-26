@@ -1,9 +1,6 @@
 //! Covers the `SlReport` surface: `id`, `parser`, `update_repos_parser` (both
 //! dispatch branches), `check_hash` (the Gitea match/mismatch compare via
 //! wiremock), and `set_repo`.
-//!
-//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
-//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -178,13 +175,6 @@ async fn check_hash_git_at_1_1_runs_gitea_compare_and_catches_mismatch() {
             actual: "freshsha".to_string(),
         }
     );
-}
-
-#[test]
-fn list_update_commands_is_a_noop_stub() {
-    let r = SlReport::new(config());
-    // Deferred doer-rendering: must not panic and must not require a doer seam.
-    r.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
 
 // --- perform_install / perform_uninstall (OperationGroup seam) --------------

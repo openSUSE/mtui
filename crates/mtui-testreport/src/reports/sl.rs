@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
-use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
+use mtui_hosts::{RepoOp, SetRepo, Target};
 use mtui_types::SystemProduct;
 use tracing::debug;
 
@@ -52,12 +52,6 @@ impl TestReport for SlReport {
             return reporepoparse(&repos, &self.base.products);
         }
         gitrepoparse(&self.base.repository, &self.base.products)
-    }
-
-    fn list_update_commands(&self, _targets: &HostsGroup) {
-        // `perform_update` below runs the per-host `updater` commands; the
-        // read-only listing command only ever prints a placeholder.
-        debug!("list_update_commands: no-op stub, not yet implemented");
     }
 
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {

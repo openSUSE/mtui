@@ -1,11 +1,7 @@
 //! Covers the `ObsReport` surface: `id`, `update_repos_parser` (from the report
 //! document), `check_hash` (constant) and `set_repo`.
-//!
-//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
-//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
 use mtui_testreport::{HashCheck, ObsReport, TestReport};
 use mtui_types::{RequestReviewID, SystemProduct};
 
@@ -69,13 +65,6 @@ async fn check_hash_always_true() {
     let mut r = ObsReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:Maintenance:12358:199773"));
     assert_eq!(r.check_hash().await, HashCheck::Ok);
-}
-
-/// The doer-rendering is deferred; smoke-check the stub does not panic.
-#[test]
-fn list_update_commands_is_a_noop_stub() {
-    let r = ObsReport::new(config());
-    r.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
 
 // --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------
