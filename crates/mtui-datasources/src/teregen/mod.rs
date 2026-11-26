@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 use crate::error::{HttpError, TeReGenError};
 use crate::http::{
     HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, VerifyPolicy, read_body_capped,
-    resolve_verify,
+    resolve_verify, sanitize_url,
 };
 
 pub mod auth;
@@ -207,10 +207,20 @@ where
 }
 
 /// Best-effort read-only (plus one write) TeReGen Report API client.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TeReGen {
     base: String,
     http: HttpClient,
+}
+
+impl std::fmt::Debug for TeReGen {
+    /// `base` may embed `user:pass@`; a derive would echo it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeReGen")
+            .field("base", &sanitize_url(&self.base))
+            .field("http", &self.http)
+            .finish()
+    }
 }
 
 impl TeReGen {
@@ -704,6 +714,15 @@ mod tests {
     /// A base URL where nothing listens, so a request fails inside `send`
     /// rather than on a status — the arm wiremock cannot reach.
     const CLOSED_PORT: &str = "http://127.0.0.1:1";
+
+    #[test]
+    fn debug_redacts_base_userinfo() {
+        let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
+        let c = TeReGen::with_client(http, "https://u:p@qam.example.invalid/api/v1");
+        let rendered = format!("{c:?}");
+        assert!(!rendered.contains("u:p"), "{rendered}");
+        assert!(rendered.contains("qam.example.invalid"), "{rendered}");
+    }
 
     fn client(server: &MockServer) -> TeReGen {
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
