@@ -201,6 +201,8 @@ Limits:
   snapshot. mtui reboots into the snapshot after each transactional operation,
   so the booted root is the base of the next one; a snapshot staged by
   something else and not yet booted is not what the dry run sees.
+- SLE 11 hosts are not checked: their zypper predates the releases whose
+  dry-run output the check was verified against.
 - `YUM` hosts are not checked: yum/dnf have no machine-readable transaction
   summary. A warning in mtui's log (not in the command output) names each
   such host.

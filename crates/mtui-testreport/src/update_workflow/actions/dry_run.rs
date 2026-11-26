@@ -12,12 +12,13 @@
 //!
 //! `YUM` has none: `yum`/`dnf` report a transaction only as a human-readable
 //! table whose layout differs between yum 3 and dnf 4/5, so those hosts are not
-//! checked.
+//! checked. Neither is SLE 11: its zypper 1.6 predates the releases whose XML
+//! summary the guard's parser is pinned against.
 
 use crate::update_workflow::{Family, Role, family};
 
 /// The dry run of `role`'s command for `(release, transactional)`, or `None`
-/// where the guard does not apply (`update`, `YUM`, an unknown key).
+/// where the guard does not apply (`update`, `YUM`, SLE 11, an unknown key).
 ///
 /// `force` mirrors `prepare --force`'s `--force-resolution`.
 #[must_use]
@@ -27,6 +28,9 @@ pub(crate) fn dry_run(
     transactional: bool,
     force: bool,
 ) -> Option<String> {
+    if release == "11" {
+        return None;
+    }
     let transactional = match family(release, transactional)? {
         Family::Zypper => false,
         Family::Transactional => true,
@@ -58,6 +62,7 @@ mod tests {
     #[test]
     fn every_zypper_key_resolves_its_commands_transaction() {
         for (release, transactional) in [
+            ("12", false),
             ("15", false),
             ("16", false),
             ("slmicro", true),
@@ -93,8 +98,9 @@ mod tests {
     }
 
     #[test]
-    fn yum_update_and_unknown_keys_have_none() {
+    fn yum_sle11_update_and_unknown_keys_have_none() {
         assert_eq!(dry_run(Role::Uninstall, "YUM", false, false), None);
+        assert_eq!(dry_run(Role::Uninstall, "11", false, false), None);
         assert_eq!(dry_run(Role::Update, "15", false, false), None);
         assert_eq!(dry_run(Role::Install, "15", true, false), None);
         assert_eq!(dry_run(Role::Install, "99", false, false), None);

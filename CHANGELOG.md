@@ -17,9 +17,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `grub2`, `dracut`, `bash`, `pam`, …), or where the dry run fails or cannot be
   read. A refused host runs nothing further and fails the command by name; the
   other hosts carry on. Other removals are reported per host. The new
-  `--allow-removal` flag commits the transaction anyway. YUM hosts, `run`, and
-  the prepare and rollback inside `update` are not checked; see "Removal
-  guard" in the docs (#873). **MCP schema note:** the four tools gain an
+  `--allow-removal` flag commits the transaction anyway. YUM and SLE 11 hosts,
+  `run`, and the prepare and rollback inside `update` are not checked; see
+  "Removal guard" in the docs (#873). **MCP schema note:** the four tools gain an
   optional boolean `allow_removal`.
 
 ### Changed
