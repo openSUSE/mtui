@@ -225,10 +225,6 @@ pub enum GiteaError {
         actual: String,
     },
 
-    /// A URL passed for PR-API conversion is not a recognisable Gitea PR URL.
-    #[error("not a Gitea PR URL: {0}")]
-    InvalidPrUrl(String),
-
     /// The metadata-supplied Gitea URL is not the configured trusted origin (or
     /// is not `https`, or carries userinfo), so the token was **not** sent. The
     /// payload is the sanitised URL — never the token or any credential. Set
@@ -455,11 +451,6 @@ mod tests {
         assert_eq!(
             GiteaError::MissingToken.to_string(),
             "Gitea API token is empty, can't access API"
-        );
-        assert!(
-            GiteaError::InvalidPrUrl("x".to_string())
-                .to_string()
-                .contains("not a Gitea PR URL")
         );
         assert!(
             GiteaError::FailedCall("GET - /x".to_string())

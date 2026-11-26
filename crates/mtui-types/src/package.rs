@@ -175,18 +175,6 @@ impl Package {
         self.required = Some(ver);
     }
 
-    /// Sets the [`before`](Package::before) version directly, recording a
-    /// completed check — `None` is *observed absent*, not *never checked*.
-    pub fn set_before_version(&mut self, ver: Option<RPMVersion>) {
-        self.before = ver.into();
-    }
-
-    /// Sets the [`after`](Package::after) version directly, recording a
-    /// completed check — `None` is *observed absent*, not *never checked*.
-    pub fn set_after_version(&mut self, ver: Option<RPMVersion>) {
-        self.after = ver.into();
-    }
-
     /// Sets the [`before`](Package::before) check outcome directly, including
     /// [`NotChecked`](VersionCheck::NotChecked).
     pub fn set_before_check(&mut self, check: VersionCheck) {
@@ -197,12 +185,6 @@ impl Package {
     /// [`NotChecked`](VersionCheck::NotChecked).
     pub fn set_after_check(&mut self, check: VersionCheck) {
         self.after = check;
-    }
-
-    /// Sets the [`current`](Package::current) version directly, recording a
-    /// completed check — `None` is *observed absent*, not *never checked*.
-    pub fn set_current_version(&mut self, ver: Option<RPMVersion>) {
-        self.current = ver.into();
     }
 
     /// Sets the [`current`](Package::current) check outcome directly,
@@ -261,14 +243,14 @@ mod tests {
         let mut p = Package::new("bash");
         assert_eq!(p.before_check(), &VersionCheck::NotChecked);
         assert_eq!(p.after_check(), &VersionCheck::NotChecked);
-        p.set_before_version(None);
+        p.set_before(None).unwrap();
         assert_eq!(p.before_check(), &VersionCheck::NotInstalled);
         assert_eq!(
             p.after_check(),
             &VersionCheck::NotChecked,
             "setting one side must not mark the other"
         );
-        p.set_after_version(None);
+        p.set_after(None).unwrap();
         assert_eq!(p.after_check(), &VersionCheck::NotInstalled);
         assert!(p.before().is_none() && p.after().is_none());
 
@@ -318,9 +300,10 @@ mod tests {
     #[test]
     fn direct_setters_store_version() {
         let mut p = Package::new("bash");
-        p.set_current_version(Some(RPMVersion::parse("3.0-1").unwrap()));
-        assert_eq!(p.current().unwrap(), &RPMVersion::parse("3.0-1").unwrap());
-        p.set_current_version(None);
+        let v = RPMVersion::parse("3.0-1").unwrap();
+        p.set_current_check(VersionCheck::Installed(v.clone()));
+        assert_eq!(p.current().unwrap(), &v);
+        p.set_current_check(VersionCheck::NotInstalled);
         assert!(p.current().is_none());
     }
 
@@ -332,7 +315,7 @@ mod tests {
         p.set_current_check(VersionCheck::NotInstalled);
         assert_eq!(p.current_check(), &VersionCheck::NotInstalled);
         assert!(p.current().is_none());
-        p.set_current_version(Some(RPMVersion::parse("3.0-1").unwrap()));
+        p.set_current_check(VersionCheck::Installed(RPMVersion::parse("3.0-1").unwrap()));
         assert_eq!(
             p.current_check(),
             &VersionCheck::Installed(RPMVersion::parse("3.0-1").unwrap())
