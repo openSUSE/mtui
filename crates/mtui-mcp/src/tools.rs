@@ -197,7 +197,7 @@ pub(crate) fn synthesise(
 
 /// Register one tool per subcommand of a subparser command (`config`); the bare
 /// parent is not emitted, and `config` is not slow, so no `background`. A
-/// fanned-out tool whose name is denied (`config_set`, #410) is skipped like a
+/// fanned-out tool whose name is denied (`config_set`) is skipped like a
 /// denied command: the parent-level check in [`synthesise`] cannot see it.
 fn fan_out_subparser(
     command: &dyn mtui_core::Command,

@@ -1,23 +1,21 @@
 //! The http [`SessionRegistry`] factory with its cap + idle-TTL enforcement.
 //!
 //! Under stdio one process serves one client with a single [`McpSession`]. Under
-//! http a fresh isolated session per client is bound by the [`SessionRegistry`]
-//! *factory* (`try_make_server`), which rmcp's streamable-HTTP transport calls
-//! once per new MCP session; rmcp's session manager owns the `Mcp-Session-Id`
-//! keying and the transport teardown.
+//! http the [`SessionRegistry`] *factory* (`try_make_server`), which rmcp's
+//! streamable-HTTP transport calls once per new MCP session, binds a fresh
+//! isolated session per client; rmcp owns the `Mcp-Session-Id` keying and the
+//! transport teardown.
 //!
 //! ## Cap + idle-TTL
 //!
-//! rmcp 3.x has no max-sessions or idle-TTL knob, its `service_factory` receives
-//! **no** session key, and rmcp owns teardown with no application hook. So the
-//! `[mcp] session_cap` / `session_idle_timeout` bounds are enforced
-//! **application-side, wrapped around the factory** rather than by mirroring
-//! rmcp's session map:
+//! rmcp has no max-sessions or idle-TTL knob, its `service_factory` receives
+//! **no** session key, and it offers no teardown hook. So the `[mcp]
+//! session_cap` / `session_idle_timeout` bounds are enforced
+//! **application-side, wrapped around the factory**:
 //!
 //! * the **cap**: [`SessionRegistry::try_make_server`] refuses a new session past
-//!   `session_cap` with an [`io::Error`], which rmcp surfaces as an
-//!   internal-error HTTP response — a bounded DoS refusal instead of an
-//!   unbounded fleet of SSH-`targets`-holding sessions;
+//!   `session_cap` with an [`io::Error`] (surfaced as an internal-error HTTP
+//!   response), bounding the fleet of SSH-holding sessions;
 //! * the idle **sweeper** ([`SessionRegistry::spawn_sweeper`]): evicts +
 //!   [`McpSession::close`]-es any session untouched for `session_idle_timeout`
 //!   seconds (reclaiming its SSH host connections); `0` disables it.
@@ -145,12 +143,11 @@ type LiveSet = Arc<StdMutex<LiveState>>;
 /// RAII handle owned by each minted [`McpServer`]: unregisters its session on
 /// `Drop` and closes it.
 ///
-/// When rmcp drops the `McpServer` at session close (a client DELETE, its
-/// keep-alive expiry), this frees a `session_cap` slot and spawns the
-/// session's [`McpSession::close`], with no rmcp teardown hook required. The
-/// close runs even when the sweeper or `SessionRegistry::close_all` closed the
-/// session already: closing is idempotent, and a session rmcp kept serving
-/// after a sweep may have attached hosts since.
+/// When rmcp drops the `McpServer` at session close, this frees a
+/// `session_cap` slot and spawns the session's [`McpSession::close`]. The close
+/// runs even if the sweeper or `SessionRegistry::close_all` already closed the
+/// session: closing is idempotent, and a session rmcp kept serving after a
+/// sweep may have attached hosts since.
 pub struct SessionGuard {
     live: LiveSet,
     id: u64,
@@ -198,16 +195,12 @@ fn spawn_tracked(
 
 /// The http per-client session factory with cap + idle-TTL enforcement.
 ///
-/// Under `--transport http` one process serves many concurrent clients, each of
-/// which must see **only its own** loaded template + SSH `targets` — sharing one
-/// session would let one client's `load_template` clobber another's. So
-/// [`try_make_server`](Self::try_make_server), the closure rmcp's
-/// `StreamableHttpService` invokes once per session, mints a **fresh, fully
-/// isolated** [`McpServer`] with its own [`McpSession`].
+/// Each client must see **only its own** loaded template + SSH `targets`, so
+/// [`try_make_server`](Self::try_make_server), invoked once per session by rmcp,
+/// mints a **fresh, fully isolated** [`McpServer`] with its own [`McpSession`].
 ///
-/// The live set holds [`Weak`] handles rather than owning the session map (rmcp
-/// owns that, keyed by `Mcp-Session-Id`), and carries the cap + idle-TTL bounds
-/// described in the module docs.
+/// The live set holds [`Weak`] handles (rmcp owns the session map) and carries
+/// the cap + idle-TTL bounds described in the module docs.
 #[derive(Clone)]
 pub struct SessionRegistry {
     /// The shared command registry every minted server dispatches against.
@@ -316,12 +309,9 @@ impl SessionRegistry {
 
     /// Mint a fresh, isolated, cap-checked [`McpServer`] for one MCP session.
     ///
-    /// Called once per new session by the streamable-HTTP transport's
-    /// `service_factory`. Refuses to mint past [`cap`](Self::cap) with an
-    /// [`io::Error`] rmcp surfaces as an internal-error response (a bounded DoS
-    /// refusal). On success it registers the session's [`Weak`] handle + a
-    /// shared last-touch timestamp, and hands the [`McpServer`] a
-    /// [`SessionGuard`] (frees the slot on `Drop`) plus that last-touch handle.
+    /// On success it registers the session's [`Weak`] handle + a shared
+    /// last-touch timestamp, and hands the [`McpServer`] a [`SessionGuard`]
+    /// (frees the slot on `Drop`) plus that last-touch handle.
     ///
     /// # Errors
     ///
@@ -396,11 +386,10 @@ impl SessionRegistry {
     /// Tear down **every** live session, for graceful process shutdown.
     ///
     /// The HTTP counterpart to the stdio serve loop's [`McpSession::close`].
-    /// Cancelling the idle sweeper alone does **not** release live sessions (its
-    /// cancel branch just returns, and the registry holds only [`Weak`] handles
-    /// whose `Drop` cannot run the async pool-claim release), so a clean Ctrl-C /
-    /// SIGTERM of a busy server would otherwise leak every active session's pool
-    /// claims and SSH connections.
+    /// Cancelling the sweeper alone does **not** release live sessions (the
+    /// registry holds only [`Weak`] handles whose `Drop` cannot run the async
+    /// pool-claim release), so a clean shutdown would otherwise leak every
+    /// active session's pool claims and SSH connections.
     ///
     /// Closes concurrently under [`sweep_parallel`](Self::sweep_parallel) with a
     /// single overall deadline so one wedged host close cannot hang process exit.

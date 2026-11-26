@@ -1,27 +1,21 @@
-//! Durable audit record of `mtui-mcp` tool calls (#411).
+//! Durable audit record of `mtui-mcp` tool calls.
 //!
-//! `mtui-mcp` executes maintenance actions on shared infrastructure; when the
-//! serving process goes away, stderr diagnostics and the in-memory `show_log`
-//! buffers go with it. This module is the file sink for the one or two records
-//! per call the server layer writes around its `call_tool` dispatch — an
-//! `intent` before and an outcome after for a tool without `readOnlyHint`, an
-//! outcome alone for a read-only one — plus a terminal record per background
-//! job.
+//! The file sink for the one or two records per call the server layer writes
+//! around its `call_tool` dispatch — an `intent` before and an outcome after
+//! for a tool without `readOnlyHint`, an outcome alone for a read-only one —
+//! plus a terminal record per background job.
 //!
-//! Design notes (settled for #411):
+//! Design notes:
 //!
-//! * The seam sits in `mtui-mcp`'s `call_tool` dispatch, not in `mtui-core`'s:
-//!   `mtui-core` has no notion of a session key or a transport, and pushing
-//!   one down there purely to serve the MCP case would be the tail wagging
-//!   the dog. The REPL is therefore not covered by this record.
-//! * Fail mode is **refuse before, report after**. A tool the surface does
-//!   not advertise `readOnlyHint` writes an `intent` record before it runs;
-//!   if that write fails the call is refused, which is honest because nothing
-//!   ran. Once the work is done the outcome record can no longer un-run it, so
-//!   a failed outcome write warns and the reply carries an in-band notice
-//!   rather than the result being discarded. Terminal records of background
-//!   jobs warn for the same reason — the dispatch already answered. Export is
-//!   best-effort throughout and never refuses anything.
+//! * The seam sits in `mtui-mcp`'s `call_tool` dispatch, not in `mtui-core`,
+//!   which has no notion of a session key or transport. The REPL is therefore
+//!   not covered by this record.
+//! * Fail mode is **refuse before, report after**. A tool without
+//!   `readOnlyHint` writes an `intent` record before it runs; if that write
+//!   fails the call is refused, since nothing ran. A failed outcome (or
+//!   terminal-job) write only warns, and the reply carries an in-band notice:
+//!   the work is done and cannot be un-run. Export is best-effort throughout
+//!   and never refuses anything.
 //! * Durable and append-only, but **not tamper-evident**: there is no hash
 //!   chain and no HMAC, so anyone writing as the sink's owner can rewrite
 //!   history undetected. Tamper evidence means shipping each record off-host
@@ -115,12 +109,8 @@ pub(crate) const AUDIT_LOG_KEEP: u32 = 5;
 /// both so the two streams join. Only consumed when auditing is on.
 static NEXT_AUDIT_SEQ: AtomicU64 = AtomicU64::new(1);
 
-/// Test-only blocking delay (millis) injected at the top of [`AuditLog::open_sink`].
-///
-/// Lets the slow-sink test prove the async dispatch never blocks on a down/slow
-/// disk: the sleep runs wherever `open_sink` runs, so inline dispatch stalls the
-/// worker while `*_async` sleeps on the blocking pool. Gated on a `slow-sink`
-/// path fragment so concurrent tests on other temp paths never observe it.
+/// Test-only blocking delay (millis) at the top of [`AuditLog::open_sink`],
+/// gated on a `slow-sink` path fragment so other tests never observe it.
 #[cfg(test)]
 pub(crate) static AUDIT_TEST_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -260,20 +250,15 @@ impl AuditLog {
     /// Shift the generations down and hand back a live sink.
     ///
     /// **Infallible by policy, and it never waits.** The cap is housekeeping;
-    /// the record is the point. So every way this can go wrong — a lock another
-    /// writer holds, a mount whose `flock` is unimplemented (an NFS export
-    /// without `lockd` answers `ENOLCK`), a rename that cannot happen — warns
-    /// and hands back the oversize file to append to. An `Err` escaping here
-    /// would reach [`refuse_error`] and turn a directory left at `<path>.1`, or
-    /// one unlucky mount, into a refusal of every mutating call past the cap
-    /// and a server that will not start: the outage the cap exists to prevent.
+    /// the record is the point. Every failure (a held lock, a mount without
+    /// `flock`, an impossible rename) warns and hands back the oversize file,
+    /// because an `Err` reaching [`refuse_error`] would refuse every mutating
+    /// call past the cap — the outage the cap exists to prevent.
     ///
-    /// The advisory lock is taken on the **oversize file itself**, not on a
-    /// process-local mutex: two stdio servers pointed at one path are two
-    /// processes, and only a lock on the inode orders them. It is a `try_lock`,
-    /// never a blocking `lock` — whoever holds it rotates, and whoever does not
-    /// appends past the cap and rotates on a later call, so a contended
-    /// boundary costs the dispatch worker nothing and still rotates once.
+    /// The advisory `try_lock` is taken on the **oversize file itself**, since
+    /// two servers on one path are two processes and only the inode orders
+    /// them. Whoever holds it rotates; the rest append past the cap and rotate
+    /// on a later call.
     fn rotate(&self, full: std::fs::File) -> std::fs::File {
         match full.try_lock() {
             Ok(()) => {}
@@ -303,8 +288,7 @@ impl AuditLog {
                 return full;
             }
         }
-        // A failed shift leaves the chain half-moved, so stop at the first one
-        // rather than reporting the same outage four more times.
+        // Stop at the first failed shift rather than warn once per generation.
         for n in (1..AUDIT_LOG_KEEP).rev() {
             let from = self.generation(n);
             if from.exists() && !renamed(&from, &self.generation(n + 1)) {
@@ -739,14 +723,13 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 /// can carry secrets in bulk:
 ///
 /// * `config_set` — the one tool shape that can carry a credential as a bare
-///   value. Its `value` is
-///   never recorded, for any attribute: the record type has no room for it,
-///   so adding a future secret attribute cannot leak it by forgetting to
-///   extend the classifier. [`is_secret_attr`](mtui_core::commands::is_secret_attr)
+///   value. Its `value` is never recorded, for any attribute: the record type
+///   has no room for it, so a future secret attribute cannot leak by forgetting
+///   to extend the classifier. [`is_secret_attr`](mtui_core::commands::is_secret_attr)
 ///   still marks whether the attribute *is* a secret, so a reader can tell a
-///   token rotation from a display-name change. Retained after #410 denied
-///   `config_set` on the MCP surface: no current tool routes here, but any
-///   future credential-carrying tool must redact the same way.
+///   token rotation from a display-name change. No current MCP tool routes
+///   here (`config_set` is denied), but any future credential-carrying tool
+///   must redact the same way.
 /// * File-body payloads — `put` `content`/`content_b64`,
 ///   `report_section_write`/`report_issue_write`/`report_field_write` `value`,
 ///   `report_new_issue_write` `title`/`comment`. Each records

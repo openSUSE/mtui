@@ -1,15 +1,12 @@
-//! Hand-written in-band `get`/`put` MCP tools (#434).
+//! Hand-written in-band `get`/`put` MCP tools.
 //!
-//! The synthesised forms of these two commands exchange **server-local paths**:
-//! `get` downloaded to `{report_wd}/downloads/` and returned the path, `put`
-//! uploaded a file that had to already exist on the server. Under
-//! `--transport http` the client is on another machine, so those paths are
-//! unreachable and `put` is unusable outright. Both commands are therefore on
-//! [`MCP_DENYLIST`](mtui_core::MCP_DENYLIST) and re-served here under the same
-//! names — the `edit` → document tools precedent — carrying the content
-//! **in-band** in both directions, on both transports.
+//! The synthesised forms of these two commands exchange **server-local paths**,
+//! unreachable by a `--transport http` client on another machine. Both commands
+//! are therefore on [`MCP_DENYLIST`](mtui_core::MCP_DENYLIST) and re-served here
+//! under the same names — the `edit` → document tools precedent — carrying the
+//! content **in-band** in both directions, on both transports.
 //!
-//! The REPL/CLI `get`/`put` commands are untouched: literal paths (#399), the
+//! The REPL/CLI `get`/`put` commands are untouched: literal paths, the
 //! `{report_wd}/downloads/{name}.{host}` layout, and their messages all stay.
 //!
 //! Content encoding: UTF-8 payloads travel as `content`, anything else as
@@ -439,8 +436,8 @@ async fn transfer_get(
         map
     };
 
-    // Partial content is never returned as success (#396's lesson): any per-host
-    // failure fails the call, with attribution, and `hosts` is the retry path.
+    // Partial content is never returned as success (any per-host
+    // failure fails the call, with attribution; `hosts` is the retry path).
     let failures: Vec<String> = outcome
         .iter()
         .filter_map(|(host, res)| res.as_ref().err().map(|e| format!("{host} ({e})")))

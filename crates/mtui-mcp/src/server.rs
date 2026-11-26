@@ -70,7 +70,7 @@ pub struct McpServer {
     job_tools: Arc<HashSet<String>>,
     /// The set of hand-written report-document tool names (`report_sections`/…).
     document_tools: Arc<HashSet<String>>,
-    /// The set of hand-written in-band transfer tool names (`get`/`put`, #434).
+    /// The set of hand-written in-band transfer tool names (`get`/`put`).
     transfer_tools: Arc<HashSet<String>>,
     /// Names advertised with `readOnlyHint: true`, taken from the same
     /// descriptors that build [`tools`](Self::tools) so the classification and
@@ -161,7 +161,7 @@ impl McpServer {
         let transfer_names = family_names(&transfer_descriptors);
 
         // Command tools + the four job tools + the report-document tools
-        // + the in-band get/put transfer tools (#434 — their command forms are on
+        // + the in-band get/put transfer tools (their command forms are on
         // MCP_DENYLIST, which makes the same-name reuse here collision-free).
         let mut descriptors: Vec<ToolDescriptor> = command_descriptors
             .into_iter()
@@ -287,15 +287,13 @@ impl ProgressSink for PeerProgressSink {
 /// on **http**: [`rmcp::model::ProtocolVersion::KNOWN_VERSIONS`] minus
 /// `V_2026_07_28`.
 ///
-/// Revision 2026-07-28 removes protocol-level sessions: rmcp's
-/// `streamable_http_server` tower layer classifies any non-`initialize`
-/// request carrying complete 2026-07-28 `_meta` as stateless and mints a
-/// throwaway [`McpServer`] to serve it inline — bypassing
-/// [`crate::provider::SessionRegistry::try_make_server`]'s one-server-per-
-/// `Mcp-Session-Id` allocation entirely. That would tear down and rebuild the
-/// per-session `McpSession` (its SSH connections, pool claims) on every such
-/// request, so http must keep refusing the revision: a client that asks for it
-/// gets `-32022` and falls back to one of these four.
+/// Revision 2026-07-28 removes protocol-level sessions: rmcp's tower layer
+/// would serve any non-`initialize` request carrying its `_meta` on a
+/// throwaway [`McpServer`], bypassing
+/// [`crate::provider::SessionRegistry::try_make_server`] and rebuilding the
+/// per-session `McpSession` (SSH connections, pool claims) on every request. So
+/// http must keep refusing the revision: a client that asks for it gets
+/// `-32022` and falls back to one of these four.
 ///
 /// This does **not** apply to stdio, which has one client per process and no
 /// per-request session churn to protect — see [`SUPPORTED_PROTOCOL_VERSIONS_STDIO`].
@@ -310,10 +308,9 @@ const SUPPORTED_PROTOCOL_VERSIONS_HTTP: &[ProtocolVersion] = &[
 /// on **stdio**: every revision this rmcp build knows, including
 /// `V_2026_07_28`.
 ///
-/// stdio has exactly one client per process, so the inline (stateless)
-/// lifecycle 2026-07-28 requests is harmless — there is no per-session state to
-/// tear down. Refusing the revision here only breaks clients that open with
-/// `server/discover` at 2026-07-28 and have no working fallback (#591).
+/// stdio has one client per process, so the stateless lifecycle is harmless
+/// there, while refusing the revision would break clients that open with
+/// `server/discover` at 2026-07-28 and have no fallback.
 const SUPPORTED_PROTOCOL_VERSIONS_STDIO: &[ProtocolVersion] = ProtocolVersion::KNOWN_VERSIONS;
 
 impl ServerHandler for McpServer {
@@ -394,11 +391,10 @@ impl McpServer {
     ///   OTLP-only mode never refuses anything.
     ///
     /// OTLP-only (endpoint set, `audit_log` unset) still builds the JSONL line
-    /// in memory and uses it verbatim as the OTLP body. With neither sink this
-    /// is dispatch verbatim: behaviour and output are byte-identical.
+    /// in memory and uses it as the OTLP body. With neither sink this is
+    /// dispatch verbatim.
     ///
-    /// Test seam: unit tests drive this directly with a fresh token and no
-    /// sink, since a real `RequestContext` needs a peer.
+    /// Tests drive this directly, since a real `RequestContext` needs a peer.
     pub(crate) async fn dispatch_audited(
         &self,
         name: &str,
@@ -501,7 +497,7 @@ impl McpServer {
                 }
             }
         }
-        // A hand-written report-document or in-band transfer (get/put, #434)
+        // A hand-written report-document or in-band transfer (get/put)
         // tool. The document tools edit the loaded document in memory, never the
         // engine or a host, so a plain drop on cancel strands nothing; a transfer
         // holds only per-call locks.
@@ -705,19 +701,16 @@ fn response_bytes_of(result: &Result<CallToolResponse, McpError>) -> Option<usiz
 /// `biased` so a future that is already resolved is never starved by the
 /// cancellation branch. Returns `None` when `ct` fires first.
 ///
-/// This only ever fires for a client that explicitly cancels: on stdio there is
-/// no per-request connection to drop, and rmcp's client-disconnect cancellation
-/// exists only on the stateless HTTP paths mtui declines (`docs/src/mcp.md`).
+/// Only an explicit client cancel fires it (rmcp's disconnect cancellation
+/// exists only on the stateless HTTP paths mtui declines, `docs/src/mcp.md`).
 /// The job-control branch is wrapped only for a `job_status`/`job_result` call
-/// parked on `wait_seconds`; a plain poll is fast, and cancelling `job_cancel`
-/// makes no sense.
+/// parked on `wait_seconds`.
 ///
 /// For the document and transfer branches only: neither dispatches through the
 /// engine, so dropping `fut` strands no `/var/lock/mtui.lock`. The
-/// synthesised-command branch *can* hold that lock and routes through
-/// [`McpSession::run_command_client_cancellable`](crate::session::McpSession::run_command_client_cancellable)
-/// instead, which cancels cooperatively, allows a grace period, and only then
-/// force-aborts and releases the lock on the dispatch's behalf.
+/// synthesised-command branch can hold it and routes through
+/// [`McpSession::run_command_client_cancellable`](crate::session::McpSession::run_command_client_cancellable),
+/// which cancels cooperatively, then force-aborts and releases the lock.
 async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) -> Option<T> {
     tokio::select! {
         biased;
@@ -728,15 +721,13 @@ async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) ->
 
 /// The error returned in place of a cancelled call's result.
 ///
-/// rmcp drops this request's id from its cancellation-token pool once the
-/// notification arrives, so the response is discarded either way; an explicit
-/// error rather than a fabricated success keeps the code honest.
+/// rmcp discards the response once the cancel notification arrives; an explicit
+/// error beats a fabricated success.
 ///
 /// `unlock` is `Some` only for a force-aborted synthesised command tool
-/// (`dispatch_tool` returning [`ToolOutcome::Aborted`]); its
-/// [`forced_abort_note`] is appended so the client learns a host operation lock
-/// may have been left behind, not merely that the call was cancelled. The
-/// document/transfer branches cannot hold that lock and always pass `None`.
+/// ([`ToolOutcome::Aborted`]); its [`forced_abort_note`] is appended so the
+/// client learns a host operation lock may have been left behind. The
+/// document/transfer branches always pass `None`.
 fn cancelled_error(unlock: Option<&AbortUnlock>) -> McpError {
     tracing::info!("MCP tool call cancelled by client notification");
     let message = match unlock {

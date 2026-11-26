@@ -1,20 +1,18 @@
-//! OTLP/HTTP LOGS export of the JSONL audit record (#411 follow-up).
+//! OTLP/HTTP LOGS export of the JSONL audit record.
 //!
-//! Hand-rolled OTLP/HTTP, zero new shipped crates: no `opentelemetry-*`
-//! dependency, one `LogRecord` per audit event over the workspace `reqwest`/
-//! rustls stack already in the lock via `mtui-datasources`. The protobuf
-//! varint encoder below is hand-written; tests assert byte-exact output
-//! rather than pulling `prost` even as a dev oracle.
+//! Hand-rolled OTLP/HTTP with no `opentelemetry-*` dependency: one `LogRecord`
+//! per audit event over the workspace `reqwest`/rustls stack, with a
+//! hand-written protobuf varint encoder (tests assert byte-exact output).
 //!
 //! Body is the verbatim JSONL line the file sink writes; attributes are a
 //! closed `mtui.*` vocabulary (`tool`, `event`, `seq`, `transport`,
 //! `session.id`, plus `outcome` when there is one and `response_bytes` when
-//! sized) plus the W3C trace correlation when the client supplied one. Resource carries only
-//! `service.name` (the multi-deployment join key, default `mtui`).
+//! sized) plus the W3C trace correlation when the client supplied one. Resource
+//! carries only `service.name` (the multi-deployment join key, default `mtui`).
 //!
-//! Configuration is env-only (container convention; headers must never be CLI
-//! flags, so there are no new TOML keys — the sink matrix falls out of the
-//! existing `[mcp] audit_log` plus the endpoint):
+//! Configuration is env-only (headers must never be CLI flags, so there are no
+//! new TOML keys — the sink matrix falls out of `[mcp] audit_log` plus the
+//! endpoint):
 //!
 //! * file-only: `audit_log` set, no endpoint (current behaviour).
 //! * OTLP-only: endpoint set, `audit_log` unset. The JSONL line is still
@@ -37,12 +35,10 @@
 //! (`[mtui] ssl_verify` via `SslVerify`); the endpoint value never reaches a
 //! log, record, or error string.
 //!
-//! Schema discipline: the OTel envelope is versioned alongside the audit
-//! schema it carries ([`OTEL_SCOPE_VERSION`], currently `"1"`). No serde
-//! deserialisation of untrusted input exists on this path — config is env-only,
-//! records are built internally — so there is no `deny_unknown_fields` site;
-//! the closed `mtui.*` attribute vocabulary and the kwarg allowlist serve that
-//! role instead.
+//! The OTel envelope is versioned alongside the audit schema it carries
+//! ([`OTEL_SCOPE_VERSION`]). No untrusted input is deserialised on this path,
+//! so there is no `deny_unknown_fields` site; the closed `mtui.*` attribute
+//! vocabulary and the kwarg allowlist serve that role.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -305,16 +301,12 @@ pub(crate) fn parse_traceparent(value: &str) -> Option<([u8; 16], [u8; 8], u8)> 
 /// W3C `tracestate` validation (SEP-414): returns the input unchanged when
 /// valid, else `None`. Bounded to 1..=512 bytes of printable ASCII (plus
 /// HTAB member OWS); comma-separated `key=value` members, at most 32.
-/// Empty and whitespace-only members are skipped, never refused: they appear
-/// when several `tracestate` headers are joined, and W3C trace-context
-/// §3.3.1.1 requires vendors to accept them. Keys are the §3.3.1.3.1
-/// `simple-key` / `multi-tenant-key` shape — lowercase only, no `.`, at most
-/// one `@`; a simple key starts with a lowercase letter, a tenant id with a
-/// lowercase letter or digit, a system id with a lowercase letter — and
-/// values are printable ASCII minus `,`/`=` (§3.3.1.3.2). Lengths follow
-/// §3.3.1.3: simple keys at most 256 characters, tenant ids at most 241,
-/// system ids at most 14, values at most 256. Never errors:
-/// absent or malformed context is an absent field, never a refusal.
+/// Empty and whitespace-only members are skipped, never refused (W3C
+/// trace-context §3.3.1.1 requires vendors to accept them). Keys are the
+/// §3.3.1.3.1 `simple-key` / `multi-tenant-key` shape — lowercase only, no `.`,
+/// at most one `@` — and values are printable ASCII minus `,`/`=`
+/// (§3.3.1.3.2); lengths follow §3.3.1.3. Never errors: absent or malformed
+/// context is an absent field, never a refusal.
 pub(crate) fn parse_tracestate(value: &str) -> Option<&str> {
     if value.is_empty() || value.len() > 512 {
         return None;

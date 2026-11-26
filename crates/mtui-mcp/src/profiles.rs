@@ -21,7 +21,7 @@ use crate::tools::ToolDescriptor;
 /// → run/install → fill report → approve/reject, without the long tail of
 /// host-bookkeeping and server-tuning verbs. The `report_*` and `job_*` tools
 /// are always core, since report editing and the background-command flow depend
-/// on them; the `get`/`put` transfer tools (#434) are deliberately full-profile
+/// on them; the `get`/`put` transfer tools are deliberately full-profile
 /// only, like the synthesised commands they replaced, and `tools_allow` restores
 /// them under `core`.
 pub const CORE: &[&str] = &[
