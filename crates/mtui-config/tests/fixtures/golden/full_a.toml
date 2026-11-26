@@ -1,0 +1,80 @@
+[mtui]
+template_dir = "/srv/a/templates"
+user = "alice"
+install_logs = "logs_a"
+ssl_verify = "/etc/ssl/a.pem"
+
+[connection]
+connection_timeout = 301
+connect_timeout = 61
+reboot_timeout = 11
+reboot_retries = 12
+max_parallel = 13
+max_oqa_parallel = 14
+ssh_strict_host_key_checking = "warn"
+
+[refhosts]
+resolvers = "path"
+https_uri = "https://a.example.com/refhosts.yml"
+https_expiration = 15
+path = "/srv/a/refhosts.yml"
+
+[url]
+bugzilla = "https://bz.a.example.com"
+testreports = "https://a.example.com/testreports"
+fancy_reports = "https://a.example.com/reports"
+
+[qem_dashboard]
+api = "https://dash.a.example.com/api"
+
+[teregen]
+api = "https://tg.a.example.com/api/v1"
+api_v2 = "https://tg.a.example.com/api/v2"
+
+[openqa]
+openqa = "https://oqa.a.example.com"
+baremetal = "http://bm.a.example.com"
+
+[target]
+tempdir = "/var/tmp/a"
+
+[gitea]
+token = "tok-a"
+url = "https://gitea.a.example.com"
+
+[slack]
+enabled = true
+token = "xoxb-a"
+channel = "#a"
+api_url = "https://slack.a.example.com/api"
+poll_interval = 16
+watch_timeout = 17
+
+[lock]
+reap_stale = false
+stale_age = 18
+pool_reap_stale = false
+pool_stale_age = 19
+pi_autolock = false
+wait = 20
+wait_poll = 21
+
+[mcp]
+max_output_bytes = 22
+max_input_bytes = 23
+max_request_bytes = 24
+max_active_jobs = 25
+max_completed_jobs = 26
+session_cap = 27
+session_idle_timeout = 28
+sweep_parallel = 29
+profile = "core"
+tools_allow = ["a1", "a2"]
+tools_deny = ["a3"]
+audit_log = "/var/log/a-audit.jsonl"
+audit_log_max_bytes = 8192
+put_dirs = ["/srv/a/put1", "/srv/a/put2"]
+
+[obs]
+api_url = "https://obs.a.example.com"
+request_timeout = 30

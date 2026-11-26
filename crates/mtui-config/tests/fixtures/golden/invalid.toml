@@ -1,0 +1,54 @@
+[mtui]
+template_dir = "/t"
+user = "u"
+install_logs = "a/b"
+
+[connection]
+connection_timeout = 0
+connect_timeout = 0
+reboot_timeout = 0
+reboot_retries = 0
+max_parallel = 0
+max_oqa_parallel = 0
+
+[refhosts]
+path = "/r.yml"
+https_uri = "not-a-url"
+https_expiration = 0
+
+[qem_dashboard]
+api = "ftp://x"
+
+[teregen]
+api = "https://h:44e3"
+api_v2 = ""
+
+[openqa]
+openqa = "nope"
+baremetal = "http://"
+
+[gitea]
+url = "gitea.example.com"
+
+[slack]
+api_url = "slack"
+poll_interval = 0
+watch_timeout = 0
+
+[lock]
+wait_poll = 0
+stale_age = 0
+wait = 0
+
+[mcp]
+session_cap = 0
+session_idle_timeout = 0
+sweep_parallel = 0
+max_output_bytes = 0
+audit_log = ""
+audit_log_max_bytes = 100
+put_dirs = ["relative/dir", "", "/srv/ok"]
+
+[obs]
+api_url = "obs"
+request_timeout = 0
