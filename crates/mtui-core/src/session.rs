@@ -3646,11 +3646,7 @@ mod tests {
     /// A mock-backed, already-connected [`Target`]: the seam the connect loop
     /// reaches once `Target::connect` short-circuits.
     fn mock_target(host: &str) -> Target {
-        Target::with_connection(
-            host,
-            TargetState::Enabled,
-            Box::new(MockConnection::new(host)),
-        )
+        crate::commands::testkit::target_with(host, |c| c)
     }
 
     /// `autolock_target` locks a freshly connected host with the PI comment when

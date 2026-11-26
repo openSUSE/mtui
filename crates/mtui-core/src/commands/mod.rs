@@ -156,6 +156,24 @@ pub(crate) mod testkit {
     use crate::display::{ColorMode, CommandPromptDisplay};
     use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 
+    /// A target whose mock connection is scripted with `build`.
+    pub(crate) fn target_with(
+        host: &str,
+        build: impl FnOnce(MockConnection) -> MockConnection,
+    ) -> Target {
+        let conn = build(MockConnection::new(host));
+        Target::with_connection(host, TargetState::Enabled, Box::new(conn))
+    }
+
+    /// Gets past the pre-flight that refuses a report naming no package
+    /// versions.
+    pub(crate) fn seed_package(session: &mut Session) {
+        session.metadata_mut().base_mut().packages.insert(
+            "standard".to_owned(),
+            HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+        );
+    }
+
     tokio::task_local! {
         /// Test-only override for [`host_op_budget`](super::support::host_op_budget),
         /// in ms. Unset means the production [`HOST_CLOSE_TIMEOUT`].
@@ -1398,10 +1416,7 @@ mod mcp_nonempty_success_guard {
             "update" => {
                 // #396 pre-flight: a report naming no package versions is refused.
                 let (mut s, b) = hosts();
-                s.metadata_mut().base_mut().packages.insert(
-                    "standard".to_owned(),
-                    std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
-                );
+                super::testkit::seed_package(&mut s);
                 (s, b, argv(&["--noprepare"]))
             }
             "install" => {
@@ -1415,10 +1430,7 @@ mod mcp_nonempty_success_guard {
             "prepare" => {
                 // Seeded for the same #396 pre-flight as `update` above.
                 let (mut s, b) = hosts();
-                s.metadata_mut().base_mut().packages.insert(
-                    "standard".to_owned(),
-                    std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
-                );
+                super::testkit::seed_package(&mut s);
                 (s, b, argv(&["-u"]))
             }
             "downgrade" => {

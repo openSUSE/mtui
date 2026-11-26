@@ -101,18 +101,9 @@ impl Command for Prepare {
 mod tests {
     use super::*;
     use crate::commands::testkit::{
-        empty_session, matches, session_with_failing_perform, session_with_hosts,
+        empty_session, matches, seed_package, session_with_failing_perform, session_with_hosts,
     };
     use crate::error::CommandError;
-
-    /// Gets past the #396 pre-flight, which refuses a report naming no package
-    /// versions.
-    fn seed_package(session: &mut crate::session::Session) {
-        session.metadata_mut().base_mut().packages.insert(
-            "standard".to_owned(),
-            std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
-        );
-    }
 
     #[test]
     fn complete_offers_own_flags_target_and_hosts() {

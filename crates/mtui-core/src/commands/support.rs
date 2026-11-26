@@ -1332,10 +1332,7 @@ mod tests {
              install; refusing to report success — check `list_packages -w` and the \
              report metadata"
         );
-        session.metadata_mut().base_mut().packages.insert(
-            "standard".to_owned(),
-            std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
-        );
+        crate::commands::testkit::seed_package(&mut session);
         assert!(!require_packages(&session, "prepare").unwrap().is_empty());
     }
 
