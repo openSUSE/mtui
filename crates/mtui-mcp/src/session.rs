@@ -363,6 +363,11 @@ async fn wait_terminal(job: &StdMutex<Job>, budget: Duration) {
     let _ = tokio::time::timeout(budget, done.cancelled()).await;
 }
 
+/// Seconds from `from` to `to`, rounded to 0.1s.
+fn elapsed_tenths(from: Instant, to: Instant) -> f64 {
+    (to.duration_since(from).as_secs_f64() * 10.0).round() / 10.0
+}
+
 /// `job`'s terminal verdict: its stdout, or the matching failure envelope.
 ///
 /// Split out of [`McpSession::job_result_wait`] so it renders the four arms from
@@ -370,8 +375,7 @@ async fn wait_terminal(job: &StdMutex<Job>, budget: Duration) {
 fn result_of(job_id: &str, job: &Job) -> Result<String, McpCommandError> {
     match job.state {
         JobState::Running => {
-            let elapsed =
-                (Instant::now().duration_since(job.started).as_secs_f64() * 10.0).round() / 10.0;
+            let elapsed = elapsed_tenths(job.started, Instant::now());
             Err(McpCommandError {
                 stdout: String::new(),
                 stderr: format!(
@@ -1776,12 +1780,11 @@ impl McpSession {
     /// else measured to now, rounded to 0.1s.
     fn view(job: &Job) -> JobView {
         let end = job.finished.unwrap_or_else(Instant::now);
-        let elapsed = (end.duration_since(job.started).as_secs_f64() * 10.0).round() / 10.0;
         JobView {
             id: job.id.clone(),
             command: job.command.clone(),
             state: job.state,
-            elapsed_s: elapsed,
+            elapsed_s: elapsed_tenths(job.started, end),
         }
     }
 
@@ -2274,6 +2277,20 @@ mod tests {
         assert!(completes(sess.scoped_lock(Some(RRID_B))).await);
         drop(held);
         assert!(completes(sess.exclusive_lock()).await);
+    }
+
+    #[test]
+    fn elapsed_is_rounded_to_tenths_of_a_second() {
+        let from = Instant::now();
+        assert_eq!(
+            elapsed_tenths(from, from + Duration::from_millis(1240)),
+            1.2
+        );
+        assert_eq!(
+            elapsed_tenths(from, from + Duration::from_millis(1260)),
+            1.3
+        );
+        assert_eq!(elapsed_tenths(from, from), 0.0);
     }
 
     /// The freshness invariant `remint_after_drop_is_a_new_session` relies on
