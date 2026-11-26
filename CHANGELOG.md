@@ -21,6 +21,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `add_host` without `-t`, and the autoconnect after `load_template`, no
+  longer skip a test-target slot because a host drawn for another slot also
+  matches it, such as an `SLE_HPC` host carrying the `SLES-LTSS` addon. Each
+  slot now gets a host of its own, and `add_host` names a slot whose every
+  candidate already serves another slot as `unserved slot <slot>: every
+  candidate already serves another slot (<hosts>)` (#880).
 - `remove_host`, `unload`, `quit`, and a reload of an already-loaded update
   (`load_template`, `regenerate`) no longer report a clean teardown when
   something was left on a host. The reply now carries one `warning: <host>: …`

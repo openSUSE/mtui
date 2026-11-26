@@ -443,8 +443,8 @@ and nothing is written there.
 - `add_host` without `-t` follows `added <hosts>` (or `no reference hosts
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, an arch of the testplatform
-  no reference host covers, every candidate claimed by another RRID, no
-  candidate connected (unreachable, claimed remotely, `operation lock held by
+  no reference host covers, every candidate claimed by another RRID, every
+  candidate already serving another slot of the update, no candidate connected (unreachable, claimed remotely, `operation lock held by
   <user> since <time>` for another owner's live operation lock, or refused
   because the update workflow cannot drive it: `no command set for <Product
   version>, <root mode>` with the root mode as detected, such as `transactional` or

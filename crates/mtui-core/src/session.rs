@@ -366,6 +366,11 @@ pub(crate) enum Unserved {
         slot: String,
         holders: Vec<(String, String)>,
     },
+    /// Every candidate already serves another slot of this update.
+    Shared {
+        slot: String,
+        hosts: Vec<String>,
+    },
     Unconnectable {
         slot: String,
         failures: Vec<(String, HostFailure)>,
@@ -385,6 +390,7 @@ impl Unserved {
             | Self::NoArchRefhost { .. }
             | Self::InventoryUnavailable
             | Self::Busy { .. }
+            | Self::Shared { .. }
             | Self::BudgetSpent { .. } => &[],
         }
     }
@@ -411,6 +417,11 @@ impl Unserved {
                     holders.len()
                 )
             }
+            Self::Shared { slot, hosts } => format!(
+                "unserved slot {}: every candidate already serves another slot ({})",
+                slot_label(slot),
+                hosts.join(", ")
+            ),
             Self::Unconnectable { slot, failures } => {
                 let why = failures
                     .iter()
@@ -2184,9 +2195,13 @@ impl Session {
     /// [`search_pool_by_query`](Refhosts::search_pool_by_query) groups candidates
     /// by their *requested* slot, so interchangeable hosts collapse to one slot.
     /// Each slot's candidates are shuffled (the [`ShuffleFn`] seam) and recorded
-    /// for sibling fallback; a slot this owner already holds a host for is
-    /// skipped; otherwise one free host is claimed, waiting up to `[lock] wait`
-    /// seconds when all are busy.
+    /// for sibling fallback, a host fewer other slots match ahead of one they
+    /// also need. Each host serves at most one slot per call, and each slot key
+    /// is drawn once: a slot this owner already holds a host for, not already
+    /// serving an earlier slot, is skipped; otherwise one free host no earlier
+    /// slot took is claimed, waiting up to `[lock] wait` seconds when all are
+    /// busy, and a slot whose every candidate serves an earlier slot is reported
+    /// as [`Unserved::Shared`].
     ///
     /// Returns `(chosen_hosts, slot_candidates, unserved)`, keyed as
     /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates),
@@ -2210,10 +2225,30 @@ impl Session {
         let mut chosen: Vec<String> = Vec::new();
         let mut slot_candidates: HashMap<String, Vec<String>> = HashMap::new();
         let mut unserved: Vec<Unserved> = Vec::new();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut drawn: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for tp in testplatforms {
-            let attrs = Attributes::from_testplatform(tp);
-            let pairs = store.search_pool_by_query(&attrs);
+        let searched: Vec<_> = testplatforms
+            .iter()
+            .map(|tp| {
+                let attrs = Attributes::from_testplatform(tp);
+                let pairs = store.search_pool_by_query(&attrs);
+                (tp, attrs, pairs)
+            })
+            .collect();
+        let mut slots_of: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
+        for (host, slot) in searched.iter().flat_map(|(_, _, pairs)| pairs) {
+            slots_of
+                .entry(host.name.as_str())
+                .or_default()
+                .insert(slot_key(slot));
+        }
+        let demand: HashMap<String, usize> = slots_of
+            .into_iter()
+            .map(|(host, slots)| (host.to_owned(), slots.len()))
+            .collect();
+
+        for (tp, attrs, pairs) in searched {
             if pairs.is_empty() {
                 info!("autoconnect: nothing found for testplatform {tp:?}");
                 unserved.push(Unserved::NoRefhost { tp: tp.clone() });
@@ -2239,18 +2274,40 @@ impl Session {
             }
 
             for (slot, mut candidates) in by_slot {
-                // Spread load, then remember the order for backup fallback.
-                shuffle(&mut candidates);
-                slot_candidates.insert(slot.clone(), candidates.clone());
-
-                if candidates
-                    .iter()
-                    .any(|c| arbiter.owner_of(c).as_ref() == Some(owner))
-                {
+                if !drawn.insert(slot.clone()) {
                     continue;
                 }
-                match arbiter.acquire_any(&candidates, owner, wait, poll).await {
-                    Some(host) => chosen.push(host),
+                // Spread load, then remember the order for backup fallback.
+                shuffle(&mut candidates);
+                // Stable, so the shuffle still decides among equally needed hosts.
+                candidates.sort_by_key(|c| demand.get(c).copied().unwrap_or(0));
+                slot_candidates.insert(slot.clone(), candidates.clone());
+
+                if let Some(held) = candidates
+                    .iter()
+                    .find(|c| !used.contains(*c) && arbiter.owner_of(c).as_ref() == Some(owner))
+                {
+                    used.insert(held.clone());
+                    continue;
+                }
+                let free: Vec<String> = candidates
+                    .iter()
+                    .filter(|c| !used.contains(*c))
+                    .cloned()
+                    .collect();
+                if free.is_empty() {
+                    warn!(slot = %slot, "every pool candidate already serves another slot");
+                    unserved.push(Unserved::Shared {
+                        slot,
+                        hosts: candidates,
+                    });
+                    continue;
+                }
+                match arbiter.acquire_any(&free, owner, wait, poll).await {
+                    Some(host) => {
+                        used.insert(host.clone());
+                        chosen.push(host);
+                    }
                     None => {
                         warn!(
                             slot = %slot,
@@ -3971,6 +4028,143 @@ mod tests {
             "chosen hosts must follow first-seen slot order"
         );
         assert_eq!(slot_candidates.len(), 2, "two distinct arch slots");
+    }
+
+    /// An x86_64 `SLE_HPC 15-SP5` host carrying the `SLES-LTSS 15-SP5` addon
+    /// (`hpc`), and `SLES 15-SP5` hosts carrying the same addon (`ltss`).
+    fn hpc_ltss_store(hpc: &[&str], ltss: &[&str]) -> Refhosts {
+        let sp5 = || Some(Version::new(15, Some(VersionField::Text("SP5".to_owned()))));
+        let row = |name: &str, base: &str| Host {
+            name: name.to_owned(),
+            arch: "x86_64".to_owned(),
+            product: Product {
+                name: base.to_owned(),
+                version: sp5(),
+            },
+            addons: vec![mtui_types::Addon {
+                name: "SLES-LTSS".to_owned(),
+                version: sp5(),
+            }],
+        };
+        Refhosts::from_hosts(
+            hpc.iter()
+                .map(|n| row(n, "SLE_HPC"))
+                .chain(ltss.iter().map(|n| row(n, "SLES")))
+                .collect(),
+        )
+    }
+
+    const HPC_TP: &str = "base=SLE_HPC(major=15,minor=SP5);arch=[x86_64]";
+    const LTSS_TP: &str = "base=SLES-LTSS(major=15,minor=SP5);arch=[x86_64]";
+
+    /// A host drawn for one slot does not also serve a later slot it matches:
+    /// that slot draws its own free candidate.
+    #[tokio::test]
+    async fn pool_select_host_taken_by_earlier_slot_leaves_later_slot_its_own() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["h1.example.com", "h2.example.com"]);
+        assert_eq!(unserved, Vec::new());
+    }
+
+    /// Among equally needed candidates, the one an earlier slot took this call
+    /// is not drawn again.
+    #[tokio::test]
+    async fn pool_select_does_not_redraw_host_taken_this_call() {
+        let store = hpc_ltss_store(&["h1.example.com", "h2.example.com"], &[]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["h1.example.com", "h2.example.com"]);
+        assert_eq!(unserved, Vec::new());
+    }
+
+    /// The earlier slot leaves the host a later slot can only get there, even
+    /// when that host comes first among its own candidates.
+    #[tokio::test]
+    async fn pool_select_earlier_slot_prefers_a_host_no_other_slot_needs() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["h2.example.com", "h1.example.com"]);
+        assert_eq!(unserved, Vec::new());
+    }
+
+    /// A slot whose only candidates serve other slots is named, not dropped.
+    #[tokio::test]
+    async fn pool_select_names_slot_whose_candidates_serve_other_slots() {
+        let store = hpc_ltss_store(&["h1.example.com"], &[]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["h1.example.com"]);
+        assert_eq!(
+            unserved,
+            vec![Unserved::Shared {
+                slot: "SLES-LTSS|15-SP5|x86_64|".to_owned(),
+                hosts: vec!["h1.example.com".to_owned()],
+            }]
+        );
+        assert_eq!(
+            unserved[0].render(),
+            "unserved slot SLES-LTSS 15-SP5 x86_64: every candidate already serves \
+             another slot (h1.example.com)"
+        );
+    }
+
+    /// A rerun keeps each slot on the host it already holds: nothing new is
+    /// claimed and no slot is reported.
+    #[tokio::test]
+    async fn pool_select_rerun_keeps_one_held_host_per_slot() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        assert!(arbiter.try_acquire("h1.example.com", &owner));
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+        assert_eq!(
+            chosen,
+            vec!["h2.example.com"],
+            "h1 serves only the HPC slot"
+        );
+        assert_eq!(unserved, Vec::new());
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+        assert_eq!(chosen, Vec::<String>::new());
+        assert_eq!(unserved, Vec::new());
+    }
+
+    /// Two testplatforms naming the same slot draw one host for it.
+    #[tokio::test]
+    async fn pool_select_repeated_slot_draws_one_host() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64"), ("x86-b", 15, 5, "x86_64")]);
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]".to_owned();
+        let tps = vec![tp.clone(), tp];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+
+        assert_eq!(chosen, vec!["x86-a"]);
+        assert_eq!(unserved, Vec::new());
     }
 
     /// With the arbiter/owner unwired, no testplatform host is resolved at all —
