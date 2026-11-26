@@ -1054,6 +1054,24 @@ impl Session {
         self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid)
     }
 
+    /// Reads `f` off the report under `rrid` for the fan-out probes: `absent`
+    /// when it is not loaded (nothing to act on, nothing to lose), `None` when
+    /// another holder has it. A contended entry must never read as absent, or
+    /// a fan-out would skip a template racing another dispatch instead of
+    /// refusing it (#524).
+    fn probe_report<R>(
+        &self,
+        rrid: &str,
+        absent: R,
+        f: impl FnOnce(&(dyn TestReport + Send + Sync)) -> R,
+    ) -> Option<R> {
+        match self.with_report(rrid, f) {
+            Ok(v) => Some(v),
+            Err(ReportAccess::NotLoaded) => Some(absent),
+            Err(ReportAccess::Busy) => None,
+        }
+    }
+
     /// Whether the report loaded under `rrid` has no connected hosts, or `None`
     /// when the entry is held elsewhere.
     ///
@@ -1065,11 +1083,7 @@ impl Session {
     /// session's hold; a foreign holder still yields `None`.
     #[must_use]
     pub(crate) fn is_hostless(&self, rrid: &str) -> Option<bool> {
-        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
-            Some(self.metadata().base().targets.is_empty())
-        } else {
-            self.templates.is_hostless(rrid)
-        }
+        self.probe_report(rrid, true, |r| r.base().targets.is_empty())
     }
 
     /// Whether the report loaded under `rrid` holds uncommitted document
@@ -1079,11 +1093,7 @@ impl Session {
     /// exactly like [`is_hostless`](Self::is_hostless) above.
     #[must_use]
     pub(crate) fn document_dirty(&self, rrid: &str) -> Option<bool> {
-        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
-            Some(self.metadata().base().document_dirty)
-        } else {
-            self.templates.document_dirty(rrid)
-        }
+        self.probe_report(rrid, false, |r| r.base().document_dirty)
     }
 
     /// Runs `f` on the report loaded under `rrid`.
@@ -1136,15 +1146,9 @@ impl Session {
     /// opt-in instead, so the fan-out skip stays a live-membership test.
     #[must_use]
     pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
-        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
-            Some(
-                !named
-                    .iter()
-                    .any(|h| self.metadata().base().targets.contains(h)),
-            )
-        } else {
-            self.templates.owns_none_of(rrid, named)
-        }
+        self.probe_report(rrid, true, |r| {
+            !named.iter().any(|h| r.base().targets.contains(h))
+        })
     }
 
     /// Retained-log hosts per RRID in `rrids`, under a single lock.
@@ -1174,14 +1178,12 @@ impl Session {
     /// caller, this one would drop the template from the listing entirely.
     #[must_use]
     pub(crate) fn template_row(&self, rrid: &str) -> Option<TemplateRow> {
-        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
-            let base = self.metadata().base();
-            Some(TemplateRow::Read(
-                base.targets.len(),
-                base.workflow.as_str(),
-            ))
-        } else {
-            self.templates.template_row(rrid)
+        match self.with_report(rrid, |r| {
+            TemplateRow::Read(r.base().targets.len(), r.base().workflow.as_str())
+        }) {
+            Ok(row) => Some(row),
+            Err(ReportAccess::NotLoaded) => None,
+            Err(ReportAccess::Busy) => Some(TemplateRow::Busy),
         }
     }
 
@@ -2820,6 +2822,59 @@ mod tests {
             s.with_report("SUSE:Maintenance:2:2", |r| r.base().targets.names()),
             Ok(vec!["t2".to_owned()])
         );
+    }
+
+    /// The guard-aware probes the fan-out driver and `list_templates` read,
+    /// across the four states an entry can be in. A contended entry must never
+    /// read as absent (#524).
+    #[tokio::test]
+    async fn report_probes_distinguish_absent_active_unheld_and_foreign_held() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:3:3", "t3");
+        assert!(s.activate("SUSE:Maintenance:1:1").is_active());
+        s.with_report_mut("SUSE:Maintenance:2:2", |r| {
+            r.base_mut().document_dirty = true
+        })
+        .expect("unheld");
+        let foreign = "SUSE:Maintenance:3:3";
+        let _held = s
+            .templates
+            .handle(foreign)
+            .expect("seeded")
+            .try_lock_owned()
+            .expect("uncontended until now");
+        let named = |h: &str| vec![h.to_owned()];
+
+        // Absent: nothing to act on, nothing to lose.
+        let absent = "SUSE:Maintenance:9:9";
+        assert_eq!(s.is_hostless(absent), Some(true));
+        assert_eq!(s.document_dirty(absent), Some(false));
+        assert_eq!(s.owns_none_of(absent, &named("t1")), Some(true));
+        assert_eq!(s.template_row(absent), None);
+
+        // Active (read through this session's own guard) and unheld inactive.
+        for (rrid, host, dirty) in [
+            ("SUSE:Maintenance:1:1", "t1", false),
+            ("SUSE:Maintenance:2:2", "t2", true),
+        ] {
+            assert_eq!(s.is_hostless(rrid), Some(false), "{rrid}");
+            assert_eq!(s.document_dirty(rrid), Some(dirty), "{rrid}");
+            assert_eq!(s.owns_none_of(rrid, &named(host)), Some(false), "{rrid}");
+            assert_eq!(s.owns_none_of(rrid, &named("zz")), Some(true), "{rrid}");
+            assert_eq!(
+                s.template_row(rrid),
+                Some(TemplateRow::Read(1, s.metadata().base().workflow.as_str())),
+                "{rrid}"
+            );
+        }
+
+        // Held by a foreign dispatch: unreadable, not absent.
+        assert_eq!(s.is_hostless(foreign), None);
+        assert_eq!(s.document_dirty(foreign), None);
+        assert_eq!(s.owns_none_of(foreign, &named("t3")), None);
+        assert_eq!(s.template_row(foreign), Some(TemplateRow::Busy));
     }
 
     /// Every registry entry **and** the sentinel's stranded group, each exactly

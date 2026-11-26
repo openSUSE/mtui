@@ -224,81 +224,6 @@ impl TemplateRegistry {
         self.active.as_deref().and_then(|rrid| self.handle(rrid))
     }
 
-    /// Whether the report loaded under `rrid` has no connected hosts, or `None`
-    /// when the entry is held elsewhere so its host set cannot be read.
-    ///
-    /// `Some(true)` when `rrid` is absent: nothing to act on, so the fan-out
-    /// skips it. The contended case must NOT collapse into that — reading a
-    /// merely-unlockable entry as hostless skipped the template with a "no
-    /// connected hosts" warning and exit 0, which is #524's symptom reached
-    /// before the dispatcher gets to refuse.
-    #[must_use]
-    pub(crate) fn is_hostless(&self, rrid: &str) -> Option<bool> {
-        match self.entries.get(rrid) {
-            Some(entry) => entry
-                .try_lock()
-                .ok()
-                .map(|report| report.base().targets.is_empty()),
-            None => Some(true),
-        }
-    }
-
-    /// Whether the report loaded under `rrid` holds document edits no `commit`
-    /// has uploaded, or `None` when the entry is held elsewhere so the flag
-    /// cannot be read.
-    ///
-    /// `Some(false)` when `rrid` is absent: there is nothing to lose. A
-    /// contended entry must not read as clean, or a guard built on this would
-    /// let a reload race past unsaved work.
-    #[must_use]
-    pub(crate) fn document_dirty(&self, rrid: &str) -> Option<bool> {
-        match self.entries.get(rrid) {
-            Some(entry) => entry
-                .try_lock()
-                .ok()
-                .map(|report| report.base().document_dirty),
-            None => Some(false),
-        }
-    }
-
-    /// Whether none of `named` belong to `rrid`'s host group, or `None` when
-    /// the entry is held elsewhere so its host set cannot be read.
-    ///
-    /// Same contention contract as [`is_hostless`](Self::is_hostless): a
-    /// contended entry must not read as "does not own the host" and be
-    /// skipped, or a `-t`-scoped fan-out would silently skip a template racing
-    /// a different dispatch instead of refusing it (#524's shape, applied to
-    /// this second skip path).
-    #[must_use]
-    pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
-        match self.entries.get(rrid) {
-            Some(entry) => entry
-                .try_lock()
-                .ok()
-                .map(|report| !named.iter().any(|h| report.base().targets.contains(h))),
-            None => Some(true),
-        }
-    }
-
-    /// Reads the connected-host count and workflow label for `rrid`, or `None`
-    /// if absent (for `list_templates`). Locks the entry.
-    ///
-    /// A held entry is [`TemplateRow::Busy`], never `None`: collapsing it into
-    /// absent dropped the template from the listing altogether, telling the
-    /// operator it is not loaded. Same shape as [`is_hostless`](Self::is_hostless)
-    /// above, and reachable without a leak — `list_templates` runs concurrently
-    /// with a different-RRID dispatch by design.
-    #[must_use]
-    pub(crate) fn template_row(&self, rrid: &str) -> Option<TemplateRow> {
-        let entry = self.entries.get(rrid)?;
-        Some(match entry.try_lock() {
-            Ok(report) => {
-                TemplateRow::Read(report.base().targets.len(), report.base().workflow.as_str())
-            }
-            Err(_) => TemplateRow::Busy,
-        })
-    }
-
     /// The active RRID, or `None` when nothing is loaded.
     #[must_use]
     pub fn active_rrid(&self) -> Option<&str> {
@@ -560,41 +485,6 @@ mod tests {
         assert!(removed.failed.is_empty());
         assert!(removed.stragglers.is_empty());
         assert!(reg.contains("SUSE:Maintenance:1:1"));
-    }
-
-    fn dirty_report(rrid: &str) -> Box<dyn mtui_testreport::TestReport + Send + Sync> {
-        let mut base = mtui_testreport::TestReportBase::new(Config::default());
-        base.rrid = rrid.parse().ok();
-        base.document_dirty = true;
-        fake_report_from_base(base)
-    }
-
-    #[test]
-    fn document_dirty_is_false_for_an_absent_entry() {
-        assert_eq!(
-            registry().document_dirty("SUSE:Maintenance:1:1"),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn document_dirty_reads_the_flag() {
-        let mut reg = registry();
-        reg.add(fake_report("SUSE:Maintenance:1:1", &["h1"], "ok"));
-        reg.add(dirty_report("SUSE:Maintenance:2:2"));
-
-        assert_eq!(reg.document_dirty("SUSE:Maintenance:1:1"), Some(false));
-        assert_eq!(reg.document_dirty("SUSE:Maintenance:2:2"), Some(true));
-    }
-
-    #[tokio::test]
-    async fn document_dirty_is_none_while_the_entry_is_held() {
-        let mut reg = registry();
-        reg.add(dirty_report("SUSE:Maintenance:2:2"));
-        let handle = reg.handle("SUSE:Maintenance:2:2").expect("entry");
-        let _held = handle.lock().await;
-
-        assert_eq!(reg.document_dirty("SUSE:Maintenance:2:2"), None);
     }
 
     #[tokio::test]
