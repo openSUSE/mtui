@@ -2,18 +2,17 @@
 //! (`qam.suse.de/api/v2`), the source of the typed `ReportDocument` model.
 //!
 //! Reads are anonymous: [`fetch_document`](TeregenV2::fetch_document) sends no
-//! `Authorization` header — reads are anonymous on the live server, and
-//! sending a possibly-stale bearer can only turn a working 200 into a 401.
-//! `If-None-Match` is set whenever the caller has a previous ETag, so an
-//! unchanged document costs a `304` instead of a re-parse.
+//! `Authorization` header, as a possibly-stale bearer can only turn a working
+//! 200 into a 401. `If-None-Match` is set whenever the caller has a previous
+//! ETag, so an unchanged document costs a `304`.
 //!
 //! Writes require auth: [`upload_document`](TeregenV2::upload_document) is the
 //! only call needing a [`TeregenAuth`] (via [`TeregenV2::with_auth`]), and it
 //! never sends an unconditional update — [`Precondition::Match`] carries the
 //! `If-Match` etag on every update, and [`Precondition::Create`] (no header)
-//! is offered only to backfill a `log`-only id (P5-D2). mtui never sends
-//! `If-Match: *`: it asserts existence, not identity, which would permit
-//! exactly the lost update the precondition exists to prevent.
+//! is offered only to backfill a `log`-only id. mtui never sends `If-Match: *`:
+//! it asserts existence, not identity, which would permit the lost update the
+//! precondition exists to prevent.
 
 use mtui_config::Config;
 use mtui_types::report_document::{DocumentError, ReportDocument, parse_and_warn_on_dropped_keys};
@@ -32,12 +31,10 @@ use crate::teregen::auth::{TeregenAuth, TeregenAuthError};
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocumentFetch {
     /// A fresh (or first-seen) document. `raw` is the exact response body,
-    /// kept alongside the parsed form for callers that want to hash it or
-    /// commit it verbatim as a fixture.
+    /// kept alongside the parsed form for callers that hash or commit it.
     Fresh {
         /// The parsed document. Boxed: `ReportDocument` is large relative to
-        /// the unit `NotModified` variant, and this call sits on a hot,
-        /// per-load path.
+        /// the unit `NotModified` variant.
         document: Box<ReportDocument>,
         /// The raw JSON body the document was parsed from.
         raw: String,
@@ -50,8 +47,8 @@ pub enum DocumentFetch {
 }
 
 /// Errors from [`TeregenV2::fetch_document`] — one variant per distinct
-/// refusal a caller should message differently. Never constructed with
-/// a raw response body or URL: see the field docs.
+/// refusal a caller should message differently. Never constructed with a raw
+/// response body or URL.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TeregenV2Error {
@@ -83,7 +80,7 @@ pub enum TeregenV2Error {
     #[error("the document failed to parse: {0}")]
     Invalid(#[source] DocumentError),
     /// A transport failure or an unmodelled non-2xx status. Never carries a
-    /// URL: `e` is always converted through [`HttpError`] first (#431).
+    /// URL: `e` is always converted through [`HttpError`] first.
     #[error("teregen v2 request failed: {0}")]
     Transport(String),
     /// The response body exceeded [`MAX_API_BODY`].
@@ -91,21 +88,19 @@ pub enum TeregenV2Error {
     BodyTooLarge,
 }
 
-/// Best-known-error-message length before it is truncated in
-/// [`TeregenV2Error::RejectedId`] — the server's own text, never mtui's
-/// hostile-input surface, but still capped so a misbehaving proxy cannot dump
-/// an arbitrary amount of text into a `CommandError`.
+/// Error-message length before truncation in [`TeregenV2Error::RejectedId`]:
+/// capped so a misbehaving proxy cannot dump arbitrary text into a
+/// `CommandError`.
 pub(crate) const MAX_DETAIL_LEN: usize = 2048;
 
-/// The precondition governing a [`TeregenV2::upload_document`] write (P5-D2).
+/// The precondition governing a [`TeregenV2::upload_document`] write.
 ///
 /// Named, not an `Option`, so an update cannot accidentally go out
 /// unconditional: every update to an existing document is
 /// [`Match`](Self::Match); [`Create`](Self::Create) sends no `If-Match` and is
 /// valid only to backfill a `log`-only id that has no `report.json` yet.
-/// `If-Match: *` is deliberately not offered — it asserts existence, not
-/// identity, so it would permit exactly the lost update this type exists to
-/// prevent.
+/// `If-Match: *` is deliberately not offered: it asserts existence, not
+/// identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precondition {
     /// `If-Match: <etag>`, sent byte-for-byte as received from a prior read —
@@ -119,10 +114,9 @@ pub enum Precondition {
 /// The outcome of a successful [`TeregenV2::upload_document`] call.
 ///
 /// Both fields come from the server's own `202` response, never from the
-/// request mtui sent (P5-D4): the `202` body is teregen's own re-read of what
-/// it just stored, and the `ETag` is recomputed over that canonical decode —
-/// keeping mtui's local bytes as the record would drift from the value the
-/// next `If-Match` is compared against.
+/// request mtui sent: the body is teregen's re-read of what it stored and the
+/// `ETag` is recomputed over that canonical decode, so mtui's local bytes would
+/// drift from the value the next `If-Match` is compared against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UploadOutcome {
     /// The stored document, as re-read and returned by the server.
@@ -132,7 +126,7 @@ pub struct UploadOutcome {
 }
 
 /// Errors from [`TeregenV2::upload_document`] — one variant per distinct
-/// refusal a caller should message differently (P5-D5). A separate enum from
+/// refusal a caller should message differently. A separate enum from
 /// [`TeregenV2Error`]: the read and write refusal sets overlap only partly.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -158,8 +152,8 @@ pub enum TeregenV2WriteError {
     },
 
     /// `400 {"error":"id mismatch"}` — the document body's `id` disagreed
-    /// with the path id. Pre-flight (P5-D3) checks this locally before any
-    /// request is sent; reaching the server with a mismatch is an mtui bug.
+    /// with the path id. Checked locally before any request; reaching the
+    /// server with a mismatch is an mtui bug.
     #[error(
         "the document's id does not match the target id — this is an mtui bug \
          (pre-flight should have caught it)"
@@ -179,16 +173,14 @@ pub enum TeregenV2WriteError {
         server_etag: Option<String>,
     },
 
-    /// `413` — the serialized body exceeded [`MAX_API_BODY`]. Pre-flight
-    /// (P5-D3) checks this locally; reaching the server is unexpected.
+    /// `413` — the serialized body exceeded [`MAX_API_BODY`]. Checked locally;
+    /// reaching the server is unexpected.
     #[error("the document exceeds the {MAX_API_BODY}-byte limit")]
     TooLarge,
 
     /// `422 {"error":"invalid document","pointers":[…]}` — schema validation
-    /// failed. The server checks this *before* the precondition (server step
-    /// 5 precedes step 7), so this can mask a genuine `412`: an mtui bug that
-    /// emits an invalid document never learns whether someone else also
-    /// edited the report.
+    /// failed. The server checks this *before* the precondition, so it can mask
+    /// a genuine `412`.
     #[error("the document failed schema validation: {}", pointers.join(", "))]
     Invalid {
         /// RFC 6901 pointers naming the offending locations, verbatim.
@@ -196,8 +188,8 @@ pub enum TeregenV2WriteError {
     },
 
     /// `428 {"error":"precondition required"}` — an unconditional update
-    /// against an existing document. mtui never sends one (P5-D2); reaching
-    /// this is an mtui bug.
+    /// against an existing document. mtui never sends one; reaching this is an
+    /// mtui bug.
     #[error("the server required a precondition that mtui did not send — this is an mtui bug")]
     PreconditionRequired,
 
@@ -236,10 +228,9 @@ pub struct TeregenV2 {
 }
 
 impl std::fmt::Debug for TeregenV2 {
-    /// Manual impl so `base` redacts embedded userinfo: the field holds the
-    /// raw apiurl used for request construction, and a derive would echo
-    /// `scheme://user:pass@host` into logs and MCP output. Field order
-    /// matches declaration order, so output for a clean base is unchanged.
+    /// Manual impl so `base` redacts embedded userinfo: the field holds the raw
+    /// apiurl, and a derive would echo `scheme://user:pass@host` into logs and
+    /// MCP output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TeregenV2")
             .field("base", &sanitize_url(&self.base))
@@ -251,7 +242,7 @@ impl std::fmt::Debug for TeregenV2 {
 
 impl TeregenV2 {
     /// Build a client targeting `apiurl`, deriving the TLS posture from
-    /// `config.ssl_verify` — mirrors [`crate::teregen::TeReGen::new`].
+    /// `config.ssl_verify`, as [`crate::teregen::TeReGen::new`] does.
     ///
     /// # Errors
     ///
@@ -274,9 +265,7 @@ impl TeregenV2 {
     }
 
     /// Attach a [`TeregenAuth`], required by
-    /// [`upload_document`](Self::upload_document). Reads stay anonymous
-    /// regardless — [`fetch_document`](Self::fetch_document) never consults
-    /// this field.
+    /// [`upload_document`](Self::upload_document). Reads stay anonymous.
     #[must_use]
     pub fn with_auth(mut self, auth: TeregenAuth) -> Self {
         self.auth = Some(auth);
@@ -287,8 +276,7 @@ impl TeregenV2 {
     /// `Some`. Sends no `Authorization` header (reads are anonymous).
     ///
     /// `rrid` is placed in the path verbatim (unencoded): a dotted SLFO id
-    /// (`SUSE:SLFO:1.2:*`) must round-trip with its colons intact, matching
-    /// how [`crate::teregen::TeReGen`] builds its own report paths.
+    /// (`SUSE:SLFO:1.2:*`) must round-trip with its colons intact.
     ///
     /// # Errors
     ///
@@ -462,12 +450,11 @@ impl TeregenV2 {
     }
 
     /// `PUT /reports/{rrid}`: upload `document`, adopting the server's `202`
-    /// response as the new authoritative document and `ETag` (P5-D4).
+    /// response as the new authoritative document and `ETag`.
     ///
-    /// Pre-flight (P5-D3), before any request is built: `document.id` must
-    /// equal `rrid` (the server's own `400 id mismatch` check), and the
-    /// serialized body must be at most [`MAX_API_BODY`] (the server's `413`) —
-    /// both fail locally instead of costing a round trip.
+    /// Pre-flight, before any request is built: `document.id` must equal `rrid`
+    /// (the server's `400 id mismatch`) and the serialized body must be at most
+    /// [`MAX_API_BODY`] (the server's `413`); both fail locally.
     ///
     /// # Errors
     ///
@@ -573,9 +560,8 @@ impl TeregenV2 {
     /// same name.
     ///
     /// Pre-flight, before any request: `name` must match the server's
-    /// `^[A-Za-z0-9_.-]+$` pattern and must not start with `.`, and
-    /// `bytes.len()` must be at most [`MAX_API_BODY`] — both fail locally
-    /// instead of costing a round trip.
+    /// `^[A-Za-z0-9_.-]+$` pattern and not start with `.`, and `bytes.len()` must
+    /// be at most [`MAX_API_BODY`]; both fail locally.
     ///
     /// # Errors
     ///
@@ -694,8 +680,7 @@ pub enum ArtifactStored {
 }
 
 /// Errors from [`TeregenV2::upload_artifact`] — a separate enum from
-/// [`TeregenV2WriteError`], whose `413`/`422` wording is document-specific;
-/// stretching it to cover a per-file artifact refusal would blur the two.
+/// [`TeregenV2WriteError`], whose `413`/`422` wording is document-specific.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArtifactUploadError {
@@ -750,10 +735,9 @@ pub enum ArtifactUploadError {
 }
 
 /// `true` when `name` matches the server's `^[A-Za-z0-9_.-]+$` pattern and
-/// does not start with `.` (`Api/V2/Report.pm`'s artifact-name rule). Public
-/// so a caller assembling artifacts locally (`mtui-testreport`'s
-/// `collect_artifacts`) can refuse a bad name before ever building a request,
-/// using the exact same predicate [`TeregenV2::upload_artifact`] checks.
+/// does not start with `.` (`Api/V2/Report.pm`'s artifact-name rule). Public so
+/// `mtui-testreport`'s `collect_artifacts` can refuse a bad name with the exact
+/// predicate [`TeregenV2::upload_artifact`] checks.
 #[must_use]
 pub fn is_valid_artifact_name(name: &str) -> bool {
     !name.is_empty()

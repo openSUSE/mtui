@@ -49,8 +49,7 @@ async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSe
 /// GET `path` (relative to `oqa`'s base URL) and return the parsed JSON body.
 ///
 /// `ruoqa::Client::request` parses the response and enforces the client's
-/// `max_response_bytes` cap, so unlike [`get_json`] there is no separate
-/// byte-fetch step.
+/// `max_response_bytes` cap, so there is no separate byte-fetch step.
 async fn oqa_request(oqa: &ruoqa::Client, path: &str) -> Result<serde_json::Value, OqaSearchError> {
     Ok(oqa.request(Method::GET, path, None).await?)
 }
@@ -143,9 +142,9 @@ async fn fallback_build(
     Ok(format!(":{}:{package}", key.number))
 }
 
-/// Jobs fetched per `/api/v1/jobs` request by [`incident_jobs`]. Small enough
-/// that a page of large jobs (kernel builds carry ~23 KB of settings and
-/// modules per job) stays far below the openQA client's body cap.
+/// Jobs fetched per `/api/v1/jobs` request by [`incident_jobs`]: small enough
+/// that a page of large jobs (kernel builds carry ~23 KB each) stays far below
+/// the openQA client's body cap.
 pub const JOBS_PAGE_SIZE: usize = 200;
 
 /// Upper bound on the jobs [`incident_jobs`] reads for one build, so a huge
@@ -179,9 +178,8 @@ pub struct IncidentJobs {
 /// A scenario whose newest job is obsoleted therefore shows its newest
 /// non-obsoleted attempt. The scenario key is `DISTRI`, `VERSION`, `FLAVOR`,
 /// `ARCH`, `TEST` and `MACHINE` (`BUILD` is fixed by the query), the key of
-/// openQA's `latest_jobs`; the job group is not part of it, so the same
-/// scenario scheduled in two groups is one scenario. This is done here rather
-/// than with `latest=1`, because openQA applies its page limit before
+/// openQA's `latest_jobs`; the job group is not part of it. This is done here
+/// rather than with `latest=1`, because openQA applies its page limit before
 /// de-duplicating and sends no paging link with it.
 ///
 /// Jobs are sorted by result then arch then scenario. Empty when `build` is

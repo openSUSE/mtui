@@ -1,5 +1,4 @@
-//! SSH-signature bearer-token auth for teregen's `/api/v2` (Phase 2 of the
-//! JSON-template migration).
+//! SSH-signature bearer-token auth for teregen's `/api/v2`.
 //!
 //! [`TeregenAuth`] drives the challenge/response against `POST
 //! .../auth/ssh/challenge` and `POST .../auth/ssh/verify`, using
@@ -25,10 +24,9 @@
 //!   OBS's raw base64).
 //!
 //! The nonce is shape-checked (`^[0-9a-f]{64}$`) **before** signing, so a
-//! mangled challenge response fails without ever touching the agent. The
-//! verify response body carries the token, so it is parsed and **never
-//! logged** — not at `DEBUG`, not inside an error; [`TeregenAuth`] gets a
-//! manual [`Debug`] (P2-D7).
+//! mangled challenge response fails without touching the agent. The verify
+//! response body carries the token, so it is parsed and **never logged** — not
+//! at `DEBUG`, not inside an error; [`TeregenAuth`] gets a manual [`Debug`].
 
 use std::path::PathBuf;
 
@@ -58,9 +56,8 @@ const UNAUTHORIZED_HINT: &str = "the server does not distinguish these, but a 40
      nonce was stale/already consumed (nonces are single-use and expire after \
      60s)";
 
-/// A hint for a `401` on the write itself after a fresh mint: the cached
-/// token was discarded and a new one minted, yet the write was still
-/// refused, so none of the stale-cache causes applies.
+/// A hint for a `401` on the write itself after a fresh mint, so none of the
+/// stale-cache causes applies.
 const WRITE_AFTER_REMINT_HINT: &str = "the cached token was discarded and a fresh one minted, \
      yet the write was still refused (401): not a stale cache — check the \
      principal/key mapping or a server-side revocation";
@@ -202,11 +199,9 @@ pub enum TeregenAuthError {
         key: String,
         /// Which request was refused.
         stage: AuthStage,
-        /// The sanitized teregen base URL that refused: both construction
-        /// sites run it through [`sanitize_url`], so [`Display`](std::fmt::Display)
-        /// and [`Debug`](std::fmt::Debug) print it verbatim and a caller
-        /// matching on this public field cannot leak embedded credentials by
-        /// logging it.
+        /// The sanitized teregen base URL that refused: both construction sites
+        /// run it through [`sanitize_url`], so a caller logging this public field
+        /// cannot leak embedded credentials.
         base: String,
         /// What the refusal means: [`AuthHint::explanation`] when teregen gave
         /// a known hint, else the generic list of possible causes.
@@ -230,9 +225,8 @@ pub enum TeregenAuthError {
     Signing(#[from] SshSigError),
 
     /// The on-disk token store could not be read or written (surfaced only by
-    /// [`TeregenAuth::invalidate`] — a mint's own cache-write failure is
-    /// logged and does not fail the mint, since the token is already valid
-    /// server-side).
+    /// [`TeregenAuth::invalidate`]; a mint's own cache-write failure is logged
+    /// and does not fail the mint).
     #[error("teregen token store error: {0}")]
     Store(String),
 }
@@ -248,8 +242,7 @@ fn is_valid_nonce(s: &str) -> bool {
 ///
 /// Exactly one of `sshkey_path`/`sshkey_fingerprint` (via [`Signer`])
 /// identifies the signing key — the pair produced by
-/// [`crate::obs::oscrc::read_credentials`] (P2-D1: teregen reuses the oscrc
-/// identity, no new config key).
+/// [`crate::obs::oscrc::read_credentials`]; teregen reuses the oscrc identity.
 pub struct TeregenAuth<A: AgentKeys = RusshAgent> {
     base: String,
     principal: String,
@@ -257,19 +250,16 @@ pub struct TeregenAuth<A: AgentKeys = RusshAgent> {
     signer: Signer<A>,
     store: Option<TokenStore>,
     http: HttpClient,
-    /// The fingerprint of the key that last signed a verify request, so a
-    /// `401` names the key that actually signed rather than the configured
-    /// locator (file-backed setups have no fingerprint configured). Sharing
-    /// across concurrent calls is benign: the signer is fixed per instance,
-    /// so every writer records the same key, and every read follows a
-    /// signature on the same path.
+    /// The fingerprint of the key that last signed a verify request, so a `401`
+    /// names the key that actually signed (file-backed setups have no
+    /// fingerprint configured). Sharing across concurrent calls is benign: the
+    /// signer is fixed per instance, so every writer records the same key.
     last_key: std::sync::Mutex<Option<String>>,
 }
 
 impl<A: AgentKeys> std::fmt::Debug for TeregenAuth<A> {
-    /// Manual impl (P2-D7): the struct holds no token field (one is fetched
-    /// per call, never cached in memory), but a derive would print the
-    /// `HttpClient`/store internals for no reader benefit.
+    /// Manual impl: the struct holds no token field, but a derive would print
+    /// the `HttpClient`/store internals.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TeregenAuth")
             .field("base", &sanitize_url(&self.base))
@@ -352,11 +342,10 @@ impl<A: AgentKeys> TeregenAuth<A> {
         self.signer.key_descriptor()
     }
 
-    /// Challenge + verify + cache a fresh token unconditionally, bypassing
-    /// any cached token. The diagnostic entry point for `teregen_login`;
-    /// prefer [`token`](Self::token) for normal calls. The mint overwrites
-    /// the cache on success, so a failed mint leaves the previous entry
-    /// alone instead of deleting it first.
+    /// Challenge + verify + cache a fresh token unconditionally, bypassing any
+    /// cached token. The diagnostic entry point for `teregen_login`; prefer
+    /// [`token`](Self::token) for normal calls. A failed mint leaves the
+    /// previous cache entry alone.
     ///
     /// # Errors
     ///
@@ -366,8 +355,7 @@ impl<A: AgentKeys> TeregenAuth<A> {
     }
 
     /// The fingerprint of the key that last signed a verify request, falling
-    /// back to the configured locator when nothing has signed yet. Every
-    /// `401` below follows a signature, so the fallback is defense-in-depth.
+    /// back to the configured locator when nothing has signed yet.
     fn signed_key(&self) -> String {
         self.last_key
             .lock()
@@ -411,8 +399,8 @@ impl<A: AgentKeys> TeregenAuth<A> {
 
     /// `POST {base}/auth/ssh/verify`: sign `nonce` and exchange it for a token.
     ///
-    /// The nonce is shape-checked before any signing happens, so a malformed
-    /// challenge response never reaches the agent or the wire.
+    /// The nonce is shape-checked before signing, so a malformed challenge
+    /// response never reaches the agent or the wire.
     ///
     /// # Errors
     ///
@@ -432,9 +420,8 @@ impl<A: AgentKeys> TeregenAuth<A> {
 
         let sig = self.signer.sign(&self.namespace, nonce.as_bytes()).await?;
         let armored = crate::sshsig::encode_pem(&sig)?;
-        // Record what actually signed, so a `401` names it even for
-        // file-backed setups with no fingerprint configured. Canonical
-        // `SHA256:…` form, normalising the optional-prefix configured case.
+        // Record what actually signed (canonical `SHA256:…` form), so a `401`
+        // names it even for file-backed setups.
         if let Ok(mut guard) = self.last_key.lock() {
             *guard = Some(
                 sig.public_key()
@@ -477,8 +464,8 @@ impl<A: AgentKeys> TeregenAuth<A> {
     ///
     /// Consults the token store first (zero HTTP on a cache hit); on a miss,
     /// mints via [`challenge`](Self::challenge) + [`verify`](Self::verify) and
-    /// caches the result. A cache-write failure is logged and does not fail
-    /// the mint — the token is already valid server-side.
+    /// caches the result. A cache-write failure is logged and does not fail the
+    /// mint.
     ///
     /// # Errors
     ///
@@ -528,7 +515,7 @@ impl<A: AgentKeys> TeregenAuth<A> {
     }
 
     /// Drop any cached token, forcing the next [`token`](Self::token) call to
-    /// mint (P2-D6: used on a `401` from an authenticated request).
+    /// mint (used on a `401` from an authenticated request).
     ///
     /// A missing file is not an error (there was nothing to invalidate).
     ///
@@ -556,20 +543,16 @@ impl<A: AgentKeys> TeregenAuth<A> {
     ///
     /// On a `401`, [`invalidate`](Self::invalidate)s the cached token, mints
     /// once, and retries **once** more. A second `401` (or any other error) is
-    /// surfaced without a further attempt — this mirrors the OBS client's
-    /// "resent exactly once" rule, and matters because the challenge endpoint
-    /// is rate-limited and a mint costs an ssh-agent round trip, so a retry
-    /// loop against a genuinely unauthorised principal would burn the rate
-    /// budget in under a second (P2-D6).
+    /// surfaced without a further attempt: the challenge endpoint is
+    /// rate-limited and a mint costs an ssh-agent round trip, so a retry loop
+    /// against an unauthorised principal would burn the budget in a second.
     ///
-    /// `customize` is `Fn`, not `FnOnce`: it is applied identically on the
-    /// first attempt and again on the re-mint resend, so a `PUT`'s body and
-    /// headers are not silently dropped from the retry.
+    /// `customize` is `Fn`, not `FnOnce`: it is applied again on the re-mint
+    /// resend, so a `PUT`'s body and headers are not dropped from the retry.
     ///
-    /// Retrying a write this way is safe *only* because a `401` is refused by
-    /// the server before any write happens (`require_auth` is the first check
-    /// in teregen's `upload`) — a re-sent `PUT` on the retry path can only
-    /// ever be the *first* write to actually land, never a second one.
+    /// Retrying a write is safe *only* because a `401` is refused by the server
+    /// before any write happens (`require_auth` is the first check in teregen's
+    /// `upload`), so a retried `PUT` is the *first* write to land.
     ///
     /// # Errors
     ///

@@ -11,17 +11,16 @@
 //! `Authorization: Signature` header) and [`encode_pem`] (armored, teregen's
 //! wire format).
 //!
-//! RSA keys are signed with `rsa-sha2-512` (`ssh-key`'s default RSA `Signer`
-//! impl), not the legacy `ssh-rsa` (SHA-1) that modern OpenSSH/servers reject.
-//! The blob's message-hash algorithm (`sha512`) is independent of the
-//! signature algorithm and stays fixed, matching `ssh-keygen -Y sign`.
+//! RSA keys are signed with `rsa-sha2-512`, not the legacy `ssh-rsa` (SHA-1)
+//! that modern OpenSSH/servers reject. The blob's message-hash algorithm
+//! (`sha512`) is independent of the signature algorithm and stays fixed,
+//! matching `ssh-keygen -Y sign`.
 //!
 //! [`Signer`] is the key-resolution engine both callers share: fingerprint →
 //! agent; unencrypted file → sign in-process; encrypted or absent file → agent
 //! key matched by `<path>.pub` blob; everything else fails closed, never
-//! prompts for a passphrase. It is parameterised by a `context: &'static str`
-//! label (e.g. "the native OBS backend" / "teregen auth") so a fail-closed
-//! hint names the right caller.
+//! prompts for a passphrase. Its `context` label names the caller in a
+//! fail-closed hint.
 //!
 //! [PROTOCOL.sshsig]: https://cvsweb.openbsd.org/src/usr.bin/ssh/PROTOCOL.sshsig
 
@@ -40,9 +39,8 @@ const HASH_ALG: HashAlg = HashAlg::Sha512;
 
 /// Errors from building or resolving an SSHSIG signature.
 ///
-/// Fail-closed and secret-safe: no variant ever carries key material or a
-/// signature, only paths, fingerprints and error text from `ssh-key`/the
-/// agent.
+/// Fail-closed and secret-safe: no variant carries key material or a signature,
+/// only paths, fingerprints and error text from `ssh-key`/the agent.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SshSigError {
@@ -107,8 +105,8 @@ pub enum SshSigError {
     },
 }
 
-/// Render [`SshSigError::PassphraseProtected`]'s message, mirroring the
-/// original OBS-only wording with the caller's `context` substituted in.
+/// Render [`SshSigError::PassphraseProtected`]'s message for the caller's
+/// `context`.
 fn passphrase_protected_message(path: &Path, hint_available: bool, context: &str) -> String {
     let hint = if hint_available {
         String::new()
@@ -217,9 +215,8 @@ pub fn encode_pem(sig: &SshSig) -> Result<String, SshSigError> {
 
 /// The non-secret signing-key locator for diagnostics: the `SHA256:…`
 /// fingerprint when one is configured, else `file key` (never a path, so
-/// home directories stay off the MCP surface). A bare fingerprint without
-/// the prefix (which signing accepts) is normalised to the canonical form
-/// that `verify()` records from the signature. The single wording behind
+/// home directories stay off the MCP surface). A bare fingerprint is
+/// normalised to the canonical form `verify()` records. The single wording behind
 /// [`Signer::key_descriptor`], the teregen `401` error and the
 /// `whoami`/`teregen_login` displays.
 #[must_use]
@@ -231,9 +228,8 @@ pub fn key_descriptor(sshkey_fingerprint: Option<&str>) -> String {
     }
 }
 
-/// `<path>.pub` as a path operation, not a string one: `format!("{}.pub",
-/// path.display())` would lossily replace non-UTF8 sequences and miss the
-/// sibling. Same shape as `key_available` in [`crate::obs::oscrc`].
+/// `<path>.pub` as a path operation: `format!("{}.pub", path.display())` would
+/// lossily replace non-UTF8 sequences and miss the sibling.
 fn pub_path(path: &Path) -> PathBuf {
     let mut pub_path = path.as_os_str().to_owned();
     pub_path.push(".pub");
@@ -242,14 +238,11 @@ fn pub_path(path: &Path) -> PathBuf {
 
 /// The SHA256 fingerprint of the file-backed key at `path`, if derivable while
 /// keeping secrets out of the output: from the public half of an unencrypted
-/// private key first (mirroring [`Signer`]'s resolution precedence, which signs
-/// such a key in-process — a stale `<path>.pub` must never misreport it), else
-/// from `<path>.pub` when the private file is encrypted or absent (the two
-/// cases `sign_with_file` defers to the agent for — anything else signs
-/// fail-closed, so the display must not name a fingerprint either). Only the
-/// public half is fingerprinted; private key bytes never reach the output.
-/// Anything else yields `None` rather than prompting — the caller falls back
-/// to `file key`.
+/// private key first (mirroring [`Signer`]'s precedence, so a stale `<path>.pub`
+/// never misreports it), else from `<path>.pub` when the private file is
+/// encrypted or absent (the cases `sign_with_file` defers to the agent for).
+/// Only the public half is fingerprinted. Anything else yields `None`; the
+/// caller falls back to `file key`.
 #[must_use]
 pub fn file_key_fingerprint(path: &Path) -> Option<String> {
     match PrivateKey::read_openssh_file(path) {
@@ -287,9 +280,8 @@ pub fn key_display(sshkey_path: Option<&Path>, sshkey_fingerprint: Option<&str>)
 /// `<path>.pub` blob; everything else fails closed, never prompts.
 ///
 /// Exactly one of `sshkey_path` / `sshkey_fingerprint` identifies the signing
-/// key — the pair produced by [`crate::obs::oscrc`]. `context` names the
-/// caller in fail-closed hints (e.g. "the native OBS backend", "teregen
-/// auth").
+/// key (the pair produced by [`crate::obs::oscrc`]). `context` names the caller
+/// in fail-closed hints.
 pub struct Signer<A: AgentKeys = crate::obs::auth::RusshAgent> {
     sshkey_path: Option<PathBuf>,
     sshkey_fingerprint: Option<String>,
@@ -331,11 +323,8 @@ impl<A: AgentKeys> Signer<A> {
         }
     }
 
-    /// The non-secret key locator for diagnostics: the `SHA256:…`
-    /// fingerprint when configured, else `file key` (never a path, so home
-    /// directories stay off the MCP surface). A bare fingerprint without the
-    /// prefix (which signing accepts) is normalised to the canonical form
-    /// that `verify()` records from the signature.
+    /// The non-secret key locator for diagnostics; see the free
+    /// [`key_descriptor`].
     #[must_use]
     pub fn key_descriptor(&self) -> String {
         key_descriptor(self.sshkey_fingerprint.as_deref())
@@ -460,9 +449,8 @@ impl<A: AgentKeys> Signer<A> {
 
 /// Read the public-key blob from `<path>.pub`, or `None` if absent/malformed.
 ///
-/// Identifies a passphrase-protected private key's counterpart among the
-/// agent's loaded keys by public-key data. Any read/parse failure yields
-/// `None` rather than an error.
+/// Identifies a passphrase-protected key's counterpart among the agent's loaded
+/// keys. Any read/parse failure yields `None`.
 fn pubkey_data(path: &Path) -> Option<KeyData> {
     let text = std::fs::read_to_string(pub_path(path)).ok()?;
     PublicKey::from_openssh(text.trim())

@@ -7,15 +7,14 @@
 //! unassign guard, the refused group-approve, `by_user` reject with the
 //! `MAINT:RejectReason` read-modify-write, the preconditions (`assign`: the
 //! `qam.suse.de` text log exists; `approve`/`reject`: the report document's
-//! verdict on TeReGen v2 — both skipped for PI), and `assign`'s refusal of a group review that is
-//! already approved or held, by someone else or by the caller (#599) — OBS's
-//! `assignreview` checks only that the request is open. The `[oscqam] ` prefix
-//! goes on approve/reject comments only.
+//! verdict on TeReGen v2 — both skipped for PI), and `assign`'s refusal of a
+//! group review already approved or held, by someone else or by the caller
+//! (OBS's `assignreview` checks only that the request is open). The `[oscqam] `
+//! prefix goes on approve/reject comments only.
 //!
-//! Like [`ObsClient`] itself, these functions take explicit URL values rather
-//! than a `Config`, which keeps them self-contained and testable; the facade
-//! binds them from a resolved `Config`. The TLS posture travels with the
-//! injected client.
+//! Like [`ObsClient`], these functions take explicit URL values rather than a
+//! `Config`; the facade binds them from a resolved `Config`, and the TLS
+//! posture travels with the injected client.
 
 use mtui_types::report_document::Verdict;
 use mtui_types::{RequestKind, RequestReviewID};
@@ -37,11 +36,10 @@ use crate::teregen::document::TeregenV2;
 
 const PREFIX: &str = "[oscqam] ";
 
-/// Concurrent per-request reads in [`requests_extras`]: neither
-/// `[connection]` knob fits — `max_parallel` bounds SSH host fan-out
-/// (default 50: far too wide for two GETs per shown row against the shared
-/// OBS API), and `max_oqa_parallel` is scoped to the oqa-search overview —
-/// so the fan-out owns its bound.
+/// Concurrent per-request reads in [`requests_extras`]: neither `[connection]`
+/// knob fits (`max_parallel` bounds SSH fan-out, default 50, far too wide for
+/// two GETs per row against the shared OBS API; `max_oqa_parallel` is scoped to
+/// the oqa-search overview), so the fan-out owns its bound.
 const REQUESTS_CONCURRENCY: usize = 8;
 
 fn verdict_label(verdict: Option<Verdict>) -> &'static str {
@@ -212,8 +210,8 @@ pub async fn requests_extras(
     client: &ObsClient,
     rrids: &[RequestReviewID],
 ) -> Vec<Result<RequestExtras, ObsError>> {
-    // Bounded so a fifty-row `--limit` does not open fifty connections at
-    // once; `buffered` keeps the positional mapping.
+    // Bounded so a large `--limit` does not open that many connections at once;
+    // `buffered` keeps the positional mapping.
     let futures: Vec<_> = rrids
         .iter()
         .map(|rrid| request_extras(client, rrid))
@@ -299,8 +297,7 @@ async fn resolve_assign_groups(
 
 /// Refuse to assign `group` when its review is already approved, or held by
 /// another user (unless `force`) or by `user` themselves: OBS's `assignreview`
-/// checks none of that and would open a fresh review on an approved request
-/// (#599).
+/// checks none of that and would open a fresh review on an approved request.
 ///
 /// `force` does not lift the caller's own hold, as Gitea's does: the re-assign
 /// changes no OBS state and only appends a reopen, which `inference` replays as
