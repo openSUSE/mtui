@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 use crate::error::{HttpError, SlackError};
 use crate::http::{
-    HttpClient, MAX_API_BODY, is_ssl_verification_error, read_body_capped, sanitize_url,
+    HttpClient, MAX_API_BODY, is_ssl_verification_error, join_url, read_body_capped, sanitize_url,
     ssl_error_detail, ssl_verification_hint,
 };
 
@@ -236,11 +236,7 @@ impl Slack {
         query: &[(&str, &str)],
         body: Option<Value>,
     ) -> Result<Value, SlackError> {
-        let mut url = format!("{}/{api_method}", self.base);
-        if !query.is_empty() {
-            url.push('?');
-            url.push_str(&build_query(query));
-        }
+        let url = join_url(&self.base, api_method, &build_query(query));
 
         tracing::debug!("Requesting {method} on {}", sanitize_url(&url));
         let mut builder = self

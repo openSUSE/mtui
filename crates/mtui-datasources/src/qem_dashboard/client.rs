@@ -12,7 +12,7 @@ use mtui_types::UpdateSource;
 use serde_json::Value;
 
 use crate::error::QemDashboardError;
-use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy};
+use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, join_url};
 
 use super::key::IncidentKey;
 
@@ -71,7 +71,7 @@ impl QemDashboardClient {
     /// A transport error, non-2xx status or malformed JSON body is logged at
     /// `debug` and returns `None`.
     async fn get(&self, path: &str) -> Option<Value> {
-        let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
+        let url = join_url(&self.apiurl, path, "");
         match self.http.get_bytes_capped(&url, MAX_API_BODY).await {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(value) => Some(value),
@@ -106,7 +106,7 @@ impl QemDashboardClient {
     /// `Ok(None)`. The description is URL-free because the URL is stripped where
     /// the `reqwest::Error` becomes an [`HttpError`](crate::HttpError) (#431).
     async fn try_get(&self, path: &str) -> Result<Option<Value>, QemDashboardError> {
-        let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
+        let url = join_url(&self.apiurl, path, "");
         let bytes = self
             .http
             .get_bytes_capped(&url, MAX_API_BODY)

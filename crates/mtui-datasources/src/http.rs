@@ -123,6 +123,36 @@ impl VerifyPolicy {
     }
 }
 
+/// Percent-encode `params` into a `key=value&...` query string, without a
+/// leading `?`.
+///
+/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
+/// `.query()` wire form, which this workspace's minimal reqwest build omits.
+pub(crate) fn query_string(params: &[(&str, String)]) -> String {
+    params
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(k),
+                urlencoding::encode(v).replace("%20", "+")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// `base/path` (leading slashes of `path` dropped), followed by `?query` when
+/// `query` is non-empty.
+pub(crate) fn join_url(base: &str, path: &str, query: &str) -> String {
+    let mut url = format!("{base}/{}", path.trim_start_matches('/'));
+    if !query.is_empty() {
+        url.push('?');
+        url.push_str(query);
+    }
+    url
+}
+
 /// Warn once, process-wide, that verification is deliberately disabled; later
 /// calls are cheap no-ops, so REPL output stays readable.
 fn disable_insecure_warnings() {
@@ -474,6 +504,19 @@ mod tests {
         // available_parallelism can't be mocked; min(32, cpu + 4) is in [5, 32].
         let n = default_pool_size();
         assert!((5..=32).contains(&n), "pool size {n} out of [5, 32]");
+    }
+
+    #[test]
+    fn query_string_encodes_spaces_as_plus() {
+        let params = [("q", "a b&c".to_owned()), ("k y", "é".to_owned())];
+        assert_eq!(query_string(&params), "q=a+b%26c&k%20y=%C3%A9");
+        assert_eq!(query_string(&[]), "");
+    }
+
+    #[test]
+    fn join_url_trims_leading_slashes_and_omits_an_empty_query() {
+        assert_eq!(join_url("https://h/api", "/x/y", ""), "https://h/api/x/y");
+        assert_eq!(join_url("https://h/api", "x", "a=1"), "https://h/api/x?a=1");
     }
 
     #[test]
