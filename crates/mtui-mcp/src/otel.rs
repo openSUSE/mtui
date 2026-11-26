@@ -213,12 +213,8 @@ impl OtelConfig {
         out
     }
 
-    // `http/protobuf` only, validated only when an endpoint exists. Empty
-    // means the default; anything else with an endpoint disables.
-    fn protocol_valid(endpoint_exists: bool) -> bool {
-        if !endpoint_exists {
-            return true;
-        }
+    // `http/protobuf` only. Empty means the default; anything else disables.
+    fn protocol_valid() -> bool {
         let raw = Self::non_empty("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")
             .or_else(|| Self::non_empty("OTEL_EXPORTER_OTLP_PROTOCOL"))
             .unwrap_or_default();
@@ -231,7 +227,7 @@ impl OtelConfig {
             tracing::warn!("otlp disabled: invalid endpoint");
             return None;
         }
-        if !Self::protocol_valid(true) {
+        if !Self::protocol_valid() {
             tracing::warn!("otlp disabled: unsupported protocol (want http/protobuf)");
             return None;
         }
@@ -291,21 +287,9 @@ pub(crate) fn parse_traceparent(value: &str) -> Option<([u8; 16], [u8; 8], u8)> 
     let trace_hex = &value[3..35];
     let span_hex = &value[36..52];
     let flags_hex = &value[53..55];
-    if !trace_hex
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
-        return None;
-    }
-    if !span_hex
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
-        return None;
-    }
-    if !flags_hex
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    if ![trace_hex, span_hex, flags_hex]
+        .into_iter()
+        .all(is_lower_hex)
     {
         return None;
     }
@@ -371,56 +355,33 @@ pub(crate) fn parse_tracestate(value: &str) -> Option<&str> {
     (members > 0).then_some(value)
 }
 
-/// One §3.3.1.3.1 key: `simple-key`, or `tenant-id@system-id` with exactly
-/// one `@`.
+/// One §3.3.1.3.1 key: `simple-key` (at most 256 characters), or
+/// `tenant-id@system-id` with exactly one `@` (tenant at most 241 characters,
+/// system at most 14).
 fn valid_tracestate_key(key: &str) -> bool {
     match key.split_once('@') {
-        None => valid_simple_key(key),
+        None => valid_key_part(key, 256, false),
         Some((tenant, system)) => {
-            if system.contains('@') || tenant.is_empty() || system.is_empty() {
-                return false;
-            }
-            valid_tenant_id(tenant) && valid_system_id(system)
+            !system.contains('@')
+                && valid_key_part(tenant, 241, true)
+                && valid_key_part(system, 14, false)
         }
     }
 }
 
-/// `simple-key = lcalpha 0*255( lcalpha / DIGIT / "_" / "-" / "*" / "/" )`:
-/// at most 256 characters.
-fn valid_simple_key(key: &str) -> bool {
-    if key.len() > 256 {
+/// `lcalpha 0*(max-1)( lcalpha / DIGIT / "_" / "-" / "*" / "/" )`; only a
+/// tenant id (`digit_first`) may start with a digit. An empty part is invalid.
+fn valid_key_part(part: &str, max_len: usize, digit_first: bool) -> bool {
+    if part.len() > max_len {
         return false;
     }
-    let mut bytes = key.bytes();
-    if !matches!(bytes.next(), Some(b'a'..=b'z')) {
-        return false;
-    }
-    bytes.all(is_tracestate_key_char)
-}
-
-/// `tenant-id = ( lcalpha / DIGIT ) 0*240( ... )`: the one key part that
-/// may start with a digit; at most 241 characters.
-fn valid_tenant_id(tenant: &str) -> bool {
-    if tenant.len() > 241 {
-        return false;
-    }
-    let mut bytes = tenant.bytes();
-    if !matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9')) {
-        return false;
-    }
-    bytes.all(is_tracestate_key_char)
-}
-
-/// `system-id = lcalpha 0*13( ... )`: at most 14 characters.
-fn valid_system_id(system: &str) -> bool {
-    if system.len() > 14 {
-        return false;
-    }
-    let mut bytes = system.bytes();
-    if !matches!(bytes.next(), Some(b'a'..=b'z')) {
-        return false;
-    }
-    bytes.all(is_tracestate_key_char)
+    let mut bytes = part.bytes();
+    let first_ok = match bytes.next() {
+        Some(b'a'..=b'z') => true,
+        Some(b'0'..=b'9') => digit_first,
+        _ => false,
+    };
+    first_ok && bytes.all(is_tracestate_key_char)
 }
 
 fn is_tracestate_key_char(b: u8) -> bool {
@@ -428,6 +389,11 @@ fn is_tracestate_key_char(b: u8) -> bool {
         b,
         b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'*' | b'/'
     )
+}
+
+fn is_lower_hex(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
@@ -475,10 +441,6 @@ fn delimited_field(field: u32, bytes: &[u8], out: &mut Vec<u8>) {
 
 fn string_field(field: u32, value: &str, out: &mut Vec<u8>) {
     delimited_field(field, value.as_bytes(), out);
-}
-
-fn bytes_field(field: u32, value: &[u8], out: &mut Vec<u8>) {
-    delimited_field(field, value, out);
 }
 
 fn anyvalue_string(value: &str) -> Vec<u8> {
@@ -543,8 +505,8 @@ impl LogRecord {
         }
         if let Some((trace_id, span_id, flags)) = &self.trace {
             varint_field(8, u64::from(*flags), &mut out);
-            bytes_field(9, trace_id, &mut out);
-            bytes_field(10, span_id, &mut out);
+            delimited_field(9, trace_id, &mut out);
+            delimited_field(10, span_id, &mut out);
         }
         fixed64_field(11, self.time_nanos, &mut out);
         out
@@ -708,6 +670,13 @@ fn classify_reqwest(err: &reqwest::Error) -> ExportReason {
 // non-contiguous window is bounding and count stays authoritative.
 type GapRange = Option<(u64, u64, usize)>;
 
+fn merge_gap(slot: &mut GapRange, start: u64, end: u64, count: usize) {
+    *slot = Some(match *slot {
+        Some((s, e, c)) => (s.min(start), e.max(end), c + count),
+        None => (start, end, count),
+    });
+}
+
 // The background exporter. Clone shares the queues and the health latch.
 pub(crate) struct OtelExporter {
     config_service: String,
@@ -745,6 +714,7 @@ impl std::fmt::Debug for OtelExporter {
 pub(crate) enum EnqueueError {
     Unhealthy,
     Full,
+    Closed,
 }
 
 impl OtelExporter {
@@ -796,13 +766,13 @@ impl OtelExporter {
                 return None;
             }
         };
-        Self::spawn(config, client)
+        Some(Self::spawn(config, client))
     }
 
     // Test seam: explicit client (wiremock http, no TLS posture).
     #[cfg(test)]
     pub(crate) fn with_client(config: OtelConfig, client: reqwest::Client) -> Arc<Self> {
-        Self::spawn(config, client).expect("test exporter builds")
+        Self::spawn(config, client)
     }
 
     // The exporter plus the receivers and config its background task needs,
@@ -836,17 +806,13 @@ impl OtelExporter {
         // Move the endpoint/headers into the task without logging them.
         let task_config = TaskConfig {
             endpoint: exporter.endpoint.expose().to_owned(),
-            headers: exporter
-                .headers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.expose().to_owned()))
-                .collect(),
+            headers: exporter.headers_exposed(),
             service: exporter.config_service.clone(),
         };
         (exporter, audit_rx, diag_rx, task_config)
     }
 
-    fn spawn(config: OtelConfig, client: reqwest::Client) -> Option<Arc<Self>> {
+    fn spawn(config: OtelConfig, client: reqwest::Client) -> Arc<Self> {
         let (exporter, audit_rx, diag_rx, task_config) = Self::assemble(config, client.clone());
         let task = tokio::spawn(run_loop(
             audit_rx,
@@ -859,7 +825,7 @@ impl OtelExporter {
             exporter.shutdown.clone(),
         ));
         *exporter.task.lock().expect("exporter task slot") = Some(task);
-        Some(exporter)
+        exporter
     }
 
     // Test seam: the exporter without its flush loop. That loop is what makes a
@@ -918,7 +884,7 @@ impl OtelExporter {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(record)) => {
                 self.note_rejected(record.seq);
-                Err(EnqueueError::Full)
+                Err(EnqueueError::Closed)
             }
         }
     }
@@ -927,16 +893,13 @@ impl OtelExporter {
     // dropped seq surfaces as `audit_gap` on recovery.
     pub(crate) fn note_rejected(&self, seq: u64) {
         if let Ok(mut slot) = self.rejected_gap.lock() {
-            *slot = Some(match *slot {
-                Some((start, end, count)) => (start.min(seq), end.max(seq), count + 1),
-                None => (seq, seq, 1),
-            });
+            merge_gap(&mut slot, seq, seq, 1);
         }
         self.audit_lost.fetch_add(1, Ordering::Relaxed);
     }
 
     #[cfg(test)]
-    pub(crate) fn rejected_gap(&self) -> Option<(u64, u64, usize)> {
+    pub(crate) fn rejected_gap(&self) -> GapRange {
         self.rejected_gap.lock().ok().and_then(|slot| *slot)
     }
 
@@ -1021,22 +984,26 @@ async fn run_loop(
     rejected_gap: Arc<std::sync::Mutex<GapRange>>,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
-    let mut pending_gap: Option<(u64, u64, usize)> = None;
+    let mut pending_gap: GapRange = None;
     let mut tick = tokio::time::interval(OTEL_FLUSH_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
             () = shutdown.cancelled() => {
-                flush_remaining(
-                    &mut audit_rx,
-                    &mut diag_rx,
-                    &client,
-                    &config,
-                    &healthy,
-                    &audit_lost,
-                    &rejected_gap,
-                    &mut pending_gap,
+                // Bounded by the shutdown budget: one final export attempt.
+                let _ = tokio::time::timeout(
+                    OTEL_SHUTDOWN_FLUSH,
+                    flush_one_batch(
+                        &mut audit_rx,
+                        &mut diag_rx,
+                        &client,
+                        &config,
+                        &healthy,
+                        &audit_lost,
+                        &rejected_gap,
+                        &mut pending_gap,
+                    ),
                 )
                 .await;
                 return;
@@ -1060,50 +1027,11 @@ async fn run_loop(
 
 // Foreground rejections never reach the receiver, so the flush folds them
 // into the pending gap before draining: the next export carries them first.
-fn absorb_rejected(
-    rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
-    pending_gap: &mut Option<(u64, u64, usize)>,
-) {
+fn absorb_rejected(rejected_gap: &Arc<std::sync::Mutex<GapRange>>, pending_gap: &mut GapRange) {
     let taken = rejected_gap.lock().ok().and_then(|mut slot| slot.take());
     if let Some((start, end, count)) = taken {
-        *pending_gap = Some(match *pending_gap {
-            Some((ps, pe, pc)) => (ps.min(start), pe.max(end), pc + count),
-            None => (start, end, count),
-        });
+        merge_gap(pending_gap, start, end, count);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn flush_remaining(
-    audit_rx: &mut mpsc::Receiver<QueuedAudit>,
-    diag_rx: &mut mpsc::Receiver<QueuedDiag>,
-    client: &reqwest::Client,
-    config: &TaskConfig,
-    healthy: &AtomicBool,
-    audit_lost: &AtomicU64,
-    rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
-    pending_gap: &mut Option<(u64, u64, usize)>,
-) {
-    // Bounded by the shutdown budget: drain without waiting, then one final
-    // export attempt inside the timeout.
-    absorb_rejected(rejected_gap, pending_gap);
-    let drained = drain_batch(audit_rx, diag_rx, usize::MAX);
-    if drained.0.is_empty() && drained.1.is_empty() && pending_gap.is_none() {
-        return;
-    }
-    let _ = tokio::time::timeout(
-        OTEL_SHUTDOWN_FLUSH,
-        export_batch(
-            client,
-            config,
-            healthy,
-            audit_lost,
-            pending_gap,
-            drained.0,
-            drained.1,
-        ),
-    )
-    .await;
 }
 
 // Drain up to OTEL_BATCH_MAX records total, audit first (load-bearing) then
@@ -1140,7 +1068,7 @@ async fn flush_one_batch(
     healthy: &AtomicBool,
     audit_lost: &AtomicU64,
     rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
-    pending_gap: &mut Option<(u64, u64, usize)>,
+    pending_gap: &mut GapRange,
 ) {
     absorb_rejected(rejected_gap, pending_gap);
     let (audits, diags) = drain_batch(audit_rx, diag_rx, OTEL_BATCH_MAX);
@@ -1164,7 +1092,7 @@ async fn export_batch(
     config: &TaskConfig,
     healthy: &AtomicBool,
     audit_lost: &AtomicU64,
-    pending_gap: &mut Option<(u64, u64, usize)>,
+    pending_gap: &mut GapRange,
     audits: Vec<QueuedAudit>,
     diags: Vec<QueuedDiag>,
 ) {
@@ -1201,15 +1129,8 @@ async fn export_batch(
             } else {
                 let batch_start = audits.first().map_or(u64::MAX, |r| r.seq);
                 let batch_end = audits.last().map_or(0, |r| r.seq);
-                let merged = match prior_gap {
-                    Some((prior_start, prior_end, prior_count)) => (
-                        prior_start.min(batch_start),
-                        prior_end.max(batch_end),
-                        prior_count + audits.len(),
-                    ),
-                    None => (batch_start, batch_end, audits.len()),
-                };
-                *pending_gap = Some(merged);
+                *pending_gap = prior_gap;
+                merge_gap(pending_gap, batch_start, batch_end, audits.len());
                 audit_lost.fetch_add(audits.len() as u64, Ordering::Relaxed);
             }
             // Closed vocabulary only: never the endpoint, headers, or body.
@@ -1665,6 +1586,8 @@ mod tests {
         let ok = format!("a{}", "b".repeat(255));
         assert_eq!(ok.len(), 256);
         assert!(parse_tracestate(&format!("{ok}=1")).is_some());
+        let just_over = format!("a{}", "b".repeat(256));
+        assert!(parse_tracestate(&format!("{just_over}=1")).is_none());
         let long = format!("a{}", "b".repeat(299));
         assert_eq!(long.len(), 300);
         assert!(
@@ -1687,6 +1610,8 @@ mod tests {
         let system_ok = format!("s{}", "y".repeat(13));
         assert_eq!(system_ok.len(), 14);
         assert!(parse_tracestate(&format!("t@{system_ok}=1")).is_some());
+        let system_just_over = format!("s{}", "y".repeat(14));
+        assert!(parse_tracestate(&format!("t@{system_just_over}=1")).is_none());
         let system_long = "s".repeat(20);
         assert!(
             parse_tracestate(&format!("t@{system_long}=1")).is_none(),
@@ -2097,6 +2022,41 @@ mod tests {
             "protobuf must carry the verbatim JSONL tool"
         );
         exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_what_is_still_queued() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let endpoint = format!("{}/v1/logs", server.uri());
+        let exporter = OtelExporter::with_client(
+            OtelConfig::for_tests(&endpoint, "mtui"),
+            reqwest::Client::new(),
+        );
+        exporter
+            .enqueue_audit(QueuedAudit {
+                seq: 1,
+                jsonl: r#"{"v":1,"tool":"whoami","seq":1}"#.to_owned(),
+                tool: "whoami".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 9,
+                response_bytes: None,
+                trace: None,
+                time_nanos: now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .expect("enqueue");
+
+        exporter.shutdown().await;
+
+        server.verify().await;
     }
 
     #[tokio::test]
@@ -2524,6 +2484,32 @@ mod tests {
             1,
             "second flush sends no repeat gap"
         );
+    }
+
+    #[tokio::test]
+    async fn enqueue_after_shutdown_reports_closed_and_accounts_the_seq() {
+        let exporter = OtelExporter::with_client_no_flush(
+            OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
+            reqwest::Client::new(),
+        );
+        exporter.shutdown().await;
+        assert_eq!(
+            exporter.enqueue_audit(QueuedAudit {
+                seq: 7,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: 0,
+                extra_attrs: Vec::new(),
+            }),
+            Err(EnqueueError::Closed)
+        );
+        assert_eq!(exporter.rejected_gap(), Some((7, 7, 1)));
     }
 
     #[tokio::test]
