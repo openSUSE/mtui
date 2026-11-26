@@ -4074,6 +4074,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reboot_selected_a_dead_link_reports_the_reconnect_failure() {
+        let m1 = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .failing_fire_and_forget()
+            .failing_reconnect();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+        let all: BTreeSet<String> = ["h1".to_owned()].into();
+
+        let report = g.reboot_selected("systemctl reboot", "", &all).await;
+
+        assert!(
+            matches!(report.outcomes["h1"], Err(HostError::ReconnectFailed { .. })),
+            "a failed reconnect outranks the dispatch failure: {:?}",
+            report.outcomes["h1"]
+        );
+    }
+
+    #[tokio::test]
     async fn operation_reboot_undispatched_but_alive_stays_repairable() {
         // The complement: dispatch fails and the reconnect *succeeds* (the
         // session was never torn down). Here the host really is up, so the
