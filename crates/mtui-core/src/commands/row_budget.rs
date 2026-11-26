@@ -176,6 +176,39 @@ fn keep_head_anomaly_tail<T>(
     }
 }
 
+/// Adds the `--limit`/`--offset` window flags shared by the paged listings.
+pub(crate) fn add_window_args(cmd: clap::Command) -> clap::Command {
+    cmd.arg(
+        clap::Arg::new("limit")
+            .long("limit")
+            .value_name("N")
+            .value_parser(clap::value_parser!(usize))
+            .default_value("0")
+            .help("cap the number of rows after --offset (0 = all)"),
+    )
+    .arg(
+        clap::Arg::new("offset")
+            .long("offset")
+            .value_name("N")
+            .value_parser(clap::value_parser!(usize))
+            .default_value("0")
+            .help(
+                "skip the first N rows (0 = from the start); with --limit, page any middle slice",
+            ),
+    )
+}
+
+/// Applies the `--offset` skip, then the `--limit` cap (0 = all).
+pub(crate) fn window<T>(args: &clap::ArgMatches, rows: Vec<T>) -> Vec<T> {
+    let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
+    let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
+    let mut v: Vec<T> = rows.into_iter().skip(offset).collect();
+    if limit > 0 && limit < v.len() {
+        v.truncate(limit);
+    }
+    v
+}
+
 /// Human/JSON trailing notice naming the narrowing flags.
 #[must_use]
 pub(crate) fn row_notice(
@@ -451,6 +484,28 @@ mod tests {
             over.meta("--limit"),
             Some(truncation_meta(over.truncated, over.total, 1, 1, "--limit"))
         );
+    }
+
+    fn window_of(argv: &[&str], rows: Vec<usize>) -> Vec<usize> {
+        let cmd = add_window_args(clap::Command::new("t"));
+        let args = cmd
+            .try_get_matches_from(std::iter::once("t").chain(argv.iter().copied()))
+            .expect("window flags parse");
+        window(&args, rows)
+    }
+
+    #[test]
+    fn window_skips_offset_before_capping_at_limit() {
+        let rows: Vec<usize> = (0..10).collect();
+        assert_eq!(window_of(&[], rows.clone()), rows);
+        assert_eq!(
+            window_of(&["--offset", "4", "--limit", "3"], rows.clone()),
+            vec![4, 5, 6]
+        );
+        assert_eq!(window_of(&["--limit", "2"], rows.clone()), vec![0, 1]);
+        assert_eq!(window_of(&["--offset", "8"], rows.clone()), vec![8, 9]);
+        assert!(window_of(&["--offset", "99"], rows.clone()).is_empty());
+        assert_eq!(window_of(&["--limit", "99"], rows.clone()), rows);
     }
 
     #[test]

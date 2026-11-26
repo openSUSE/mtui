@@ -31,7 +31,7 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush, json_envelope, probe_meta, probe_notice};
+use super::row_budget::{add_window_args, crush, json_envelope, probe_meta, probe_notice, window};
 
 /// Narrowing flags named in the row-budget notice.
 const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/--addon";
@@ -330,95 +330,81 @@ impl Command for ListRefhosts {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        cmd.arg(
-            Arg::new("testplatform")
-                .long("testplatform")
-                .value_name("QUERY")
-                .help("match a SMELT testplatform query"),
-        )
-        .arg(
-            Arg::new("name")
-                .short('n')
-                .long("name")
-                .value_name("GLOB")
-                .help("hostname glob, e.g. 'whale-*' or '*.qam.suse.cz'"),
-        )
-        .arg(
-            Arg::new("arch")
-                .short('a')
-                .long("arch")
-                .value_name("ARCH")
-                .action(ArgAction::Append)
-                .help("arch filter (repeatable): x86_64 / aarch64 / ppc64le / s390x"),
-        )
-        .arg(
-            Arg::new("product")
-                .short('p')
-                .long("product")
-                .value_name("SUBSTR")
-                .help("base-product substring, e.g. sles / sled / SLE_HPC"),
-        )
-        .arg(
-            Arg::new("version")
-                .long("version")
-                .value_name("VERSION")
-                .help("product version: 15-SP6 / 15.6 / 15 (SP optional)"),
-        )
-        .arg(
-            Arg::new("addon")
-                .long("addon")
-                .value_name("SUBSTR")
-                .action(ArgAction::Append)
-                .help("addon-name substring (repeatable)"),
-        )
-        .arg(
-            Arg::new("pool")
-                .long("pool")
-                .action(ArgAction::SetTrue)
-                .help("group by test-target slot (product+version+arch+addons)"),
-        )
-        .arg(
-            Arg::new("json")
-                .long("json")
-                .action(ArgAction::SetTrue)
-                .help(
-                    "emit a JSON array of kept rows; over-cap stdout is a JSON envelope \
+        let cmd = cmd
+            .arg(
+                Arg::new("testplatform")
+                    .long("testplatform")
+                    .value_name("QUERY")
+                    .help("match a SMELT testplatform query"),
+            )
+            .arg(
+                Arg::new("name")
+                    .short('n')
+                    .long("name")
+                    .value_name("GLOB")
+                    .help("hostname glob, e.g. 'whale-*' or '*.qam.suse.cz'"),
+            )
+            .arg(
+                Arg::new("arch")
+                    .short('a')
+                    .long("arch")
+                    .value_name("ARCH")
+                    .action(ArgAction::Append)
+                    .help("arch filter (repeatable): x86_64 / aarch64 / ppc64le / s390x"),
+            )
+            .arg(
+                Arg::new("product")
+                    .short('p')
+                    .long("product")
+                    .value_name("SUBSTR")
+                    .help("base-product substring, e.g. sles / sled / SLE_HPC"),
+            )
+            .arg(
+                Arg::new("version")
+                    .long("version")
+                    .value_name("VERSION")
+                    .help("product version: 15-SP6 / 15.6 / 15 (SP optional)"),
+            )
+            .arg(
+                Arg::new("addon")
+                    .long("addon")
+                    .value_name("SUBSTR")
+                    .action(ArgAction::Append)
+                    .help("addon-name substring (repeatable)"),
+            )
+            .arg(
+                Arg::new("pool")
+                    .long("pool")
+                    .action(ArgAction::SetTrue)
+                    .help("group by test-target slot (product+version+arch+addons)"),
+            )
+            .arg(
+                Arg::new("json")
+                    .long("json")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "emit a JSON array of kept rows; over-cap stdout is a JSON envelope \
                      {\"rows\": [...], \"truncation\": {...}} so stdout stays valid JSON \
                      (--free windowing adds a \"probe\" object)",
-                ),
-        )
-        .arg(
-            Arg::new("limit")
-                .long("limit")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("cap the number of rows after --offset (0 = all)"),
-        )
-        .arg(
-            Arg::new("offset")
-                .long("offset")
-                .value_name("N")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("0")
-                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
-        )
-        .arg(
-          Arg::new("free")
-              .long("free")
-              .action(ArgAction::SetTrue)
-              .help(
-                  "also probe live operation-lock and pool-claim state \
+                    ),
+            );
+        add_window_args(cmd)
+            .arg(
+                Arg::new("free")
+                    .long("free")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "also probe live operation-lock and pool-claim state \
                    (connects to each shown host; --offset/--limit window first)",
-              ),
-        )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .action(ArgAction::SetTrue)
-                .help("include addons in the output"),
-        )
+                    ),
+            )
+            .arg(
+                Arg::new("verbose")
+                    .short('v')
+                    .long("verbose")
+                    .action(ArgAction::SetTrue)
+                    .help("include addons in the output"),
+            )
     }
 
     fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
@@ -473,8 +459,6 @@ impl Command for ListRefhosts {
         let free = args.get_flag("free");
         let verbose = args.get_flag("verbose");
         let as_json = args.get_flag("json");
-        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
-        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
 
         let filters = Filters {
             testplatform: args.get_one::<String>("testplatform").map(String::as_str),
@@ -493,14 +477,7 @@ impl Command for ListRefhosts {
         // the windowed subset is probed. Order is the deterministic matched
         // inventory order (refhosts.yml file order after filters); the
         // notice/footer below still report pre-window totals.
-        let mut windowed: Vec<Record> = {
-            let skipped = offset.min(records.len());
-            let mut v: Vec<Record> = records.into_iter().skip(skipped).collect();
-            if limit > 0 && limit < v.len() {
-                v.truncate(limit);
-            }
-            v
-        };
+        let mut windowed = window(args, records);
         let window_dropped = matched_total.saturating_sub(windowed.len());
 
         if free && !windowed.is_empty() {
