@@ -27,7 +27,7 @@ record what you learn as a statement about the constraint, not as a citation.
 - **Check first that the shape is not a contract in disguise.** If it is written
   to a host (`/var/lock/mtui*.lock`, `/var/log/mtui.log`, a zypper repo alias —
   `repo_manager.rs::issue_alias`), signed or transmitted to a live service (the
-  openQA HMAC path encoding, `openqa/client.rs::encode_path_for_signing`), or is
+  openQA HMAC path encoding, owned by the `ruoqa` crate's `auth::signing_string`), or is
   user-facing text an LLM client consumes, it is load-bearing **even when the
   only comment about it says "upstream did X"**. Replace the stale rationale;
   do not delete the constraint.
@@ -46,7 +46,7 @@ record what you learn as a statement about the constraint, not as a citation.
   `.py` file or a Python identifier it means the removed tree; where it names a
   live external it stays: `openSUSE/osc-plugin-qam`, `mjdonis/oqa-search`, the
   `osc` tool's own `oscrc` lookup (`obs/oscrc.rs`), the openQA server's signing
-  rules (`openqa/client.rs`), and Rust crates such as `russh`/`rsa`. Read each
+  rules (the `ruoqa` crate), and Rust crates such as `russh`/`rsa`. Read each
   site; do not sweep the term.
 - "Python" is also a **domain word** here. Never rename or delete it in SUSE
   package flavours (`pythonNNN-foo` → `python-foo`,
