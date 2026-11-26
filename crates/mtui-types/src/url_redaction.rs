@@ -35,6 +35,31 @@ pub fn sanitize_url(url: &str) -> String {
     }
 }
 
+/// The host (authority without userinfo or port) of a `scheme://…` URL, for a
+/// TLS-failure hint. `None` if the shape is unexpected.
+///
+/// Userinfo is dropped first: otherwise a credentialed URL makes the hint name
+/// the *username* as the host (#431).
+#[must_use]
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = authority.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Whether `host` is a loopback address, for which a plaintext `http` origin is
+/// acceptable (a test/mock server, never a real exfiltration target).
+#[must_use]
+pub fn is_loopback(host: &str) -> bool {
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+        || host.starts_with("127.")
+}
+
 /// If `s` contains an `@`, return the slice after the last one; else `None`.
 fn rest_after_at(s: &str) -> Option<&str> {
     s.rsplit_once('@').map(|(_, after)| after)
@@ -102,6 +127,38 @@ fn ends_authority(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_of_extracts_authority_without_port() {
+        assert_eq!(
+            host_of("https://api.suse.de:443/request/1").as_deref(),
+            Some("api.suse.de")
+        );
+        assert_eq!(host_of("not a url"), None);
+    }
+
+    /// Without the userinfo strip `host_of` returns the *username*, which the
+    /// TLS hint would then name as the server that failed verification (#431).
+    #[test]
+    fn host_of_ignores_userinfo() {
+        assert_eq!(
+            host_of("https://user:pass@h.example/x").as_deref(),
+            Some("h.example")
+        );
+        assert_eq!(
+            host_of("https://token@h.example:443/x").as_deref(),
+            Some("h.example")
+        );
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised() {
+        for h in ["localhost", "127.0.0.1", "127.9.9.9", "::1", "[::1]"] {
+            assert!(is_loopback(h), "{h}");
+        }
+        assert!(!is_loopback("example.com"));
+        assert!(!is_loopback("10.0.0.1"));
+    }
 
     #[test]
     fn sanitize_url_redacts_password() {

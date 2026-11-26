@@ -17,6 +17,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mtui_types::url_redaction::host_of;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use reqwest::{Method, RequestBuilder};
@@ -335,21 +336,6 @@ impl ObsClient {
     }
 }
 
-/// Extract the host (authority without any port) from an
-/// `scheme://[userinfo@]host[:port]/…` URL, for the TLS-failure hint. Returns
-/// `None` if the shape is unexpected.
-///
-/// Any userinfo is dropped first: without that, a credentialed API base makes
-/// the hint name the *username* as the host it failed to verify (#431). Same
-/// helper as in [`crate::gitea`].
-fn host_of(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = authority.split(':').next()?;
-    (!host.is_empty()).then(|| host.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,30 +371,6 @@ mod tests {
         // either, so the summary stays empty rather than "boom".
         let body = "<status><summary>&e;</summary></status>";
         assert_eq!(error_summary(body), "");
-    }
-
-    #[test]
-    fn host_of_extracts_authority_without_port() {
-        assert_eq!(
-            host_of("https://api.suse.de:443/request/1").as_deref(),
-            Some("api.suse.de")
-        );
-        assert_eq!(host_of("not a url"), None);
-    }
-
-    /// Userinfo is not the host: without the strip, `host_of` returns the
-    /// *username*, which `ssl_verification_hint` then names as the server the
-    /// operator failed to verify (#431).
-    #[test]
-    fn host_of_ignores_userinfo() {
-        assert_eq!(
-            host_of("https://user:pass@h.example/x").as_deref(),
-            Some("h.example")
-        );
-        assert_eq!(
-            host_of("https://token@h.example:443/x").as_deref(),
-            Some("h.example")
-        );
     }
 
     #[tokio::test]

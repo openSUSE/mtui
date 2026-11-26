@@ -23,6 +23,7 @@ use std::sync::LazyLock;
 use chrono::{DateTime, FixedOffset};
 use mtui_config::Config;
 use mtui_types::Assignment;
+use mtui_types::url_redaction::{host_of, is_loopback};
 use regex::Regex;
 use reqwest::Method;
 use serde_json::json;
@@ -64,16 +65,6 @@ fn unassign_marker(user: &str, group: &str) -> String {
     UNASSIGN_TEMPLATE
         .replace("{user}", user)
         .replace("{group}", group)
-}
-
-/// Extract the host (authority without any port) from an `scheme://host[:port]/…`
-/// URL, for the TLS-failure hint. Returns `None` if the shape is unexpected.
-fn host_of(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = authority.split(':').next()?;
-    (!host.is_empty()).then(|| host.to_string())
 }
 
 /// A URL origin: scheme (lower-cased), host (lower-cased), and effective port.
@@ -124,16 +115,6 @@ fn parse_origin(url: &str) -> Option<Origin> {
         host: host.to_ascii_lowercase(),
         port,
     })
-}
-
-/// Whether `host` is a loopback address, for which a plaintext `http` origin is
-/// acceptable (a test/mock server, never a real exfiltration target).
-fn is_loopback(host: &str) -> bool {
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]"
-        || host.starts_with("127.")
 }
 
 /// Whether the origin `o` is allowed to carry the token: it must be `https`,
