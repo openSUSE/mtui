@@ -219,39 +219,10 @@ pub fn get_arbiter() -> &'static HostArbiter<SystemClock> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
-    /// A fake clock mirroring `locks.rs`: fixed `now`, a manually-advanceable
-    /// monotonic counter (ms), and a no-op sleep that advances the monotonic
-    /// clock by the slept amount — so wait budgets elapse instantly.
-    #[derive(Clone)]
-    struct FakeClock {
-        mono: Arc<AtomicU64>, // milliseconds
-    }
-
-    impl FakeClock {
-        fn new() -> Self {
-            Self {
-                mono: Arc::new(AtomicU64::new(0)),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Clock for FakeClock {
-        fn now_unix(&self) -> u64 {
-            1_700_000_000
-        }
-        fn monotonic(&self) -> f64 {
-            self.mono.load(Ordering::SeqCst) as f64 / 1000.0
-        }
-        async fn sleep(&self, secs: f64) {
-            self.mono
-                .fetch_add((secs * 1000.0) as u64, Ordering::SeqCst);
-        }
-    }
+    use crate::target::test_support::FakeClock;
 
     fn owner_a() -> Owner {
         ("reg1".into(), "SUSE:Maintenance:1:1".into())
@@ -267,7 +238,7 @@ mod tests {
     }
 
     fn fake_arb() -> HostArbiter<FakeClock> {
-        HostArbiter::with_clock(FakeClock::new())
+        HostArbiter::with_clock(FakeClock::new(1_700_000_000))
     }
 
     #[tokio::test]

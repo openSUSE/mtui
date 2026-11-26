@@ -45,6 +45,8 @@ pub mod package_querier;
 pub mod parsers;
 pub mod repo_manager;
 pub mod spinner;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
@@ -1496,18 +1498,7 @@ mod tests {
     use super::*;
     use crate::connection::MockConnection;
     use crate::connection::MockSftpOp;
-
-    fn cfg() -> Config {
-        Config::default()
-    }
-
-    fn enabled_with(conn: MockConnection) -> Target {
-        Target::with_connection(
-            "test-host.example.com",
-            TargetState::Enabled,
-            Box::new(conn),
-        )
-    }
+    use crate::target::test_support::{cfg, enabled_with};
 
     // --- construction / defaults -------------------------------------------
 
