@@ -765,6 +765,7 @@ fn render(result: Result<String, crate::session::McpCommandError>) -> CallToolRe
 mod tests {
     use super::*;
     use crate::provider::SessionRegistry;
+    use crate::testkit::{Probe, registry_with, test_config};
     use mtui_config::Config;
     use mtui_core::register_all;
     use mtui_hosts::{HostsGroup, MockConnection, Target};
@@ -1080,45 +1081,12 @@ mod tests {
     /// live `Peer`; the `call_tool` wiring around it is covered by inspection.
     #[tokio::test]
     async fn cancelling_a_dispatch_drops_the_future_and_releases_its_command_lock() {
-        use std::sync::Mutex as StdMutex;
-
-        use clap::ArgMatches;
-        use mtui_core::{Command, CommandResult, Scope, register_all};
-
         use crate::session::DEFAULT_PROGRESS_INTERVAL;
 
         let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
 
-        /// A body blocked mid host-op that observes no cancellation signal: only
-        /// a forced abort can stop it, the shape the forced stage exists for.
-        struct Stubborn(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
-        #[async_trait::async_trait]
-        impl Command for Stubborn {
-            fn name(&self) -> &'static str {
-                "cancellable_probe"
-            }
-            fn scope(&self) -> Scope {
-                Scope::Fanout
-            }
-            async fn call(
-                &self,
-                _session: &mut mtui_core::Session,
-                _args: &ArgMatches,
-            ) -> CommandResult {
-                if let Some(tx) = self.0.lock().expect("probe channel poisoned").take() {
-                    let _ = tx.send(());
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
-                Ok(())
-            }
-        }
-
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
-        let session = McpSession::new(config);
-        let mut registry = register_all();
-        registry.register(Arc::new(Stubborn(StdMutex::new(Some(started_tx)))));
-        let registry = Arc::new(registry);
+        let session = McpSession::new(test_config());
+        let registry = registry_with(Probe::stubborn("cancellable_probe", started_tx));
 
         let ct = CancellationToken::new();
         let call = tokio::spawn({
@@ -1169,34 +1137,10 @@ mod tests {
     /// holds no lock, so the plain `cancellable` drop is the whole recovery.
     #[tokio::test]
     async fn client_cancel_interrupts_a_job_status_wait() {
-        use clap::ArgMatches;
-        use mtui_core::{Command, CommandResult, Scope};
-
-        /// Never finishes, so only the cancel can end the wait.
-        struct Endless;
-        #[async_trait::async_trait]
-        impl Command for Endless {
-            fn name(&self) -> &'static str {
-                "endless_probe"
-            }
-            fn scope(&self) -> Scope {
-                Scope::Fanout
-            }
-            async fn call(
-                &self,
-                _session: &mut mtui_core::Session,
-                _args: &ArgMatches,
-            ) -> CommandResult {
-                std::future::pending::<()>().await;
-                Ok(())
-            }
-        }
-
         let session = McpSession::new(Config::default());
-        let mut registry = register_all();
-        registry.register(Arc::new(Endless));
+        let registry = registry_with(Probe::forever("endless_probe"));
         let job_id = session
-            .start_job(Arc::new(registry), "endless_probe", Vec::new())
+            .start_job(registry, "endless_probe", Vec::new())
             .expect("start_job succeeds");
 
         let ct = CancellationToken::new();
@@ -1253,8 +1197,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         tweak(&mut config);
         let registry = Arc::new(register_all());
@@ -1685,8 +1628,7 @@ mod tests {
     #[tokio::test]
     async fn audit_unwritable_sink_refuses_before_dispatch() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         // A directory as the sink path: every open fails, so the intent write
         // refuses the call before anything runs.
         config.mcp_audit_log = Some(dir.path().to_path_buf());
@@ -1724,8 +1666,7 @@ mod tests {
         // A read-only tool writes no intent record, so an unwritable sink can
         // only cost its outcome record — never the call.
         async fn whoami(audit: Option<std::path::PathBuf>) -> (CallToolResult, String) {
-            let mut config = Config::default();
-            config.session_user = "testuser".to_owned();
+            let mut config = test_config();
             config.mcp_audit_log = audit;
             let registry = Arc::new(register_all());
             let session = McpSession::new(config);
@@ -1798,8 +1739,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let moved = dir.path().join("audit.moved.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let mut registry = register_all();
         registry.register(Arc::new(SinkBreaker {
@@ -1905,38 +1845,12 @@ mod tests {
     /// Register a never-finishing command and start it as a background job, so
     /// a `job_status` wait has something to park on.
     fn start_endless_job(session: &Arc<McpSession>) -> String {
-        use clap::ArgMatches;
-        use mtui_core::{Command, CommandResult, Scope};
-
-        struct EndlessAuditProbe;
-        #[async_trait::async_trait]
-        impl Command for EndlessAuditProbe {
-            fn name(&self) -> &'static str {
-                "endless_audit_probe"
-            }
-            // Session-level, so the worker dispatches on a fork and does not
-            // hold the canonical session mutex for the life of the job — which
-            // the outcome record's `audit_hosts` needs to take.
-            fn scope(&self) -> Scope {
-                Scope::Single
-            }
-            fn reads_resolved_report(&self) -> bool {
-                false
-            }
-            async fn call(
-                &self,
-                _session: &mut mtui_core::Session,
-                _args: &ArgMatches,
-            ) -> CommandResult {
-                std::future::pending::<()>().await;
-                Ok(())
-            }
-        }
-
-        let mut registry = register_all();
-        registry.register(Arc::new(EndlessAuditProbe));
+        // Session-level, so the worker dispatches on a fork and does not hold
+        // the canonical session mutex for the life of the job — which the
+        // outcome record's `audit_hosts` needs to take.
+        let registry = registry_with(Probe::forever("endless_audit_probe").session_level());
         session
-            .start_job(Arc::new(registry), "endless_audit_probe", Vec::new())
+            .start_job(registry, "endless_audit_probe", Vec::new())
             .expect("start_job succeeds")
     }
 
@@ -2181,8 +2095,7 @@ mod tests {
             kwargs: Value,
             audit: Option<std::path::PathBuf>,
         ) -> CallToolResult {
-            let mut config = Config::default();
-            config.session_user = "testuser".to_owned();
+            let mut config = test_config();
             config.mcp_audit_log = audit;
             let registry = Arc::new(register_all());
             let session = McpSession::new(config);
@@ -2272,8 +2185,7 @@ mod tests {
         let (mock, bodies) = otlp_mock().await;
         let endpoint = format!("{}/v1/logs", mock.uri());
         let exporter = otlp_exporter(&endpoint);
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         // No `audit_log`: OTLP-only mode still builds the JSONL line.
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
@@ -2297,8 +2209,7 @@ mod tests {
         let (mock, bodies) = otlp_mock().await;
         let endpoint = format!("{}/v1/logs", mock.uri());
         let exporter = otlp_exporter(&endpoint);
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(Arc::new(register_all()), session.clone());
         seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
@@ -2332,8 +2243,7 @@ mod tests {
         let exporter = otlp_exporter(&endpoint);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
@@ -2385,8 +2295,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
@@ -2446,8 +2355,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
@@ -2507,8 +2415,7 @@ mod tests {
         let (mock, bodies) = otlp_mock().await;
         let endpoint = format!("{}/v1/logs", mock.uri());
         let exporter = otlp_exporter(&endpoint);
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(registry, session);
@@ -2554,8 +2461,7 @@ mod tests {
         );
         // OTLP-only on purpose: with no file sink the record's only path is the
         // exporter, so the refused enqueue is the one accounted loss.
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(registry, session);
@@ -3281,8 +3187,7 @@ mod tests {
         );
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(dir.path().join("audit.jsonl"));
         let audited = McpSession::new(config);
         assert!(audited.auditing(), "sink on means auditing on");
@@ -3309,8 +3214,7 @@ mod tests {
         let exporter = otlp_exporter(&endpoint);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
@@ -3524,8 +3428,7 @@ mod tests {
     async fn response_bytes_sized_for_ok_absent_for_unknown() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new(config);
@@ -3560,8 +3463,7 @@ mod tests {
         async fn transport_of(transport: &'static str) -> Value {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join("audit.jsonl");
-            let mut config = Config::default();
-            config.session_user = "testuser".to_owned();
+            let mut config = test_config();
             config.mcp_audit_log = Some(path.clone());
             let registry = Arc::new(register_all());
             let session = McpSession::new_with_transport(config, transport);
@@ -3602,8 +3504,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("slow-sink-audit.jsonl");
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new(config);

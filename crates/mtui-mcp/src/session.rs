@@ -2189,6 +2189,7 @@ mod tests {
     use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH};
 
     use super::*;
+    use crate::testkit::{Probe, registry_with, test_config};
 
     fn session(config: Config) -> Arc<McpSession> {
         McpSession::new(config)
@@ -2449,8 +2450,7 @@ mod tests {
     /// `whoami` returns the same banner the REPL prints, via the shared engine.
     #[tokio::test]
     async fn run_command_whoami_returns_stdout() {
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let sess = session(config);
         let registry = register_all();
 
@@ -2508,8 +2508,7 @@ mod tests {
     /// A tiny cap truncates the result and appends the notice.
     #[tokio::test]
     async fn run_command_output_is_capped() {
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let mut config = test_config();
         config.mcp_max_output_bytes = 8; // far below the `whoami` banner length
         let sess = session(config);
         let registry = register_all();
@@ -3348,8 +3347,7 @@ mod tests {
     /// Cancelling a *finished* job succeeds as a no-op and does not rewrite it.
     #[tokio::test]
     async fn job_cancel_finished_job_is_noop() {
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let sess = session(config);
         let registry = Arc::new(register_all());
 
@@ -3454,37 +3452,10 @@ mod tests {
     /// force-aborted; the reply says so instead of claiming a clean cancel.
     #[tokio::test]
     async fn job_cancel_unobservant_body_is_force_aborted_after_grace() {
-        use clap::ArgMatches;
-        use mtui_core::{Command, CommandResult, Scope};
-
         let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
 
-        struct Stubborn(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
-        #[async_trait::async_trait]
-        impl Command for Stubborn {
-            fn name(&self) -> &'static str {
-                "stubborn_probe"
-            }
-            fn scope(&self) -> Scope {
-                Scope::Fanout
-            }
-            async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
-                if let Some(tx) = self.0.lock().expect("probe channel poisoned").take() {
-                    let _ = tx.send(());
-                }
-                // Simulates a body blocked mid host-op: never observes the
-                // token, only the hard abort can stop it.
-                tokio::time::sleep(Duration::from_secs(600)).await;
-                Ok(())
-            }
-        }
-
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
-        let sess = session(config);
-        let mut registry = register_all();
-        registry.register(Arc::new(Stubborn(StdMutex::new(Some(started_tx)))));
-        let registry = Arc::new(registry);
+        let sess = session(test_config());
+        let registry = registry_with(Probe::stubborn("stubborn_probe", started_tx));
 
         let job_id = sess
             .start_job(Arc::clone(&registry), "stubborn_probe", Vec::new())
@@ -5820,8 +5791,7 @@ mod tests {
     /// `sink = None` is zero-overhead: no frames, same stdout as `run_command`.
     #[tokio::test]
     async fn run_command_with_progress_none_emits_no_frames() {
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
+        let config = test_config();
         let sess = session(config);
         let registry = register_all();
         let sink = RecordingSink::default();
