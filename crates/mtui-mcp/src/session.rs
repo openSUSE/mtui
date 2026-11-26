@@ -913,22 +913,20 @@ impl McpSession {
             crate::audit::AuditOutcome::Error
         };
         let seq = crate::audit::next_seq();
-        let record = serde_json::json!({
-            "v": crate::audit::AUDIT_SCHEMA_VERSION,
-            "ts": crate::audit::now_millis(),
-            "seq": seq,
-            "session": self.id,
-            "transport": self.transport,
-            "principal": serde_json::Value::Null,
-            "event": crate::audit::AuditEvent::Terminal.as_str(),
-            "tool": crate::audit::cap_str(tool),
-            "job_id": crate::audit::cap_str(job_id),
-            "job_state": state.to_string(),
-            "outcome": outcome.as_str(),
-            "duration_ms": finished.saturating_duration_since(started).as_millis() as u64,
-            "rrids": scope.rrids(),
-            "hosts": hosts,
-        });
+        let mut record = crate::audit::record_header(
+            self,
+            crate::audit::now_millis(),
+            seq,
+            crate::audit::AuditEvent::Terminal,
+            tool,
+        );
+        record["job_id"] = serde_json::json!(crate::audit::cap_str(job_id));
+        record["job_state"] = serde_json::json!(state.to_string());
+        record["outcome"] = serde_json::json!(outcome.as_str());
+        record["duration_ms"] =
+            serde_json::json!(finished.saturating_duration_since(started).as_millis() as u64);
+        record["rrids"] = serde_json::json!(scope.rrids());
+        record["hosts"] = serde_json::json!(hosts);
         // File first, seq order; warn-only on failure (already answered).
         // Off the worker via `spawn_blocking`: a wedged disk must not stall
         // the job table.
@@ -937,32 +935,56 @@ impl McpSession {
         {
             tracing::warn!(job_id, error = %err, "audit log: terminal record lost");
         }
-        if let Some(otel) = self.otel() {
-            let line = serde_json::to_string(&record).unwrap_or_default();
-            if line.is_empty() {
-                // Inert (Value always serializes) but still accounts the seq.
-                otel.note_rejected(seq);
-                tracing::warn!(job_id, "audit otlp: terminal record lost");
-            } else {
-                // Best-effort audit enqueue: warn when full or unhealthy (the
-                // exporter's gap accounting covers the hole on recovery).
-                let queued = crate::otel::QueuedAudit {
-                    seq,
-                    jsonl: line,
-                    tool: crate::audit::cap_str(tool),
-                    outcome: outcome.as_str().to_owned(),
-                    event: crate::audit::AuditEvent::Terminal.as_str().to_owned(),
-                    transport: self.transport.to_owned(),
-                    session_id: self.id,
-                    response_bytes: None,
-                    trace: None,
-                    time_nanos: crate::otel::now_nanos(),
-                    extra_attrs: Vec::new(),
-                };
-                if otel.enqueue_audit(queued).is_err() {
-                    tracing::warn!(job_id, "audit otlp: terminal record lost");
-                }
-            }
+        self.export_best_effort(&record, tool, &serde_json::Map::new(), None);
+    }
+
+    /// Hand one already-built record to the OTLP exporter, best-effort.
+    ///
+    /// Never refuses and never reports back: the `mtui.*` attributes are read
+    /// back out of `record`, so they cannot disagree with the JSONL body they
+    /// accompany. A rejected enqueue warns with a closed-vocabulary reason and
+    /// nothing more — `enqueue_audit` has already merged the seq into the gap
+    /// it reports on recovery, so accounting it again here would double-count.
+    /// The inert encode failure is the one arm that must account for itself.
+    ///
+    /// `tracestate` deliberately stays out of the indexed attributes: it
+    /// rides the verbatim JSONL body (which the `tracestate` record field is
+    /// part of) and is never a queryable `mtui.*` key.
+    pub(crate) fn export_best_effort(
+        &self,
+        record: &serde_json::Value,
+        name: &str,
+        kwargs: &serde_json::Map<String, serde_json::Value>,
+        trace: Option<([u8; 16], [u8; 8], u8)>,
+    ) {
+        let Some(otel) = self.otel() else {
+            return;
+        };
+        let seq = record["seq"].as_u64().unwrap_or_default();
+        let line = serde_json::to_string(record).unwrap_or_default();
+        if line.is_empty() {
+            otel.note_rejected(seq);
+            warn_export_lost(seq, crate::otel::ExportReason::Encode.as_str());
+            return;
+        }
+        let queued = crate::otel::QueuedAudit {
+            seq,
+            jsonl: line,
+            tool: crate::audit::cap_str(name),
+            // Absent on an intent record: nothing has happened yet to judge.
+            outcome: record["outcome"].as_str().unwrap_or_default().to_owned(),
+            event: record["event"].as_str().unwrap_or_default().to_owned(),
+            transport: self.transport().to_owned(),
+            session_id: self.id,
+            response_bytes: record["response_bytes"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok()),
+            trace,
+            time_nanos: crate::otel::now_nanos(),
+            extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
+        };
+        if let Err(reason) = otel.enqueue_audit(queued) {
+            warn_export_lost(seq, enqueue_reason(reason));
         }
     }
 
@@ -2138,6 +2160,27 @@ impl McpSession {
                 exit_code: 1,
             })
     }
+}
+
+/// The closed-vocabulary reason for a refused OTLP enqueue: never the
+/// endpoint, headers, or URL.
+fn enqueue_reason(reason: crate::otel::EnqueueError) -> &'static str {
+    match reason {
+        crate::otel::EnqueueError::Full => "otlp queue full",
+        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+    }
+}
+
+/// Warn that one record did not reach the exporter.
+///
+/// The only report an unexported record gets: the call itself still answers.
+/// Recovery from a probe-latched exporter does not hang on this line — the
+/// refused enqueue already merged its `seq` into the rejected gap, which the
+/// flush absorbs and re-POSTs as a gap-only batch every tick. `mtui_mcp::session`
+/// is outside `DIAG_EXCLUDED_PREFIXES`, so the line rides the diagnostics queue
+/// as a second driver.
+fn warn_export_lost(seq: u64, reason: &'static str) {
+    tracing::warn!(seq, reason, "audit otlp: record not exported");
 }
 
 #[cfg(test)]

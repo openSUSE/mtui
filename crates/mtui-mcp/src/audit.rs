@@ -91,6 +91,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 
+use crate::session::McpSession;
+
 /// Schema version stamped on every record as `v`.
 pub(crate) const AUDIT_SCHEMA_VERSION: u32 = 1;
 
@@ -171,6 +173,36 @@ impl AuditEvent {
             AuditEvent::Dispatch => "dispatch",
             AuditEvent::Terminal => "terminal",
         }
+    }
+}
+
+/// The fields every audit record opens with; the caller adds the rest.
+pub(crate) fn record_header(
+    session: &McpSession,
+    ts: u64,
+    seq: u64,
+    event: AuditEvent,
+    tool: &str,
+) -> Value {
+    serde_json::json!({
+        "v": AUDIT_SCHEMA_VERSION,
+        "ts": ts,
+        "seq": seq,
+        "session": session.id(),
+        "transport": session.transport(),
+        "principal": Value::Null,
+        "event": event.as_str(),
+        "tool": cap_str(tool),
+    })
+}
+
+/// Stamp the validated W3C correlation keys onto a record.
+pub(crate) fn with_trace(record: &mut Value, traceparent: Option<&str>, tracestate: Option<&str>) {
+    if let Some(traceparent) = traceparent {
+        record["trace"] = serde_json::json!(traceparent);
+    }
+    if let Some(tracestate) = tracestate {
+        record["tracestate"] = serde_json::json!(tracestate);
     }
 }
 

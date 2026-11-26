@@ -434,7 +434,7 @@ impl McpServer {
         tracestate: Option<&str>,
     ) -> Result<CallToolResponse, McpError> {
         use crate::audit::{
-            AUDIT_SCHEMA_VERSION, AuditEvent, AuditOutcome, refuse_error, sanitize_args,
+            AuditEvent, AuditOutcome, record_header, refuse_error, sanitize_args, with_trace,
         };
 
         let start = std::time::Instant::now();
@@ -475,29 +475,17 @@ impl McpServer {
         let mut intent_seq: Option<u64> = None;
         if auditing && !self.read_only_tools.contains(name) {
             let seq = crate::audit::next_seq();
-            let mut record = serde_json::json!({
-                "v": AUDIT_SCHEMA_VERSION,
-                "ts": started_ms,
-                "seq": seq,
-                "session": self.session.id(),
-                "transport": self.session.transport(),
-                "principal": serde_json::Value::Null,
-                "event": AuditEvent::Intent.as_str(),
-                "tool": crate::audit::cap_str(name),
-                "args": args.clone(),
-            });
-            if let Some(traceparent) = traced {
-                record["trace"] = serde_json::json!(traceparent);
-            }
-            if let Some(tracestate) = traced_state {
-                record["tracestate"] = serde_json::json!(tracestate);
-            }
+            let mut record =
+                record_header(&self.session, started_ms, seq, AuditEvent::Intent, name);
+            record["args"] = serde_json::json!(args.clone());
+            with_trace(&mut record, traced, traced_state);
             if let Some(audit) = self.session.audit_log()
                 && let Err(err) = audit.append_async(record.clone()).await
             {
                 return Err(refuse_error(&err));
             }
-            self.export_best_effort(&record, name, kwargs, trace);
+            self.session
+                .export_best_effort(&record, name, kwargs, trace);
             intent_seq = Some(seq);
         }
 
@@ -637,21 +625,12 @@ impl McpServer {
             let seq = crate::audit::next_seq();
             let hosts = self.session.audit_hosts(&scope).await;
             let response_bytes = response_bytes_of(&result);
-            let mut record = serde_json::json!({
-                "v": AUDIT_SCHEMA_VERSION,
-                "ts": started_ms,
-                "seq": seq,
-                "session": self.session.id(),
-                "transport": self.session.transport(),
-                "principal": serde_json::Value::Null,
-                "event": event.as_str(),
-                "tool": crate::audit::cap_str(name),
-                "args": args,
-                "outcome": outcome.as_str(),
-                "duration_ms": start.elapsed().as_millis() as u64,
-                "rrids": scope.rrids(),
-                "hosts": hosts,
-            });
+            let mut record = record_header(&self.session, started_ms, seq, event, name);
+            record["args"] = serde_json::json!(args);
+            record["outcome"] = serde_json::json!(outcome.as_str());
+            record["duration_ms"] = serde_json::json!(start.elapsed().as_millis() as u64);
+            record["rrids"] = serde_json::json!(scope.rrids());
+            record["hosts"] = serde_json::json!(hosts);
             if let Some(intent) = intent_seq {
                 record["intent"] = serde_json::json!(intent);
             }
@@ -660,12 +639,7 @@ impl McpServer {
                     job_ids.iter().map(|id| crate::audit::cap_str(id)).collect();
                 record["job_ids"] = serde_json::json!(capped);
             }
-            if let Some(traceparent) = traced {
-                record["trace"] = serde_json::json!(traceparent);
-            }
-            if let Some(tracestate) = traced_state {
-                record["tracestate"] = serde_json::json!(tracestate);
-            }
+            with_trace(&mut record, traced, traced_state);
             if let Some(bytes) = response_bytes {
                 record["response_bytes"] = serde_json::json!(bytes);
             }
@@ -690,84 +664,14 @@ impl McpServer {
                 lost = Some(err.to_string());
             }
             // OTLP second, same seq and verbatim line.
-            self.export_best_effort(&record, name, kwargs, trace);
+            self.session
+                .export_best_effort(&record, name, kwargs, trace);
             if let Some(reason) = lost {
                 result = with_audit_notice(result, &reason);
             }
         }
         result
     }
-
-    /// Hand one already-built record to the OTLP exporter, best-effort.
-    ///
-    /// Never refuses and never reports back: the `mtui.*` attributes are read
-    /// back out of `record`, so they cannot disagree with the JSONL body they
-    /// accompany. A rejected enqueue warns with a closed-vocabulary reason and
-    /// nothing more — `enqueue_audit` has already merged the seq into the gap
-    /// it reports on recovery, so accounting it again here would double-count.
-    /// The inert encode failure is the one arm that must account for itself.
-    ///
-    /// `tracestate` deliberately stays out of the indexed attributes: it
-    /// rides the verbatim JSONL body (which the `tracestate` record field is
-    /// part of) and is never a queryable `mtui.*` key.
-    fn export_best_effort(
-        &self,
-        record: &Value,
-        name: &str,
-        kwargs: &Map<String, Value>,
-        trace: Option<([u8; 16], [u8; 8], u8)>,
-    ) {
-        let Some(otel) = self.session.otel() else {
-            return;
-        };
-        let seq = record["seq"].as_u64().unwrap_or_default();
-        let line = serde_json::to_string(record).unwrap_or_default();
-        if line.is_empty() {
-            otel.note_rejected(seq);
-            warn_export_lost(seq, crate::otel::ExportReason::Encode.as_str());
-            return;
-        }
-        let queued = crate::otel::QueuedAudit {
-            seq,
-            jsonl: line,
-            tool: crate::audit::cap_str(name),
-            // Absent on an intent record: nothing has happened yet to judge.
-            outcome: record["outcome"].as_str().unwrap_or_default().to_owned(),
-            event: record["event"].as_str().unwrap_or_default().to_owned(),
-            transport: self.session.transport().to_owned(),
-            session_id: self.session.id(),
-            response_bytes: record["response_bytes"]
-                .as_u64()
-                .and_then(|n| usize::try_from(n).ok()),
-            trace,
-            time_nanos: crate::otel::now_nanos(),
-            extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
-        };
-        if let Err(reason) = otel.enqueue_audit(queued) {
-            warn_export_lost(seq, enqueue_reason(reason));
-        }
-    }
-}
-
-/// The closed-vocabulary reason for a refused OTLP enqueue: never the
-/// endpoint, headers, or URL.
-fn enqueue_reason(reason: crate::otel::EnqueueError) -> &'static str {
-    match reason {
-        crate::otel::EnqueueError::Full => "otlp queue full",
-        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
-    }
-}
-
-/// Warn that one record did not reach the exporter.
-///
-/// The only report an unexported record gets: the call itself still answers.
-/// Recovery from a probe-latched exporter does not hang on this line — the
-/// refused enqueue already merged its `seq` into the rejected gap, which the
-/// flush absorbs and re-POSTs as a gap-only batch every tick. `mtui_mcp::server`
-/// is outside `DIAG_EXCLUDED_PREFIXES`, so the line rides the diagnostics queue
-/// as a second driver.
-fn warn_export_lost(seq: u64, reason: &'static str) {
-    tracing::warn!(seq, reason, "audit otlp: record not exported");
 }
 
 /// The in-band notice appended to a reply whose outcome record could not be
@@ -2425,6 +2329,39 @@ mod tests {
             body.windows(b"whoami".len()).any(|w| w == b"whoami"),
             "protobuf carries the verbatim JSONL tool"
         );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_background_jobs_terminal_record_is_exported_to_otlp() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(Arc::new(register_all()), session.clone());
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+
+        let needle = br#""event":"terminal""#;
+        let mut exported = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let body = bodies.lock().expect("body").clone();
+            if body.windows(needle.len()).any(|w| w == needle) {
+                exported = true;
+                break;
+            }
+        }
+        assert!(exported, "the terminal record reaches the collector");
         exporter.shutdown().await;
     }
 
