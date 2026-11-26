@@ -141,7 +141,7 @@ mod tests {
 
     use super::*;
     use crate::commands::testkit::{
-        empty_session, fake_report, matches, session_with_hosts, session_with_targets,
+        empty_session, fake_report, matches, session_with_hosts, session_with_targets, target_with,
     };
 
     /// Override for [`close_timeout`] in milliseconds; `u64::MAX` means the
@@ -245,12 +245,6 @@ mod tests {
         let args = matches(&Quit, &["poweroff"]);
         Quit.call(&mut session, &args).await.unwrap();
         assert!(session.should_exit());
-    }
-
-    /// Builds a target whose mock connection is scripted with `build`.
-    fn target_with(host: &str, build: impl FnOnce(MockConnection) -> MockConnection) -> Target {
-        let conn = build(MockConnection::new(host));
-        Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
     /// A locked target over a probe that stays observable after the target takes
