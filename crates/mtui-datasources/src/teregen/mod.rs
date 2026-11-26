@@ -32,7 +32,8 @@ use serde_json::{Value, json};
 
 use crate::error::{HttpError, TeReGenError};
 use crate::http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, read_body_capped, sanitize_url,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, join_url, query_string,
+    read_body_capped, sanitize_url,
 };
 
 pub mod auth;
@@ -280,12 +281,7 @@ impl TeReGen {
         path: &str,
         query: &[(&str, String)],
     ) -> Result<Value, TeReGenError> {
-        let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
-        let qs = build_query_string(query);
-        if !qs.is_empty() {
-            url.push('?');
-            url.push_str(&qs);
-        }
+        let url = join_url(&self.base, path, &query_string(query));
         let request = client.get(&url).timeout(timeout);
         let response = request.send().await.map_err(|e| {
             let e = HttpError::from(e);
@@ -615,24 +611,6 @@ fn json_keys(v: &Value) -> String {
         || "<not an object>".to_string(),
         |o| o.keys().map(String::as_str).collect::<Vec<_>>().join(", "),
     )
-}
-
-/// Build the percent-encoded `key=value&...` query string.
-///
-/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
-/// `.query()` wire form, which this workspace's minimal reqwest build omits.
-fn build_query_string(params: &[(&str, String)]) -> String {
-    params
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                urlencoding::encode(k),
-                urlencoding::encode(v).replace("%20", "+")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("&")
 }
 
 /// How long the SMELT-backed reads ([`TeReGen::checkers`], [`TeReGen::updates`])

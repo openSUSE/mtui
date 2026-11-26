@@ -23,8 +23,8 @@ use reqwest::{Method, RequestBuilder};
 
 use crate::error::HttpError;
 use crate::http::{
-    HttpClient, MAX_API_BODY, is_ssl_verification_error, read_body_capped, sanitize_url,
-    ssl_error_detail, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, is_ssl_verification_error, join_url, query_string, read_body_capped,
+    sanitize_url, ssl_error_detail, ssl_verification_hint,
 };
 use crate::obs::errors::ObsError;
 
@@ -154,13 +154,7 @@ impl ObsClient {
     /// build does not expose `.query()` (see [`crate::teregen`] /
     /// [`crate::openqa`]).
     fn url(&self, path: &str, params: &[(&str, String)]) -> String {
-        let mut url = format!("{}/{}", self.api_url, path.trim_start_matches('/'));
-        let qs = build_query_string(params);
-        if !qs.is_empty() {
-            url.push('?');
-            url.push_str(&qs);
-        }
-        url
+        join_url(&self.api_url, path, &query_string(params))
     }
 
     /// Abort with [`ObsError::Timeout`] if the between-calls budget is spent.
@@ -348,25 +342,6 @@ impl ObsClient {
     ) -> Result<String, ObsError> {
         self.request(Method::POST, path, params, Some(body)).await
     }
-}
-
-/// Build the percent-encoded `key=value&...` query string.
-///
-/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
-/// `.query()` wire form, which this workspace's minimal reqwest build omits
-/// (see [`crate::teregen`]).
-fn build_query_string(params: &[(&str, String)]) -> String {
-    params
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                urlencoding::encode(k),
-                urlencoding::encode(v).replace("%20", "+")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("&")
 }
 
 /// Extract the host (authority without any port) from an
