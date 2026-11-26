@@ -471,6 +471,16 @@ impl<C: Clock> Drop for TargetLock<C> {
     }
 }
 
+/// How one exclusive-create attempt ended.
+enum Create {
+    /// The create landed: the lock is ours.
+    Won,
+    /// The file vanished between the create and the load; create again.
+    Freed,
+    /// The file exists and is loaded (and settled) for the caller to judge.
+    Occupied,
+}
+
 /// The default operation-lock path, `/var/lock/mtui.lock` — a cross-process
 /// contract (other tools on the fleet parse the same layout).
 pub const TARGET_LOCK_PATH: &str = "/var/lock/mtui.lock";
@@ -832,26 +842,50 @@ impl<C: Clock> TargetLock<C> {
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
     pub(crate) async fn reap_if_stale(&mut self) -> Result<bool> {
-        if !self.lock_reap_stale || self.lock_stale_age == 0 {
+        self.reap_with(self.lock_reap_stale, self.lock_stale_age, false)
+            .await
+    }
+
+    /// Force-removes the loaded lock when `enabled` and older than `stale_age`
+    /// seconds (`0` disables); `pool` only selects the wording of the warning.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load/unlock path.
+    async fn reap_with(&mut self, enabled: bool, stale_age: u64, pool: bool) -> Result<bool> {
+        if !enabled || stale_age == 0 {
             return Ok(false);
         }
         let Some(age) = self.age_seconds().await? else {
             return Ok(false);
         };
-        if age <= self.lock_stale_age {
+        if age <= stale_age {
             return Ok(false);
         }
         if self.invalid {
-            tracing::warn!(
-                host = %self.hostname(), hours = age / 3600,
-                "removing stale invalid lockfile"
-            );
+            if pool {
+                tracing::warn!(
+                    host = %self.hostname(), hours = age / 3600,
+                    "removing stale invalid pool lockfile"
+                );
+            } else {
+                tracing::warn!(
+                    host = %self.hostname(), hours = age / 3600,
+                    "removing stale invalid lockfile"
+                );
+            }
             return self.remove_invalid().await;
         }
-        tracing::warn!(
-            host = %self.hostname(), user = %self.lock.user, hours = age / 3600,
-            "removing stale lock"
-        );
+        if pool {
+            tracing::warn!(
+                host = %self.hostname(), user = %self.lock.user, hours = age / 3600,
+                "removing stale pool claim"
+            );
+        } else {
+            tracing::warn!(
+                host = %self.hostname(), user = %self.lock.user, hours = age / 3600,
+                "removing stale lock"
+            );
+        }
         self.unlock(true).await?;
         Ok(true)
     }
@@ -973,42 +1007,16 @@ impl<C: Clock> TargetLock<C> {
         };
         let path = self.filename();
         let line = rl.to_lockfile();
-        // Reconciles a create whose reply timed out at most once per `lock()`
-        // call — the create may well have landed server-side, so the next
-        // load is trusted as authoritative instead of assuming failure. A
-        // *second* timeout is a real, propagating error: this is not another
-        // `RECONCILE_RETRIES`-style budget.
         let mut timeout_reconciled = false;
 
         for _ in 0..Self::RECONCILE_RETRIES {
-            // 1) Atomic exclusive create: on a free host exactly one racer wins.
             match self
-                .connection
-                .sftp_write(&path, line.as_bytes(), true)
-                .await
+                .create_or_reconcile(&rl, &mut timeout_reconciled)
+                .await?
             {
-                Ok(()) => {
-                    self.mark_held(rl.comment.clone());
-                    self.lock = rl;
-                    return Ok(());
-                }
-                Err(HostError::AlreadyExists { .. }) => {
-                    // Fall through to reconciliation.
-                }
-                Err(HostError::SftpTimeout { .. }) if !timeout_reconciled => {
-                    timeout_reconciled = true;
-                    // The create may well have landed server-side; re-read
-                    // before giving up.
-                }
-                Err(e) => return Err(e),
-            }
-
-            // 2) The file exists. Load it (fail-closed) and decide.
-            self.load().await?;
-            self.settle().await?;
-            if self.lock.user.is_empty() && !self.invalid {
-                // Freed between the create and the load — retry the create.
-                continue;
+                Create::Won => return Ok(()),
+                Create::Freed => continue,
+                Create::Occupied => {}
             }
             if self.owned_here()? {
                 // The wire's ownership check is PID-based, so it cannot tell
@@ -1064,6 +1072,48 @@ impl<C: Clock> TargetLock<C> {
         Err(self.contention().await?)
     }
 
+    /// One atomic exclusive create of `rl`, then — when the file already exists
+    /// — a fail-closed load of it.
+    ///
+    /// A create whose reply timed out is reconciled at most once per `lock()`
+    /// call (`timeout_reconciled`): it may well have landed server-side, so the
+    /// next load is trusted as authoritative instead of assuming failure. A
+    /// *second* timeout is a real, propagating error, not another
+    /// [`RECONCILE_RETRIES`](Self::RECONCILE_RETRIES)-style budget.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the create or the load.
+    async fn create_or_reconcile(
+        &mut self,
+        rl: &RemoteLock,
+        timeout_reconciled: &mut bool,
+    ) -> Result<Create> {
+        let path = self.filename();
+        match self
+            .connection
+            .sftp_write(&path, rl.to_lockfile().as_bytes(), true)
+            .await
+        {
+            Ok(()) => {
+                self.mark_held(rl.comment.clone());
+                self.lock = rl.clone();
+                return Ok(Create::Won);
+            }
+            Err(HostError::AlreadyExists { .. }) => {}
+            Err(HostError::SftpTimeout { .. }) if !*timeout_reconciled => {
+                *timeout_reconciled = true;
+            }
+            Err(e) => return Err(e),
+        }
+        self.load().await?;
+        self.settle().await?;
+        Ok(if self.lock.user.is_empty() && !self.invalid {
+            Create::Freed
+        } else {
+            Create::Occupied
+        })
+    }
+
     /// The error for a lock that cannot be taken: [`HostError::InvalidLockFile`]
     /// when the lockfile is invalid, else [`HostError::TargetLocked`] naming the
     /// holder.
@@ -1106,13 +1156,26 @@ impl<C: Clock> TargetLock<C> {
     /// forced, or an SFTP/transport error from the remove path (other than
     /// "already gone").
     pub async fn unlock(&mut self, force: bool) -> Result<()> {
+        self.unlock_with(force, Self::owned_here).await
+    }
+
+    /// [`unlock`](Self::unlock) with the ownership test supplied by the caller,
+    /// run once the lock is known to be loaded and present.
+    ///
+    /// # Errors
+    /// As [`unlock`](Self::unlock).
+    async fn unlock_with(
+        &mut self,
+        force: bool,
+        owned: impl FnOnce(&Self) -> Result<bool>,
+    ) -> Result<()> {
         if !self.is_locked().await? {
             // The lockfile is gone (a reboot cleared `/var/lock`, another owner
             // removed it): whatever this instance took, it no longer holds.
             self.mark_released();
             return Ok(());
         }
-        if !self.owned_here()? && !force {
+        if !owned(self)? && !force {
             return Err(self.contention().await?);
         }
         let path = self.filename();
@@ -1283,26 +1346,7 @@ impl<C: Clock> PoolLock<C> {
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
     /// lock is loaded.
     fn is_mine(&self) -> Result<bool> {
-        if self.inner.invalid {
-            return Ok(false);
-        }
-        let lock = self.inner.current();
-        if lock.user.is_empty() {
-            return Err(HostError::TargetLocked("not locked".to_owned()));
-        }
-        if lock.user != self.inner.i_am_user {
-            return Ok(false);
-        }
-        if self.i_am_rrid.is_empty() {
-            return Ok(true);
-        }
-        Ok(Self::rrid_of(&lock.comment) == self.i_am_rrid)
-    }
-
-    /// The pool lockfile path.
-    #[must_use]
-    fn filename(&self) -> PathBuf {
-        PathBuf::from(POOL_LOCK_PATH)
+        pool_is_mine(&self.inner, &self.i_am_rrid)
     }
 
     /// Resolves the pool claim's on-disk state, RRID-based ownership, and owning
@@ -1354,16 +1398,6 @@ impl<C: Clock> PoolLock<C> {
         self.i_am_rrid = rrid.into();
     }
 
-    /// Whether the pool claim is currently held (by anyone).
-    ///
-    /// Delegates to the inner [`TargetLock`], which reads the pool lockfile.
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load path.
-    async fn is_locked(&mut self) -> Result<bool> {
-        self.inner.is_locked().await
-    }
-
     /// Claims the pool lock, recording `comment` (the
     /// `mtui pool <RRID> [<owner>]` stamp).
     ///
@@ -1384,35 +1418,17 @@ impl<C: Clock> PoolLock<C> {
             pid: self.inner.i_am_pid,
             comment: comment.to_owned(),
         };
-        let path = self.filename();
-        let line = rl.to_lockfile();
-        // A timed-out create may have landed, so the next load is trusted once;
-        // a second timeout is a real error.
         let mut timeout_reconciled = false;
 
         for _ in 0..TargetLock::<C>::RECONCILE_RETRIES {
             match self
                 .inner
-                .connection
-                .sftp_write(&path, line.as_bytes(), true)
-                .await
+                .create_or_reconcile(&rl, &mut timeout_reconciled)
+                .await?
             {
-                Ok(()) => {
-                    self.inner.mark_held(rl.comment.clone());
-                    self.inner.lock = rl;
-                    return Ok(());
-                }
-                Err(HostError::AlreadyExists { .. }) => {}
-                Err(HostError::SftpTimeout { .. }) if !timeout_reconciled => {
-                    timeout_reconciled = true;
-                }
-                Err(e) => return Err(e),
-            }
-
-            self.inner.load().await?;
-            self.inner.settle().await?;
-            if self.inner.lock.user.is_empty() && !self.inner.invalid {
-                continue;
+                Create::Won => return Ok(()),
+                Create::Freed => continue,
+                Create::Occupied => {}
             }
             if self.is_mine()? {
                 self.inner.mark_held(self.inner.lock.comment.clone());
@@ -1441,31 +1457,9 @@ impl<C: Clock> PoolLock<C> {
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
     async fn reap_if_stale(&mut self) -> Result<bool> {
-        if !self.pool_reap_stale || self.pool_stale_age == 0 {
-            return Ok(false);
-        }
-        let Some(age) = self.inner.age_seconds().await? else {
-            return Ok(false);
-        };
-        if age <= self.pool_stale_age {
-            return Ok(false);
-        }
-        if self.inner.invalid {
-            tracing::warn!(
-                host = %self.inner.hostname(),
-                hours = age / 3600,
-                "removing stale invalid pool lockfile"
-            );
-            return self.inner.remove_invalid().await;
-        }
-        tracing::warn!(
-            host = %self.inner.hostname(),
-            user = %self.inner.current().user,
-            hours = age / 3600,
-            "removing stale pool claim"
-        );
-        self.unlock(true).await?;
-        Ok(true)
+        self.inner
+            .reap_with(self.pool_reap_stale, self.pool_stale_age, true)
+            .await
     }
 
     /// Claims the pool lock without raising when it is already claimed.
@@ -1508,29 +1502,30 @@ impl<C: Clock> PoolLock<C> {
     /// Returns [`HostError::TargetLocked`] when the claim is foreign and not
     /// forced, or an SFTP error from the remove path.
     pub(crate) async fn unlock(&mut self, force: bool) -> Result<()> {
-        if !self.is_locked().await? {
-            self.mark_released();
-            return Ok(());
-        }
-        if !self.is_mine()? && !force {
-            return Err(self.inner.contention().await?);
-        }
-        let path = self.filename();
-        match self.inner.connection.sftp_remove(&path).await {
-            Ok(()) => {}
-            Err(HostError::SftpNotFound { .. }) => {
-                tracing::debug!("pool lockfile already gone");
-            }
-            Err(e) => {
-                // The claim was not removed; do not mark it released.
-                return Err(e);
-            }
-        }
-        self.inner.lock = RemoteLock::default();
-        self.inner.invalid = false;
-        self.mark_released();
-        Ok(())
+        let rrid = &self.i_am_rrid;
+        self.inner
+            .unlock_with(force, |lock| pool_is_mine(lock, rrid))
+            .await
     }
+}
+
+/// Pool-claim ownership of the loaded `lock` for a session on `rrid`:
+/// RRID-based (ignores PID), falling back to user-only without an RRID.
+fn pool_is_mine<C: Clock>(lock: &TargetLock<C>, rrid: &str) -> Result<bool> {
+    if lock.invalid {
+        return Ok(false);
+    }
+    let loaded = lock.current();
+    if loaded.user.is_empty() {
+        return Err(HostError::TargetLocked("not locked".to_owned()));
+    }
+    if loaded.user != lock.i_am_user {
+        return Ok(false);
+    }
+    if rrid.is_empty() {
+        return Ok(true);
+    }
+    Ok(PoolLock::<C>::rrid_of(&loaded.comment) == rrid)
 }
 
 /// Converts a Unix timestamp to `%A, %d.%m.%Y %H:%M UTC`.
@@ -3771,7 +3766,7 @@ mod tests {
         for content in INVALID_CONTENTS {
             let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
             let mut p = pool(conn, "SUSE:Maintenance:1:2");
-            assert!(p.is_locked().await.unwrap(), "{content:?}");
+            assert!(p.inner.is_locked().await.unwrap(), "{content:?}");
             let snap = p.snapshot().await.unwrap();
             assert!(snap.invalid, "{content:?}");
             assert!(!snap.is_mine, "{content:?}");
