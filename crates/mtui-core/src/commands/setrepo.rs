@@ -104,12 +104,12 @@ impl Command for SetRepo {
             // prepare/update do: refuse while another owner holds a host
             // rather than changing its repos under them (#665).
             let locked: BTreeSet<String> = selected.names().into_iter().collect();
-            if let Err(e) = selected.update_lock_selected(&locked).await {
+            if let Err(e) = selected.update_lock(Some(&locked)).await {
                 session.restore_split_targets(selected, remainder);
                 return Err(CommandError::Other(e.to_string()));
             }
             let set_repo = session.metadata().as_set_repo().expect("checked above");
-            selected.fanout_set_repo(operation, set_repo).await;
+            selected.fanout_set_repo(operation, set_repo, None).await;
             // `last_repo()` aggregates the whole per-host `zypper ar/rr` +
             // refresh run; any recorded error must fail the command, so an MCP
             // call never silently succeeds on a repo that failed to apply.
@@ -141,7 +141,7 @@ impl Command for SetRepo {
             }
             // Exactly the set locked above: releasing a host never locked
             // would report a failure for a lock nobody took.
-            let unlock_outcomes = selected.unlock_selected(&locked).await;
+            let unlock_outcomes = selected.unlock(Some(&locked)).await;
             // Report a stranded lock like prepare/update do.
             warn_on_unlock_failures("set_repo", &unlock_outcomes);
             if !failed.is_empty() {

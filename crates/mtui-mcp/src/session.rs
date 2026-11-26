@@ -3551,7 +3551,7 @@ mod tests {
             _args: &clap::ArgMatches,
         ) -> mtui_core::CommandResult {
             let rrid = session.metadata().id();
-            session.targets_mut().lock("").await;
+            session.targets_mut().lock("", None).await;
             if self.park_rrid.as_ref().is_some_and(|r| *r != rrid) {
                 return Ok(());
             }
@@ -3567,7 +3567,7 @@ mod tests {
                 }
                 Park::Gate(gate) => {
                     let _permit = gate.acquire().await.expect("gate not closed");
-                    session.targets_mut().unlock().await;
+                    session.targets_mut().unlock(None).await;
                 }
             }
             Ok(())
@@ -3604,7 +3604,7 @@ mod tests {
         ) -> mtui_core::CommandResult {
             for rrid in session.templates.rrids() {
                 if let Some(entry) = session.templates.handle(&rrid) {
-                    entry.lock().await.base_mut().targets.lock("").await;
+                    entry.lock().await.base_mut().targets.lock("", None).await;
                 }
             }
             tokio::time::sleep(Duration::from_secs(600)).await;

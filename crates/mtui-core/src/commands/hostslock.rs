@@ -65,7 +65,7 @@ impl Command for HostLock {
             .map_err(|e| CommandError::Other(e.to_string()))?
             .into_iter()
             .collect();
-        let outcomes = targets.lock_selected(&comment, &names).await;
+        let outcomes = targets.lock(&comment, Some(&names)).await;
 
         // `Contended` is benign — another owner holds the lock — so only a real
         // transport error (`Failed`) fails the command.

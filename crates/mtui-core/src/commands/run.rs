@@ -80,7 +80,7 @@ impl Command for Run {
         // operation lock breaks the serialization it exists for. Anything else
         // rolls back and aborts without running.
         let selected: BTreeSet<String> = hosts.iter().cloned().collect();
-        let outcomes = targets.lock_selected("", &selected).await;
+        let outcomes = targets.lock("", Some(&selected)).await;
 
         // Classify under the `targets` borrow; display writes would be a second
         // `session` borrow, so they wait until it is released.
@@ -113,7 +113,7 @@ impl Command for Run {
 
         if !blocked.is_empty() {
             if !acquired.is_empty() {
-                targets.unlock_selected(&acquired).await;
+                targets.unlock(Some(&acquired)).await;
             }
             for line in &report {
                 session.display.println(line);
@@ -126,7 +126,7 @@ impl Command for Run {
         }
 
         targets.run(per_host(&command, &hosts)).await;
-        targets.unlock_selected(&selected).await;
+        targets.unlock(Some(&selected)).await;
 
         let mut output: Vec<String> = Vec::new();
         // A non-zero remote exit is often expected, so this stays `Ok` and the

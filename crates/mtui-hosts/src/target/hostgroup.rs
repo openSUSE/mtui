@@ -55,6 +55,14 @@ use super::operation::{
 use super::repo_manager::{RepoOp, SetRepo};
 use super::{LockOwner, LockRow, OpLockHolders, Target};
 
+/// Which hosts a group fan-out covers: `None` is the whole group, `Some` only
+/// the named ones. A name not in the group is silently skipped.
+pub type Scope<'a> = Option<&'a BTreeSet<String>>;
+
+fn in_scope(scope: Scope<'_>) -> impl Fn(&Target) -> bool + Copy + '_ {
+    move |t| scope.is_none_or(|names| names.contains(t.hostname()))
+}
+
 /// The per-host result of a group [`lock`](HostsGroup::lock) /
 /// [`unlock`](HostsGroup::unlock) fan-out.
 ///
@@ -775,7 +783,7 @@ impl HostsGroup {
         &mut self,
         remote: &Path,
     ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        bytes_only(self.sftp_read_capped(remote, 0).await)
+        bytes_only(self.sftp_read_capped(remote, 0, None).await)
     }
 
     /// Reads `remote` into memory from only the named hosts, otherwise
@@ -789,45 +797,20 @@ impl HostsGroup {
         remote: &Path,
         names: &std::collections::BTreeSet<String>,
     ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        bytes_only(self.sftp_read_capped_selected(remote, names, 0).await)
+        bytes_only(self.sftp_read_capped(remote, 0, Some(names)).await)
     }
 
     /// Like [`sftp_read`](Self::sftp_read), but each host retains at most
     /// `max_bytes` (`0` = unlimited) and reports its file size and whether the
-    /// content was cut.
+    /// content was cut. `scope` narrows the fan-out to the named hosts (see
+    /// [`Scope`]).
     pub async fn sftp_read_capped(
         &mut self,
         remote: &Path,
         max_bytes: usize,
+        scope: Scope<'_>,
     ) -> BTreeMap<String, std::result::Result<SftpRead, String>> {
-        self.sftp_read_capped_where(remote, max_bytes, |_t| true)
-            .await
-    }
-
-    /// Like [`sftp_read_selected`](Self::sftp_read_selected), with the per-host
-    /// budget of [`sftp_read_capped`](Self::sftp_read_capped).
-    pub async fn sftp_read_capped_selected(
-        &mut self,
-        remote: &Path,
-        names: &std::collections::BTreeSet<String>,
-        max_bytes: usize,
-    ) -> BTreeMap<String, std::result::Result<SftpRead, String>> {
-        self.sftp_read_capped_where(remote, max_bytes, |t| names.contains(t.hostname()))
-            .await
-    }
-
-    /// Shared implementation for the in-memory read fan-outs, the
-    /// [`lock_where`](Self::lock_where) pattern over [`Target::sftp_read_capped`].
-    async fn sftp_read_capped_where<S>(
-        &mut self,
-        remote: &Path,
-        max_bytes: usize,
-        select: S,
-    ) -> BTreeMap<String, std::result::Result<SftpRead, String>>
-    where
-        S: Fn(&Target) -> bool + Send + Sync,
-    {
-        self.collect_fanout("FileDownload", select, |t| {
+        self.collect_fanout("FileDownload", in_scope(scope), |t| {
             let remote = remote.to_path_buf();
             // `None` = not attempted (disabled): the host stays out of the map
             // rather than masquerading as an outcome.
@@ -843,42 +826,18 @@ impl HostsGroup {
     /// arrives from the caller (the MCP `put` tool) rather than a local file.
     /// Returns one entry per attempted host like
     /// [`sftp_read`](Self::sftp_read); the per-target upload still records
-    /// `last_upload`, so the REPL aggregation stays coherent if mixed.
+    /// `last_upload`, so the REPL aggregation stays coherent if mixed. `scope`
+    /// narrows the fan-out to the named hosts (see [`Scope`]).
     pub async fn sftp_put_bytes(
         &mut self,
         data: &[u8],
         remote: &Path,
+        scope: Scope<'_>,
     ) -> BTreeMap<String, std::result::Result<(), String>> {
-        self.sftp_put_bytes_where(data, remote, |_t| true).await
-    }
-
-    /// Like [`sftp_put_bytes`](Self::sftp_put_bytes), to only the named hosts;
-    /// unknown names are silently skipped, as in
-    /// [`sftp_read_selected`](Self::sftp_read_selected).
-    pub async fn sftp_put_bytes_selected(
-        &mut self,
-        data: &[u8],
-        remote: &Path,
-        names: &std::collections::BTreeSet<String>,
-    ) -> BTreeMap<String, std::result::Result<(), String>> {
-        self.sftp_put_bytes_where(data, remote, |t| names.contains(t.hostname()))
-            .await
-    }
-
-    /// Shared implementation for the in-memory upload fan-outs.
-    async fn sftp_put_bytes_where<S>(
-        &mut self,
-        data: &[u8],
-        remote: &Path,
-        select: S,
-    ) -> BTreeMap<String, std::result::Result<(), String>>
-    where
-        S: Fn(&Target) -> bool + Send + Sync,
-    {
         // One allocation shared across hosts — the actions::sftp_put_all
         // shared-bytes pattern; the caller has already size-capped the payload.
         let shared: Arc<[u8]> = Arc::from(data);
-        self.collect_fanout("FileUpload", select, |t| {
+        self.collect_fanout("FileUpload", in_scope(scope), |t| {
             let shared = Arc::clone(&shared);
             let remote = remote.to_path_buf();
             boxed(async move { t.sftp_put_bytes(&shared, &remote).await })
@@ -886,7 +845,7 @@ impl HostsGroup {
         .await
     }
 
-    /// Locks every host in the group for `comment`, best-effort.
+    /// Locks every host in `scope` for `comment`, best-effort.
     ///
     /// Each per-target [`Target::lock`] is
     /// attempted, and a [`HostError::TargetLocked`] from a foreign-owned host is
@@ -898,36 +857,12 @@ impl HostsGroup {
     /// like [`close`](Self::close), so the map is deterministic regardless of
     /// completion order) so a command can report which hosts a real failure hit
     /// while leaving benign [`Contended`](LockOutcome::Contended) hosts
-    /// unreported. Existing callers that ignore the return value keep compiling.
-    pub async fn lock(&mut self, comment: &str) -> BTreeMap<String, LockOutcome> {
-        self.lock_where(comment, |_t| true).await
-    }
-
-    /// Locks only the named hosts for `comment`, best-effort, otherwise
-    /// identical to [`lock`](Self::lock).
-    ///
-    /// The returned [`LockOutcome`] map contains an entry for every host in
-    /// `names` that exists in the group (unknown names are silently skipped, like
-    /// the whole-group fan-out). Callers that must serialize a remote transaction
-    /// on a `-t` subset (e.g. `run`) lock exactly that subset instead of the
-    /// whole fleet.
-    pub async fn lock_selected(
-        &mut self,
-        comment: &str,
-        names: &std::collections::BTreeSet<String>,
-    ) -> BTreeMap<String, LockOutcome> {
-        self.lock_where(comment, |t| names.contains(t.hostname()))
-            .await
-    }
-
-    /// Shared implementation for [`lock`](Self::lock) /
-    /// [`lock_selected`](Self::lock_selected): the only difference is the
-    /// `select` predicate handed to [`run_fanout`](super::actions::run_fanout).
-    async fn lock_where<S>(&mut self, comment: &str, select: S) -> BTreeMap<String, LockOutcome>
-    where
-        S: Fn(&Target) -> bool + Send + Sync,
-    {
-        self.collect_fanout("lock", select, |t| {
+    /// unreported. A scoped lock has an entry for every named host that exists
+    /// in the group (unknown names are silently skipped); callers that must
+    /// serialize a remote transaction on a `-t` subset (e.g. `run`) lock exactly
+    /// that subset instead of the whole fleet.
+    pub async fn lock(&mut self, comment: &str, scope: Scope<'_>) -> BTreeMap<String, LockOutcome> {
+        self.collect_fanout("lock", in_scope(scope), |t| {
             let comment = comment.to_owned();
             boxed(async move {
                 Some(if !t.has_operation_lock() {
@@ -950,7 +885,7 @@ impl HostsGroup {
         .await
     }
 
-    /// Releases every host's operation lock, best-effort.
+    /// Releases every host's operation lock in `scope`, best-effort.
     ///
     /// Delegates to the per-target
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
@@ -959,10 +894,12 @@ impl HostsGroup {
     /// Returns each host's [`LockOutcome`] keyed by hostname (like
     /// [`lock`](Self::lock)): [`Released`](LockOutcome::Released) on success,
     /// [`Contended`](LockOutcome::Contended) for a benign foreign-owned lock, and
-    /// [`Failed`](LockOutcome::Failed) for a real transport error. Existing
-    /// callers that ignore the return value keep compiling.
-    pub async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
-        self.unlock_collecting(|_t| true).await
+    /// [`Failed`](LockOutcome::Failed) for a real transport error. A scoped
+    /// unlock rolls back a partial scoped [`lock`](Self::lock): a caller that
+    /// aborts a subset operation unlocks exactly the hosts it acquired, leaving
+    /// every other host untouched.
+    pub async fn unlock(&mut self, scope: Scope<'_>) -> BTreeMap<String, LockOutcome> {
+        self.unlock_collecting(in_scope(scope)).await
     }
 
     /// Releases the named hosts' operation lock **including one owned by
@@ -1009,20 +946,6 @@ impl HostsGroup {
     /// group that later ran an operation.
     pub async fn unlock_held(&mut self) -> BTreeMap<String, LockOutcome> {
         self.unlock_collecting(Target::holds_unmarked_operation_lock)
-            .await
-    }
-
-    /// Releases the operation lock on only the named hosts, best-effort,
-    /// otherwise identical to [`unlock`](Self::unlock).
-    ///
-    /// Used to roll back a partial [`lock_selected`](Self::lock_selected): a
-    /// caller that aborts a subset operation unlocks exactly the hosts it
-    /// acquired this call, leaving every other host untouched.
-    pub async fn unlock_selected(
-        &mut self,
-        names: &std::collections::BTreeSet<String>,
-    ) -> BTreeMap<String, LockOutcome> {
-        self.unlock_collecting(|t| names.contains(t.hostname()))
             .await
     }
 
@@ -1092,8 +1015,7 @@ impl HostsGroup {
     }
 
     /// Shared implementation for [`unlock`](Self::unlock) /
-    /// [`unlock_force`](Self::unlock_force) /
-    /// [`unlock_selected`](Self::unlock_selected). `force` also removes a
+    /// [`unlock_force`](Self::unlock_force). `force` also removes a
     /// foreign-owned lock; every caller but `unlock_force` passes `false`.
     ///
     /// Without `force`, a comment-marked hold of this session's own (an
@@ -1253,7 +1175,7 @@ impl HostsGroup {
         self.prompter = Some(prompter);
     }
 
-    /// Fans a repository add/remove out across every host in the group.
+    /// Fans a repository add/remove out across every host in `scope`.
     ///
     /// Runs the per-host set-repo hook
     /// (`repo_manager().set(operation, report)`) on every host. `report` is the
@@ -1262,45 +1184,51 @@ impl HostsGroup {
     /// by `update_flow::perform_prepare`), so the group never depends on the
     /// report crate.
     ///
-    /// Fans out concurrently via `run_fanout`:
-    /// every host runs its repo change in
-    /// parallel. The per-host `last*` state is left in place so a caller can
-    /// inspect `lasterr()` after the fan-out (prepare aborts on `lasterr`).
-    pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
-        self.fanout_set_repo_where(operation, report, |_t| true)
-            .await;
-    }
-
-    /// Fans a repository add/remove out across *only* the named hosts,
-    /// otherwise identical to [`fanout_set_repo`](Self::fanout_set_repo).
-    ///
-    /// The host-scoped counterpart, following
-    /// [`unlock_selected`](Self::unlock_selected)'s shape — a public entry
-    /// point over a shared `_where` impl.
-    /// ([`add_history_for`](Self::add_history_for) is host-scoped too, but
-    /// duplicates `add_history`'s body rather than delegating.) For a flow that
-    /// has already excluded a host from the work it is doing, since
-    /// reconfiguring the repositories of a host it reported as excluded is a
-    /// side effect that host's exclusion promised it would not have. A name not
-    /// in the group is ignored.
-    pub async fn fanout_set_repo_for(
+    /// Every host runs its repo change in parallel. The per-host `last*` state
+    /// is left in place so a caller can inspect `lasterr()` after the fan-out
+    /// (prepare aborts on `lasterr`). A scope serves a flow that has already
+    /// excluded a host: reconfiguring the repositories of a host it reported as
+    /// excluded is a side effect that host's exclusion promised it would not
+    /// have.
+    pub async fn fanout_set_repo(
         &mut self,
-        hosts: &BTreeSet<String>,
         operation: RepoOp,
         report: &dyn SetRepo,
+        scope: Scope<'_>,
     ) {
-        self.fanout_set_repo_where(operation, report, |t| hosts.contains(t.hostname()))
-            .await;
+        self.fanout("set_repo", in_scope(scope), |t| {
+            boxed(async move { t.repo_manager().set(operation, report).await })
+        })
+        .await;
     }
 
-    /// Shared implementation for [`fanout_set_repo`](Self::fanout_set_repo) /
-    /// [`fanout_set_repo_for`](Self::fanout_set_repo_for).
-    async fn fanout_set_repo_where<S>(&mut self, operation: RepoOp, report: &dyn SetRepo, select: S)
-    where
-        S: FnMut(&Target) -> bool,
-    {
-        self.fanout("set_repo", select, |t| {
-            boxed(async move { t.repo_manager().set(operation, report).await })
+    /// Appends a history entry to the remote history file of every member
+    /// target in `scope`.
+    ///
+    /// Fans [`Target::add_history`] out across the group (enabled hosts only,
+    /// best-effort per host). A flow whose work reached only some of the group
+    /// scopes the row: `prepare` deliberately drops a host whose release key
+    /// does not resolve or whose template does not render, and writing that
+    /// host a `:prepare:` row anyway would put a false entry in
+    /// `/var/log/mtui.log`, which is an interop contract other tools read
+    /// (#407). A name that is not in the group is ignored.
+    pub async fn add_history(&mut self, fields: &[String], scope: Scope<'_>) {
+        self.fanout("add_history", in_scope(scope), |t| {
+            let fields = fields.to_vec();
+            boxed(async move { t.add_history(&fields).await })
+        })
+        .await;
+    }
+
+    /// Queries the installed package versions of every host in `scope`
+    /// concurrently.
+    ///
+    /// The I/O phase shared by [`package_check`](Self::package_check) and the
+    /// downgrade verdict, so the pure per-package bookkeeping that follows never
+    /// blocks on I/O. A name not in the group is ignored.
+    pub async fn query_versions(&mut self, scope: Scope<'_>) {
+        self.fanout("query_versions", in_scope(scope), |t| {
+            boxed(async move { t.query_versions().await })
         })
         .await;
     }
@@ -1308,7 +1236,10 @@ impl HostsGroup {
     /// Queries every host's tracked package versions and logs update-sanity
     /// warnings.
     ///
-    /// The `package_check` step of the update workflow. Each host's
+    /// The `package_check` step of the update workflow, over the hosts in `scope`
+    /// (a host outside it draws no `query_versions` command and its packages'
+    /// `before`/`after` stay untouched, so it never earns an update-sanity
+    /// warning for work it never received). Each host's
     /// [`Target::query_versions`] runs
     /// first, populating each package's `current` version; then, per package:
     ///
@@ -1332,106 +1263,11 @@ impl HostsGroup {
     ///
     /// The packages must already be [`seeded`](Target::set_packages) with their
     /// `required` versions.
-    /// Appends a history entry to every member target's remote history file.
-    ///
-    /// Fans [`Target::add_history`] out
-    /// across the group (enabled hosts only, best-effort per host).
-    pub async fn add_history(&mut self, fields: &[String]) {
-        self.fanout(
-            "add_history",
-            |_t| true,
-            |t| {
-                let fields = fields.to_vec();
-                boxed(async move { t.add_history(&fields).await })
-            },
-        )
-        .await;
-    }
-
-    /// Appends a history entry to *only* the named hosts' remote history files.
-    ///
-    /// The host-scoped counterpart to [`add_history`](Self::add_history), for a
-    /// flow whose work reached some of the group but not all of it. The
-    /// group-wide fan-out is the right default for an op whose command map
-    /// covers every enabled host, but `prepare` builds a per-host map and
-    /// deliberately drops a host whose release key does not resolve or whose
-    /// template does not render — and that same host is then failed with
-    /// "nothing was installed". Writing it a `:prepare:` row anyway would put a
-    /// false entry in `/var/log/mtui.log`, which is an interop contract other
-    /// tools read (#407).
-    ///
-    /// `hosts` is matched against [`Target::hostname`]; a name that is not in
-    /// the group is ignored, and the per-target
-    /// [`enabled`](mtui_types::enums::TargetState) check still applies on top.
-    pub async fn add_history_for(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
-        self.fanout(
-            "add_history",
-            |t| hosts.contains(t.hostname()),
-            |t| {
-                let fields = fields.to_vec();
-                boxed(async move { t.add_history(&fields).await })
-            },
-        )
-        .await;
-    }
-
-    /// Queries every host's installed package versions concurrently.
-    ///
-    /// The I/O phase shared by [`package_check`](Self::package_check) and the
-    /// downgrade verdict: fans [`Target::query_versions`] out through the shared
-    /// `run_fanout` primitive in parallel, so the
-    /// pure per-package bookkeeping that follows never blocks on I/O.
-    pub async fn query_versions(&mut self) {
-        self.query_versions_where(|_t| true).await;
-    }
-
-    /// [`query_versions`](Self::query_versions) restricted to `names`,
-    /// otherwise identical. A name not in the group is ignored.
-    pub async fn query_versions_selected(&mut self, names: &BTreeSet<String>) {
-        self.query_versions_where(|t| names.contains(t.hostname()))
-            .await;
-    }
-
-    /// Shared implementation for [`query_versions`](Self::query_versions),
-    /// [`query_versions_selected`](Self::query_versions_selected) and
-    /// [`package_check`](Self::package_check)'s I/O phase.
-    async fn query_versions_where<S>(&mut self, select: S)
-    where
-        S: FnMut(&Target) -> bool,
-    {
-        self.fanout("query_versions", select, |t| {
-            boxed(async move { t.query_versions().await })
-        })
-        .await;
-    }
-
-    pub async fn package_check(&mut self, post: bool) {
-        self.package_check_where(post, |_t| true).await;
-    }
-
-    /// [`package_check`](Self::package_check) restricted to `names`, otherwise
-    /// identical.
-    ///
-    /// For a flow that has already excluded a host from the work it is about
-    /// to do: that host draws no `query_versions` command and its packages'
-    /// `before`/`after` stay untouched, so it never earns an update-sanity
-    /// warning for work it never received. A name not in the group is
-    /// ignored.
-    pub async fn package_check_selected(&mut self, post: bool, names: &BTreeSet<String>) {
-        self.package_check_where(post, |t| names.contains(t.hostname()))
-            .await;
-    }
-
-    /// Shared implementation for [`package_check`](Self::package_check) /
-    /// [`package_check_selected`](Self::package_check_selected): `select`
-    /// scopes both the I/O fan-out and the pure before/after fold below it.
-    async fn package_check_where<S>(&mut self, post: bool, mut select: S)
-    where
-        S: FnMut(&Target) -> bool,
-    {
+    pub async fn package_check(&mut self, post: bool, scope: Scope<'_>) {
+        let select = in_scope(scope);
         // Phase 1 (I/O): query the selected hosts' installed versions
         // concurrently, through the shared fan-out primitive.
-        self.query_versions_where(&mut select).await;
+        self.query_versions(scope).await;
 
         // Phase 2 (pure): fold each selected host's queried versions into its
         // packages' before/after fields and emit the update-sanity warnings.
@@ -1502,14 +1338,14 @@ impl HostsGroup {
         }
     }
 
-    /// Acquires the shared operation lock across every host in the group.
+    /// Acquires the shared operation lock across every host in `scope`.
     ///
     /// For each host, if it is already
     /// locked by another owner, log a warning (with the lock's timestamp, owner
     /// and any comment) and mark the group as partially contended; otherwise
     /// take the lock. If any host was skipped, release the locks we did take
-    /// (best-effort) and return [`HostError::HostsLocked`] so the caller aborts — the
-    /// group is not fully owned by this process.
+    /// (best-effort, over the same scope) and return [`HostError::HostsLocked`]
+    /// so the caller aborts — the group is not fully owned by this process.
     ///
     /// **Fails closed**: success (`Ok`) means *every* host is verifiably locked
     /// by this process. Any per-host failure marks the group contended — a
@@ -1517,37 +1353,19 @@ impl HostsGroup {
     /// SFTP/transport error reading the lock state or writing the lockfile.
     /// A host whose state we cannot even read is treated as "not ours".
     ///
+    /// A scope serves a flow that has already excluded a host: the fail-closed
+    /// rule would otherwise let one excluded host whose lock is contended or
+    /// unreadable abort the operation for every eligible peer. A name not in
+    /// the group is ignored.
+    ///
     /// # Errors
     ///
     /// Returns [`HostError::HostsLocked`] when one or more hosts were locked by
     /// another owner or could not be locked/read.
-    pub async fn update_lock(&mut self) -> Result<()> {
-        self.update_lock_where(None).await
-    }
-
-    /// Acquires the shared operation lock on only the named hosts, otherwise
-    /// identical to [`update_lock`](Self::update_lock) — fail-closed included,
-    /// and the best-effort release on abort covers exactly the same subset.
-    ///
-    /// For a flow that has already excluded a host from the work it is about to
-    /// do. `update_lock` fails closed on *any* member, so one excluded host
-    /// whose lock is contended or unreadable aborts the operation for every
-    /// peer that is still eligible. A name not in the group is ignored.
-    ///
-    /// # Errors
-    ///
-    /// As [`update_lock`](Self::update_lock), restricted to `names`.
-    pub async fn update_lock_selected(&mut self, names: &BTreeSet<String>) -> Result<()> {
-        self.update_lock_where(Some(names)).await
-    }
-
-    /// Shared implementation for [`update_lock`](Self::update_lock) /
-    /// [`update_lock_selected`](Self::update_lock_selected): `None` is the whole
-    /// group.
-    async fn update_lock_where(&mut self, names: Option<&BTreeSet<String>>) -> Result<()> {
+    pub async fn update_lock(&mut self, scope: Scope<'_>) -> Result<()> {
         use std::sync::Mutex;
 
-        let select = |t: &Target| names.is_none_or(|n| n.contains(t.hostname()));
+        let select = in_scope(scope);
 
         // Probe-and-acquire concurrently across the group via the shared
         // fan-out. Each host's probe+acquire is self-contained and
@@ -1965,7 +1783,7 @@ impl HostsGroup {
                 .cloned()
                 .collect();
             if !relock.is_empty() {
-                let _ = self.lock_selected(relock_comment, &relock).await;
+                let _ = self.lock(relock_comment, Some(&relock)).await;
             }
         }
 
@@ -2337,7 +2155,7 @@ impl OperationGroup for HostsGroup {
     }
 
     async fn update_lock(&mut self) -> Result<()> {
-        HostsGroup::update_lock(self).await
+        HostsGroup::update_lock(self, None).await
     }
 
     async fn run(&mut self, commands: HostCommandMap) {
@@ -2346,7 +2164,7 @@ impl OperationGroup for HostsGroup {
     }
 
     async fn add_history(&mut self, fields: &[String]) {
-        HostsGroup::add_history(self, fields).await;
+        HostsGroup::add_history(self, fields, None).await;
     }
 
     fn last_output(&self, hostname: &str) -> Option<super::operation::HostOutput> {
@@ -2368,7 +2186,7 @@ impl OperationGroup for HostsGroup {
     }
 
     async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
-        HostsGroup::unlock(self).await
+        HostsGroup::unlock(self, None).await
     }
 }
 
@@ -2788,7 +2606,7 @@ mod tests {
         g.cancel_token().cancel();
         assert!(g.cancel_requested(), "the group observes the cancel");
 
-        g.add_history(&["prepare".to_owned(), "pkg-a".to_owned()])
+        g.add_history(&["prepare".to_owned(), "pkg-a".to_owned()], None)
             .await;
 
         let written = String::from_utf8(
@@ -2823,7 +2641,7 @@ mod tests {
         );
 
         let only_h1: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        g.add_history_for(&only_h1, &["prepare".to_owned(), "pkg-a".to_owned()])
+        g.add_history(&["prepare".to_owned(), "pkg-a".to_owned()], Some(&only_h1))
             .await;
 
         let written = String::from_utf8(
@@ -2930,7 +2748,7 @@ mod tests {
             false,
         );
 
-        let got = g.sftp_read_capped(Path::new("/remote/f"), 4).await;
+        let got = g.sftp_read_capped(Path::new("/remote/f"), 4, None).await;
 
         assert_eq!(got.len(), 2, "disabled host is absent: {got:?}");
         assert_eq!(
@@ -2970,7 +2788,7 @@ mod tests {
 
         let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into();
         let got = g
-            .sftp_read_capped_selected(Path::new("/remote/f"), &names, 3)
+            .sftp_read_capped(Path::new("/remote/f"), 3, Some(&names))
             .await;
 
         assert_eq!(got.len(), 1);
@@ -3001,7 +2819,7 @@ mod tests {
         );
 
         let got = g
-            .sftp_put_bytes(b"payload-434", Path::new("/tmp/wd/f"))
+            .sftp_put_bytes(b"payload-434", Path::new("/tmp/wd/f"), None)
             .await;
 
         assert_eq!(got.len(), 2);
@@ -3036,7 +2854,9 @@ mod tests {
             false,
         );
 
-        let got = g.sftp_put_bytes(b"payload", Path::new("/tmp/wd/f")).await;
+        let got = g
+            .sftp_put_bytes(b"payload", Path::new("/tmp/wd/f"), None)
+            .await;
 
         assert_eq!(got.len(), 1, "disabled host absent from the map: {got:?}");
         assert_eq!(got["h1"], Ok(()));
@@ -3059,7 +2879,9 @@ mod tests {
             false,
         );
 
-        let got = g.sftp_put_bytes(b"payload", Path::new("/tmp/wd/f")).await;
+        let got = g
+            .sftp_put_bytes(b"payload", Path::new("/tmp/wd/f"), None)
+            .await;
 
         assert_eq!(got["h1"], Ok(()));
         let Err(reason) = &got["h2"] else {
@@ -4446,7 +4268,7 @@ mod tests {
     #[tokio::test]
     async fn update_lock_locks_all_free_hosts() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
-        g.update_lock().await.expect("all free -> ok");
+        g.update_lock(None).await.expect("all free -> ok");
         // Both hosts now report locked.
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
@@ -4467,7 +4289,10 @@ mod tests {
             false,
         );
 
-        let err = g.update_lock().await.expect_err("foreign lock -> abort");
+        let err = g
+            .update_lock(None)
+            .await
+            .expect_err("foreign lock -> abort");
         assert!(matches!(err, HostError::HostsLocked(_)));
         // h1's lock was released during the abort.
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
@@ -4489,7 +4314,10 @@ mod tests {
         let (h2, h2_handle) = invalid_lock_host("h2");
         let mut g = HostsGroup::new(vec![enabled("h1"), h2], false);
 
-        let err = g.update_lock().await.expect_err("invalid lock -> abort");
+        let err = g
+            .update_lock(None)
+            .await
+            .expect_err("invalid lock -> abort");
 
         assert!(matches!(err, HostError::HostsLocked(_)), "{err:?}");
         let msg = err.to_string();
@@ -4507,7 +4335,7 @@ mod tests {
         let (h1, handle) = invalid_lock_host("h1");
         let mut g = HostsGroup::new(vec![h1], false);
 
-        let locked = g.lock("").await;
+        let locked = g.lock("", None).await;
         let LockOutcome::Failed(reason) = &locked["h1"] else {
             panic!("expected Failed, got {:?}", locked["h1"]);
         };
@@ -4515,7 +4343,7 @@ mod tests {
             reason.contains("invalid (empty or unparseable)"),
             "{reason}"
         );
-        let unlocked = g.unlock().await;
+        let unlocked = g.unlock(None).await;
         assert!(
             matches!(&unlocked["h1"], LockOutcome::Failed(r) if r.contains("--force")),
             "{:?}",
@@ -4547,7 +4375,7 @@ mod tests {
         );
 
         let err = g
-            .update_lock()
+            .update_lock(None)
             .await
             .expect_err("non-contention lock failure -> abort");
         assert!(matches!(err, HostError::HostsLocked(_)));
@@ -4583,7 +4411,7 @@ mod tests {
         let mut g = two_unlockable_hosts();
 
         let err = g
-            .update_lock()
+            .update_lock(None)
             .await
             .expect_err("two hosts cannot be locked");
 
@@ -4613,7 +4441,7 @@ mod tests {
         let mut g = two_unlockable_hosts();
 
         let err = g
-            .update_lock()
+            .update_lock(None)
             .await
             .expect_err("two hosts cannot be locked");
 
@@ -4627,13 +4455,13 @@ mod tests {
     #[tokio::test]
     async fn lock_and_unlock_fan_out_over_group() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
-        let locked = g.lock("").await;
+        let locked = g.lock("", None).await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
         assert_eq!(locked["h2"], LockOutcome::Acquired);
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
 
-        let unlocked = g.unlock().await;
+        let unlocked = g.unlock(None).await;
         assert_eq!(unlocked["h1"], LockOutcome::Released);
         assert_eq!(unlocked["h2"], LockOutcome::Released);
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
@@ -4671,7 +4499,7 @@ mod tests {
         // Only h1 is locked *by this group*; h2 already carries a same-process
         // lock this group never took.
         let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        let locked = g.lock_selected("", &names).await;
+        let locked = g.lock("", Some(&names)).await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
 
         let released = g.unlock_held().await;
@@ -4688,7 +4516,7 @@ mod tests {
 
         // The contrast: the unscoped fan-out does remove it, because on the
         // wire it is indistinguishable from ours.
-        let swept = g.unlock().await;
+        let swept = g.unlock(None).await;
         assert_eq!(swept["h2"], LockOutcome::Released);
         assert!(sibling_handle.file_contents(TARGET_LOCK_PATH).is_none());
     }
@@ -4709,9 +4537,9 @@ mod tests {
         );
 
         let marked: std::collections::BTreeSet<String> = ["h2".to_owned()].into_iter().collect();
-        g.lock_selected("PI assignment", &marked).await;
+        g.lock("PI assignment", Some(&marked)).await;
         let plain: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        g.lock_selected("", &plain).await;
+        g.lock("", Some(&plain)).await;
 
         let released = g.unlock_held().await;
         assert_eq!(released["h1"], LockOutcome::Released);
@@ -4753,7 +4581,7 @@ mod tests {
         );
 
         let names: BTreeSet<String> = ["h1".to_owned()].into();
-        let locked = group_a.lock_selected("", &names).await;
+        let locked = group_a.lock("", Some(&names)).await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
 
         let outcome = group_b.unlock_taken(&names).await;
@@ -4796,10 +4624,10 @@ mod tests {
         group_b.set_op_lock_holders(holders);
 
         let names: BTreeSet<String> = ["h1".to_owned()].into();
-        group_a.lock_selected("", &names).await;
+        group_a.lock("", Some(&names)).await;
 
         let err = group_b
-            .update_lock()
+            .update_lock(None)
             .await
             .expect_err("a sibling's hold must abort the update");
         assert!(matches!(err, HostError::HostsLocked(_)), "{err}");
@@ -4870,7 +4698,7 @@ mod tests {
         let mut group_a = build("SUSE:Maintenance:1:1");
         let mut group_b = build("SUSE:Maintenance:2:2");
         let names: BTreeSet<String> = ["h1".to_owned()].into();
-        group_a.lock_selected("", &names).await;
+        group_a.lock("", Some(&names)).await;
 
         let outcome = group_b.unlock_taken(&names).await;
         assert!(
@@ -4894,9 +4722,9 @@ mod tests {
             false,
         );
         let names: BTreeSet<String> = ["h1".to_owned()].into();
-        g.lock_selected("X", &names).await;
+        g.lock("X", Some(&names)).await;
 
-        let outcome = g.unlock_selected(&names).await;
+        let outcome = g.unlock(Some(&names)).await;
         assert!(
             matches!(&outcome["h1"], LockOutcome::Skipped(r) if r.contains("reservation kept")),
             "{outcome:?}"
@@ -4905,7 +4733,7 @@ mod tests {
             conn.file_contents(TARGET_LOCK_PATH).is_some(),
             "an operation release removed the reservation"
         );
-        let swept = g.unlock().await;
+        let swept = g.unlock(None).await;
         assert!(matches!(&swept["h1"], LockOutcome::Skipped(_)), "{swept:?}");
         assert!(conn.file_contents(TARGET_LOCK_PATH).is_some());
 
@@ -4919,11 +4747,11 @@ mod tests {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
         let reserved: BTreeSet<String> = ["h1".to_owned()].into();
         let plain: BTreeSet<String> = ["h2".to_owned()].into();
-        g.lock_selected("X", &reserved).await;
-        g.lock_selected("", &plain).await;
+        g.lock("X", Some(&reserved)).await;
+        g.lock("", Some(&plain)).await;
 
         let both: BTreeSet<String> = ["h1".to_owned(), "h2".to_owned()].into();
-        let outcome = g.unlock_selected(&both).await;
+        let outcome = g.unlock(Some(&both)).await;
         assert_eq!(outcome["h2"], LockOutcome::Released);
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(!g.get_mut("h2").unwrap().is_locked().await.unwrap());
@@ -4940,7 +4768,7 @@ mod tests {
         // `holds_unmarked_operation_lock` makes this skip instead of release.
         let mut g = HostsGroup::new(vec![enabled("h1")], false);
         let names: BTreeSet<String> = ["h1".to_owned()].into();
-        let locked = g.lock_selected("reservation", &names).await;
+        let locked = g.lock("reservation", Some(&names)).await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
 
         let released = g.unlock_taken(&names).await;
@@ -4975,7 +4803,7 @@ mod tests {
         );
 
         let plain: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
-        g.lock_selected("", &plain).await;
+        g.lock("", Some(&plain)).await;
         assert!(g.get("h1").unwrap().holds_unmarked_operation_lock());
 
         // Reading a *foreign* host's remote state is not taking it. This is the
@@ -5020,7 +4848,7 @@ mod tests {
             false,
         );
 
-        let outcomes = g.lock("").await;
+        let outcomes = g.lock("", None).await;
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
         assert_eq!(outcomes["h2"], contended_by_alice());
         assert!(
@@ -5048,7 +4876,7 @@ mod tests {
 
         let names: std::collections::BTreeSet<String> =
             ["h1".to_owned(), "h2".to_owned()].into_iter().collect();
-        let outcomes = g.lock_selected("", &names).await;
+        let outcomes = g.lock("", Some(&names)).await;
 
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
         assert_eq!(outcomes["h2"], contended_by_alice());
@@ -5060,7 +4888,7 @@ mod tests {
         assert!(!g.get_mut("h3").unwrap().is_locked().await.unwrap());
 
         // Rolling back the acquired subset releases h1 without touching h3.
-        let released = g.unlock_selected(&names).await;
+        let released = g.unlock(Some(&names)).await;
         assert_eq!(released["h1"], LockOutcome::Released);
         assert!(!released.contains_key("h3"));
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
@@ -5079,14 +4907,14 @@ mod tests {
         );
         let mut g = HostsGroup::new(vec![enabled("h1"), unconnected], false);
 
-        let locked = g.lock("").await;
+        let locked = g.lock("", None).await;
         assert_eq!(locked["h1"], LockOutcome::Acquired);
         assert_eq!(
             locked["unconnected"],
             LockOutcome::Skipped("not connected".to_owned())
         );
 
-        let unlocked = g.unlock().await;
+        let unlocked = g.unlock(None).await;
         assert_eq!(unlocked["h1"], LockOutcome::Released);
         assert_eq!(
             unlocked["unconnected"],
@@ -5108,9 +4936,9 @@ mod tests {
             ],
             false,
         );
-        let _ = g.lock("").await; // locks h1; h2 stays foreign-locked
+        let _ = g.lock("", None).await; // locks h1; h2 stays foreign-locked
 
-        let outcomes = g.unlock().await;
+        let outcomes = g.unlock(None).await;
         assert_eq!(outcomes["h1"], LockOutcome::Released);
         assert_eq!(outcomes["h2"], contended_by_alice());
     }
@@ -5137,7 +4965,7 @@ mod tests {
 
         let plain = foreign();
         let mut g = group(plain.clone());
-        assert_eq!(g.unlock().await["h1"], contended_by_alice());
+        assert_eq!(g.unlock(None).await["h1"], contended_by_alice());
         assert!(plain.file_contents(TARGET_LOCK_PATH).is_some());
 
         let forced = foreign();
@@ -5165,7 +4993,7 @@ mod tests {
             )],
             false,
         );
-        let _ = g.lock("").await;
+        let _ = g.lock("", None).await;
 
         let outcomes = OperationGroup::unlock(&mut g).await;
         assert!(
@@ -5342,8 +5170,8 @@ mod tests {
             ],
             false,
         );
-        g.lock("").await; // locks h1; h2 stays foreign-locked
-        g.unlock().await;
+        g.lock("", None).await; // locks h1; h2 stays foreign-locked
+        g.unlock(None).await;
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         // h2's foreign lock is still present (unlock suppressed the failure).
         assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
@@ -5371,7 +5199,7 @@ mod tests {
     async fn fanout_set_repo_visits_every_host_with_the_operation() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
         let report = RecordingSetRepo::default();
-        g.fanout_set_repo(RepoOp::Add, &report).await;
+        g.fanout_set_repo(RepoOp::Add, &report, None).await;
         let seen = report.seen.lock().unwrap().clone();
         assert_eq!(
             seen,
@@ -5402,14 +5230,14 @@ mod tests {
         let mut g = HostsGroup::new(vec![t], false);
 
         // Pre-pass records the installed version as `before`.
-        g.package_check(false).await;
+        g.package_check(false, None).await;
         let before = g.get("h1").unwrap().packages()[0].before().cloned();
         assert_eq!(before, Some(RPMVersion::parse("5.1-1").unwrap()));
         assert!(g.get("h1").unwrap().packages()[0].after().is_none());
 
         // Post-pass records `after` (same scripted output ⇒ equals `before`,
         // the "package was not updated" state), leaving `before` intact.
-        g.package_check(true).await;
+        g.package_check(true, None).await;
         let p = &g.get("h1").unwrap().packages()[0];
         assert_eq!(p.after(), Some(&RPMVersion::parse("5.1-1").unwrap()));
         assert_eq!(p.before(), p.after());
@@ -5425,7 +5253,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut g = HostsGroup::new(vec![t], false);
 
-        g.package_check(false).await;
+        g.package_check(false, None).await;
         let before_check = g.get("h1").unwrap().packages()[0].before_check().clone();
         assert!(g.get("h1").unwrap().packages()[0].before().is_none());
         // #437: an rpm "is not installed" line is a real observation of
@@ -5445,7 +5273,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut g = HostsGroup::new(vec![t], false);
 
-        g.package_check(false).await;
+        g.package_check(false, None).await;
         let before_check = g.get("h1").unwrap().packages()[0].before_check().clone();
         assert_eq!(before_check, VersionCheck::NotChecked);
     }
@@ -5470,7 +5298,7 @@ mod tests {
         let mut g = HostsGroup::new(vec![t1, t2], false);
         let names: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
 
-        g.package_check_selected(false, &names).await;
+        g.package_check(false, Some(&names)).await;
 
         assert!(g.get("h1").unwrap().packages()[0].before().is_some());
         assert!(
@@ -5500,7 +5328,7 @@ mod tests {
         let mut g = HostsGroup::new(vec![t1, t2], false);
         let names: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
 
-        g.query_versions_selected(&names).await;
+        g.query_versions(Some(&names)).await;
 
         assert!(g.get("h1").unwrap().packages()[0].current().is_some());
         assert_eq!(
