@@ -5,7 +5,7 @@
 //! are an interop **Contract** (see `AGENTS.md`): RRIDs are minted by OBS/IBS
 //! and the rendered form becomes the on-disk testreport directory name, so
 //! loosening the grammar admits identifiers the ecosystem rejects and tightening
-//! it strands checkouts already on disk — either way a breaking change.
+//! it strands checkouts on disk.
 //!
 //! ## Grammar
 //!
@@ -35,10 +35,9 @@ use std::str::FromStr;
 use crate::enums::RequestKind;
 use crate::error::RridParseError;
 
-/// The exact number of components a well-formed RRID must have
-/// (`project:kind:maintenance_id:review_id`). Enforced as two bounds: more
-/// tokens is rejected as too many, fewer leaves trailing parsers with no token
-/// and each raises a missing-component error.
+/// The number of components a well-formed RRID has
+/// (`project:kind:maintenance_id:review_id`): more is rejected as too many,
+/// fewer leaves trailing parsers with no token (a missing-component error).
 const REQUIRED_COMPONENTS: usize = 4;
 
 /// A parsed OBS Request Review ID.
@@ -96,8 +95,7 @@ impl RequestReviewID {
     }
 }
 
-/// The token at `idx`, or `None` when absent — a short input yields `None` for
-/// the trailing parsers.
+/// The token at `idx`, or `None` when absent.
 fn component<'a>(tokens: &[&'a str], idx: usize) -> Option<&'a str> {
     tokens.get(idx).copied()
 }
@@ -127,8 +125,8 @@ fn parse_kind(token: Option<&str>, index: usize) -> Result<RequestKind, RridPars
 }
 
 /// Component 3 — maintenance ID. Any non-empty token parses, so the only
-/// failure is absence. Stored raw to preserve the int-vs-string distinction
-/// downstream code depends on (`1` vs `1.1`).
+/// failure is absence. Stored raw to keep the int-vs-string distinction (`1` vs
+/// `1.1`).
 fn parse_maintenance_id(token: Option<&str>, index: usize) -> Result<String, RridParseError> {
     let raw = require(token, index, "an integer or string")?;
     Ok(raw.to_owned())

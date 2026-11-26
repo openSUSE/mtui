@@ -2,39 +2,33 @@
 //! `$id` `https://qam.suse.de/schema/report-template-v1.json`, served live at
 //! `GET /api/v2/schema`).
 //!
-//! Pure data: no I/O, and not yet wired into the report lifecycle — retargeting
-//! ingest from `MetadataEnvelope`/`TestReportBase` onto this type is future
-//! work.
+//! Pure data: no I/O.
 //!
 //! # Rules every struct in this module follows
 //!
 //! - **Required** (schema `required`): a plain field, never `#[serde(default)]`
 //!   nor `skip_serializing_if` — always emitted; missing on input is a parse
-//!   error. A document the server has already validated never has one of its
-//!   `required` keys absent, so tolerating a missing key here would mean
-//!   silently constructing a report with no packages and no targets (P1-D1).
+//!   error. Tolerating a missing key would silently construct a report with no
+//!   packages and no targets.
 //! - **Optional** (may be genuinely absent): `Option<T>` +
 //!   `#[serde(default, skip_serializing_if = "Option::is_none")]` — an absent
 //!   key stays absent on the round trip.
 //! - **Required-nullable** (always present, value may be `null`): [`Req<T>`],
 //!   never a plain `Option<T>`. serde's derive special-cases any field whose
-//!   *declared type* is `Option<T>` (or, transitively, any type whose
-//!   `Deserialize` impl calls `deserialize_option`) to silently default to
-//!   `None` on a **missing** key — the exact "log + return `None`" failure
-//!   class AGENTS.md forbids, and indistinguishable from a present `null`
-//!   without this wrapper. Missing the key is a parse error, a present `null`
-//!   deserializes to `Req(None)`, and it serializes back to `null` (never
-//!   omitted). No field in this schema is both optional and nullable
-//!   (verified field-by-field), so `Req<T>` is unambiguous everywhere it is
-//!   used.
+//!   *declared type* is `Option<T>` (or any type whose `Deserialize` impl calls
+//!   `deserialize_option`) to silently default to `None` on a **missing** key,
+//!   indistinguishable from a present `null`. With `Req<T>` a missing key is a
+//!   parse error, a present `null` deserializes to `Req(None)`, and it
+//!   serializes back to `null` (never omitted). No field in this schema is both
+//!   optional and nullable, so `Req<T>` is unambiguous.
 //! - Maps are `BTreeMap` for deterministic, server-matching key order:
 //!   `issues`, `target.binaries`, `install_check.before`/`after`.
 //! - Two objects — `testing` and `testing.openqa` — are schema-**open**
 //!   (`additionalProperties: true`): their `extra: BTreeMap<String, Value>`
 //!   catch-all preserves an unknown key across a round trip rather than
-//!   silently dropping schema-legal server data (P1-D2). Every other object is
-//!   schema-**closed**: plain serde already drops an unknown key there, and it
-//!   is never re-emitted (re-emitting it would guarantee a `422`).
+//!   silently dropping schema-legal server data. Every other object is
+//!   schema-**closed**: an unknown key is dropped and never re-emitted
+//!   (re-emitting it would guarantee a `422`).
 
 /// The report document's JSON Schema (draft 2019-09), as served by
 /// `GET /api/v2/schema`.
@@ -84,12 +78,10 @@ use crate::update_source::UpdateSource;
 /// Wrapper for a **required-nullable** field: the JSON key must be present,
 /// but its value may be `null`.
 ///
-/// Plain `Option<T>` cannot express this — see the module doc's "Rules"
-/// section. `Req<T>` never delegates to `Option<T>`'s own `Deserialize` impl
-/// (which is what triggers serde's missing-key special case), so a missing
-/// key is a parse error while a present `null` deserializes to `Req(None)`.
-/// `Deref`s to `Option<T>` for ergonomic reads (`doc.verdict.is_some()`,
-/// `*doc.verdict == Some(Verdict::Passed)`, ...).
+/// Plain `Option<T>` cannot express this (see the module doc's "Rules").
+/// `Req<T>` never delegates to `Option<T>`'s own `Deserialize` impl, so a
+/// missing key is a parse error while a present `null` deserializes to
+/// `Req(None)`. `Deref`s to `Option<T>` for reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Req<T>(pub Option<T>);
 
@@ -131,13 +123,9 @@ impl<T: Serialize> Serialize for Req<T> {
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Req<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // Routing through `serde_json::Value` (rather than `Option::<T>::
-        // deserialize`) is deliberate: `Option<T>`'s impl calls
-        // `deserializer.deserialize_option`, which is exactly the hook serde's
-        // generated missing-field handling special-cases to succeed with
-        // `None` — reintroducing the hazard `Req` exists to close. Every
-        // caller of this type already only ever parses JSON, so coupling this
-        // helper to `serde_json::Value` costs nothing in practice.
+        // Via `serde_json::Value`, not `Option::<T>::deserialize`: that calls
+        // `deserialize_option`, the hook serde's missing-field handling
+        // special-cases to `None`, reintroducing the hazard `Req` closes.
         let value = serde_json::Value::deserialize(deserializer)?;
         if value.is_null() {
             Ok(Self(None))
@@ -154,14 +142,13 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Req<T> {
 pub struct ReportDocument {
     pub schema_version: SchemaVersion,
     /// Normalized review request id (schema pattern `^[A-Za-z0-9:._-]+$`).
-    /// Kept as a plain string in this phase — nothing here parses it into an
-    /// [`RequestReviewID`](crate::RequestReviewID); that is Phase 3's job.
+    /// Kept as a plain string; parsing it into a
+    /// [`RequestReviewID`](crate::RequestReviewID) is the ingest layer's job.
     pub id: String,
     pub kind: DocumentKind,
     pub workflow: DocWorkflow,
-    /// Time the pipeline produced this document, RFC 3339. Kept as a string:
-    /// `chrono` is not a `mtui-types` dependency and nothing in this phase
-    /// does date arithmetic.
+    /// Time the pipeline produced this document, RFC 3339, kept as a string
+    /// (`chrono` is not a `mtui-types` dependency).
     pub generated_at: String,
     /// Overall tester verdict from the log's `SUMMARY:` line, null until
     /// decided.
@@ -287,7 +274,7 @@ impl fmt::Display for SchemaVersion {
 
 /// Update format (`kind`). Wire values are the exact lowercase schema tokens
 /// `maintenance`/`slfo`/`pi` — distinct from [`RequestKind`]'s
-/// `Maintenance`/`SLFO`/`PI` wire form (P1-D4).
+/// `Maintenance`/`SLFO`/`PI` wire form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DocumentKind {
@@ -336,10 +323,8 @@ impl From<DocWorkflow> for UpdateSource {
 
 /// Overall tester verdict (`verdict`, `testing.install.verdict`,
 /// `testing.regression.verdict`, `install_check.verdict`): the
-/// `PASSED`/`FAILED` vocabulary. Distinct from
-/// [`OpenqaVerdict`]'s lowercase `passed`/`failed`
-/// (P1-D4) — sharing one type across both wire vocabularies is how a `422`
-/// gets shipped.
+/// `PASSED`/`FAILED` vocabulary. Distinct from [`OpenqaVerdict`]'s lowercase
+/// `passed`/`failed`; sharing one type across both is how a `422` gets shipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
     #[serde(rename = "PASSED")]
@@ -349,9 +334,9 @@ pub enum Verdict {
 }
 
 /// Error produced when a raw JSON document fails to parse into a
-/// [`ReportDocument`] (P1-D1: a missing required key is a typed error, never
-/// a silent default). Carries the same RFC 6901 pointer vocabulary Phase 5
-/// will see in a `422 {pointers: [...]}`.
+/// [`ReportDocument`]: a missing required key is a typed error, never a silent
+/// default. Carries the same RFC 6901 pointer vocabulary as a
+/// `422 {pointers: [...]}`.
 ///
 /// A missing-*field* error (the field's key itself was never present) is only
 /// tracked to the *object* that was missing it — the field name is not a
@@ -404,11 +389,10 @@ fn pointer_from_path(path: &Path) -> String {
 }
 
 /// Every RFC 6901 pointer present in `original` but absent from
-/// `round_tripped` (P1-D2's "unknown key dropped" signal). Object keys are
-/// compared recursively by walking both trees in lockstep; a key whose value
-/// merely *differs* (rather than being wholly absent) is not reported here —
-/// that is a round-trip-correctness bug, the property [`ReportDocument`]'s own
-/// semantic-round-trip test (P1-D3) already catches.
+/// `round_tripped` (the "unknown key dropped" signal). Object keys are
+/// compared recursively; a key whose value merely *differs* is not reported
+/// here, as that is a round-trip-correctness bug [`ReportDocument`]'s own
+/// round-trip test catches.
 #[must_use]
 pub fn dropped_pointers(original: &Value, round_tripped: &Value) -> Vec<String> {
     let mut out = Vec::new();
@@ -452,7 +436,7 @@ fn collect_dropped(
 
 /// Parses `raw` into a [`ReportDocument`], then logs (`tracing::warn!`, once
 /// per pointer) every key [`dropped_pointers`] finds between the raw document
-/// and the model's re-serialised form (P1-D2). The two schema-open objects
+/// and the model's re-serialised form. The two schema-open objects
 /// (`testing`, `testing.openqa`) never trigger this: their typed
 /// `extra: BTreeMap<String, Value>` catch-all round-trips every key they see.
 /// This is a diagnostic side effect, not a validation gate — the parsed

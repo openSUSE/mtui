@@ -4,14 +4,13 @@
 //! `nuremberg:`, …), but location is a legacy grouping rather than a live query
 //! dimension, so every group is merged into one flat list of [`Host`]s.
 //!
-//! This crate is I/O-free, so the loader takes the already-read YAML as a
-//! `&str`; the `Path`-based loader and the resolver / search / query / slot
-//! engine belong to `mtui-datasources`.
+//! The loader takes the already-read YAML as a `&str`; the `Path`-based loader
+//! and the resolver / search / query / slot engine belong to
+//! `mtui-datasources`.
 //!
 //! # Load-time dedup
 //! Rows are de-duplicated by [`Host::name`] **at load time** (first occurrence
-//! wins), so `mtui-datasources` must *not* dedup again. The golden fixture has
-//! only unique names, so a dedicated unit test below covers the dedup path.
+//! wins), so `mtui-datasources` must *not* dedup again.
 //!
 //! # Best-effort row handling
 //! A malformed row (missing required field, wrong nesting) is dropped and logged
@@ -31,21 +30,20 @@ use crate::product::Host;
 
 /// The top-level `refhosts.yml` shape: location key → list of raw host rows.
 ///
-/// `serde-saphyr` builds no DOM, so rows are held as `serde_json::Value` (an
-/// existing workspace dep that implements `Deserializer`). Keeping them untyped
-/// first is what lets one malformed row be dropped without failing the document.
+/// `serde-saphyr` builds no DOM, so rows are held as `serde_json::Value`;
+/// keeping them untyped first lets one malformed row be dropped without failing
+/// the document.
 type RawDocument = std::collections::BTreeMap<String, Option<Vec<serde_json::Value>>>;
 
 /// Parser options for `refhosts.yml`:
 /// - `strict_booleans`: without it YAML 1.1 booleans (`no`, `on`, `y`, …) would
 ///   swallow hostnames and values that must stay strings.
-/// - `non_finite_float_policy: AsString`: a single `.inf`/`.nan` anywhere
-///   is otherwise document-fatal under `deserialize_any` — exactly the failure
-///   mode this loader exists to prevent. `AsString` degrades it to a string, so
-///   `Host::deserialize` drops just that row.
+/// - `non_finite_float_policy: AsString`: a single `.inf`/`.nan` is otherwise
+///   document-fatal under `deserialize_any`; `AsString` makes `Host::deserialize`
+///   drop just that row.
 /// - `budget`: the default `max_nodes` (250,000) would cap the inventory at
-///   roughly 21k hosts; the raised ceiling is still deliberate DoS hardening for
-///   a document fetched over the network, not a disabled check.
+///   roughly 21k hosts; the raised ceiling remains DoS hardening for a document
+///   fetched over the network.
 fn options() -> serde_saphyr::Options {
     serde_saphyr::options! {
         strict_booleans: true,

@@ -1,6 +1,4 @@
-//! The `mtui-types` error hierarchy: the foundation every later crate imports,
-//! scoped to what the domain types themselves need.
-//!
+//! The `mtui-types` error hierarchy, scoped to what the domain types need.
 //! Higher crates define their own enums (`HostError`, `GiteaError`, ...) rather
 //! than extending this one via `#[from]`.
 

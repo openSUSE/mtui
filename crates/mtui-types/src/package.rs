@@ -10,8 +10,8 @@
 //! `before`, `after` and `current` are [`VersionCheck`]s rather than
 //! `Option<`[`RPMVersion`]`>` because all three are *measured* on a target: a
 //! host the version query never reached must not read the same as one it
-//! confirmed the package absent on (#396, #437). `required` is declared by the
-//! update metadata, never measured, so it stays a plain option.
+//! confirmed the package absent on. `required` is declared by the update
+//! metadata, so it stays a plain option.
 //!
 //! A `Package` hashes and compares **by name only**, so it can live in a
 //! name-keyed set regardless of its version fields.
@@ -33,8 +33,7 @@ pub struct Package {
 /// The outcome of checking one of a package's versions on a target.
 ///
 /// `Option<RPMVersion>` cannot say *why* it is empty, and the export must render
-/// "the check ran, the package was absent" differently from "no check ran"
-/// (#396). One field keeps the value and the fact it was measured together.
+/// "the check ran, the package was absent" differently from "no check ran".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum VersionCheck {
     /// No check has run — the version is simply unknown.
@@ -189,7 +188,7 @@ impl Package {
 
     /// Sets the [`current`](Package::current) check outcome directly,
     /// including [`NotChecked`](VersionCheck::NotChecked) — the version
-    /// query never having answered for this package at all (#437).
+    /// query never having answered for this package.
     pub fn set_current_check(&mut self, check: VersionCheck) {
         self.current = check;
     }
@@ -197,9 +196,9 @@ impl Package {
 
 /// Parses an optional version string, treating `None`/empty as "no version".
 ///
-/// The before/after setters feed the result through [`VersionCheck::from`],
-/// which reads that as *checked, not installed*;
-/// [`required`](Package::required) keeps it as a plain absent value.
+/// The before/after setters read it as *checked, not installed*
+/// ([`VersionCheck::from`]); [`required`](Package::required) keeps a plain
+/// absent value.
 fn parse_opt(ver: Option<&str>) -> crate::error::Result<Option<RPMVersion>> {
     match ver {
         Some(v) if !v.is_empty() => Ok(Some(RPMVersion::parse(v)?)),
