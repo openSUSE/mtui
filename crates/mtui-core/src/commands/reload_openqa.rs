@@ -81,7 +81,6 @@ impl Command for ReloadOpenQA {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::support::{build_auto_openqa, build_incident};
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
     use crate::error::CommandError;
 
@@ -178,18 +177,9 @@ mod tests {
 
         // Prime the holder so the "refresh" branch runs instead of "get".
         let rrid = session.metadata().rrid().unwrap().clone();
-        let http = session.http_client().unwrap();
-        let dashboard_api = session.config.qem_dashboard_api.clone();
-        let openqa_instance = session.config.openqa_instance.clone();
-        let source = session.metadata().update_source();
-        let incident = build_incident(rrid.clone(), dashboard_api, http, source, None).await;
-        let max_parallel = session.config.max_parallel as usize;
-        session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
-            openqa_instance,
-            &incident,
-            rrid,
-            max_parallel,
-        ));
+        let ctx = OpenqaCtx::snapshot(&session, rrid).unwrap();
+        let incident = ctx.incident().await;
+        session.metadata_mut().openqa_mut().auto = Some(ctx.auto(&incident));
 
         let args = matches(&ReloadOpenQA, &[]);
         ReloadOpenQA.call(&mut session, &args).await.unwrap();

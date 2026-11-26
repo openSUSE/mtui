@@ -40,26 +40,6 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
 // `-t`-scoped whole-group caveat so a `-t`-scoped line never reads as "force
 // this one host" (#521).
 
-/// Builds the report's [`QemIncident`], threaded into both
-/// `DashboardAutoOpenQA` and `KernelOpenQA` so they share one incident state.
-///
-/// Takes an already-built [`HttpClient`] (from
-/// [`Session::http_client`](crate::session::Session::http_client)) to reuse the
-/// session connection pool, and plain values rather than `&Session` so callers
-/// never hold a non-`Sync` borrow across the `.await`. `source` is the
-/// incident's fallback when the dashboard has no record. `pr_url` is the
-/// report's Gitea pull request URL, which names a git incident's project.
-pub(crate) async fn build_incident(
-    rrid: RequestReviewID,
-    dashboard_api: String,
-    http: HttpClient,
-    source: UpdateSource,
-    pr_url: Option<&str>,
-) -> QemIncident {
-    let client = QemDashboardClient::with_client(http, dashboard_api);
-    QemIncident::with_client(rrid, client, source, pr_url).await
-}
-
 /// Resolves the dashboard identity of the loaded update for the commands that
 /// query the dashboard directly.
 ///
@@ -87,19 +67,6 @@ pub(crate) async fn resolve_dashboard_key(
                 "QEM Dashboard query failed: could not identify incident {number} on the QEM Dashboard"
             ))
         })
-}
-
-/// A fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on openQA
-/// instance `host`, its concurrent per-setting job fetches bounded by
-/// `max_parallel`. Call [`DashboardAutoOpenQA::run`] to populate it.
-#[must_use]
-pub(crate) fn build_auto_openqa(
-    host: String,
-    incident: &QemIncident,
-    rrid: RequestReviewID,
-    max_parallel: usize,
-) -> DashboardAutoOpenQA {
-    DashboardAutoOpenQA::new(host, incident, rrid, max_parallel)
 }
 
 /// A fresh, unpopulated [`KernelOpenQA`] connector for openQA instance `host`.
@@ -193,19 +160,26 @@ impl OpenqaCtx {
         })
     }
 
+    /// The report's [`QemIncident`], threaded into both `DashboardAutoOpenQA`
+    /// and `KernelOpenQA` so they share one incident state. `source` is the
+    /// incident's fallback when the dashboard has no record; `pr_url` names a
+    /// git incident's project.
     pub(crate) async fn incident(&self) -> QemIncident {
-        build_incident(
+        let client = QemDashboardClient::with_client(self.http.clone(), self.dashboard_api.clone());
+        QemIncident::with_client(
             self.rrid.clone(),
-            self.dashboard_api.clone(),
-            self.http.clone(),
+            client,
             self.source,
             self.pr_url.as_deref(),
         )
         .await
     }
 
+    /// A fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow, its
+    /// concurrent per-setting job fetches bounded by `max_parallel`. Call
+    /// [`DashboardAutoOpenQA::run`] to populate it.
     pub(crate) fn auto(&self, incident: &QemIncident) -> DashboardAutoOpenQA {
-        build_auto_openqa(
+        DashboardAutoOpenQA::new(
             self.openqa_instance.clone(),
             incident,
             self.rrid.clone(),
@@ -321,14 +295,12 @@ pub(crate) fn require_update(
     session: &Session,
 ) -> Result<mtui_types::RequestReviewID, CommandError> {
     let meta = session.metadata();
-    if !meta.is_loaded() {
-        return Err(CommandError::Other(
-            "Metadata not loaded, please use load_template first".to_owned(),
-        ));
-    }
-    meta.rrid().cloned().ok_or_else(|| {
-        CommandError::Other("Metadata not loaded, please use load_template first".to_owned())
-    })
+    meta.is_loaded()
+        .then(|| meta.rrid().cloned())
+        .flatten()
+        .ok_or_else(|| {
+            CommandError::Other("Metadata not loaded, please use load_template first".to_owned())
+        })
 }
 
 /// Guards a command body that reads or writes the report document.

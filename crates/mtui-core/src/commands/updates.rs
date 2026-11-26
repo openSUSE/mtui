@@ -296,12 +296,11 @@ impl Command for Updates {
         // --assignee/--mine/--all-assignees opt out of.
         let is_testing = status.as_deref() == Some("testing");
         let unassigned = is_testing && assignees.is_empty() && !all_assignees;
-        let want_assignment = is_testing;
 
         // Without `with_assignment` TeReGen omits assignee/assignees on SLFO
         // rows, so an assignment-derived field would render a false
         // "unassigned".
-        if !want_assignment && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
+        if !is_testing && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
             return Err(CommandError::Other(format!(
                 "field '{}' needs assignment data, which TeReGen serves for \
                  --status testing only; use --status testing",
@@ -314,24 +313,6 @@ impl Command for Updates {
         // `-G` group: TeReGen serves the union of a repeated `review_group`.
         let groups: Vec<&str> = review_groups.iter().map(String::as_str).collect();
         let status_filter = status.as_deref();
-        // A named fn, not a closure: a closure cannot tie its return's
-        // lifetime to its argument's.
-        fn query_for<'a>(
-            groups: &'a [&'a str],
-            status: Option<&'a str>,
-            assignee: Option<&'a str>,
-            unassigned: bool,
-            with_assignment: bool,
-        ) -> UpdatesQuery<'a> {
-            UpdatesQuery {
-                review_groups: groups,
-                status,
-                assignee,
-                unassigned,
-                with_assignment,
-                no_cache: false,
-            }
-        }
         let assignee_filters: Vec<Option<&str>> = if assignees.is_empty() {
             vec![None]
         } else {
@@ -339,7 +320,14 @@ impl Command for Updates {
         };
         let queries: Vec<UpdatesQuery<'_>> = assignee_filters
             .iter()
-            .map(|a| query_for(&groups, status_filter, *a, unassigned, want_assignment))
+            .map(|a| UpdatesQuery {
+                review_groups: &groups,
+                status: status_filter,
+                assignee: *a,
+                unassigned,
+                with_assignment: is_testing,
+                no_cache: false,
+            })
             .collect();
         let multi = queries.len() > 1;
         // `buffered` keeps batches in login order. Materialised eagerly: a lazy
@@ -455,7 +443,7 @@ impl Command for Updates {
         }
         if specs.is_empty() {
             for u in &shown {
-                session.display.println(&render_row(u, want_assignment));
+                session.display.println(&render_row(u, is_testing));
             }
         } else {
             if needs_obs {
