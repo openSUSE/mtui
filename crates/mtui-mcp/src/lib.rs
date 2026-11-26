@@ -45,6 +45,8 @@ pub mod slim;
 #[cfg(all(test, feature = "mcp"))]
 pub(crate) mod test_log;
 #[cfg(feature = "mcp")]
+pub(crate) mod tool_args;
+#[cfg(feature = "mcp")]
 pub mod tools;
 #[cfg(feature = "mcp")]
 pub mod transfer_tools;

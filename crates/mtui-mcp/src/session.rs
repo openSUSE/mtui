@@ -151,13 +151,16 @@ pub trait ProgressSink: Send + Sync {
 /// [`ProgressSink`]), so this loop cannot mask `fut`'s result.
 pub(crate) async fn run_with_heartbeat<F>(
     fut: F,
-    sink: &dyn ProgressSink,
+    sink: Option<&dyn ProgressSink>,
     command: &str,
     interval: Duration,
 ) -> F::Output
 where
     F: Future,
 {
+    let Some(sink) = sink else {
+        return fut.await;
+    };
     // `progress` is on the std clock, which tokio's `start_paused` does not
     // advance: a virtual-time test sees 0.0 on every frame, so assertions about
     // *values* must run on the wall clock. Tick *counts* stay exact either way.
@@ -1352,21 +1355,13 @@ impl McpSession {
         cancel: Option<CancellationToken>,
         ran_under: Option<&ScopeSlot>,
     ) -> Result<String, McpCommandError> {
-        match sink {
-            None => {
-                self.run_command_cancellable(registry, name, argv, cancel, ran_under)
-                    .await
-            }
-            Some(sink) => {
-                run_with_heartbeat(
-                    self.run_command_cancellable(registry, name, argv, cancel, ran_under),
-                    sink,
-                    name,
-                    interval,
-                )
-                .await
-            }
-        }
+        run_with_heartbeat(
+            self.run_command_cancellable(registry, name, argv, cancel, ran_under),
+            sink,
+            name,
+            interval,
+        )
+        .await
     }
 
     /// [`run_command_with_progress`](Self::run_command_with_progress) driven
@@ -5657,8 +5652,13 @@ mod tests {
             "done"
         };
 
-        let out =
-            run_with_heartbeat(body, &sink, "_sleepy_command", Duration::from_millis(50)).await;
+        let out = run_with_heartbeat(
+            body,
+            Some(&sink),
+            "_sleepy_command",
+            Duration::from_millis(50),
+        )
+        .await;
         assert_eq!(out, "done", "future output returned unchanged");
 
         let calls = sink.calls();
@@ -5680,7 +5680,8 @@ mod tests {
     #[tokio::test]
     async fn run_with_heartbeat_no_frames_for_fast_future() {
         let sink = RecordingSink::default();
-        let out = run_with_heartbeat(async { 7 }, &sink, "fast", Duration::from_secs(1)).await;
+        let out =
+            run_with_heartbeat(async { 7 }, Some(&sink), "fast", Duration::from_secs(1)).await;
         assert_eq!(out, 7);
         assert!(sink.calls().is_empty(), "no frames: {:?}", sink.calls());
     }
@@ -5719,8 +5720,13 @@ mod tests {
             "ok"
         };
 
-        let out =
-            run_with_heartbeat(body, &sink, "_sleepy_command", Duration::from_millis(40)).await;
+        let out = run_with_heartbeat(
+            body,
+            Some(&sink),
+            "_sleepy_command",
+            Duration::from_millis(40),
+        )
+        .await;
         assert_eq!(out, "ok", "result survives a failing sink");
         assert_eq!(
             *sink.calls.lock().unwrap(),

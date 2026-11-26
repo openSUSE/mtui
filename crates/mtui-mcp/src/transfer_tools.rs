@@ -39,50 +39,12 @@ use crate::session::{
     CallScope, CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
     ScopeSlot, record_scope, run_with_heartbeat,
 };
+use crate::tool_args::{TEMPLATE_NOTE, opt_str, refuse, reject_unknown_for, schema, template_prop};
 use crate::tools::ToolDescriptor;
-
-/// Shared "which template" note, kept textually aligned with the document
-/// tools' `TEMPLATE_NOTE`.
-const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded template; required when more \
-     than one is loaded.";
-
-fn refuse(msg: impl Into<String>) -> McpCommandError {
-    McpCommandError {
-        stdout: String::new(),
-        stderr: msg.into(),
-        exit_code: 1,
-    }
-}
-
-/// Build the schema for a transfer tool (strict: unknown fields rejected).
-fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Map<String, Value> {
-    let mut properties = Map::new();
-    for (name, spec) in props {
-        properties.insert(name.to_owned(), spec);
-    }
-    let mut s = Map::new();
-    s.insert("type".to_owned(), Value::String("object".to_owned()));
-    s.insert("properties".to_owned(), Value::Object(properties));
-    if !required.is_empty() {
-        s.insert(
-            "required".to_owned(),
-            Value::Array(required.iter().map(|r| json!(r)).collect()),
-        );
-    }
-    s.insert("additionalProperties".to_owned(), Value::Bool(false));
-    s
-}
 
 /// The two transfer tool descriptors (transport-free).
 #[must_use]
 pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
-    let template_prop = || {
-        json!({
-            "type": "string",
-            "description": "RRID of a loaded template to target (required when >1 loaded).",
-        })
-    };
-
     let hosts_prop = || {
         json!({
             "type": "array",
@@ -182,10 +144,7 @@ pub(crate) async fn dispatch_transfer_tool_scoped(
     ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
     let body = dispatch_transfer_tool_inner(session, name, kwargs, ran_under);
-    match sink {
-        None => body.await,
-        Some(sink) => run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await,
-    }
+    run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await
 }
 
 /// The undecorated dispatch, wrapped by [`dispatch_transfer_tool`].
@@ -195,19 +154,7 @@ async fn dispatch_transfer_tool_inner(
     kwargs: &Map<String, Value>,
     ran_under: Option<&ScopeSlot>,
 ) -> Result<Value, McpCommandError> {
-    // The allowed keys are the descriptor's advertised properties.
-    if let Some(desc) = transfer_tool_descriptors()
-        .into_iter()
-        .find(|d| d.name == name)
-    {
-        let allowed = desc
-            .input_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(|props| props.keys().map(String::as_str));
-        crate::tools::reject_unknown_kwargs(kwargs, allowed)?;
-    }
+    reject_unknown_for(kwargs, transfer_tool_descriptors(), name)?;
 
     let template = opt_str(kwargs, "template")?;
     match name {
@@ -312,18 +259,6 @@ fn check_hosts(
         )));
     }
     Ok(())
-}
-
-/// `Some(trimmed value)` for a present string field, `None` when absent/null.
-fn opt_str<'a>(
-    kwargs: &'a Map<String, Value>,
-    key: &str,
-) -> Result<Option<&'a str>, McpCommandError> {
-    match kwargs.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(refuse(format!("{key} must be a string, got {other}"))),
-    }
 }
 
 /// Resolves the target template rrid: the single loaded one, or the named one.
