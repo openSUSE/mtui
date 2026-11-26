@@ -736,16 +736,6 @@ impl Target {
         Ok(Some(snap.rrid))
     }
 
-    /// Returns this target's operation lock, loaded, for inspecting ownership.
-    ///
-    /// The group [`update_lock`](HostsGroup::update_lock) fan-out needs to read
-    /// [`is_mine`](TargetLock::is_mine) / [`time`](TargetLock::time) /
-    /// [`locked_by`](TargetLock::locked_by) / [`comment`](TargetLock::comment)
-    /// after establishing the host is locked. `None` when not connected.
-    fn lock_mut(&mut self) -> Option<&mut TargetLock> {
-        self.lock.as_mut()
-    }
-
     /// The operation lock's owner as of its last load, with no remote read.
     ///
     /// Only meaningful right after a call that failed with

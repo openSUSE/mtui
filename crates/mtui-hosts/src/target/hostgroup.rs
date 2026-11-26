@@ -1376,53 +1376,40 @@ impl HostsGroup {
         self.fanout("update_lock", select, |target| {
             let reasons = &reasons;
             boxed(async move {
-                    // Load the lock (is_locked) before reading ownership;
-                    // is_mine requires a prior load and is order-sensitive. A
-                    // read failure (fail-closed load) means the host's state is
-                    // unknown — treat it as a skip rather than assuming free.
-                    let locked = match target.is_locked().await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let host = target.hostname().to_owned();
-                            tracing::warn!(host = %host, error = %e, "update_lock: lock state unreadable; skipping");
-                            reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: format!("lock state unreadable: {e}") });
-                            return;
-                        }
-                    };
-                    let foreign = locked && target.lock_mut().is_some_and(|l| l.held_elsewhere());
-                    if foreign {
-                        let hostname = target.hostname().to_owned();
-                        let lock = target.lock_mut().expect("foreign implies a built lock");
-                        let time = lock.time().await.unwrap_or_default();
-                        let by = lock.locked_by().await.unwrap_or_default();
-                        let comment = lock.comment().await.unwrap_or_default();
-                        tracing::warn!(
-                            host = %hostname, since = %time, by = %by,
-                            "host is locked; skipping"
-                        );
-                        if !comment.is_empty() {
-                            tracing::info!(host = %hostname, %by, %comment, "lock comment");
-                        }
-                        reasons.lock().expect("reasons mutex").push(LockRefusal { host: hostname, reason: format!("held by {by} since {time}") });
-                    } else {
-                        // Any failure to acquire — contention or an SFTP/transport
-                        // error — means we do NOT own this host, so the whole
-                        // group must abort. Push a reason on every error, not
-                        // just `TargetLocked`.
-                        match target.lock("").await {
-                            Ok(()) => {}
-                            Err(HostError::TargetLocked(msg)) => {
-                                let host = target.hostname().to_owned();
-                                tracing::debug!(host = %host, %msg, "update_lock: held by another owner");
-                                reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: msg });
-                            }
-                            Err(e) => {
-                                let host = target.hostname().to_owned();
-                                tracing::warn!(host = %host, error = %e, "update_lock: lock failed");
-                                reasons.lock().expect("reasons mutex").push(LockRefusal { host, reason: e.to_string() });
-                            }
-                        }
+                let host = target.hostname().to_owned();
+                let refusal = |reason: String| LockRefusal {
+                    host: host.clone(),
+                    reason,
+                };
+                // A read failure (fail-closed load) means the host's state is
+                // unknown — a skip, never an assumption that it is free.
+                let refused = match target.foreign_operation_lock().await {
+                    Err(e) => {
+                        tracing::warn!(host = %host, error = %e, "update_lock: lock state unreadable; skipping");
+                        Some(refusal(format!("lock state unreadable: {e}")))
                     }
+                    Ok(Some(LockOwner { by, since, .. })) => {
+                        tracing::warn!(host = %host, since = %since, by = %by, "host is locked; skipping");
+                        Some(refusal(format!("held by {by} since {since}")))
+                    }
+                    // Any failure to acquire — contention or an SFTP/transport
+                    // error — means we do NOT own this host, so the whole group
+                    // must abort.
+                    Ok(None) => match target.lock("").await {
+                        Ok(()) => None,
+                        Err(HostError::TargetLocked(msg)) => {
+                            tracing::debug!(host = %host, %msg, "update_lock: held by another owner");
+                            Some(refusal(msg))
+                        }
+                        Err(e) => {
+                            tracing::warn!(host = %host, error = %e, "update_lock: lock failed");
+                            Some(refusal(e.to_string()))
+                        }
+                    },
+                };
+                if let Some(refusal) = refused {
+                    reasons.lock().expect("reasons mutex").push(refusal);
+                }
             })
         })
         .await;
@@ -4434,6 +4421,31 @@ mod tests {
             ]
         );
         assert!(!g.get_mut("h3").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_lock_names_a_foreign_owner_from_a_single_lock_read() {
+        let foreign = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let handle = foreign.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(foreign),
+            )],
+            false,
+        );
+
+        g.update_lock(None).await.expect_err("foreign lock aborts");
+
+        let reads = handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| matches!(op, crate::connection::MockSftpOp::Open(p) if p == std::path::Path::new(TARGET_LOCK_PATH)))
+            .count();
+        assert_eq!(reads, 3);
     }
 
     #[tokio::test]
