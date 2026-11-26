@@ -61,6 +61,12 @@ pub enum HttpError {
         /// else `None` (the cap tripped while streaming).
         seen: Option<u64>,
     },
+
+    /// A 2xx body that is not valid JSON, as read by
+    /// `HttpClient::get_json`. Renders as
+    /// the parser's own message; serde's error carries no URL.
+    #[error("{0}")]
+    Json(#[source] serde_json::Error),
 }
 
 impl HttpError {
@@ -75,7 +81,7 @@ impl HttpError {
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Request(e) => e.status().map(|s| s.as_u16()),
-            Self::CaBundle { .. } | Self::BodyTooLarge { .. } => None,
+            Self::CaBundle { .. } | Self::BodyTooLarge { .. } | Self::Json(_) => None,
         }
     }
 }

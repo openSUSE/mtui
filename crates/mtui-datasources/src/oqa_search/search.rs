@@ -36,8 +36,7 @@ use super::results::{BuildCheckResult, GroupResult, JobResult, VersionResult};
 /// [`OqaSearchError::Http`] so callers can convert into a user-facing message
 /// (or fold it into a note / empty result, as the entry points do).
 async fn get_json(http: &HttpClient, url: &str) -> Result<serde_json::Value, OqaSearchError> {
-    let bytes = http.get_bytes_capped(url, MAX_API_BODY).await?;
-    serde_json::from_slice(&bytes).map_err(|e| OqaSearchError::Http(e.to_string()))
+    Ok(http.get_json(url).await?)
 }
 
 /// GET `url` and return the body as UTF-8 text.
