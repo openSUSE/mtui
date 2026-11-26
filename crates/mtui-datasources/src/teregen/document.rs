@@ -304,11 +304,8 @@ impl TeregenV2 {
             request = request.header(IF_NONE_MATCH, etag);
         }
 
-        let response = request.send().await.map_err(|e| {
-            let e = HttpError::from(e);
-            tracing::debug!("TeReGen v2 GET reports/{rrid} failed: {e}");
-            TeregenV2Error::Transport(e.to_string())
-        })?;
+        let label = format!("reports/{rrid}");
+        let response = send_get(request, &label).await?;
 
         match response.status() {
             StatusCode::NOT_MODIFIED => return Ok(DocumentFetch::NotModified),
@@ -316,32 +313,23 @@ impl TeregenV2 {
             StatusCode::CONFLICT => return Err(TeregenV2Error::Stale),
             StatusCode::SERVICE_UNAVAILABLE => return Err(unavailable_error(response).await),
             StatusCode::BAD_REQUEST => {
-                let detail = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .ok()
-                    .map(|bytes| error_detail(&bytes))
-                    .unwrap_or_default();
-                return Err(TeregenV2Error::RejectedId { detail });
+                return Err(TeregenV2Error::RejectedId {
+                    detail: rejected_detail(response).await,
+                });
             }
             _ => {}
         }
 
-        let response = response.error_for_status().map_err(|e| {
-            let e = HttpError::from(e);
-            tracing::debug!("TeReGen v2 GET reports/{rrid} failed: {e}");
-            TeregenV2Error::Transport(e.to_string())
-        })?;
-        let etag_header = response
-            .headers()
-            .get(ETAG)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        let bytes = read_body_capped(response, MAX_API_BODY)
-            .await
-            .map_err(|e| match e {
-                HttpError::BodyTooLarge { .. } => TeregenV2Error::BodyTooLarge,
-                other => TeregenV2Error::Transport(other.to_string()),
-            })?;
+        let response = response
+            .error_for_status()
+            .map_err(|e| transport_error(&label, e))?;
+        let etag_header = etag_of(&response);
+        let bytes = read_capped(
+            response,
+            TeregenV2Error::BodyTooLarge,
+            TeregenV2Error::Transport,
+        )
+        .await?;
         let raw = String::from_utf8(bytes)
             .map_err(|e| TeregenV2Error::Transport(format!("response was not valid UTF-8: {e}")))?;
         let document = parse_and_warn_on_dropped_keys(&raw).map_err(TeregenV2Error::Invalid)?;
@@ -363,25 +351,19 @@ impl TeregenV2 {
     /// [`MAX_API_BODY`].
     pub async fn fetch_schema(&self) -> Result<serde_json::Value, TeregenV2Error> {
         let url = format!("{}/schema", self.base);
-        let response = self
-            .http
-            .inner()
-            .get(&url)
-            .timeout(HTTP_TIMEOUT.1)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| {
-                let e = HttpError::from(e);
-                tracing::debug!("TeReGen v2 GET schema failed: {e}");
-                TeregenV2Error::Transport(e.to_string())
-            })?;
-        let bytes = read_body_capped(response, MAX_API_BODY)
-            .await
-            .map_err(|e| match e {
-                HttpError::BodyTooLarge { .. } => TeregenV2Error::BodyTooLarge,
-                other => TeregenV2Error::Transport(other.to_string()),
-            })?;
+        let response = send_get(
+            self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1),
+            "schema",
+        )
+        .await?
+        .error_for_status()
+        .map_err(|e| transport_error("schema", e))?;
+        let bytes = read_capped(
+            response,
+            TeregenV2Error::BodyTooLarge,
+            TeregenV2Error::Transport,
+        )
+        .await?;
         serde_json::from_slice(&bytes)
             .map_err(|e| TeregenV2Error::Transport(format!("malformed schema: {e}")))
     }
@@ -397,44 +379,30 @@ impl TeregenV2 {
     /// any other status or an unparseable body is [`TeregenV2Error::Transport`].
     pub async fn list_artifacts(&self, rrid: &str) -> Result<Vec<ArtifactEntry>, TeregenV2Error> {
         let url = format!("{}/reports/{rrid}/artifacts", self.base);
-        let response = self
-            .http
-            .inner()
-            .get(&url)
-            .timeout(HTTP_TIMEOUT.1)
-            .send()
-            .await
-            .map_err(|e| {
-                let e = HttpError::from(e);
-                tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts failed: {e}");
-                TeregenV2Error::Transport(e.to_string())
-            })?;
+        let label = format!("reports/{rrid}/artifacts");
+        let response =
+            send_get(self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1), &label).await?;
 
         match response.status() {
             StatusCode::NOT_FOUND => return Err(TeregenV2Error::NotFound),
             StatusCode::SERVICE_UNAVAILABLE => return Err(unavailable_error(response).await),
             StatusCode::BAD_REQUEST => {
-                let detail = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .ok()
-                    .map(|bytes| error_detail(&bytes))
-                    .unwrap_or_default();
-                return Err(TeregenV2Error::RejectedId { detail });
+                return Err(TeregenV2Error::RejectedId {
+                    detail: rejected_detail(response).await,
+                });
             }
             _ => {}
         }
 
-        let response = response.error_for_status().map_err(|e| {
-            let e = HttpError::from(e);
-            tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts failed: {e}");
-            TeregenV2Error::Transport(e.to_string())
-        })?;
-        let bytes = read_body_capped(response, MAX_API_BODY)
-            .await
-            .map_err(|e| match e {
-                HttpError::BodyTooLarge { .. } => TeregenV2Error::BodyTooLarge,
-                other => TeregenV2Error::Transport(other.to_string()),
-            })?;
+        let response = response
+            .error_for_status()
+            .map_err(|e| transport_error(&label, e))?;
+        let bytes = read_capped(
+            response,
+            TeregenV2Error::BodyTooLarge,
+            TeregenV2Error::Transport,
+        )
+        .await?;
         serde_json::from_slice::<ArtifactList>(&bytes)
             .map(|list| list.artifacts)
             .map_err(|e| TeregenV2Error::Transport(format!("malformed artifact list: {e}")))
@@ -468,11 +436,7 @@ impl TeregenV2 {
         if max_bytes > 0 {
             request = request.header(RANGE, format!("bytes=0-{max_bytes}"));
         }
-        let response = request.send().await.map_err(|e| {
-            let e = HttpError::from(e);
-            tracing::debug!("TeReGen v2 GET reports/{rrid}/artifacts/{dir}/<name> failed: {e}");
-            TeregenV2Error::Transport(e.to_string())
-        })?;
+        let response = send_get(request, &format!("reports/{rrid}/artifacts/{dir}/<name>")).await?;
 
         match response.status() {
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
@@ -488,14 +452,9 @@ impl TeregenV2 {
             StatusCode::RANGE_NOT_SATISFIABLE => Ok(Vec::new()),
             StatusCode::NOT_FOUND => Err(TeregenV2Error::NotFound),
             StatusCode::SERVICE_UNAVAILABLE => Err(unavailable_error(response).await),
-            StatusCode::BAD_REQUEST => {
-                let detail = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .ok()
-                    .map(|bytes| error_detail(&bytes))
-                    .unwrap_or_default();
-                Err(TeregenV2Error::RejectedId { detail })
-            }
+            StatusCode::BAD_REQUEST => Err(TeregenV2Error::RejectedId {
+                detail: rejected_detail(response).await,
+            }),
             other => Err(TeregenV2Error::Transport(format!(
                 "unexpected status {other}"
             ))),
@@ -553,18 +512,13 @@ impl TeregenV2 {
 
         match response.status().as_u16() {
             202 => {
-                let etag_header = response
-                    .headers()
-                    .get(ETAG)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
-                let bytes =
-                    read_body_capped(response, MAX_API_BODY)
-                        .await
-                        .map_err(|e| match e {
-                            HttpError::BodyTooLarge { .. } => TeregenV2WriteError::BodyTooLarge,
-                            other => TeregenV2WriteError::Transport(other.to_string()),
-                        })?;
+                let etag_header = etag_of(&response);
+                let bytes = read_capped(
+                    response,
+                    TeregenV2WriteError::BodyTooLarge,
+                    TeregenV2WriteError::Transport,
+                )
+                .await?;
                 let raw = String::from_utf8(bytes).map_err(|e| {
                     TeregenV2WriteError::Transport(format!("response was not valid UTF-8: {e}"))
                 })?;
@@ -576,11 +530,7 @@ impl TeregenV2 {
                 })
             }
             400 => {
-                let detail = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .ok()
-                    .map(|bytes| error_detail(&bytes))
-                    .unwrap_or_default();
+                let detail = rejected_detail(response).await;
                 if detail == "id mismatch" {
                     Err(TeregenV2WriteError::IdMismatch)
                 } else {
@@ -588,14 +538,9 @@ impl TeregenV2 {
                 }
             }
             404 => Err(TeregenV2WriteError::NeverGenerated),
-            412 => {
-                let server_etag = response
-                    .headers()
-                    .get(ETAG)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
-                Err(TeregenV2WriteError::PreconditionFailed { server_etag })
-            }
+            412 => Err(TeregenV2WriteError::PreconditionFailed {
+                server_etag: etag_of(&response),
+            }),
             413 => Err(TeregenV2WriteError::TooLarge),
             422 => {
                 let bytes = read_body_capped(response, MAX_API_BODY)
@@ -613,20 +558,10 @@ impl TeregenV2 {
                 Err(TeregenV2WriteError::Invalid { pointers })
             }
             428 => Err(TeregenV2WriteError::PreconditionRequired),
-            503 => {
-                let bytes = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .unwrap_or_default();
-                let error_field = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .ok()
-                    .and_then(|v| v.get("error").and_then(|e| e.as_str().map(str::to_owned)));
-                match error_field.as_deref() {
-                    Some("busy") => Err(TeregenV2WriteError::Busy),
-                    // Conservative fallback (taxonomy): an unrecognised body
-                    // reads as still-generating, never as safe-to-retry.
-                    _ => Err(TeregenV2WriteError::Generating),
-                }
-            }
+            // Conservative fallback: an unrecognised body reads as
+            // still-generating, never as safe-to-retry.
+            503 if busy_body(response).await => Err(TeregenV2WriteError::Busy),
+            503 => Err(TeregenV2WriteError::Generating),
             other => Err(TeregenV2WriteError::Transport(format!(
                 "unexpected status {other}"
             ))),
@@ -682,35 +617,17 @@ impl TeregenV2 {
         match response.status().as_u16() {
             201 => Ok(ArtifactStored::Created),
             200 => Ok(ArtifactStored::Replaced),
-            400 => {
-                let detail = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .ok()
-                    .map(|bytes| error_detail(&bytes))
-                    .unwrap_or_default();
-                Err(ArtifactUploadError::RejectedId { detail })
-            }
+            400 => Err(ArtifactUploadError::RejectedId {
+                detail: rejected_detail(response).await,
+            }),
             413 => Err(ArtifactUploadError::TooLarge {
                 name: name.to_owned(),
             }),
             422 => Err(ArtifactUploadError::InvalidName {
                 name: name.to_owned(),
             }),
-            503 => {
-                let bytes = read_body_capped(response, MAX_API_BODY)
-                    .await
-                    .unwrap_or_default();
-                let error_field = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .ok()
-                    .and_then(|v| v.get("error").and_then(|e| e.as_str().map(str::to_owned)));
-                match error_field.as_deref() {
-                    Some("busy") => Err(ArtifactUploadError::Busy),
-                    // Conservative fallback, same taxonomy as
-                    // `upload_document`: an unrecognised body reads as
-                    // still-generating, never as safe-to-retry.
-                    _ => Err(ArtifactUploadError::Generating),
-                }
-            }
+            503 if busy_body(response).await => Err(ArtifactUploadError::Busy),
+            503 => Err(ArtifactUploadError::Generating),
             other => Err(ArtifactUploadError::Transport(format!(
                 "unexpected status {other}"
             ))),
@@ -850,16 +767,66 @@ pub fn is_valid_artifact_name(name: &str) -> bool {
 /// `{"error":"busy"}`, else [`TeregenV2Error::Generating`] — the conservative
 /// reading, as on writes: an unrecognised body is never taken as safe to retry.
 async fn unavailable_error(response: reqwest::Response) -> TeregenV2Error {
-    let busy = read_body_capped(response, MAX_API_BODY)
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .is_some_and(|v| v.get("error").and_then(|e| e.as_str()) == Some("busy"));
-    if busy {
+    if busy_body(response).await {
         TeregenV2Error::Busy
     } else {
         TeregenV2Error::Generating
     }
+}
+
+/// `true` when a `503` body is `{"error":"busy"}`; an unreadable or
+/// unrecognised body is `false`.
+async fn busy_body(response: reqwest::Response) -> bool {
+    read_body_capped(response, MAX_API_BODY)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|v| v.get("error").and_then(|e| e.as_str()) == Some("busy"))
+}
+
+/// The server's message for a `400`, empty when the body cannot be read.
+async fn rejected_detail(response: reqwest::Response) -> String {
+    read_body_capped(response, MAX_API_BODY)
+        .await
+        .ok()
+        .map(|bytes| error_detail(&bytes))
+        .unwrap_or_default()
+}
+
+fn etag_of(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Read a capped body, mapping an overflow to `too_large` and any other
+/// failure to `transport`.
+async fn read_capped<E>(
+    response: reqwest::Response,
+    too_large: E,
+    transport: fn(String) -> E,
+) -> Result<Vec<u8>, E> {
+    read_body_capped(response, MAX_API_BODY)
+        .await
+        .map_err(|e| match e {
+            HttpError::BodyTooLarge { .. } => too_large,
+            other => transport(other.to_string()),
+        })
+}
+
+fn transport_error(label: &str, e: reqwest::Error) -> TeregenV2Error {
+    let e = HttpError::from(e);
+    tracing::debug!("TeReGen v2 GET {label} failed: {e}");
+    TeregenV2Error::Transport(e.to_string())
+}
+
+async fn send_get(
+    request: reqwest::RequestBuilder,
+    label: &str,
+) -> Result<reqwest::Response, TeregenV2Error> {
+    request.send().await.map_err(|e| transport_error(label, e))
 }
 
 /// Extract a `{"error": "..."}` body's message, falling back to the raw body
