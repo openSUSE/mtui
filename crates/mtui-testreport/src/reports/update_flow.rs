@@ -19,9 +19,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mtui_hosts::{
-    Command, HostError, HostsGroup, InstallOperation, LockOutcome, Operation, OperationGroup,
-    RebootFailure, RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo,
-    UninstallOperation,
+    Command, HostError, HostsGroup, LockOutcome, Operation, OperationGroup, RebootFailure,
+    RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo,
 };
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
@@ -900,7 +899,7 @@ fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> V
 /// The shared body behind every report's `perform_install`. Injects the
 /// [`WorkflowRegistry`] as the group's
 /// [`PlanProvider`](mtui_hosts::PlanProvider) and drives the
-/// [`InstallOperation`] template, whose own per-host
+/// install [`Operation`] template, whose own per-host
 /// [`Check`](mtui_hosts::Check) produces the verdict before the reboot.
 ///
 /// Injecting here rather than where the group is built is deliberate:
@@ -1000,12 +999,8 @@ async fn perform_operation_with(
     targets.set_plan_provider(provider);
 
     let outcome = match role {
-        Role::Install => InstallOperation::new(packages.to_vec()).run(targets).await,
-        Role::Uninstall => {
-            UninstallOperation::new(packages.to_vec())
-                .run(targets)
-                .await
-        }
+        Role::Install => Operation::install(packages.to_vec()).run(targets).await,
+        Role::Uninstall => Operation::uninstall(packages.to_vec()).run(targets).await,
         Role::Update | Role::Prepare | Role::Downgrade => {
             unreachable!("returned above for these roles")
         }

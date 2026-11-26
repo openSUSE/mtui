@@ -525,7 +525,7 @@ pub trait TestReport {
 
     /// Installs `packages` on every host in `targets`.
     ///
-    /// Drives the [`InstallOperation`](mtui_hosts::InstallOperation) template
+    /// Drives the install [`Operation`](mtui_hosts::Operation) template
     /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
     /// which resolves each host's installer doer/check via the `PlanProvider`
     /// injected by `update_flow::perform_install` (the shared body behind this
@@ -547,7 +547,7 @@ pub trait TestReport {
 
     /// Uninstalls `packages` from every host in `targets`.
     ///
-    /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
+    /// Drives the uninstall [`Operation`](mtui_hosts::Operation)
     /// template; see [`perform_install`](Self::perform_install). Default no-op
     /// `Ok(())`; returns `Err` on a per-host command failure. Holds lost in
     /// the reboot gap are reported on `diagnostics` as degradations.

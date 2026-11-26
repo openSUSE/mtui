@@ -187,7 +187,7 @@ pub enum HostError {
 
     /// No installer "doer" is defined for the given product release.
     ///
-    /// Raised by [`InstallOperation`](crate::InstallOperation), which logs and
+    /// Raised by an install [`Operation`](crate::Operation), which logs and
     /// returns before touching any locks.
     #[error("Missing Installer for {release}")]
     MissingInstaller {
@@ -197,7 +197,7 @@ pub enum HostError {
 
     /// No uninstaller "doer" is defined for the given product release.
     ///
-    /// Raised by [`UninstallOperation`](crate::UninstallOperation) under the
+    /// Raised by an uninstall [`Operation`](crate::Operation) under the
     /// same early-return contract as [`MissingInstaller`](Self::MissingInstaller).
     #[error("Missing Uninstaller for {release}")]
     MissingUninstaller {
@@ -376,8 +376,40 @@ pub enum UploadRefusal {
     },
 }
 
+impl HostError {
+    /// The "no doer for this release" error of `role`, one of the role strings
+    /// the workflow tables are keyed by (`"installer"`, `"uninstaller"`,
+    /// `"updater"`, `"preparer"`, `"downgrader"`). An unrecognised role reports
+    /// the installer's, the role the install-family templates dispatch first.
+    #[must_use]
+    pub fn missing_for(role: &str, release: impl Into<String>) -> Self {
+        let release = release.into();
+        match role {
+            "uninstaller" => Self::MissingUninstaller { release },
+            "updater" => Self::MissingUpdater { release },
+            "preparer" => Self::MissingPreparer { release },
+            "downgrader" => Self::MissingDowngrader { release },
+            _ => Self::MissingInstaller { release },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_for_maps_each_role_to_its_error() {
+        for (role, shown) in [
+            ("installer", "Missing Installer for r"),
+            ("uninstaller", "Missing Uninstaller for r"),
+            ("updater", "Missing Updater for r"),
+            ("preparer", "Missing Preparer for r"),
+            ("downgrader", "Missing Downgrader for r"),
+            ("anything else", "Missing Installer for r"),
+        ] {
+            assert_eq!(super::HostError::missing_for(role, "r").to_string(), shown);
+        }
+    }
+
     use super::*;
 
     #[test]
