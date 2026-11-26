@@ -15,7 +15,7 @@
 use mtui_config::options::Config;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{TeReGen, VerifyPolicy, resolve_verify};
+use mtui_datasources::{TeReGen, VerifyPolicy};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
 use mtui_types::{UpdateID, Workflow};
@@ -190,10 +190,7 @@ pub async fn make_testreport(
         let dashboard_api = report.base().config.qem_dashboard_api.clone();
         let openqa_instance = report.base().config.openqa_instance.clone();
         let max_parallel = report.base().config.max_parallel as usize;
-        let policy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&report.base().config.ssl_verify)),
-        );
+        let policy = VerifyPolicy::from_config(&report.base().config.ssl_verify);
         let source = report.update_source();
         let pr_url = report.base().giteapr.clone();
 

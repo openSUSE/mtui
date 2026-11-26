@@ -6,10 +6,9 @@
 //! TLS-verification policy instead of each deciding separately:
 //!
 //! - `HTTP_TIMEOUT` bounds a stuck socket so a broken network cannot hang mtui.
-//! - [`resolve_verify`] folds a per-call default and the user's global
-//!   preference into the effective [`VerifyPolicy`]; verification is **on by
-//!   default for every call site**. [`VerifyPolicy::from_config`] bridges the
-//!   typed [`mtui_config::SslVerify`] config value into it.
+//! - [`VerifyPolicy::from_config`] bridges the typed
+//!   [`mtui_config::SslVerify`] config value into the effective
+//!   [`VerifyPolicy`]; verification is **on by default**.
 //! - [`HttpClient`] builds one `reqwest::Client` with that fixed posture.
 //!   reqwest fixes TLS and owns its connection pool at build time, so a caller
 //!   resolves the policy first, then reuses the client.
@@ -33,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use mtui_config::SslVerify;
+use mtui_config::{Config, SslVerify};
 pub use mtui_types::url_redaction::sanitize_url;
 
 use crate::error::{HttpError, Result};
@@ -124,14 +123,6 @@ impl VerifyPolicy {
     }
 }
 
-/// Pick the effective verify value for a request: `override_` wins whenever it
-/// is `Some`, else the per-call `default` (call sites pass `Default(true)`, so
-/// verification is on unless the user expressed a preference).
-#[must_use]
-pub fn resolve_verify(default: VerifyPolicy, override_: Option<VerifyPolicy>) -> VerifyPolicy {
-    override_.unwrap_or(default)
-}
-
 /// Warn once, process-wide, that verification is deliberately disabled; later
 /// calls are cheap no-ops, so REPL output stays readable.
 fn disable_insecure_warnings() {
@@ -189,6 +180,15 @@ impl HttpClient {
     /// or parsed, or [`HttpError::Request`] if the client fails to build.
     pub fn new(verify: VerifyPolicy) -> Result<Self> {
         Self::with_read_timeouts(verify, READ_TIMEOUT, PATIENT_READ_TIMEOUT)
+    }
+
+    /// Build a client with the TLS posture of `config.ssl_verify`.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn from_config(config: &Config) -> Result<Self> {
+        Self::new(VerifyPolicy::from_config(&config.ssl_verify))
     }
 
     pub(crate) fn with_read_timeouts(
@@ -477,16 +477,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_verify_precedence() {
-        let f = || VerifyPolicy::Default(false);
-        let t = || VerifyPolicy::Default(true);
-        let ca = || VerifyPolicy::CaBundle(PathBuf::from("/etc/ssl/ca.pem"));
-
-        assert_eq!(resolve_verify(f(), None), f()); // unset -> keep default
-        assert_eq!(resolve_verify(t(), None), t());
-        assert_eq!(resolve_verify(f(), Some(t())), t()); // override wins
-        assert_eq!(resolve_verify(t(), Some(f())), f());
-        assert_eq!(resolve_verify(f(), Some(ca())), ca()); // CA bundle path
+    fn client_from_config_honours_ssl_verify() {
+        let mut config = Config::default();
+        config.ssl_verify = SslVerify::CaBundle("/nonexistent/mtui-ca.pem".into());
+        assert!(matches!(
+            HttpClient::from_config(&config),
+            Err(HttpError::CaBundle { .. })
+        ));
+        assert!(HttpClient::from_config(&Config::default()).is_ok());
     }
 
     #[test]

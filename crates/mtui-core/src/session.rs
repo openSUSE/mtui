@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_datasources::HttpError;
-use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
+use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
 use mtui_datasources::teregen::TokenStore;
 #[cfg(test)]
@@ -783,10 +783,7 @@ impl Session {
     /// Propagates [`HttpError`] when the client cannot be built (e.g. an
     /// unreadable CA bundle).
     pub(crate) fn http_client(&self) -> Result<HttpClient, HttpError> {
-        let policy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&self.config.ssl_verify)),
-        );
+        let policy = VerifyPolicy::from_config(&self.config.ssl_verify);
         let mut cache = self
             .http_client
             .lock()
@@ -871,10 +868,7 @@ impl Session {
     /// Propagates [`HttpError`] when the transport cannot be built (e.g. an
     /// unreadable CA bundle).
     pub(crate) fn openqa_transport(&self) -> Result<reqwest::Client, HttpError> {
-        let policy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&self.config.ssl_verify)),
-        );
+        let policy = VerifyPolicy::from_config(&self.config.ssl_verify);
         let mut cache = self
             .openqa_transport
             .lock()
