@@ -26,12 +26,12 @@ pub use connection::{
 pub use error::{HostError, LockRefusal, Result, UploadRefusal};
 pub use prompter::{Prompter, Reader};
 pub use target::{
-    Check, CheckArgs, CheckFailure, Clock, Command, ContendedSurface, Doer, HostArbiter,
-    HostOutput, HostPlan, HostsGroup, LockOutcome, LockOwner, LostHold, LostHoldKind,
-    LostHoldProof, OpLockHolders, Operation, OperationGroup, OperationKind, OperationReport, Owner,
-    POOL_LOCK_PATH, PackageQuerier, PlanProvider, RebootFailure, RebootFailureCause, RebootReport,
-    RemoteLock, RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo, Sink, SpinnerGuard,
-    Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, Transactional, TtySpinner,
-    contended_lock_reason, get_arbiter, parse_system, set_test_sink, sibling_holder_name, spinner,
-    suspend,
+    Check, CheckArgs, CheckFailure, Clock, CloseRelease, Command, ContendedSurface, Doer,
+    HostArbiter, HostLeftovers, HostOutput, HostPlan, HostsGroup, LockOutcome, LockOwner, LostHold,
+    LostHoldKind, LostHoldProof, OpLockHolders, Operation, OperationGroup, OperationKind,
+    OperationReport, Owner, POOL_LOCK_PATH, PackageQuerier, PlanProvider, RebootFailure,
+    RebootFailureCause, RebootReport, RemoteLock, RepoFailure, RepoManager, RepoOp, RepoOutcome,
+    SetRepo, Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock,
+    Transactional, TtySpinner, contended_lock_reason, get_arbiter, parse_system, set_test_sink,
+    sibling_holder_name, spinner, suspend,
 };

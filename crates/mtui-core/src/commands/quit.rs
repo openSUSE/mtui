@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
 use crate::command::{Command, Scope};
+use crate::commands::support::leftover_notices;
 use crate::error::CommandResult;
 use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 
@@ -36,6 +37,8 @@ fn close_timeout() -> Duration {
 ///
 /// A report whose document holds uncommitted edits is named in a warning, never
 /// refused: the teardown must always be able to release locks.
+/// Anything the session left on a host is warned about the same way, from
+/// in-memory records only, so it adds no remote I/O to the bounded teardown.
 ///
 /// [`Scope::Single`] and REPL-only (on the MCP deny-list). The aliases
 /// `exit`/`EOF` dispatch here.
@@ -119,6 +122,9 @@ impl Command for Quit {
                         tracing::warn!("still disconnecting from {host} after {secs} seconds");
                     }
                 }
+            }
+            for line in leftover_notices(&report.base().targets.leftovers()) {
+                session.display.println(&line);
             }
         }
 
@@ -360,6 +366,38 @@ mod tests {
             vec!["halt"],
             "n1: null-group host powered off too"
         );
+    }
+
+    /// Both the null group and a template's group are torn down, so each
+    /// gets a notice; the released host gets none.
+    #[tokio::test]
+    async fn quit_names_locks_left_on_hosts() {
+        let mut down = target_with("t1", MockConnection::inactive);
+        down.lock("").await.expect("operation lock taken");
+        let (clean, _probe) = locked_target("t2").await;
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![down, clean]);
+        session.release_active_guard();
+        let mut null_down = target_with("n1", MockConnection::inactive);
+        null_down.lock("").await.expect("operation lock taken");
+        session.targets_mut().add(null_down);
+        session.refresh_active_guard();
+
+        let args = matches(&Quit, &[]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        for host in ["t1", "n1"] {
+            assert!(
+                out.contains(&format!(
+                    "warning: {host}: operation lock not released (link down); unless the \
+                     host reboots, it stays until it is older than [lock] stale_age or someone \
+                     runs `unlock -f`"
+                )),
+                "{out}"
+            );
+        }
+        assert!(!out.contains("t2:"), "t2 released its lock: {out}");
+        assert!(session.should_exit());
     }
 
     #[tokio::test]

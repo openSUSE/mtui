@@ -21,6 +21,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `remove_host`, `unload` and `quit` no longer report a clean teardown when
+  something was left on a host. The reply now carries one `warning: <host>: …`
+  line for each operation lock or pool claim the session still holds after the
+  close (the link was down, the release failed, or the teardown was
+  abandoned), with how it goes away; for the update's repositories when the
+  session's last repository change on that host was an add; and for packages
+  the session's `install` put there that no later `uninstall` removed. The
+  teardown itself is still never refused, and the check runs nothing on the
+  host (#874).
 - The `downgrade` row that `downgrade`, and `update`'s automatic rollback,
   append to `/var/log/mtui.log` now names only the packages a downgrade
   command was sent for on that host. A host a cancel stopped between packages,

@@ -60,6 +60,8 @@ pub struct RemoveReport {
     pub(crate) failed: Vec<(String, String)>,
     /// Hosts still disconnecting when the close budget expired.
     pub(crate) stragglers: Vec<String>,
+    /// What the session left on each closed host, read after the close.
+    pub(crate) leftovers: std::collections::BTreeMap<String, mtui_hosts::HostLeftovers>,
 }
 
 /// Holds the loaded templates and tracks the active one.
@@ -174,6 +176,7 @@ impl TemplateRegistry {
                 }
                 Err(_) => result.stragglers = hosts,
             }
+            result.leftovers = report.base().targets.leftovers();
         }
         self.entries.shift_remove(rrid);
         if self.active.as_deref() == Some(rrid) {

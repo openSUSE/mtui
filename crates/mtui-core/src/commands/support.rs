@@ -814,6 +814,71 @@ pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
     }
 }
 
+/// One `warning:` line per item this session left on a closed host, shared by
+/// `remove_host`, `unload` and `quit`.
+pub(crate) fn leftover_notices(
+    leftovers: &std::collections::BTreeMap<String, mtui_hosts::HostLeftovers>,
+) -> Vec<String> {
+    use crate::display::sanitize_external;
+    use mtui_hosts::CloseRelease;
+
+    let mut lines = Vec::new();
+    for (host, left) in leftovers {
+        let host = sanitize_external(host, None);
+        let why = match left.release {
+            CloseRelease::LinkDown => "link down",
+            CloseRelease::Attempted => "release failed",
+            CloseRelease::Unfinished => "teardown abandoned",
+        };
+        let holds = [
+            (
+                left.operation_lock,
+                "operation lock",
+                "stale_age",
+                "unlock -f",
+            ),
+            (
+                left.pool_claim,
+                "pool claim",
+                "pool_stale_age",
+                "unlock -f -p",
+            ),
+        ];
+        for (_, what, age, unlock) in holds.into_iter().filter(|h| h.0) {
+            lines.push(format!(
+                "warning: {host}: {what} not released ({why}); unless the host reboots, it \
+                 stays until it is older than [lock] {age} or someone runs `{unlock}`"
+            ));
+        }
+        if left.repos_added {
+            lines.push(format!(
+                "warning: {host}: the update's repositories are still configured (this \
+                 session's last repository change there was an add); re-add the host and run \
+                 `set_repo --remove`"
+            ));
+        }
+        if !left.installed.is_empty() {
+            let packages: std::collections::BTreeSet<String> = left
+                .installed
+                .iter()
+                .map(|p| sanitize_external(p, None))
+                .collect();
+            let packages: Vec<String> = packages.into_iter().collect();
+            let (them, some) = if packages.len() == 1 {
+                ("it", "it may have been installed before")
+            } else {
+                ("them", "some may have been installed before")
+            };
+            lines.push(format!(
+                "warning: {host}: `install` ran for {} and no later `uninstall` removed {them} \
+                 ({some})",
+                packages.join(", ")
+            ));
+        }
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +887,44 @@ mod tests {
 
     fn cmd() -> clap::Command {
         add_hosts_arg(clap::Command::new("t").no_binary_name(true))
+    }
+
+    #[test]
+    fn leftover_notices_names_an_abandoned_release_and_omits_clean_hosts() {
+        use mtui_hosts::{CloseRelease, HostLeftovers};
+
+        let leftovers = std::collections::BTreeMap::from([(
+            "h1".to_owned(),
+            HostLeftovers {
+                operation_lock: true,
+                release: CloseRelease::Unfinished,
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            leftover_notices(&leftovers),
+            [
+                "warning: h1: operation lock not released (teardown abandoned); unless the host \
+              reboots, it stays until it is older than [lock] stale_age or someone runs \
+              `unlock -f`"
+            ]
+        );
+        let one = std::collections::BTreeMap::from([(
+            "h1".to_owned(),
+            HostLeftovers {
+                installed: vec!["pkg-a".to_owned()],
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            leftover_notices(&one),
+            [
+                "warning: h1: `install` ran for pkg-a and no later `uninstall` removed it (it \
+                 may have been installed before)"
+            ]
+        );
+        let clean = std::collections::BTreeMap::from([("h2".to_owned(), HostLeftovers::default())]);
+        assert!(leftover_notices(&clean).is_empty());
     }
 
     #[test]

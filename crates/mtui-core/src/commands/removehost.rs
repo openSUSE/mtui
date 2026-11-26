@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_completion, host_op_budget, select_hosts};
+use super::support::{
+    add_hosts_arg, host_completion, host_op_budget, leftover_notices, select_hosts,
+};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -22,6 +24,10 @@ use crate::session::Session;
 /// scarce pool host stays busy in the process-global
 /// [`HostArbiter`](mtui_hosts::HostArbiter) for the life of an MCP session. Only
 /// hosts the budget cut short are named. With no `-t` every host is removed.
+///
+/// The removal is never refused, but the reply warns about anything this
+/// session left on a removed host (see
+/// [`HostLeftovers`](mtui_hosts::HostLeftovers)).
 pub struct RemoveHost;
 
 #[async_trait]
@@ -89,6 +95,7 @@ impl Command for RemoveHost {
         if let Some(rrid) = session.templates.active_rrid() {
             session.retain_detached_logs(rrid, &doomed);
         }
+        let notices = leftover_notices(&doomed.leftovers());
         drop(doomed);
         *session.targets_mut() = rest;
 
@@ -100,6 +107,9 @@ impl Command for RemoveHost {
         session
             .display
             .println(&format!("Removed {}", hosts.join(", ")));
+        for line in &notices {
+            session.display.println(line);
+        }
         Ok(())
     }
 }
@@ -122,6 +132,123 @@ mod tests {
     /// vanished without closing its SSH link.
     fn target_with(host: &str, conn: MockConnection) -> Target {
         Target::with_connection(host, TargetState::Enabled, Box::new(conn))
+    }
+
+    const LOCK_LEFT_LINK_DOWN: &str = "warning: h1: operation lock not released (link down); \
+        unless the host reboots, it stays until it is older than [lock] stale_age or someone \
+        runs `unlock -f`";
+
+    /// A target over `conn` that took the operation lock.
+    async fn locked(host: &str, conn: MockConnection) -> Target {
+        let mut t = target_with(host, conn);
+        t.lock("").await.expect("operation lock taken");
+        assert!(t.holds_operation_lock(), "fixture must hold the lock");
+        t
+    }
+
+    async fn remove_all(session: &mut Session) {
+        let args = matches(&RemoveHost, &[]);
+        RemoveHost.call(session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn names_a_lock_left_because_the_link_was_down() {
+        let t = locked("h1", MockConnection::new("h1").inactive()).await;
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        let out = buf.contents();
+        assert!(out.contains("Removed h1"), "{out}");
+        assert!(out.contains(LOCK_LEFT_LINK_DOWN), "{out}");
+    }
+
+    #[tokio::test]
+    async fn names_a_lock_and_claim_whose_release_failed() {
+        let mut t = locked("h1", MockConnection::new("h1").failing_sftp_remove()).await;
+        t.set_rrid("SUSE:Maintenance:1:1");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:1")
+                .await
+                .expect("claim written"),
+            "fixture must hold the pool claim"
+        );
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        let out = buf.contents();
+        assert!(
+            out.contains(
+                "warning: h1: operation lock not released (release failed); unless the host \
+                 reboots, it stays until it is older than [lock] stale_age or someone runs \
+                 `unlock -f`"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "warning: h1: pool claim not released (release failed); unless the host \
+                 reboots, it stays until it is older than [lock] pool_stale_age or someone runs \
+                 `unlock -f -p`"
+            ),
+            "{out}"
+        );
+    }
+
+    /// The lock is held right up to the close, so a notice built from the
+    /// pre-close record would name it here.
+    #[tokio::test]
+    async fn a_clean_close_prints_no_notice() {
+        let t = locked("h1", MockConnection::new("h1")).await;
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        assert_eq!(buf.contents().trim_end(), "Removed h1");
+    }
+
+    const REPOS_LEFT: &str = "warning: h1: the update's repositories are still configured \
+        (this session's last repository change there was an add); re-add the host and run \
+        `set_repo --remove`";
+
+    async fn set_repo(session: &mut Session, flag: &str) {
+        use crate::commands::setrepo::SetRepo;
+        let args = matches(&SetRepo, &[flag]);
+        SetRepo.call(session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn names_repositories_left_added() {
+        let (mut session, buf) = testkit::session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![target_with("h1", MockConnection::new("h1"))],
+        );
+        set_repo(&mut session, "-A").await;
+        remove_all(&mut session).await;
+        assert!(buf.contents().contains(REPOS_LEFT), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn repositories_added_then_removed_print_no_notice() {
+        let (mut session, buf) = testkit::session_with_targets_and_set_repo(
+            "SUSE:Maintenance:1:1",
+            vec![target_with("h1", MockConnection::new("h1"))],
+        );
+        set_repo(&mut session, "-A").await;
+        set_repo(&mut session, "-R").await;
+        remove_all(&mut session).await;
+        assert!(!buf.contents().contains("warning:"), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn names_packages_left_installed_and_strips_escapes() {
+        let mut t = target_with("h1", MockConnection::new("h1"));
+        t.note_installed(&["pkg-a".to_owned(), "pkg-\u{1b}[31mb".to_owned()]);
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![t]);
+        remove_all(&mut session).await;
+        assert!(
+            buf.contents().contains(
+                "warning: h1: `install` ran for pkg-a, pkg-b and no later `uninstall` removed \
+                 them (some may have been installed before)"
+            ),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     /// `remove_host` passes `enabled = false` to `split_targets` precisely so a
