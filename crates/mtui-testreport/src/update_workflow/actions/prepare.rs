@@ -13,6 +13,7 @@
 //! success, so a non-zero status means the probe itself failed.
 
 use crate::update_workflow::actions::ActionCommands;
+use crate::update_workflow::{Family, family};
 
 /// Enumerates the installed package names, one per line — the `--installed`
 /// probe, shared by all three families. It carries no `$`, so it renders
@@ -25,12 +26,8 @@ const INSTALLED_PROBE: &str = "rpm -qa --qf '%{NAME}\\n'";
 /// parity but unused by zypper.
 fn zypper(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
-    ActionCommands {
-        command: format!("zypper -n in -y -l {parameter} $package"),
-        reboot: None,
-        list_command: Some(INSTALLED_PROBE.to_owned()),
-        mode: crate::update_workflow::actions::SubstMode::Strict,
-    }
+    ActionCommands::command_only(format!("zypper -n in -y -l {parameter} $package"))
+        .with_list_command(INSTALLED_PROBE)
 }
 
 /// yum prepare.
@@ -43,23 +40,17 @@ fn yum(_force: bool, testing: bool) -> ActionCommands {
     } else {
         "--disablerepo=*testing*"
     };
-    ActionCommands {
-        command: format!("yum -y {parameter} install $package"),
-        reboot: None,
-        list_command: Some(INSTALLED_PROBE.to_owned()),
-        mode: crate::update_workflow::actions::SubstMode::Strict,
-    }
+    ActionCommands::command_only(format!("yum -y {parameter} install $package"))
+        .with_list_command(INSTALLED_PROBE)
 }
 
 /// slmicro (transactional) prepare.
 fn slmicro(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
-    ActionCommands {
-        command: format!("transactional-update --continue -n pkg in -l {parameter} $package"),
-        reboot: Some("systemctl reboot".to_owned()),
-        list_command: Some(INSTALLED_PROBE.to_owned()),
-        mode: crate::update_workflow::actions::SubstMode::Strict,
-    }
+    ActionCommands::with_reboot(format!(
+        "transactional-update --continue -n pkg in -l {parameter} $package"
+    ))
+    .with_list_command(INSTALLED_PROBE)
 }
 
 /// The prepare command for `(release, transactional)` with the given `force` /
@@ -72,14 +63,11 @@ pub(crate) fn preparer(
     force: bool,
     testing: bool,
 ) -> Option<ActionCommands> {
-    match (release, transactional) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => {
-            Some(zypper(force, testing))
-        }
-        ("YUM", false) => Some(yum(force, testing)),
-        ("slmicro", true) | ("16", true) => Some(slmicro(force, testing)),
-        _ => None,
-    }
+    family(release, transactional).map(|f| match f {
+        Family::Zypper => zypper(force, testing),
+        Family::Yum => yum(force, testing),
+        Family::Transactional => slmicro(force, testing),
+    })
 }
 
 #[cfg(test)]

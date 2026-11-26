@@ -25,13 +25,32 @@ use thiserror::Error;
 
 pub use checks::Diagnostic;
 
-/// The lookup key shared by every action and check table: a *release* token —
-/// a product major version (`"11"`, `"12"`, `"15"`, `"16"`), the
-/// package-manager family `"YUM"`, or `"slmicro"` — paired with a
-/// *transactional* flag (read-only-root hosts, e.g. SL Micro). Lookups accept
-/// `(&str, bool)`. `("16", true)`, SLES 16 with a read-only root, resolves
-/// SL Micro's `transactional-update` entries.
-pub(crate) type WorkflowKey = (String, bool);
+/// The package-manager family an action or check table entry is keyed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Family {
+    /// `zypper` on a read-write root.
+    Zypper,
+    /// `yum`.
+    Yum,
+    /// `transactional-update` on a read-only root.
+    Transactional,
+}
+
+/// The [`Family`] shared by every action and check table, from a *release*
+/// token — a product major version (`"11"`, `"12"`, `"15"`, `"16"`), the
+/// package-manager family `"YUM"`, or `"slmicro"` — and a *transactional* flag
+/// (read-only-root hosts, e.g. SL Micro). `("16", true)`, SLES 16 with a
+/// read-only root, resolves SL Micro's `transactional-update` entries. `None`
+/// for an unknown key.
+#[must_use]
+pub(crate) fn family(release: &str, transactional: bool) -> Option<Family> {
+    match (release, transactional) {
+        ("11" | "12" | "15" | "16", false) => Some(Family::Zypper),
+        ("YUM", false) => Some(Family::Yum),
+        ("slmicro" | "16", true) => Some(Family::Transactional),
+        _ => None,
+    }
+}
 
 /// A failure recognised by a post-run [`checks`] function.
 ///

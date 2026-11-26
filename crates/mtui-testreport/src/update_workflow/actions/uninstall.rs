@@ -4,6 +4,7 @@
 //! `reboot`.
 
 use crate::update_workflow::actions::ActionCommands;
+use crate::update_workflow::{Family, family};
 
 /// zypper uninstall.
 fn zypper() -> ActionCommands {
@@ -17,22 +18,18 @@ fn yum() -> ActionCommands {
 
 /// slmicro (transactional) uninstall.
 fn slmicro() -> ActionCommands {
-    ActionCommands::with_reboot(
-        "transactional-update -n pkg remove $packages",
-        "systemctl reboot",
-    )
+    ActionCommands::with_reboot("transactional-update -n pkg remove $packages")
 }
 
 /// The uninstall command for `(release, transactional)`, or `None` for an
 /// unknown key (provider maps `None` to `MissingUninstallerError`).
 #[must_use]
 pub(crate) fn uninstaller(release: &str, transactional: bool) -> Option<ActionCommands> {
-    match (release, transactional) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
-        ("YUM", false) => Some(yum()),
-        ("slmicro", true) | ("16", true) => Some(slmicro()),
-        _ => None,
-    }
+    family(release, transactional).map(|f| match f {
+        Family::Zypper => zypper(),
+        Family::Yum => yum(),
+        Family::Transactional => slmicro(),
+    })
 }
 
 #[cfg(test)]

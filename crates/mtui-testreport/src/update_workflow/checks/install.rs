@@ -4,8 +4,8 @@
 //! Unlike the other checks, install treats *any* unrecognised non-success as an
 //! `UpdateError("Unknown Error")`.
 
-use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, log_failed};
+use crate::update_workflow::{Family, UpdateError, family};
 
 /// The zypper install check.
 ///
@@ -113,12 +113,13 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// so every reason here is worded role-neutrally.
 #[must_use]
 pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {
-    match (release, transactional) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
-        ("YUM", false) => Some(Box::new(yum)),
-        ("slmicro", true) | ("16", true) => Some(Box::new(transactional_update)),
-        _ => None,
-    }
+    family(release, transactional).map(|f| -> CheckFn {
+        match f {
+            Family::Zypper => Box::new(zypper),
+            Family::Yum => Box::new(yum),
+            Family::Transactional => Box::new(transactional_update),
+        }
+    })
 }
 
 #[cfg(test)]

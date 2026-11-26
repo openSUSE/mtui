@@ -70,6 +70,7 @@
 //! provides.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
+use crate::update_workflow::{Family, family};
 
 /// zypper/slmicro downgrade list command, shared by both.
 ///
@@ -126,44 +127,32 @@ const YUM_CMD: &str = "yum -y downgrade $package";
 
 /// zypper downgrade.
 fn zypper() -> ActionCommands {
-    ActionCommands {
-        command: ZYPPER_CMD.to_owned(),
-        list_command: Some(LIST_COMMAND.to_owned()),
-        reboot: None,
-        mode: SubstMode::Safe,
-    }
+    ActionCommands::command_only(ZYPPER_CMD)
+        .with_list_command(LIST_COMMAND)
+        .with_mode(SubstMode::Safe)
 }
 
 /// slmicro (transactional) downgrade.
 fn slmicro() -> ActionCommands {
-    ActionCommands {
-        command: SLM_CMD.to_owned(),
-        list_command: Some(LIST_COMMAND.to_owned()),
-        reboot: Some("systemctl reboot".to_owned()),
-        mode: SubstMode::Safe,
-    }
+    ActionCommands::with_reboot(SLM_CMD)
+        .with_list_command(LIST_COMMAND)
+        .with_mode(SubstMode::Safe)
 }
 
 /// yum downgrade.
 fn yum() -> ActionCommands {
-    ActionCommands {
-        command: YUM_CMD.to_owned(),
-        list_command: None,
-        reboot: None,
-        mode: SubstMode::Safe,
-    }
+    ActionCommands::command_only(YUM_CMD).with_mode(SubstMode::Safe)
 }
 
 /// The downgrade command for `(release, transactional)`, or `None` for an
 /// unknown key (provider maps `None` to `MissingDowngraderError`).
 #[must_use]
 pub(crate) fn downgrader(release: &str, transactional: bool) -> Option<ActionCommands> {
-    match (release, transactional) {
-        ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
-        ("YUM", false) => Some(yum()),
-        ("slmicro", true) | ("16", true) => Some(slmicro()),
-        _ => None,
-    }
+    family(release, transactional).map(|f| match f {
+        Family::Zypper => zypper(),
+        Family::Yum => yum(),
+        Family::Transactional => slmicro(),
+    })
 }
 
 #[cfg(test)]
