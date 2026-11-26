@@ -888,7 +888,7 @@ pub async fn perform_install(
     packages: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    perform_operation(targets, Role::Install, packages, diagnostics).await
+    perform_operation(targets, Op::Install, packages, diagnostics).await
 }
 
 /// Uninstalls `packages` from every host in `targets`.
@@ -905,20 +905,43 @@ pub async fn perform_uninstall(
     packages: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    perform_operation(targets, Role::Uninstall, packages, diagnostics).await
+    perform_operation(targets, Op::Uninstall, packages, diagnostics).await
+}
+
+/// The two operations the install/uninstall template drives.
+#[derive(Clone, Copy)]
+enum Op {
+    Install,
+    Uninstall,
+}
+
+impl Op {
+    fn role(self) -> Role {
+        match self {
+            Op::Install => Role::Install,
+            Op::Uninstall => Role::Uninstall,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Op::Install => "install",
+            Op::Uninstall => "uninstall",
+        }
+    }
 }
 
 /// The shared body of [`perform_install`] / [`perform_uninstall`], driving the
 /// template through the real [`WorkflowRegistry`].
 async fn perform_operation(
     targets: &mut HostsGroup,
-    role: Role,
+    op: Op,
     packages: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     perform_operation_with(
         targets,
-        role,
+        op,
         packages,
         Arc::new(WorkflowRegistry::default()),
         diagnostics,
@@ -938,39 +961,25 @@ async fn perform_operation(
 /// check failures see the `cancelled` comment in [`aggregate_failures`].
 async fn perform_operation_with(
     targets: &mut HostsGroup,
-    role: Role,
+    op: Op,
     packages: &[String],
     provider: Arc<dyn mtui_hosts::PlanProvider>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
-    // Exhaustive on purpose: a `_ =>` arm defaulting to install would quietly
-    // run the wrong package-manager command if a role were ever added.
-    let op = match role {
-        Role::Install => "install",
-        Role::Uninstall => "uninstall",
-        Role::Update | Role::Prepare | Role::Downgrade => {
-            return Err(UpdateError::reason_only(format!(
-                "{} is not driven by the install/uninstall template",
-                role.as_operation_role()
-            )));
-        }
-    };
+    let label = op.label();
 
     // Entry gate: nothing has run yet, so a cancel here is a clean no-op.
     if targets.cancel_requested() {
         return Err(UpdateError::cancelled(format!(
-            "cancelled before the {op} started"
+            "cancelled before the {label} started"
         )));
     }
 
     targets.set_plan_provider(provider);
 
-    let outcome = match role {
-        Role::Install => Operation::install(packages.to_vec()).run(targets).await,
-        Role::Uninstall => Operation::uninstall(packages.to_vec()).run(targets).await,
-        Role::Update | Role::Prepare | Role::Downgrade => {
-            unreachable!("returned above for these roles")
-        }
+    let outcome = match op {
+        Op::Install => Operation::install(packages.to_vec()).run(targets).await,
+        Op::Uninstall => Operation::uninstall(packages.to_vec()).run(targets).await,
     };
 
     // The template ran nothing at all (missing doer, or a host held by another
@@ -978,7 +987,9 @@ async fn perform_operation_with(
     let report = match outcome {
         Err(e) => {
             return Err(UpdateError::reason_only(describe_start_failure(
-                &e, role, targets,
+                &e,
+                op.role(),
+                targets,
             )));
         }
         Ok(report) => report,
@@ -991,7 +1002,7 @@ async fn perform_operation_with(
     // A stranded operation lock does not turn a good install/uninstall into a
     // failed one — warn rather than joining `failures` below.
     if !report.unlock_failures.is_empty() {
-        warn!("{}", unlock_failure_message(op, &report.unlock_failures));
+        warn!("{}", unlock_failure_message(label, &report.unlock_failures));
     }
 
     // A hold lost in the reboot gap is degradation, not failure: the host did
@@ -1017,7 +1028,7 @@ async fn perform_operation_with(
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     // Every host was planned and nothing rolls back, so each one not failed is done.
     let completed = completed_hosts(targets, &targets.names(), &failures);
-    aggregate_failures(op, failures).map_err(|e| e.with_completed(completed))
+    aggregate_failures(label, failures).map_err(|e| e.with_completed(completed))
 }
 
 /// Removes the test repositories from `hosts` and releases their operation lock:
@@ -1189,40 +1200,6 @@ pub async fn perform_prepare(
     )
 }
 
-/// [`perform_prepare`] restricted to `hosts` — every fan-out, the operation
-/// lock and [`build_reboot_map`]'s pre-lock missing-preparer scan included.
-///
-/// For a flow that has already excluded a host from the work it is doing: the
-/// group-wide variant would add the test repo to a host reported as excluded
-/// and leave it there (the update's cleanup is scoped, see
-/// [`remove_test_repos`]), and its contended lock would abort the prepare for
-/// every eligible peer.
-#[allow(clippy::too_many_arguments)]
-async fn perform_prepare_for(
-    targets: &mut HostsGroup,
-    hosts: &BTreeSet<String>,
-    report: &dyn SetRepo,
-    packages: &[String],
-    force: bool,
-    testing: bool,
-    installed_only: bool,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), UpdateError> {
-    flatten_prepare_failure(
-        perform_prepare_classified(
-            targets,
-            report,
-            Some(hosts),
-            packages,
-            force,
-            testing,
-            installed_only,
-            diagnostics,
-        )
-        .await,
-    )
-}
-
 /// Drops [`PrepareFailure`]'s classification, which only [`perform_update`]'s
 /// abort gate reads.
 fn flatten_prepare_failure(result: Result<(), PrepareFailure>) -> Result<(), UpdateError> {
@@ -1236,8 +1213,9 @@ fn flatten_prepare_failure(result: Result<(), PrepareFailure>) -> Result<(), Upd
     }
 }
 
-/// Shared implementation for [`perform_prepare`] / [`perform_prepare_for`]
-/// (`selected` `None` is the whole group), and the classified body both flatten:
+/// The classified body of [`perform_prepare`] (`selected` `None` is the whole
+/// group) and of the `--newpackage` prepare, which is restricted to the hosts an
+/// update completed on:
 /// it distinguishes a prepare that never ran ([`PrepareFailure::DidNotRun`])
 /// from one that ran and reported a host failure
 /// ([`PrepareFailure::HostReported`]) — the split [`perform_update`] gates its
@@ -3068,17 +3046,19 @@ async fn finish_update(
     // add here strands it on an excluded host (#409). It also composes nothing
     // for that host, so there is nothing to prepare on it.
     if newpackage
-        && let Err(e) = perform_prepare_for(
-            targets,
-            hosts,
-            report,
-            packages,
-            false,
-            true,
-            false,
-            diagnostics,
+        && let Err(e) = flatten_prepare_failure(
+            perform_prepare_classified(
+                targets,
+                report,
+                Some(hosts),
+                packages,
+                false,
+                true,
+                false,
+                diagnostics,
+            )
+            .await,
         )
-        .await
     {
         warn!(error = %e, "newpackage prepare after update failed");
         diagnostics.push(Diagnostic::degradation(format!(
@@ -5474,7 +5454,7 @@ mod tests {
 
         let err = perform_operation_with(
             &mut group,
-            Role::Install,
+            Op::Install,
             &["pkg-a".to_owned()],
             Arc::new(CancellingOnH2Provider),
             &mut Vec::new(),
@@ -7515,6 +7495,30 @@ mod tests {
         );
         // h1 resolves fine, so it must not be blamed.
         assert!(!err.reason.contains("h1 ("), "reason: {}", err.reason);
+        assert!(
+            err.reason.contains("no installer command for"),
+            "reason: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_uninstall_names_the_unresolvable_host_and_product() {
+        let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let t = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        let (ok, _h) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![ok, t], false);
+
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("an unresolvable host aborts the group");
+
+        assert!(
+            err.reason.contains("no uninstaller command for h2"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(!err.reason.contains("h1 ("), "reason: {}", err.reason);
     }
 
     #[tokio::test]
@@ -7622,7 +7626,7 @@ mod tests {
 
         let err = perform_operation_with(
             &mut group,
-            Role::Install,
+            Op::Install,
             &["pkg-a".to_owned()],
             Arc::new(CancellingProvider),
             &mut Vec::new(),
@@ -7772,6 +7776,7 @@ mod tests {
             .expect_err("a cancelled install reports an error");
 
         assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert_eq!(err.reason, "cancelled before the install started");
         assert!(
             handle.commands().is_empty(),
             "entry gate must dispatch no command: {:?}",
@@ -7790,6 +7795,7 @@ mod tests {
             .expect_err("a cancelled uninstall reports an error");
 
         assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert_eq!(err.reason, "cancelled before the uninstall started");
         assert!(handle.commands().is_empty());
     }
 
