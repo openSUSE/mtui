@@ -347,8 +347,10 @@ the initial load (`-a`/`-k`/`--sut`) still end mtui at once, without teardown.
 Signals that arrive while `shell` or `edit` holds the terminal are not acted on
 until that command returns. An unresponsive host cannot hold the teardown:
 releasing its pool claim and closing it each give up after 45 seconds, and mtui
-names the host. The claims and locks left on it need `unlock --pool` and
-`unlock --force` once it answers again.
+names the host. The close retries the hung release, so each loaded template
+can take up to 90 seconds, and templates are torn down one after another. The
+claims and locks left on the host need `unlock --pool` and `unlock --force`
+once it answers again.
 
 ## How do I remove a dangling lock left by a crashed session?
 

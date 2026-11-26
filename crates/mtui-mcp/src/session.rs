@@ -1145,8 +1145,10 @@ impl McpSession {
             let unit = async {
                 let mut report = entry.lock().await;
                 // Half the remainder, so a hung release still leaves the close a share.
-                for host in report.release_pool_claims(left / 2).await {
-                    tracing::warn!("still releasing the pool claim on {host}");
+                let budget = left / 2;
+                let secs = budget.as_secs();
+                for host in report.release_pool_claims(budget).await {
+                    tracing::warn!("pool-claim release on {host} unfinished after {secs} seconds");
                 }
                 // Plain disconnect: no reboot/poweroff on an eviction, unlike
                 // the REPL `quit` bootarg, and per-host outcomes are irrelevant.
@@ -2348,7 +2350,8 @@ mod tests {
     }
 
     /// A pool-claim release that never returns must leave the close its share
-    /// of the budget: the healthy sibling is still closed.
+    /// of the budget: the healthy sibling is still closed. Both of the healthy
+    /// host's steps take real time, so a split that starves either goes red.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_with_timeout_closes_hosts_after_a_hung_pool_release() {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
@@ -2358,7 +2361,8 @@ mod tests {
 
         let hung =
             MockConnection::new("hung-host").with_sftp_session_delay(Duration::from_secs(3600));
-        let good = MockConnection::new("good-host");
+        let good =
+            MockConnection::new("good-host").with_sftp_session_delay(Duration::from_millis(100));
         let hung_target =
             Target::with_connection("hung-host", TargetState::Enabled, Box::new(hung));
         let good_target =
@@ -2376,16 +2380,26 @@ mod tests {
             guard.templates.set_active("SUSE:Maintenance:1:1");
         }
 
-        tokio::time::timeout(
+        let (closed, logs) = crate::test_log::capture_logs(tokio::time::timeout(
             Duration::from_secs(15),
-            sess.close_with_timeout(Duration::from_millis(400)),
-        )
-        .await
-        .expect("close_with_timeout did not return in time");
+            sess.close_with_timeout(Duration::from_secs(2)),
+        ))
+        .await;
+        closed.expect("close_with_timeout did not return in time");
 
+        // Catches a release given the whole remainder: the close never runs.
         assert!(
             good.is_closed(),
             "healthy host closed despite the hung release"
+        );
+        // Catches a release given no budget: the healthy host is named too.
+        let unfinished: Vec<&str> = logs
+            .lines()
+            .filter(|l| l.starts_with("pool-claim release"))
+            .collect();
+        assert!(
+            matches!(&unfinished[..], [line] if line.starts_with("pool-claim release on hung-host ")),
+            "only the hung host is named: {unfinished:?}"
         );
     }
 

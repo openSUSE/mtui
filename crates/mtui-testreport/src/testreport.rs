@@ -1193,6 +1193,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn release_pool_claims_clears_state_and_names_only_the_hung_host_on_timeout() {
+        use mtui_hosts::{MockConnection, POOL_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+
+        let rrid = "SUSE:Maintenance:1:1";
+        let owner: Owner = ("reg-1".to_owned(), rrid.to_owned());
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        for host in ["hung", "healthy", "elsewhere"] {
+            assert!(arbiter.try_acquire(host, &owner));
+        }
+
+        let me = config().session_user;
+        let claim = format!("1700000000:{me}:1:mtui pool {rrid} [{rrid}]");
+        let healthy = MockConnection::new("healthy").with_file(POOL_LOCK_PATH, claim);
+        let hung = MockConnection::new("hung").with_sftp_session_delay(Duration::from_secs(3600));
+        let mut healthy_target =
+            Target::with_connection("healthy", TargetState::Enabled, Box::new(healthy.clone()));
+        healthy_target.set_rrid(rrid);
+        let hung_target = Target::with_connection("hung", TargetState::Enabled, Box::new(hung));
+
+        let mut base = TestReportBase::new(config());
+        base.arbiter = Some(arbiter);
+        base.owner = Some(owner);
+        base.targets = HostsGroup::new(vec![hung_target, healthy_target], false);
+        for host in ["hung", "healthy", "elsewhere"] {
+            base.pool_claims.insert(host.to_owned());
+        }
+        base.slot_candidates
+            .insert("slot0".to_owned(), vec!["hung".to_owned()]);
+        let mut r = MetaReport { base };
+
+        let unfinished = tokio::time::timeout(
+            Duration::from_secs(5),
+            r.release_pool_claims(Duration::from_millis(100)),
+        )
+        .await
+        .expect("the release must end at its budget");
+
+        // "elsewhere" is claimed but not in the group: never named.
+        assert_eq!(unfinished, vec!["hung".to_owned()]);
+        assert!(
+            healthy.file_contents(POOL_LOCK_PATH).is_none(),
+            "healthy: the release itself removed the claim"
+        );
+        assert!(r.base().pool_claims.is_empty());
+        assert!(r.base().slot_candidates.is_empty());
+        for host in ["hung", "healthy", "elsewhere"] {
+            assert!(arbiter.owner_of(host).is_none(), "{host}: owner released");
+        }
+    }
+
+    #[tokio::test]
     async fn release_pool_claims_is_a_noop_when_pooling_never_used() {
         // No arbiter / owner / claims: must not panic and stays empty.
         let mut r = MetaReport {
