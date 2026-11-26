@@ -22,6 +22,7 @@
 //! [`Slack::with_client`] is the injectable seam tests aim at `wiremock`.
 
 use mtui_config::Config;
+use mtui_types::url_redaction::is_loopback;
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -110,16 +111,6 @@ pub fn is_ack_reaction(name: &str) -> bool {
 #[must_use]
 pub fn is_nack_reaction(name: &str) -> bool {
     NACK_REACTIONS.contains(&normalize_reaction(name))
-}
-
-/// Whether `host` is a loopback address, so a plain-HTTP mock server is allowed
-/// to receive the token in tests.
-fn is_loopback(host: &str) -> bool {
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]"
-        || host.starts_with("127.")
 }
 
 /// Whether `url` may carry the bearer token: `https`, or `http` to loopback.
