@@ -22,7 +22,7 @@ use mtui_types::{UpdateID, Workflow};
 use tracing::{error, info, warn};
 
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
-use crate::testreport::{HashCheck, TestReport};
+use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// Which update kind produced the report — selects the workflow and whether
 /// autoconnect defaults on.
@@ -63,12 +63,32 @@ fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + 
     }
 }
 
+/// What to do with a stale template hash.
+enum StaleHash {
+    /// TeReGen regenerated a fresh, verified report.
+    Regenerated(Box<dyn TestReport + Send + Sync>),
+    /// Force-continue: the caller keeps its existing stale report.
+    ForceContinue,
+    /// Abandon the load (the caller substitutes a [`NullReport`]).
+    Abandon,
+}
+
 /// A [`NullReport`] carrying the reason its load failed, so
 /// `Session::load_update` can surface *why* rather than "could not load".
 fn null_with_error(config: Config, reason: String) -> NullReport {
     let mut report = NullReport::new(config);
     report.base_mut().load_error = Some(reason);
     report
+}
+
+/// Switches an auto load to [`Workflow::Manual`], arming the deferred autoconnect
+/// when the caller asked for one. The composition root wires the arbiter first,
+/// so `refhosts_from_tp` draws one host per slot.
+fn downgrade_to_manual(base: &mut TestReportBase, autoconnect: bool) {
+    base.workflow = Workflow::Manual;
+    if autoconnect {
+        base.autoconnect_pending = true;
+    }
 }
 
 /// Builds and populates a [`TestReport`] for `update`.
@@ -158,20 +178,17 @@ pub async fn make_testreport(
             )
             .await
             {
-                Some(regenerated) => {
-                    if let Some(fresh) = regenerated {
-                        report = fresh;
-                    } else {
-                        // Force-continue kept the (stale) `report` as-is; flag it
-                        // so a non-interactive caller can surface the fact too.
-                        report.base_mut().stale_hash_warning = Some(
-                            "template hash mismatch (stale checkout); loaded as-is \
-                             via force-continue"
-                                .to_owned(),
-                        );
-                    }
+                StaleHash::Regenerated(fresh) => report = fresh,
+                StaleHash::ForceContinue => {
+                    // The (stale) `report` is kept as-is; flag it so a
+                    // non-interactive caller can surface the fact too.
+                    report.base_mut().stale_hash_warning = Some(
+                        "template hash mismatch (stale checkout); loaded as-is \
+                         via force-continue"
+                            .to_owned(),
+                    );
                 }
-                None => {
+                StaleHash::Abandon => {
                     return Box::new(null_with_error(
                         checkout_config,
                         "template hash mismatch (stale checkout); regeneration \
@@ -189,7 +206,6 @@ pub async fn make_testreport(
         // Snapshot before the awaits: no `&report` borrow may cross `.await`.
         let dashboard_api = report.base().config.qem_dashboard_api.clone();
         let openqa_instance = report.base().config.openqa_instance.clone();
-        let max_parallel = report.base().config.max_parallel as usize;
         let policy = VerifyPolicy::from_config(&report.base().config.ssl_verify);
         let source = report.update_source();
         let pr_url = report.base().giteapr.clone();
@@ -223,21 +239,13 @@ pub async fn make_testreport(
                 if no_results {
                     warn!("No install jobs or install jobs failed");
                     info!("Switch mode to manual");
-                    report.base_mut().workflow = Workflow::Manual;
-                    if autoconnect {
-                        // The composition root wires the arbiter first, so
-                        // refhosts_from_tp draws one host per slot.
-                        report.base_mut().autoconnect_pending = true;
-                    }
+                    downgrade_to_manual(report.base_mut(), autoconnect);
                 }
             }
             Err(e) => {
                 // No dashboard client at all: same best-effort downgrade.
                 warn!(error = %e, "QEM Dashboard unavailable; switching mode to manual");
-                report.base_mut().workflow = Workflow::Manual;
-                if autoconnect {
-                    report.base_mut().autoconnect_pending = true;
-                }
+                downgrade_to_manual(report.base_mut(), autoconnect);
             }
         }
     }
@@ -253,15 +261,13 @@ pub async fn make_testreport(
 /// Handles a stale template hash: log, offer TeReGen regeneration, then the
 /// manual force-continue fallback.
 ///
-/// * `Some(Some(fresh))` — TeReGen regenerated a fresh, verified report;
-/// * `Some(None)` — force-continue; the caller keeps its existing stale report;
-/// * `None` — abandon the load (the caller substitutes a [`NullReport`]).
+/// Returns the [`StaleHash`] outcome.
 ///
 /// `prompter` is `Some` only in interactive mode, so every prompt is gated on
 /// `is_repl && prompter.is_some()` and otherwise takes the non-interactive
 /// answer — **except** the force-continue question, whose non-interactive
 /// default is `force_continue_arg` rather than a hard-coded `false` (#517).
-/// It reaches exactly the outcome the REPL's own "y" answer does — `Some(None)`
+/// It reaches exactly the outcome the REPL's own "y" answer does — [`StaleHash::ForceContinue`]
 /// — and does nothing else: no regeneration, no re-checkout, no write. The
 /// `regenerate` question is unaffected and stays interactive-only.
 async fn handle_stale_hash(
@@ -272,7 +278,7 @@ async fn handle_stale_hash(
     prompter: Option<&Prompter>,
     force_continue_arg: bool,
     prev_etag: Option<&str>,
-) -> Option<Option<Box<dyn TestReport + Send + Sync>>> {
+) -> StaleHash {
     let rrid = update.id.clone();
     error!("Invalid Gitea hash");
     warn!("TestReport hash differs from the Gitea PR; the template is stale");
@@ -287,7 +293,7 @@ async fn handle_stale_hash(
 
     if regenerate {
         if let Some(fresh) = regenerate_via_teregen(update, config, trpath, prev_etag).await {
-            return Some(Some(fresh));
+            return StaleHash::Regenerated(fresh);
         }
         warn!("Regeneration failed; falling back to manual handling");
     } else {
@@ -307,12 +313,11 @@ async fn handle_stale_hash(
     };
     if force_continue {
         warn!("Template is loaded, but hash differs");
-        // Keep the caller's existing (stale) report.
-        return Some(None);
+        return StaleHash::ForceContinue;
     }
 
     // Declined: abandon the load; the scratch directory stays.
-    None
+    StaleHash::Abandon
 }
 
 /// Regenerates a stale template via TeReGen, then reloads it by re-fetching the
@@ -521,6 +526,18 @@ mod ingest_tests {
         c
     }
 
+    fn obs_report(config: &Config) -> Box<dyn TestReport + Send + Sync> {
+        Box::new(ObsReport::new(config.clone()))
+    }
+
+    async fn mount_document(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID_STR}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
+            .mount(server)
+            .await;
+    }
+
     fn minimal_document(id: &str) -> String {
         format!(
             r#"{{
@@ -586,8 +603,7 @@ mod ingest_tests {
             .await;
 
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
         let err = load_via_document(
             &mut report,
             &rrid(),
@@ -610,8 +626,7 @@ mod ingest_tests {
             .await;
 
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
         let err = load_via_document(
             &mut report,
             &rrid(),
@@ -637,18 +652,13 @@ mod ingest_tests {
             .up_to_n_times(1)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID_STR}")))
-            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
-            .mount(&server)
-            .await;
+        mount_document(&server).await;
 
         let dir = tempfile::tempdir().unwrap();
         let trpath = dir.path().join("log");
 
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
         load_via_document(&mut report, &rrid(), &config, &trpath, None)
             .await
             .unwrap();
@@ -670,17 +680,12 @@ mod ingest_tests {
             .expect(1)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID_STR}")))
-            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
-            .mount(&server)
-            .await;
+        mount_document(&server).await;
 
         let dir = tempfile::tempdir().unwrap();
         let trpath = dir.path().join("log");
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
         load_via_document(&mut report, &rrid(), &config, &trpath, None)
             .await
             .unwrap();
@@ -691,19 +696,14 @@ mod ingest_tests {
     #[tokio::test]
     async fn document_load_creates_the_dir_and_never_checks_out() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID_STR}")))
-            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
-            .mount(&server)
-            .await;
+        mount_document(&server).await;
 
         let dir = tempfile::tempdir().unwrap();
         let rrid_dir = dir.path().join(RRID_STR);
         let trpath = rrid_dir.join("log");
 
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
         load_via_document(&mut report, &rrid(), &config, &trpath, None)
             .await
             .unwrap();
@@ -717,11 +717,7 @@ mod ingest_tests {
     /// returns the loaded report's `schema_drift`.
     async fn drift_after_loading(schema: ResponseTemplate) -> Option<String> {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID_STR}")))
-            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
-            .mount(&server)
-            .await;
+        mount_document(&server).await;
         Mock::given(method("GET"))
             .and(path("/schema"))
             .respond_with(schema)
@@ -729,8 +725,7 @@ mod ingest_tests {
             .await;
         let dir = tempfile::tempdir().unwrap();
         let config = config_for(&server);
-        let mut report: Box<dyn TestReport + Send + Sync> =
-            Box::new(ObsReport::new(config.clone()));
+        let mut report = obs_report(&config);
 
         load_via_document(&mut report, &rrid(), &config, &dir.path().join("log"), None)
             .await
@@ -788,11 +783,7 @@ mod ingest_tests {
     async fn regenerate_via_teregen_reloads_from_the_fresh_document() {
         let server = MockServer::start().await;
         mount_v1_regenerate_finished(&server).await;
-        Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID_STR}")))
-            .respond_with(ResponseTemplate::new(200).set_body_string(minimal_document(RRID_STR)))
-            .mount(&server)
-            .await;
+        mount_document(&server).await;
 
         let dir = tempfile::tempdir().unwrap();
         let rrid_dir = dir.path().join(RRID_STR);
