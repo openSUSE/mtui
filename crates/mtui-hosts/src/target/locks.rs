@@ -11,7 +11,8 @@
 //!   **PID-based**: the lock is "mine" only when this exact process took it, so
 //!   one user running several `mtui` instances against the same host does not
 //!   collide with themselves.
-//! * [`PoolLock`] — the *pool-claim* lock at `/var/lock/mtui-pool.lock`. It
+//! * the *pool claim* — a [`TargetLock`] over [`POOL_LOCK_PATH`],
+//!   `/var/lock/mtui-pool.lock`. It
 //!   marks a reference host as claimed by a particular template (RRID) during
 //!   host arbitration, so a different user/template does not connect to a host
 //!   already taken. Ownership is **RRID-based** and ignores the PID, because a
@@ -25,7 +26,7 @@
 //! is a **cross-process contract**: other tools on the fleet parse the same
 //! layout, including older `mtui` releases, so the bytes must not change. The
 //! `comment` field keeps any embedded colons (parsed with a 3-way split); a
-//! `PoolLock` stores `mtui pool <RRID> [<owner>]` there.
+//! the pool claim stores `mtui pool <RRID> [<owner>]` there.
 //!
 //! A missing file is a free host; a present file that is not such a line
 //! (empty, malformed, not UTF-8) is **invalid**, never free: claims refuse it
@@ -50,7 +51,7 @@
 //!   distinct error type.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -116,7 +117,7 @@ pub struct RemoteLock {
     /// The PID of the process that took the lock.
     pub pid: u32,
     /// Optional comment. A non-empty comment marks an *exclusive* lock; a
-    /// [`PoolLock`] stores `mtui pool <RRID> [<owner>]` here.
+    /// A pool claim stores `mtui pool <RRID> [<owner>]` here.
     pub comment: String,
 }
 
@@ -166,7 +167,7 @@ impl LockRow {
 
 /// A single-read view of a lock's on-disk state plus derived ownership.
 ///
-/// Produced by `TargetLock::snapshot` / `PoolLock::snapshot` with **exactly
+/// Produced by `TargetLock::snapshot` with **exactly
 /// one** remote read, so [`Target::lock_status`](crate::Target::lock_status) can
 /// derive every displayed field without re-reading the lockfile per field.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -176,7 +177,7 @@ pub struct LockSnapshot {
     /// Whether the lock belongs to the current owner. `false` when unlocked
     /// (the accessor's "not locked" error is not propagated here).
     pub(crate) is_mine: bool,
-    /// The owning template's RRID, for a [`PoolLock`] claim only; empty for an
+    /// The owning template's RRID, for a pool claim only; empty for an
     /// operation-lock snapshot or a non-pool comment.
     pub(crate) rrid: String,
     /// The sibling in this process that holds the lock, as in
@@ -417,11 +418,30 @@ impl std::fmt::Display for RemoteLock {
     }
 }
 
-/// Manages the operation lock (`/var/lock/mtui.lock`) for a single target.
+/// How a [`TargetLock`] decides a loaded lock is its own, and which reap
+/// settings govern it.
+#[derive(Debug, Clone)]
+enum Ownership {
+    /// The operation lock: PID-based, reaped by the `[lock]` stale settings.
+    Pid,
+    /// The pool claim: a lock is ours when its comment
+    /// (`mtui pool <RRID> [<owner>]`) names this session's RRID, ignoring the
+    /// PID so a tester reconnecting from a fresh process is still the owner.
+    /// With no session RRID, ownership degrades to user-only. Reaped by the
+    /// separate `pool_*` stale settings.
+    Pool {
+        rrid: String,
+        reap_stale: bool,
+        stale_age: u64,
+    },
+}
+
+/// Manages one remote lock for a single target: the operation lock
+/// (`/var/lock/mtui.lock`, PID-based ownership) or the pool claim
+/// (`/var/lock/mtui-pool.lock`, RRID-based ownership), per its [`Ownership`].
 ///
-/// Ownership is PID-based (see the module docs). Drives the injected
-/// [`Connection`] for all remote I/O and an injected [`Clock`] for the wait
-/// queue.
+/// Drives the injected [`Connection`] for all remote I/O and an injected
+/// [`Clock`] for the wait queue.
 pub struct TargetLock<C: Clock = SystemClock> {
     connection: Box<dyn Connection>,
     clock: C,
@@ -451,11 +471,10 @@ pub struct TargetLock<C: Clock = SystemClock> {
     /// the lockfile is provably gone. [`load`](Self::load) never touches it —
     /// reading a host's lock state is not taking it.
     held: Option<String>,
-    /// The remote lockfile this instance manages. Defaults to
-    /// [`TARGET_LOCK_PATH`]; [`PoolLock`] builds its inner lock over
-    /// [`POOL_LOCK_PATH`] instead, so the shared lock/unlock/load machinery
-    /// touches the correct file.
+    /// The remote lockfile this instance manages: [`TARGET_LOCK_PATH`] or
+    /// [`POOL_LOCK_PATH`].
     path: PathBuf,
+    ownership: Ownership,
     /// Where this instance records a hold so siblings in the process can see it.
     holders: OpLockHolders,
     /// This instance's identity in [`holders`](Self::holders).
@@ -498,31 +517,65 @@ const INVALID_SETTLE_SECS: u64 = 5;
 const INVALID_SETTLE_POLL_SECS: f64 = 1.0;
 
 impl TargetLock<SystemClock> {
-    /// Builds a `TargetLock` over `connection` using config-derived identity and
-    /// reap/wait behaviour, with the real [`SystemClock`].
+    /// Builds an operation `TargetLock` over `connection` using config-derived
+    /// identity and reap/wait behaviour, with the real [`SystemClock`].
     #[must_use]
     pub fn new(connection: Box<dyn Connection>, config: &Config) -> Self {
         Self::with_clock(connection, config, SystemClock)
     }
+
+    /// Builds the pool-claim lock for a session on `rrid`, with the real
+    /// [`SystemClock`].
+    #[must_use]
+    pub(crate) fn pool(
+        connection: Box<dyn Connection>,
+        config: &Config,
+        rrid: impl Into<String>,
+    ) -> Self {
+        Self::pool_with_clock(connection, config, rrid, SystemClock)
+    }
 }
 
 impl<C: Clock> TargetLock<C> {
-    /// Builds a `TargetLock` with an explicit [`Clock`] (for tests).
+    /// Builds an operation `TargetLock` with an explicit [`Clock`] (for tests).
     #[must_use]
     fn with_clock(connection: Box<dyn Connection>, config: &Config, clock: C) -> Self {
-        Self::with_clock_and_path(connection, config, clock, PathBuf::from(TARGET_LOCK_PATH))
+        Self::build(
+            connection,
+            config,
+            clock,
+            PathBuf::from(TARGET_LOCK_PATH),
+            Ownership::Pid,
+        )
     }
 
-    /// Builds a `TargetLock` with an explicit [`Clock`] and lockfile `path`.
-    ///
-    /// The path seam lets [`PoolLock`] reuse the whole lock/unlock/load
-    /// machinery over [`POOL_LOCK_PATH`] instead of the operation-lock path.
+    /// Builds a pool-claim lock with an explicit [`Clock`] (for tests).
     #[must_use]
-    fn with_clock_and_path(
+    fn pool_with_clock(
+        connection: Box<dyn Connection>,
+        config: &Config,
+        rrid: impl Into<String>,
+        clock: C,
+    ) -> Self {
+        Self::build(
+            connection,
+            config,
+            clock,
+            PathBuf::from(POOL_LOCK_PATH),
+            Ownership::Pool {
+                rrid: rrid.into(),
+                reap_stale: config.pool_reap_stale,
+                stale_age: config.pool_stale_age,
+            },
+        )
+    }
+
+    fn build(
         connection: Box<dyn Connection>,
         config: &Config,
         clock: C,
         path: PathBuf,
+        ownership: Ownership,
     ) -> Self {
         Self {
             connection,
@@ -537,6 +590,7 @@ impl<C: Clock> TargetLock<C> {
             invalid: false,
             held: None,
             path,
+            ownership,
             holders: OpLockHolders::default(),
             id: NEXT_LOCK_ID.fetch_add(1, Ordering::Relaxed),
             label: String::new(),
@@ -671,8 +725,7 @@ impl<C: Clock> TargetLock<C> {
         self.held.clone()
     }
 
-    /// The lockfile path this lock manages. Set at construction; defaults to
-    /// [`TARGET_LOCK_PATH`], overridden to [`POOL_LOCK_PATH`] for [`PoolLock`].
+    /// The lockfile path this lock manages, set at construction.
     fn filename(&self) -> PathBuf {
         self.path.clone()
     }
@@ -692,7 +745,7 @@ impl<C: Clock> TargetLock<C> {
             Some(secs) => format!("last modified {secs}s ago"),
             None => "last modification time unknown".to_owned(),
         };
-        let remedy = if self.path == Path::new(POOL_LOCK_PATH) {
+        let remedy = if matches!(self.ownership, Ownership::Pool { .. }) {
             format!(
                 "{age}; if no other mtui is claiming it, `unlock --pool --force` removes \
                  it, or it is reaped once older than `[lock] pool_stale_age`"
@@ -835,23 +888,24 @@ impl<C: Clock> TargetLock<C> {
     /// Force-removes the lock if it is older than the configured stale age.
     ///
     /// Controlled by `lock_reap_stale` (default on) and `lock_stale_age`
-    /// (default 86400s); a non-positive age disables reaping. Applies to any
-    /// lock, including exclusive (commented) ones and foreign locks, since a
+    /// (default 86400s) — `pool_reap_stale` / `pool_stale_age` for a pool
+    /// claim, whose foreign owner's PID disappearing never frees it; an orphan
+    /// left by an uncatchable exit would otherwise block arbitration until a
+    /// manual `unlock -f -p`. A zero age disables reaping. Applies to any lock,
+    /// including exclusive (commented) ones and foreign locks, since a
     /// sufficiently old lock is almost always abandoned.
     ///
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
     pub(crate) async fn reap_if_stale(&mut self) -> Result<bool> {
-        self.reap_with(self.lock_reap_stale, self.lock_stale_age, false)
-            .await
-    }
-
-    /// Force-removes the loaded lock when `enabled` and older than `stale_age`
-    /// seconds (`0` disables); `pool` only selects the wording of the warning.
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load/unlock path.
-    async fn reap_with(&mut self, enabled: bool, stale_age: u64, pool: bool) -> Result<bool> {
+        let (enabled, stale_age, pool) = match self.ownership {
+            Ownership::Pid => (self.lock_reap_stale, self.lock_stale_age, false),
+            Ownership::Pool {
+                reap_stale,
+                stale_age,
+                ..
+            } => (reap_stale, stale_age, true),
+        };
         if !enabled || stale_age == 0 {
             return Ok(false);
         }
@@ -976,7 +1030,9 @@ impl<C: Clock> TargetLock<C> {
     /// Locks the target.
     ///
     /// Attempts an atomic exclusive create first; on collision, reconciles
-    /// (re-stamp if ours, reap if stale, wait if configured) or refuses.
+    /// (re-stamp if ours, reap if stale, wait if configured) or refuses. A pool
+    /// claim reconciles by RRID instead: ours is adopted untouched, stale is
+    /// reaped, and it never waits.
     ///
     /// **Race-safe**: a foreign lock is never blind-overwritten. The only
     /// non-exclusive (truncating) write is a re-stamp of a lock this process
@@ -1017,6 +1073,20 @@ impl<C: Clock> TargetLock<C> {
                 Create::Won => return Ok(()),
                 Create::Freed => continue,
                 Create::Occupied => {}
+            }
+            if matches!(self.ownership, Ownership::Pool { .. }) {
+                // A claim that is already ours is adopted byte-for-byte —
+                // without a truncating re-stamp or a refreshed timestamp; a
+                // stale foreign claim is reaped and the create retried; a fresh
+                // one is refused untouched. Pool acquisition never waits.
+                if self.is_mine()? {
+                    self.mark_held(self.lock.comment.clone());
+                    return Ok(());
+                }
+                if self.reap_if_stale().await? {
+                    continue;
+                }
+                return Err(self.contention().await?);
             }
             if self.owned_here()? {
                 // The wire's ownership check is PID-based, so it cannot tell
@@ -1156,26 +1226,13 @@ impl<C: Clock> TargetLock<C> {
     /// forced, or an SFTP/transport error from the remove path (other than
     /// "already gone").
     pub async fn unlock(&mut self, force: bool) -> Result<()> {
-        self.unlock_with(force, Self::owned_here).await
-    }
-
-    /// [`unlock`](Self::unlock) with the ownership test supplied by the caller,
-    /// run once the lock is known to be loaded and present.
-    ///
-    /// # Errors
-    /// As [`unlock`](Self::unlock).
-    async fn unlock_with(
-        &mut self,
-        force: bool,
-        owned: impl FnOnce(&Self) -> Result<bool>,
-    ) -> Result<()> {
         if !self.is_locked().await? {
             // The lockfile is gone (a reboot cleared `/var/lock`, another owner
             // removed it): whatever this instance took, it no longer holds.
             self.mark_released();
             return Ok(());
         }
-        if !owned(self)? && !force {
+        if !self.owned_here()? && !force {
             return Err(self.contention().await?);
         }
         let path = self.filename();
@@ -1198,10 +1255,12 @@ impl<C: Clock> TargetLock<C> {
         Ok(())
     }
 
-    /// Whether the currently-loaded lock is owned by this process.
+    /// Whether the currently-loaded lock is ours under this lock's
+    /// [`Ownership`].
     ///
-    /// PID-based: mine only when both the user and the PID match. Call after a
-    /// method that loads the lock (e.g. [`is_locked`](Self::is_locked)).
+    /// Operation lock: PID-based — mine only when both the user and the PID
+    /// match. Pool claim: RRID-based, ignoring the PID. Call after a method that
+    /// loads the lock (e.g. [`is_locked`](Self::is_locked)).
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
@@ -1216,11 +1275,16 @@ impl<C: Clock> TargetLock<C> {
         if self.lock.user != self.i_am_user {
             return Ok(false);
         }
-        Ok(self.lock.pid == self.i_am_pid)
+        Ok(match &self.ownership {
+            Ownership::Pid => self.lock.pid == self.i_am_pid,
+            Ownership::Pool { rrid, .. } => {
+                rrid.is_empty() || pool_rrid_of(&self.lock.comment) == *rrid
+            }
+        })
     }
 
-    /// Read-only view of the currently-loaded lock (for tests / callers).
-    #[must_use]
+    /// Read-only view of the currently-loaded lock.
+    #[cfg(test)]
     fn current(&self) -> &RemoteLock {
         &self.lock
     }
@@ -1251,281 +1315,47 @@ impl<C: Clock> TargetLock<C> {
     /// read, for lock reporting ([`Target::lock_status`](crate::Target::lock_status)).
     ///
     /// One [`load`](Self::load); `is_mine` is derived from the freshly-loaded
-    /// cache (an unlocked lock is not "mine" and does not raise). Leaves the
-    /// per-field async accessors for the wait/claim/unlock callers, which
-    /// intentionally re-read between retries.
+    /// cache (an unlocked lock is not "mine" and does not raise), and the
+    /// owning RRID of a pool claim is parsed from the same cached comment.
+    /// Leaves the per-field async accessors for the wait/claim/unlock callers,
+    /// which intentionally re-read between retries.
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
     pub(crate) async fn snapshot(&mut self) -> Result<LockSnapshot> {
         self.load().await?;
-        let is_mine = self.is_mine().unwrap_or(false);
+        let (rrid, sibling) = match self.ownership {
+            Ownership::Pid => (String::new(), self.loaded_sibling()),
+            Ownership::Pool { .. } => (pool_rrid_of(&self.lock.comment), None),
+        };
         Ok(LockSnapshot {
             lock: self.lock.clone(),
-            is_mine,
-            rrid: String::new(),
-            sibling: self.loaded_sibling(),
+            is_mine: self.is_mine().unwrap_or(false),
+            rrid,
+            sibling,
             invalid: self.invalid,
         })
     }
-}
 
-/// The pool-claim lock (`/var/lock/mtui-pool.lock`), separate from the
-/// operation lock, with RRID-based ownership.
-///
-/// See the module docs: a pool claim marks a host as taken by a template
-/// (RRID). Ownership ignores the PID and compares the RRID recorded in the
-/// comment (`mtui pool <RRID> [<owner>]`) against this session's RRID, so a
-/// tester reconnecting from a fresh process is still the owner. With no session
-/// RRID, ownership degrades to user-only.
-pub struct PoolLock<C: Clock = SystemClock> {
-    inner: TargetLock<C>,
-    i_am_rrid: String,
-    /// Force-reap a pool claim older than [`Self::pool_stale_age`] on claim
-    /// (`pool_reap_stale`). The pool-claim analogue of the operation lock's
-    /// `lock_reap_stale`, kept separate because the inner [`TargetLock`]'s
-    /// reap fields govern the *operation* lock's stale age, not the pool claim's.
-    pool_reap_stale: bool,
-    /// Age (seconds) beyond which a pool claim is reapable (`pool_stale_age`);
-    /// `0` disables pool-claim reaping.
-    pool_stale_age: u64,
-}
-
-impl PoolLock<SystemClock> {
-    /// Builds a `PoolLock` with the real [`SystemClock`].
-    #[must_use]
-    pub(crate) fn new(
-        connection: Box<dyn Connection>,
-        config: &Config,
-        rrid: impl Into<String>,
-    ) -> Self {
-        Self::with_clock(connection, config, rrid, SystemClock)
+    /// Sets the pool claim's ownership RRID (the report layer pushes this down
+    /// after the claim is built; see [`Target::set_rrid`](crate::Target::set_rrid)).
+    /// A no-op on an operation lock.
+    pub(crate) fn set_rrid(&mut self, new: impl Into<String>) {
+        if let Ownership::Pool { rrid, .. } = &mut self.ownership {
+            *rrid = new.into();
+        }
     }
 }
 
-impl<C: Clock> PoolLock<C> {
-    /// Builds a `PoolLock` with an explicit [`Clock`] (for tests).
-    #[must_use]
-    fn with_clock(
-        connection: Box<dyn Connection>,
-        config: &Config,
-        rrid: impl Into<String>,
-        clock: C,
-    ) -> Self {
-        Self {
-            inner: TargetLock::with_clock_and_path(
-                connection,
-                config,
-                clock,
-                PathBuf::from(POOL_LOCK_PATH),
-            ),
-            i_am_rrid: rrid.into(),
-            pool_reap_stale: config.pool_reap_stale,
-            pool_stale_age: config.pool_stale_age,
-        }
+/// Extracts the RRID from a `mtui pool <RRID> [<owner>]` comment, or `""` when
+/// the comment is not a pool comment.
+fn pool_rrid_of(comment: &str) -> String {
+    let parts: Vec<&str> = comment.split_whitespace().collect();
+    if parts.len() >= 3 && parts[0] == "mtui" && parts[1] == "pool" {
+        parts[2].to_owned()
+    } else {
+        String::new()
     }
-
-    /// Extracts the RRID from a `mtui pool <RRID> [<owner>]` comment, or `""`
-    /// when the comment is not a pool comment.
-    #[must_use]
-    fn rrid_of(comment: &str) -> String {
-        let parts: Vec<&str> = comment.split_whitespace().collect();
-        if parts.len() >= 3 && parts[0] == "mtui" && parts[1] == "pool" {
-            parts[2].to_owned()
-        } else {
-            String::new()
-        }
-    }
-
-    /// Whether the pool lock belongs to this template + user.
-    ///
-    /// RRID-based (ignores PID). Falls back to user-only when this session has
-    /// no RRID.
-    ///
-    /// # Errors
-    /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
-    /// lock is loaded.
-    fn is_mine(&self) -> Result<bool> {
-        pool_is_mine(&self.inner, &self.i_am_rrid)
-    }
-
-    /// Resolves the pool claim's on-disk state, RRID-based ownership, and owning
-    /// RRID with a **single** remote read, for lock reporting
-    /// ([`Target::lock_status`](crate::Target::lock_status)).
-    ///
-    /// One inner [`load`](TargetLock::load); `is_mine` uses the pool RRID rule
-    /// against the freshly-loaded cache (an unclaimed lock is not "mine" and
-    /// does not raise), and `rrid` is parsed from the same cached comment.
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load path.
-    pub(crate) async fn snapshot(&mut self) -> Result<LockSnapshot> {
-        self.inner.load().await?;
-        let is_mine = self.is_mine().unwrap_or(false);
-        let lock = self.inner.current().clone();
-        let rrid = Self::rrid_of(&lock.comment);
-        Ok(LockSnapshot {
-            lock,
-            is_mine,
-            rrid,
-            sibling: None,
-            invalid: self.inner.invalid,
-        })
-    }
-
-    /// The pool-claim comment this instance stamped, if it holds the claim.
-    /// See [`TargetLock::held_comment`](Self::held_comment).
-    #[must_use]
-    pub(crate) fn held_comment(&self) -> Option<String> {
-        self.inner.held_comment()
-    }
-
-    /// Drops this instance's in-memory claim record after the remote claim
-    /// proved to be another template's, so `holds()` stops claiming it.
-    pub(crate) fn mark_released(&mut self) {
-        self.inner.mark_released();
-    }
-
-    /// [`TargetLock::loaded_owner`] for the pool claim — no remote read.
-    #[must_use]
-    pub(crate) fn loaded_owner(&self) -> LockOwner {
-        self.inner.loaded_owner()
-    }
-
-    /// Sets the ownership RRID (the report layer pushes this down after the
-    /// claim is built; see [`Target::set_rrid`](crate::Target::set_rrid)).
-    pub(crate) fn set_rrid(&mut self, rrid: impl Into<String>) {
-        self.i_am_rrid = rrid.into();
-    }
-
-    /// Claims the pool lock, recording `comment` (the
-    /// `mtui pool <RRID> [<owner>]` stamp).
-    ///
-    /// Creates the pool lockfile atomically. A collision is reconciled by
-    /// **RRID** ownership, never the operation lock's PID check: a claim that is
-    /// already ours ([`is_mine`](Self::is_mine)) is adopted byte-for-byte —
-    /// without a truncating re-stamp, and without refreshing its timestamp — a
-    /// stale foreign claim is reaped and the create retried, and a fresh foreign
-    /// claim is refused untouched. Pool acquisition never waits.
-    ///
-    /// # Errors
-    /// Returns [`HostError::TargetLocked`] when the host is claimed by another
-    /// owner, or an SFTP error from the read/write path.
-    async fn lock(&mut self, comment: &str) -> Result<()> {
-        let rl = RemoteLock {
-            user: self.inner.i_am_user.clone(),
-            timestamp: self.inner.clock.now_unix().to_string(),
-            pid: self.inner.i_am_pid,
-            comment: comment.to_owned(),
-        };
-        let mut timeout_reconciled = false;
-
-        for _ in 0..TargetLock::<C>::RECONCILE_RETRIES {
-            match self
-                .inner
-                .create_or_reconcile(&rl, &mut timeout_reconciled)
-                .await?
-            {
-                Create::Won => return Ok(()),
-                Create::Freed => continue,
-                Create::Occupied => {}
-            }
-            if self.is_mine()? {
-                self.inner.mark_held(self.inner.lock.comment.clone());
-                return Ok(());
-            }
-            if self.reap_if_stale().await? {
-                continue;
-            }
-            return Err(self.inner.contention().await?);
-        }
-
-        Err(self.inner.contention().await?)
-    }
-
-    /// Force-removes the pool claim if it is older than the configured pool
-    /// stale age.
-    ///
-    /// The pool-claim analogue of [`TargetLock::reap_if_stale`], gated by
-    /// `pool_reap_stale` (default on) and `pool_stale_age` (default 86400s; `0`
-    /// disables reaping). Pool ownership is RRID-based, so a foreign claim's PID
-    /// disappearing never frees it — an orphan left by an uncatchable exit
-    /// (SIGKILL / panic / power loss) would otherwise block arbitration until a
-    /// manual `unlock -f -p`. This reaps any pool claim older than the TTL,
-    /// regardless of owner, via a forced [`unlock`](Self::unlock).
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load/unlock path.
-    async fn reap_if_stale(&mut self) -> Result<bool> {
-        self.inner
-            .reap_with(self.pool_reap_stale, self.pool_stale_age, true)
-            .await
-    }
-
-    /// Claims the pool lock without raising when it is already claimed.
-    ///
-    /// The non-raising counterpart to [`lock`](Self::lock), used by host
-    /// arbitration. Ownership is RRID-based: a claim recording *our* RRID (even
-    /// from another process) counts as ours. A foreign claim older than
-    /// `pool_stale_age` is force-reaped first (see
-    /// [`reap_if_stale`](Self::reap_if_stale)), the only automatic recovery for a
-    /// claim orphaned by an uncatchable exit.
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the underlying calls.
-    pub(crate) async fn try_claim(&mut self, comment: &str) -> Result<bool> {
-        if self.inner.is_locked_settled().await?
-            && !self.is_mine()?
-            && !self.reap_if_stale().await?
-        {
-            return if self.inner.invalid {
-                Err(self.inner.invalid_error().await?)
-            } else {
-                Ok(false)
-            };
-        }
-        match self.lock(comment).await {
-            Ok(()) => Ok(true),
-            Err(HostError::TargetLocked(_)) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Releases the pool claim.
-    ///
-    /// Unlike [`TargetLock::unlock`] (PID-based ownership), a foreign claim is
-    /// decided by **RRID** ([`is_mine`](Self::is_mine)): with `force = false` a
-    /// claim owned by another template is refused; with `force = true` any
-    /// claim is removed. A no-op on an unclaimed host.
-    ///
-    /// # Errors
-    /// Returns [`HostError::TargetLocked`] when the claim is foreign and not
-    /// forced, or an SFTP error from the remove path.
-    pub(crate) async fn unlock(&mut self, force: bool) -> Result<()> {
-        let rrid = &self.i_am_rrid;
-        self.inner
-            .unlock_with(force, |lock| pool_is_mine(lock, rrid))
-            .await
-    }
-}
-
-/// Pool-claim ownership of the loaded `lock` for a session on `rrid`:
-/// RRID-based (ignores PID), falling back to user-only without an RRID.
-fn pool_is_mine<C: Clock>(lock: &TargetLock<C>, rrid: &str) -> Result<bool> {
-    if lock.invalid {
-        return Ok(false);
-    }
-    let loaded = lock.current();
-    if loaded.user.is_empty() {
-        return Err(HostError::TargetLocked("not locked".to_owned()));
-    }
-    if loaded.user != lock.i_am_user {
-        return Ok(false);
-    }
-    if rrid.is_empty() {
-        return Ok(true);
-    }
-    Ok(PoolLock::<C>::rrid_of(&loaded.comment) == rrid)
 }
 
 /// Converts a Unix timestamp to `%A, %d.%m.%Y %H:%M UTC`.
@@ -1569,6 +1399,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
     use crate::connection::MockConnection;
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2636,8 +2467,8 @@ mod tests {
 
     // --- PoolLock -----------------------------------------------------------
 
-    fn pool(conn: MockConnection, rrid: &str) -> PoolLock<FakeClock> {
-        PoolLock::with_clock(Box::new(conn), &cfg(), rrid, FakeClock::new(now()))
+    fn pool(conn: MockConnection, rrid: &str) -> TargetLock<FakeClock> {
+        TargetLock::pool_with_clock(Box::new(conn), &cfg(), rrid, FakeClock::new(now()))
     }
 
     #[test]
@@ -2649,21 +2480,21 @@ mod tests {
     #[test]
     fn rrid_of_parses_pool_comment() {
         assert_eq!(
-            PoolLock::<SystemClock>::rrid_of("mtui pool SUSE:Maintenance:1:2 [alice]"),
+            pool_rrid_of("mtui pool SUSE:Maintenance:1:2 [alice]"),
             "SUSE:Maintenance:1:2"
         );
     }
 
     #[test]
     fn rrid_of_non_pool_comment_empty() {
-        assert_eq!(PoolLock::<SystemClock>::rrid_of("testing of something"), "");
-        assert_eq!(PoolLock::<SystemClock>::rrid_of(""), "");
+        assert_eq!(pool_rrid_of("testing of something"), "");
+        assert_eq!(pool_rrid_of(""), "");
     }
 
     #[test]
     fn pool_is_mine_same_rrid_ignores_pid() {
         let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
-        p.inner.lock = RemoteLock {
+        p.lock = RemoteLock {
             user: "testuser".into(),
             pid: std::process::id() + 1,
             comment: "mtui pool SUSE:Maintenance:1:2 [alice]".into(),
@@ -2675,7 +2506,7 @@ mod tests {
     #[test]
     fn pool_is_mine_different_rrid_not_mine() {
         let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
-        p.inner.lock = RemoteLock {
+        p.lock = RemoteLock {
             user: "testuser".into(),
             pid: std::process::id(),
             comment: "mtui pool SUSE:Maintenance:9:9 [bob]".into(),
@@ -2687,7 +2518,7 @@ mod tests {
     #[test]
     fn pool_is_mine_different_user_not_mine() {
         let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
-        p.inner.lock = RemoteLock {
+        p.lock = RemoteLock {
             user: "otheruser".into(),
             comment: "mtui pool SUSE:Maintenance:1:2 [alice]".into(),
             ..Default::default()
@@ -2698,7 +2529,7 @@ mod tests {
     #[test]
     fn pool_is_mine_no_rrid_falls_back_to_user() {
         let mut p = pool(MockConnection::new("h1"), "");
-        p.inner.lock = RemoteLock {
+        p.lock = RemoteLock {
             user: "testuser".into(),
             comment: "mtui pool SUSE:Maintenance:9:9 [bob]".into(),
             ..Default::default()
@@ -2866,8 +2697,8 @@ mod tests {
 
     /// A pool claim built from `conn`+`rrid` with an explicit `[lock]` `config`
     /// (so reaping knobs can be toggled per test).
-    fn pool_with_cfg(conn: MockConnection, rrid: &str, config: &Config) -> PoolLock<FakeClock> {
-        PoolLock::with_clock(Box::new(conn), config, rrid, FakeClock::new(now()))
+    fn pool_with_cfg(conn: MockConnection, rrid: &str, config: &Config) -> TargetLock<FakeClock> {
+        TargetLock::pool_with_clock(Box::new(conn), config, rrid, FakeClock::new(now()))
     }
 
     #[tokio::test]
@@ -2953,7 +2784,7 @@ mod tests {
     async fn pool_set_rrid_updates_ownership_identity() {
         let mut p = pool(MockConnection::new("h1"), "");
         p.set_rrid("SUSE:Maintenance:1:2");
-        p.inner.lock = RemoteLock {
+        p.lock = RemoteLock {
             user: "testuser".into(),
             comment: "mtui pool SUSE:Maintenance:1:2 [alice]".into(),
             ..Default::default()
@@ -3278,7 +3109,7 @@ mod tests {
         };
         let writes = racing.forwarded_writes.clone();
         let removes = racing.forwarded_removes.clone();
-        let mut p = PoolLock::with_clock(
+        let mut p = TargetLock::pool_with_clock(
             Box::new(racing),
             &cfg(),
             "SUSE:Maintenance:1:2",
@@ -3666,7 +3497,7 @@ mod tests {
             Err(HostError::Sftp { .. })
         ));
         assert!(lock.is_invalid());
-        assert!(p.inner.invalid);
+        assert!(p.invalid);
     }
 
     #[tokio::test]
@@ -3740,16 +3571,16 @@ mod tests {
             (TARGET_LOCK_PATH, "unlock --force", "stale_age"),
             (POOL_LOCK_PATH, "unlock --pool --force", "pool_stale_age"),
         ] {
-            let mut lock = TargetLock::with_clock_and_path(
-                Box::new(
-                    MockConnection::new("h1")
-                        .with_file(path, Vec::new())
-                        .with_mtime(path, now() - 90),
-                ),
-                &cfg(),
-                FakeClock::new(now()),
-                PathBuf::from(path),
+            let conn = Box::new(
+                MockConnection::new("h1")
+                    .with_file(path, Vec::new())
+                    .with_mtime(path, now() - 90),
             );
+            let mut lock = if path == POOL_LOCK_PATH {
+                TargetLock::pool_with_clock(conn, &cfg(), "", FakeClock::new(now()))
+            } else {
+                TargetLock::with_clock(conn, &cfg(), FakeClock::new(now()))
+            };
             let msg = lock.invalid_error().await.unwrap().to_string();
             assert!(msg.contains("h1") && msg.contains(path), "{msg}");
             assert!(msg.contains("invalid (empty or unparseable)"), "{msg}");
@@ -3766,7 +3597,7 @@ mod tests {
         for content in INVALID_CONTENTS {
             let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, content.to_vec());
             let mut p = pool(conn, "SUSE:Maintenance:1:2");
-            assert!(p.inner.is_locked().await.unwrap(), "{content:?}");
+            assert!(p.is_locked().await.unwrap(), "{content:?}");
             let snap = p.snapshot().await.unwrap();
             assert!(snap.invalid, "{content:?}");
             assert!(!snap.is_mine, "{content:?}");
@@ -3846,7 +3677,7 @@ mod tests {
                 handle.file_contents(POOL_LOCK_PATH).is_none(),
                 "{content:?}"
             );
-            assert!(!p.inner.invalid);
+            assert!(!p.invalid);
             assert!(p.try_claim(POOL_COMMENT).await.unwrap());
         }
     }
@@ -3874,7 +3705,7 @@ mod tests {
                     reaped,
                     "{content:?} mtime {mtime:?}"
                 );
-                assert_eq!(p.inner.invalid, !reaped, "{content:?} mtime {mtime:?}");
+                assert_eq!(p.invalid, !reaped, "{content:?} mtime {mtime:?}");
             }
         }
     }
@@ -3907,7 +3738,7 @@ mod tests {
                 .with_file(POOL_LOCK_PATH, Vec::new())
                 .with_mtime(POOL_LOCK_PATH, now() - 200_000);
             let handle = conn.clone();
-            let mut p = PoolLock::with_clock(
+            let mut p = TargetLock::pool_with_clock(
                 Box::new(conn),
                 &c,
                 "SUSE:Maintenance:1:2",
@@ -3936,7 +3767,7 @@ mod tests {
         };
         let handle = racing.inner.clone();
         let removes = racing.forwarded_removes.clone();
-        let mut p = PoolLock::with_clock(
+        let mut p = TargetLock::pool_with_clock(
             Box::new(racing),
             &cfg(),
             "SUSE:Maintenance:1:2",
@@ -4036,7 +3867,7 @@ mod tests {
                 }
             }
             Side::PoolLock | Side::PoolTryClaim => {
-                let mut p = PoolLock::with_clock(
+                let mut p = TargetLock::pool_with_clock(
                     Box::new(racing),
                     &cfg(),
                     "SUSE:Maintenance:1:2",
@@ -4150,7 +3981,7 @@ mod tests {
             let clock = FakeClock::new(now());
             match side {
                 Side::PoolLock => {
-                    let mut p = PoolLock::with_clock(
+                    let mut p = TargetLock::pool_with_clock(
                         Box::new(racing),
                         &cfg(),
                         "SUSE:Maintenance:1:2",
