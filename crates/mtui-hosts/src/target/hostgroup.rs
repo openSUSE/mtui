@@ -11,7 +11,7 @@
 //!   the unselected hosts over a shared-reference set of hosts),
 //! * [`names`](HostsGroup::names) / iteration,
 //! * command fan-out via [`run`](HostsGroup::run) (delegating to
-//!   `super::actions::RunCommand`),
+//!   `super::actions::run_command`),
 //! * SFTP fan-out ([`sftp_put`](HostsGroup::sftp_put) /
 //!   [`sftp_get`](HostsGroup::sftp_get) / `sftp_remove`),
 //! * the operation-lock fan-out ([`lock`](HostsGroup::lock) /
@@ -48,7 +48,7 @@ use crate::error::{HostError, LockRefusal, Result};
 use mtui_types::package::VersionCheck;
 use mtui_types::system::System;
 
-use super::actions::{self, Command, RunCommand};
+use super::actions::{self, BoxTargetFut, Command, boxed};
 use super::operation::{
     HostCommandMap, HostPlan, OperationGroup, PlanProvider, RebootFailure, RebootFailureCause,
 };
@@ -677,13 +677,76 @@ impl HostsGroup {
     ///
     /// `cmd` accepts a single string (run on every host) or a per-host
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
-    /// `RunCommand`.
+    /// `run_command`.
     pub async fn run(&mut self, cmd: impl Into<Command>) {
-        let max_parallel = self.max_parallel;
-        RunCommand::new(&mut self.data, cmd, self.is_repl)
-            .with_max_parallel(max_parallel)
-            .run()
+        actions::run_command(&mut self.data, cmd, self.is_repl, self.max_parallel).await;
+    }
+
+    /// Drives `op` over every target `select` admits, in parallel, under a
+    /// spinner labelled `desc`.
+    async fn fanout<'t, S, F>(&'t mut self, desc: &str, select: S, op: F)
+    where
+        S: FnMut(&Target) -> bool,
+        F: Fn(&'t mut Target) -> BoxTargetFut<'t>,
+    {
+        actions::run_fanout(
+            &mut self.data,
+            self.is_repl,
+            self.max_parallel,
+            Some(desc),
+            select,
+            op,
+        )
+        .await;
+    }
+
+    /// [`fanout`](Self::fanout) where `op` yields a per-host value, inserted
+    /// into the caller-owned `sink` as each host finishes; `None` leaves the
+    /// host out. The caller owns the map when it applies a wall-clock budget:
+    /// a returned map would be dropped with the abandoned future.
+    async fn collect_fanout_into<'t, T, H, S, F>(
+        &'t mut self,
+        desc: &str,
+        select: S,
+        sink: H,
+        op: F,
+    ) where
+        T: Send + 't,
+        H: std::ops::Deref<Target = std::sync::Mutex<BTreeMap<String, T>>> + Clone + Send + 't,
+        S: FnMut(&Target) -> bool,
+        F: Fn(&'t mut Target) -> BoxTargetFut<'t, Option<T>>,
+    {
+        self.fanout(desc, select, |t| {
+            let sink = sink.clone();
+            let host = t.hostname().to_owned();
+            let outcome = op(t);
+            boxed(async move {
+                if let Some(value) = outcome.await {
+                    sink.lock().unwrap().insert(host, value);
+                }
+            })
+        })
+        .await;
+    }
+
+    /// [`collect_fanout_into`](Self::collect_fanout_into) into a map owned by
+    /// this call, keyed by hostname so the result is deterministic regardless
+    /// of completion order.
+    async fn collect_fanout<'t, T, S, F>(
+        &'t mut self,
+        desc: &str,
+        select: S,
+        op: F,
+    ) -> BTreeMap<String, T>
+    where
+        T: Send + 't,
+        S: FnMut(&Target) -> bool,
+        F: Fn(&'t mut Target) -> BoxTargetFut<'t, Option<T>>,
+    {
+        let sink = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        self.collect_fanout_into(desc, select, Arc::clone(&sink), op)
             .await;
+        std::mem::take(&mut *sink.lock().unwrap())
     }
 
     /// Uploads `local` to `remote` on every host in parallel.
@@ -764,34 +827,13 @@ impl HostsGroup {
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        use std::sync::Mutex;
-
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: Mutex<BTreeMap<String, std::result::Result<SftpRead, String>>> =
-            Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("FileDownload"),
-            select,
-            |t| {
-                let remote = remote.to_path_buf();
-                let collected = &collected;
-                Box::pin(async move {
-                    // `None` = not attempted (disabled): the host stays out of
-                    // the map rather than masquerading as an outcome.
-                    if let Some(outcome) = t.sftp_read_capped(&remote, max_bytes).await {
-                        collected
-                            .lock()
-                            .unwrap()
-                            .insert(t.hostname().to_owned(), outcome);
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-        collected.into_inner().unwrap()
+        self.collect_fanout("FileDownload", select, |t| {
+            let remote = remote.to_path_buf();
+            // `None` = not attempted (disabled): the host stays out of the map
+            // rather than masquerading as an outcome.
+            boxed(async move { t.sftp_read_capped(&remote, max_bytes).await })
+        })
+        .await
     }
 
     /// Uploads already-decoded bytes to `remote` on every enabled host in
@@ -833,36 +875,15 @@ impl HostsGroup {
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        use std::sync::Mutex;
-
         // One allocation shared across hosts — the actions::sftp_put_all
         // shared-bytes pattern; the caller has already size-capped the payload.
-        let shared: std::sync::Arc<[u8]> = std::sync::Arc::from(data);
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: Mutex<BTreeMap<String, std::result::Result<(), String>>> =
-            Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("FileUpload"),
-            select,
-            |t| {
-                let shared = std::sync::Arc::clone(&shared);
-                let remote = remote.to_path_buf();
-                let collected = &collected;
-                Box::pin(async move {
-                    if let Some(outcome) = t.sftp_put_bytes(&shared, &remote).await {
-                        collected
-                            .lock()
-                            .unwrap()
-                            .insert(t.hostname().to_owned(), outcome);
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-        collected.into_inner().unwrap()
+        let shared: Arc<[u8]> = Arc::from(data);
+        self.collect_fanout("FileUpload", select, |t| {
+            let shared = Arc::clone(&shared);
+            let remote = remote.to_path_buf();
+            boxed(async move { t.sftp_put_bytes(&shared, &remote).await })
+        })
+        .await
     }
 
     /// Locks every host in the group for `comment`, best-effort.
@@ -906,41 +927,27 @@ impl HostsGroup {
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        use std::sync::Mutex;
-
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("lock"),
-            select,
-            |t| {
-                let comment = comment.to_owned();
-                let collected = &collected;
-                Box::pin(async move {
-                    let outcome = if !t.has_operation_lock() {
-                        LockOutcome::Skipped("not connected".to_owned())
-                    } else {
-                        match t.lock(&comment).await {
-                            Ok(()) => LockOutcome::Acquired,
-                            Err(HostError::TargetLocked(msg)) => {
-                                tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
-                                LockOutcome::Contended(t.loaded_lock_owner())
-                            }
-                            Err(e) => {
-                                tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
-                                LockOutcome::Failed(e.to_string())
-                            }
+        self.collect_fanout("lock", select, |t| {
+            let comment = comment.to_owned();
+            boxed(async move {
+                Some(if !t.has_operation_lock() {
+                    LockOutcome::Skipped("not connected".to_owned())
+                } else {
+                    match t.lock(&comment).await {
+                        Ok(()) => LockOutcome::Acquired,
+                        Err(HostError::TargetLocked(msg)) => {
+                            tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
+                            LockOutcome::Contended(t.loaded_lock_owner())
                         }
-                    };
-                    collected.lock().unwrap().insert(t.hostname().to_owned(), outcome);
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-        collected.into_inner().unwrap()
+                        Err(e) => {
+                            tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
+                            LockOutcome::Failed(e.to_string())
+                        }
+                    }
+                })
+            })
+        })
+        .await
     }
 
     /// Releases every host's operation lock, best-effort.
@@ -1046,19 +1053,12 @@ impl HostsGroup {
         &mut self,
         names: &std::collections::BTreeSet<String>,
     ) -> BTreeMap<String, LockOutcome> {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: std::sync::Mutex<BTreeMap<String, LockOutcome>> =
-            std::sync::Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("unlock"),
+        self.collect_fanout(
+            "unlock",
             |t| names.contains(t.hostname()),
             |t| {
-                let collected = &collected;
-                Box::pin(async move {
-                    let outcome = if !t.has_operation_lock() {
+                boxed(async move {
+                    Some(if !t.has_operation_lock() {
                         LockOutcome::Skipped("not connected".to_owned())
                     } else if !t.holds_operation_lock() {
                         LockOutcome::Skipped(match t.sibling_operation_holder() {
@@ -1072,23 +1072,12 @@ impl HostsGroup {
                             }
                         })
                     } else {
-                        match t.unlock_reporting(false).await {
-                            Ok(()) => LockOutcome::Released,
-                            Err(HostError::TargetLocked(_)) => {
-                                LockOutcome::Contended(t.loaded_lock_owner())
-                            }
-                            Err(e) => LockOutcome::Failed(e.to_string()),
-                        }
-                    };
-                    collected
-                        .lock()
-                        .unwrap()
-                        .insert(t.hostname().to_owned(), outcome);
-                }) as actions::BoxTargetFut<'_>
+                        release_outcome(t.unlock_reporting(false).await, || t.loaded_lock_owner())
+                    })
+                })
             },
         )
-        .await;
-        collected.into_inner().unwrap()
+        .await
     }
 
     /// [`unlock_where`](Self::unlock_where) with `force = false` and a local
@@ -1119,39 +1108,17 @@ impl HostsGroup {
     ) where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("unlock"),
-            select,
-            |t| {
-                let collected = &collected;
-                Box::pin(async move {
-                    let outcome = if !t.has_operation_lock() {
-                        LockOutcome::Skipped("not connected".to_owned())
-                    } else if !force
-                        && t.holds_operation_lock()
-                        && !t.holds_unmarked_operation_lock()
-                    {
-                        LockOutcome::Skipped("reservation kept".to_owned())
-                    } else {
-                        match t.unlock_reporting(force).await {
-                            Ok(()) => LockOutcome::Released,
-                            Err(HostError::TargetLocked(_)) => {
-                                LockOutcome::Contended(t.loaded_lock_owner())
-                            }
-                            Err(e) => LockOutcome::Failed(e.to_string()),
-                        }
-                    };
-                    collected
-                        .lock()
-                        .unwrap()
-                        .insert(t.hostname().to_owned(), outcome);
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
+        self.collect_fanout_into("unlock", select, collected, |t| {
+            boxed(async move {
+                Some(if !t.has_operation_lock() {
+                    LockOutcome::Skipped("not connected".to_owned())
+                } else if !force && t.holds_operation_lock() && !t.holds_unmarked_operation_lock() {
+                    LockOutcome::Skipped("reservation kept".to_owned())
+                } else {
+                    release_outcome(t.unlock_reporting(force).await, || t.loaded_lock_owner())
+                })
+            })
+        })
         .await;
     }
 
@@ -1169,32 +1136,20 @@ impl HostsGroup {
         names: &BTreeSet<String>,
         collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
     ) {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("pool_unlock"),
+        self.collect_fanout_into(
+            "pool_unlock",
             |t| names.contains(t.hostname()),
+            collected,
             |t| {
-                let collected = &collected;
-                Box::pin(async move {
-                    let outcome = if !t.has_pool_lock() {
+                boxed(async move {
+                    Some(if !t.has_pool_lock() {
                         LockOutcome::Skipped("not connected".to_owned())
                     } else {
-                        match t.pool_unlock_reporting(force).await {
-                            Ok(()) => LockOutcome::Released,
-                            Err(HostError::TargetLocked(_)) => {
-                                LockOutcome::Contended(t.loaded_pool_owner())
-                            }
-                            Err(e) => LockOutcome::Failed(e.to_string()),
-                        }
-                    };
-                    collected
-                        .lock()
-                        .unwrap()
-                        .insert(t.hostname().to_owned(), outcome);
-                }) as actions::BoxTargetFut<'_>
+                        release_outcome(t.pool_unlock_reporting(force).await, || {
+                            t.loaded_pool_owner()
+                        })
+                    })
+                })
             },
         )
         .await;
@@ -1234,22 +1189,11 @@ impl HostsGroup {
         action: Option<&str>,
         collected: &std::sync::Mutex<BTreeMap<String, Result<()>>>,
     ) {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let action = action.map(str::to_owned);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("close"),
+        self.collect_fanout_into(
+            "close",
             |_t| true,
-            |t| {
-                let action = action.clone();
-                Box::pin(async move {
-                    let hostname = t.hostname().to_owned();
-                    let outcome = t.close(action.as_deref()).await;
-                    collected.lock().unwrap().insert(hostname, outcome);
-                }) as actions::BoxTargetFut<'_>
-            },
+            collected,
+            |t| boxed(async move { Some(t.close(action).await) }),
         )
         .await;
     }
@@ -1269,35 +1213,23 @@ impl HostsGroup {
     where
         F: FnMut(&str, &System, &LockRow),
     {
-        use std::sync::Mutex;
-
-        // Phase 1 (I/O): resolve every host's lock row concurrently via the
-        // shared fan-out. Each host's `(system, row)` is collected keyed by
-        // hostname, so the drain below is deterministically sorted regardless
-        // of completion order.
-        let collected: Mutex<BTreeMap<String, (System, LockRow)>> = Mutex::new(BTreeMap::new());
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("report_locks"),
-            |_t| true,
-            |t| {
-                let collected = &collected;
-                Box::pin(async move {
-                    let row = t.lock_status(pool).await;
-                    collected
-                        .lock()
-                        .unwrap()
-                        .insert(t.hostname().to_owned(), (t.system().clone(), row));
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
+        // Phase 1 (I/O): resolve every host's lock row concurrently; the
+        // drain below is sorted by hostname regardless of completion order.
+        let collected = self
+            .collect_fanout(
+                "report_locks",
+                |_t| true,
+                |t| {
+                    boxed(async move {
+                        let row = t.lock_status(pool).await;
+                        Some((t.system().clone(), row))
+                    })
+                },
+            )
+            .await;
 
         // Phase 2 (pure): forward each host to the sink in sorted hostname order.
-        for (hostname, (system, row)) in collected.into_inner().unwrap() {
+        for (hostname, (system, row)) in collected {
             sink(&hostname, &system, &row);
         }
     }
@@ -1367,18 +1299,9 @@ impl HostsGroup {
     where
         S: FnMut(&Target) -> bool,
     {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("set_repo"),
-            select,
-            |t| {
-                Box::pin(async move { t.repo_manager().set(operation, report).await })
-                    as actions::BoxTargetFut<'_>
-            },
-        )
+        self.fanout("set_repo", select, |t| {
+            boxed(async move { t.repo_manager().set(operation, report).await })
+        })
         .await;
     }
 
@@ -1414,16 +1337,12 @@ impl HostsGroup {
     /// Fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("add_history"),
+        self.fanout(
+            "add_history",
             |_t| true,
             |t| {
                 let fields = fields.to_vec();
-                Box::pin(async move { t.add_history(&fields).await }) as actions::BoxTargetFut<'_>
+                boxed(async move { t.add_history(&fields).await })
             },
         )
         .await;
@@ -1445,16 +1364,12 @@ impl HostsGroup {
     /// the group is ignored, and the per-target
     /// [`enabled`](mtui_types::enums::TargetState) check still applies on top.
     pub async fn add_history_for(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("add_history"),
+        self.fanout(
+            "add_history",
             |t| hosts.contains(t.hostname()),
             |t| {
                 let fields = fields.to_vec();
-                Box::pin(async move { t.add_history(&fields).await }) as actions::BoxTargetFut<'_>
+                boxed(async move { t.add_history(&fields).await })
             },
         )
         .await;
@@ -1484,15 +1399,9 @@ impl HostsGroup {
     where
         S: FnMut(&Target) -> bool,
     {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("query_versions"),
-            select,
-            |t| Box::pin(async move { t.query_versions().await }) as actions::BoxTargetFut<'_>,
-        )
+        self.fanout("query_versions", select, |t| {
+            boxed(async move { t.query_versions().await })
+        })
         .await;
     }
 
@@ -1646,16 +1555,9 @@ impl HostsGroup {
         // `reasons` list. The per-host lock wire semantics are unchanged —
         // only the fan-out is now concurrent (Contract preserved).
         let reasons: Mutex<Vec<LockRefusal>> = Mutex::new(Vec::new());
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("update_lock"),
-            select,
-            |target| {
-                let reasons = &reasons;
-                Box::pin(async move {
+        self.fanout("update_lock", select, |target| {
+            let reasons = &reasons;
+            boxed(async move {
                     // Load the lock (is_locked) before reading ownership;
                     // is_mine requires a prior load and is order-sensitive. A
                     // read failure (fail-closed load) means the host's state is
@@ -1703,9 +1605,8 @@ impl HostsGroup {
                             }
                         }
                     }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
+            })
+        })
         .await;
 
         let mut reasons = reasons.into_inner().expect("reasons mutex");
@@ -2354,6 +2255,16 @@ fn bytes_only(
         .into_iter()
         .map(|(host, res)| (host, res.map(|read| read.bytes)))
         .collect()
+}
+
+/// Folds a release result into a [`LockOutcome`]; a foreign owner is benign
+/// contention, named from the load the failed release already did.
+fn release_outcome(result: Result<()>, owner: impl FnOnce() -> LockOwner) -> LockOutcome {
+    match result {
+        Ok(()) => LockOutcome::Released,
+        Err(HostError::TargetLocked(_)) => LockOutcome::Contended(owner()),
+        Err(e) => LockOutcome::Failed(e.to_string()),
+    }
 }
 
 /// Classifies a reboot failure for the [`OperationGroup`] seam.

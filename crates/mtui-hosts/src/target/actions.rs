@@ -2,7 +2,7 @@
 //!
 //! * `run_parallel` drives a set of caller-supplied futures to completion
 //!   concurrently.
-//! * `RunCommand` dispatches a command (one string for all hosts, or a
+//! * `run_command` dispatches a command (one string for all hosts, or a
 //!   per-host map) to every host in parallel.
 //! * `sftp_put_all` / `sftp_get_all` fan the corresponding transfer out
 //!   across the group.
@@ -24,7 +24,7 @@
 //! during an interactive read.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
@@ -53,7 +53,7 @@ const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 /// fan-out (a no-op off a TTY, so tests and `mtui-mcp` stay clean) and is
 /// stopped — erasing its frame — when the batch completes.
 ///
-/// The per-target futures built by [`RunCommand`] and the `sftp_*_all`
+/// The per-target futures built by [`run_command`] and the `sftp_*_all`
 /// helpers never fail: [`Target::run`] and the SFTP methods swallow and log
 /// their own errors (the `-1`-sentinel / log-not-propagate contract),
 /// so one bad host can never abort the fan-out. `run_parallel` therefore has no
@@ -125,8 +125,16 @@ where
 /// carries its own `'a` lifetime, so callers just wrap their async block in
 /// [`Box::pin`]. The per-call allocation is negligible next to the SSH round
 /// trip each op performs.
-pub(crate) type BoxTargetFut<'a> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+pub(crate) type BoxTargetFut<'a, T = ()> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+/// Boxes a per-target future for [`run_fanout`]; the function signature drives
+/// the unsizing coercion that a bare `Box::pin` inside a closure does not.
+pub(crate) fn boxed<'a, T>(
+    fut: impl std::future::Future<Output = T> + Send + 'a,
+) -> BoxTargetFut<'a, T> {
+    Box::pin(fut)
+}
 
 /// Drives a per-target async `op` across a group in parallel.
 ///
@@ -225,73 +233,28 @@ impl From<BTreeMap<String, String>> for Command {
 ///
 /// When a [`PerHost`](Command::PerHost) map
 /// is given, hosts it does not cover are skipped entirely.
-pub(crate) struct RunCommand<'a> {
-    targets: &'a mut BTreeMap<String, Target>,
-    command: Command,
+pub(crate) async fn run_command(
+    targets: &mut BTreeMap<String, Target>,
+    command: impl Into<Command>,
     is_repl: bool,
     max_parallel: usize,
-}
-
-impl<'a> RunCommand<'a> {
-    /// Builds a run over `targets` with `command`.
-    ///
-    /// The parallel-batch width defaults to unconfigured (`0` →
-    /// [`DEFAULT_MAX_PARALLEL`]); set it with
-    /// [`with_max_parallel`](Self::with_max_parallel).
-    #[must_use]
-    pub(crate) fn new(
-        targets: &'a mut BTreeMap<String, Target>,
-        command: impl Into<Command>,
-        is_repl: bool,
-    ) -> Self {
-        Self {
-            targets,
-            command: command.into(),
-            is_repl,
-            max_parallel: 0,
-        }
-    }
-
-    /// Sets the parallel-batch concurrency bound (builder-style). `0` falls back
-    /// to [`DEFAULT_MAX_PARALLEL`].
-    #[must_use]
-    pub(crate) fn with_max_parallel(mut self, max_parallel: usize) -> Self {
-        self.max_parallel = max_parallel;
-        self
-    }
-
-    /// Executes the command across every (non-skipped) host in parallel.
-    ///
-    /// Delegates to the shared [`run_fanout`] primitive; the only
-    /// command-specific logic here is resolving the per-host command string
-    /// and skipping hosts a [`PerHost`](Command::PerHost) map does not cover.
-    pub(crate) async fn run(self) {
-        let Self {
-            targets,
-            command,
-            is_repl,
-            max_parallel,
-        } = self;
-
-        run_fanout(
-            targets,
-            is_repl,
-            max_parallel,
-            Some("run"),
-            // `for_host` returning None means "skip".
-            |t: &Target| command.for_host(t.hostname()).is_some(),
-            |t: &mut Target| {
-                // Resolve before the async block so `command` isn't borrowed
-                // across it; the host was filtered to be covered above.
-                let cmd = command
-                    .for_host(t.hostname())
-                    .expect("host was filtered to be covered")
-                    .to_owned();
-                Box::pin(async move { t.run(&cmd).await }) as BoxTargetFut<'_>
-            },
-        )
-        .await;
-    }
+) {
+    let command = command.into();
+    run_fanout(
+        targets,
+        is_repl,
+        max_parallel,
+        Some("run"),
+        |t: &Target| command.for_host(t.hostname()).is_some(),
+        |t: &mut Target| {
+            let cmd = command
+                .for_host(t.hostname())
+                .expect("host was filtered to be covered")
+                .to_owned();
+            boxed(async move { t.run(&cmd).await })
+        },
+    )
+    .await;
 }
 
 /// Uploads `local` to `remote` on every target in parallel.
@@ -305,7 +268,6 @@ pub(crate) async fn sftp_put_all(
     is_repl: bool,
     max_parallel: usize,
 ) {
-    let desc = if is_repl { Some("FileUpload") } else { None };
     let remote = remote.to_path_buf();
 
     // Read the immutable payload once when it is size-bounded, and dispatch the
@@ -323,23 +285,37 @@ pub(crate) async fn sftp_put_all(
 
     match shared {
         Some(bytes) => {
-            let futs = targets.values_mut().map(|t| {
-                let (bytes, remote) = (Arc::clone(&bytes), remote.clone());
-                // The outcome is recorded in `last_upload` for the REPL `put`
-                // aggregation; the returned copy is for map-returning callers.
-                async move {
-                    let _ = t.sftp_put_bytes(&bytes, &remote).await;
-                }
-            });
-            run_parallel(futs, desc, max_parallel).await;
+            run_fanout(
+                targets,
+                is_repl,
+                max_parallel,
+                Some("FileUpload"),
+                |_| true,
+                |t| {
+                    let (bytes, remote) = (Arc::clone(&bytes), remote.clone());
+                    // The outcome is recorded in `last_upload` for the REPL `put`
+                    // aggregation; the returned copy is for map-returning callers.
+                    boxed(async move {
+                        let _ = t.sftp_put_bytes(&bytes, &remote).await;
+                    })
+                },
+            )
+            .await;
         }
         None => {
             let local = local.to_path_buf();
-            let futs = targets.values_mut().map(|t| {
-                let (local, remote) = (local.clone(), remote.clone());
-                async move { t.sftp_put(&local, &remote).await }
-            });
-            run_parallel(futs, desc, max_parallel).await;
+            run_fanout(
+                targets,
+                is_repl,
+                max_parallel,
+                Some("FileUpload"),
+                |_| true,
+                |t| {
+                    let (local, remote) = (local.clone(), remote.clone());
+                    boxed(async move { t.sftp_put(&local, &remote).await })
+                },
+            )
+            .await;
         }
     }
 }
@@ -356,14 +332,18 @@ pub(crate) async fn sftp_get_all(
     is_repl: bool,
     max_parallel: usize,
 ) {
-    let desc = if is_repl { Some("FileDownload") } else { None };
-    let remote = remote.to_owned();
-    let local: PathBuf = local.to_path_buf();
-    let futs = targets.values_mut().map(|t| {
-        let (remote, local) = (remote.clone(), local.clone());
-        async move { t.sftp_get(&remote, &local).await }
-    });
-    run_parallel(futs, desc, max_parallel).await;
+    run_fanout(
+        targets,
+        is_repl,
+        max_parallel,
+        Some("FileDownload"),
+        |_| true,
+        |t| {
+            let (remote, local) = (remote.to_owned(), local.to_path_buf());
+            boxed(async move { t.sftp_get(&remote, &local).await })
+        },
+    )
+    .await;
 }
 
 #[cfg(test)]
@@ -527,7 +507,7 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
-        RunCommand::new(&mut g, "uptime", false).run().await;
+        run_command(&mut g, "uptime", false, 0).await;
 
         assert_eq!(h1.commands(), vec!["uptime".to_owned()]);
         assert_eq!(h2.commands(), vec!["uptime".to_owned()]);
@@ -542,7 +522,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("h1".to_owned(), "only-h1".to_owned());
-        RunCommand::new(&mut g, map, false).run().await;
+        run_command(&mut g, map, false, 0).await;
 
         assert_eq!(h1.commands(), vec!["only-h1".to_owned()]);
         assert!(h2.commands().is_empty(), "uncovered host must be skipped");
