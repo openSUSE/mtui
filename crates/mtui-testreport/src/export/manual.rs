@@ -13,6 +13,7 @@ use mtui_types::package::Package;
 use mtui_types::system::SystemProduct;
 
 use super::base::{ExportContext, OverwritePrompt};
+use crate::update_workflow::is_dry_run;
 
 /// A decoupled view of a connected host, holding exactly what the manual
 /// exporter reads from a `Target`.
@@ -55,8 +56,8 @@ impl ManualExport {
     /// Converts a host's install log to template lines.
     ///
     /// Always emits a `log from <target>:` header. If a matching host ran any
-    /// `zypper `/`transactional-update` command, each contributes a `#
-    /// <command>` line plus its stdout; a command that ran always leaves that
+    /// `zypper `/`transactional-update` command other than the removal guard's
+    /// dry run, each contributes a `# <command>` line plus its stdout; a command that ran always leaves that
     /// line, so a header followed only by [`NO_UPDATE_RECORDED`] is unambiguous
     /// — nothing that looked like an update ever executed on this host,
     /// whether because it is unknown to `results` or its `hostlog` had no
@@ -67,7 +68,9 @@ impl ManualExport {
         if let Some(host) = self.results.iter().find(|h| h.hostname == target) {
             for cmd_log in &host.hostlog {
                 let cmd = &cmd_log.command;
-                if cmd.contains("zypper ") || cmd.contains("transactional-update") {
+                if (cmd.contains("zypper ") || cmd.contains("transactional-update"))
+                    && !is_dry_run(cmd)
+                {
                     t.push(format!("# {cmd}\n{}\n", cmd_log.stdout));
                 }
             }
@@ -144,6 +147,23 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("ls") && !l.contains("zypper"))
         );
+    }
+
+    #[test]
+    fn host_installog_leaves_out_the_removal_guards_dry_run() {
+        let mut h = host(vec![]);
+        h.hostlog.push(CommandLog::new(
+            "zypper -x -n rm --dry-run libfoo",
+            "<stream/>",
+            "",
+            0,
+            1,
+        ));
+        h.hostlog
+            .push(CommandLog::new("zypper -n rm libfoo", "done", "", 0, 1));
+        let ex = ManualExport::new(ctx(), vec![h]);
+        let out = ex.host_installog_to_template("h1");
+        assert_eq!(out, ["log from h1:\n", "# zypper -n rm libfoo\ndone\n"]);
     }
 
     /// A `hostlog` present but carrying no `zypper `/`transactional-update`

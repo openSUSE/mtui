@@ -423,8 +423,14 @@ impl CommandPromptDisplay {
         for (cmdline, stdout, stderr, exitcode) in hostlog {
             sink(&format!("{hostname}:~> {cmdline} [{exitcode}]"));
             sink("stdout:");
-            for line in stdout.split('\n') {
-                sink(line);
+            // The guard's dry-run XML runs to hundreds of KB; its verdict is in
+            // the command's own output.
+            if mtui_testreport::update_workflow::is_dry_run(cmdline) {
+                sink("(the removal guard's dry-run XML is not shown)");
+            } else {
+                for line in stdout.split('\n') {
+                    sink(line);
+                }
             }
             sink("stderr:");
             for line in stderr.split('\n') {
@@ -1101,6 +1107,40 @@ mod tests {
         assert!(joined.contains("test_host:~> cmd [0]"));
         assert!(joined.contains("out"));
         assert!(joined.contains("err"));
+    }
+
+    #[test]
+    fn show_log_omits_the_removal_guards_dry_run_xml() {
+        let mut captured: Vec<String> = Vec::new();
+        {
+            let mut sink = |m: &str| captured.push(m.to_owned());
+            CommandPromptDisplay::show_log(
+                "test_host",
+                &[(
+                    "zypper -x -n rm --dry-run libfoo".to_owned(),
+                    "<stream>".to_owned(),
+                    String::new(),
+                    0,
+                )],
+                None,
+                &mut sink,
+            );
+        }
+        assert_eq!(
+            captured[1..3],
+            [
+                "test_host:~> zypper -x -n rm --dry-run libfoo [0]",
+                "stdout:"
+            ]
+        );
+        assert_eq!(
+            captured[3],
+            "(the removal guard's dry-run XML is not shown)"
+        );
+        assert!(
+            !captured.iter().any(|l| l.contains("<stream>")),
+            "{captured:?}"
+        );
     }
 
     #[test]

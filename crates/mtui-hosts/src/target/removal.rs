@@ -20,7 +20,8 @@ use super::operation::OperationGroup;
 /// Matched exactly: their siblings (`kernel-default-devel`, `glibc-locale`,
 /// `systemd-doc`) are routinely removed as dependants and are not needed to
 /// boot, reach or repair the host. The list covers the kernel flavours, the
-/// base system, the package stack, and the network and SSH services.
+/// base system, the boot chain, the package and snapshot stack, and the
+/// network, SSH and `sudo` access.
 const PROTECTED: &[&str] = &[
     "NetworkManager",
     "aaa_base",
@@ -38,6 +39,7 @@ const PROTECTED: &[&str] = &[
     "kernel-preempt",
     "kernel-rt",
     "kernel-zfcpdump",
+    "kmod",
     "libzypp",
     "openssh",
     "openssh-common",
@@ -45,8 +47,12 @@ const PROTECTED: &[&str] = &[
     "pam",
     "rpm",
     "rpm-ndb",
+    "shim",
+    "snapper",
+    "sudo",
     "systemd",
     "transactional-update",
+    "tukit",
     "udev",
     "util-linux",
     "wicked",
@@ -130,6 +136,14 @@ pub fn judge_dry_run(
     stdout: &str,
     requested: &[String],
 ) -> Result<Vec<String>, String> {
+    // `Target::run` records -1 when no exit code came back.
+    if exitcode == -1 {
+        return Err(
+            "the dry run timed out or could not reach the host, so what the \
+                    transaction would remove is unknown"
+                .to_owned(),
+        );
+    }
     if !matches!(exitcode, 0 | 100..=103 | 106 | 107) {
         return Err(format!(
             "the dry run failed (exit {exitcode}), so what the transaction would remove is unknown"
@@ -153,32 +167,49 @@ pub fn judge_dry_run(
     ))
 }
 
-/// Runs each host's dry run (`None`: the host's package manager has none) and
+/// What the removal guard found across a group.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DryRuns {
+    /// Each probed host's verdict: the packages the transaction removes there,
+    /// or why it is refused.
+    pub verdicts: BTreeMap<String, Result<Vec<String>, String>>,
+    /// The hosts with no dry run to judge, whose transaction runs unchecked.
+    pub unchecked: Vec<String>,
+}
+
+/// Runs each host's dry run (`None`: the host has none the guard can read) and
 /// judges it with [`judge_dry_run`].
 ///
-/// Returns one verdict per probed host. A host without a probe is not in the
-/// map: it is warned about and left unchecked.
+/// Returns one verdict per probed host, and names every host without a probe
+/// as unchecked.
 pub async fn probe_removals(
     group: &mut dyn OperationGroup,
     probes: Vec<(String, Option<String>)>,
     requested: &[String],
-) -> BTreeMap<String, Result<Vec<String>, String>> {
+) -> DryRuns {
     let mut commands = Vec::new();
+    let mut unchecked = Vec::new();
     for (host, probe) in probes {
         match probe {
             Some(probe) => commands.push((host, probe)),
-            None => tracing::warn!(
-                host = %host,
-                "no dry run exists for this host's package manager; its removals are not checked"
-            ),
+            None => {
+                tracing::warn!(
+                    host = %host,
+                    "no dry run exists for this host; its removals are not checked"
+                );
+                unchecked.push(host);
+            }
         }
     }
     if commands.is_empty() {
-        return BTreeMap::new();
+        return DryRuns {
+            verdicts: BTreeMap::new(),
+            unchecked,
+        };
     }
     let hosts: Vec<String> = commands.iter().map(|(h, _)| h.clone()).collect();
     group.run(commands).await;
-    hosts
+    let verdicts = hosts
         .into_iter()
         .map(|host| {
             let verdict = group.last_output(&host).map_or_else(
@@ -194,7 +225,11 @@ pub async fn probe_removals(
             }
             (host, verdict)
         })
-        .collect()
+        .collect();
+    DryRuns {
+        verdicts,
+        unchecked,
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +283,11 @@ mod tests {
             "wicked",
             "grub2",
             "grub2-x86_64-efi",
+            "kmod",
+            "shim",
+            "snapper",
+            "sudo",
+            "tukit",
         ] {
             assert!(is_protected(name), "{name}");
         }
@@ -367,6 +407,11 @@ mod tests {
         assert!(reason.contains("exit 104"), "{reason}");
         let reason = judge_dry_run(4, fixture("leap156_rm_glibc_problem"), &[]).unwrap_err();
         assert!(reason.contains("exit 4"), "{reason}");
+        let reason = judge_dry_run(-1, "", &[]).unwrap_err();
+        assert!(
+            reason.starts_with("the dry run timed out or could not reach the host"),
+            "{reason}"
+        );
         let reason = judge_dry_run(0, "ok", &[]).unwrap_err();
         assert!(reason.contains("could not be read"), "{reason}");
         assert!(judge_dry_run(106, fixture("leap156_rm_curl"), &[]).is_ok());

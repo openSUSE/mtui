@@ -20,3 +20,7 @@ The `<install-summary>` layout read here (`<to-remove>` holding one
 `<solvable type="package" name="…">` per package) is unchanged in zypper's
 `Summary::dumpAsXmlTo` from 1.11.0 (SLE 12) through 1.14.x; no SLE 11 zypper was
 checked.
+
+All captures are from non-transactional containers. No dry run was captured on
+a transactional host (SL Micro, transactional SLES 16), so the guard leaves
+those hosts unchecked.

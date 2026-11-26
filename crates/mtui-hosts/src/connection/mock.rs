@@ -168,6 +168,8 @@ pub struct MockConnection {
     sftp_session_delay: std::time::Duration,
     /// See [`with_cancel_on_sftp_session`](Self::with_cancel_on_sftp_session).
     cancel_on_sftp_session: Option<tokio_util::sync::CancellationToken>,
+    /// See [`with_cancel_on_command`](Self::with_cancel_on_command).
+    cancel_on_command: Option<(String, tokio_util::sync::CancellationToken)>,
     /// Canned directory listings keyed by remote path (for `listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
@@ -251,6 +253,7 @@ impl MockConnection {
             sftp_sessions: Arc::new(Mutex::new(0)),
             sftp_session_delay: std::time::Duration::ZERO,
             cancel_on_sftp_session: None,
+            cancel_on_command: None,
             listings: HashMap::new(),
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
@@ -438,6 +441,18 @@ impl MockConnection {
         token: tokio_util::sync::CancellationToken,
     ) -> Self {
         self.cancel_on_sftp_session = Some(token);
+        self
+    }
+
+    /// Cancels `token` whenever `command` runs: a cancel that lands while that
+    /// command is in flight, with no timing involved.
+    #[must_use]
+    pub fn with_cancel_on_command(
+        mut self,
+        command: impl Into<String>,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        self.cancel_on_command = Some((command.into(), token));
         self
     }
 
@@ -924,6 +939,12 @@ impl Connection for MockConnection {
 
         if !self.run_delay.is_zero() {
             tokio::time::sleep(self.run_delay).await;
+        }
+
+        if let Some((on, token)) = &self.cancel_on_command
+            && on == command
+        {
+            token.cancel();
         }
 
         // A fresh value per probe models a host that actually rebooted.

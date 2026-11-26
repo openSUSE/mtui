@@ -357,12 +357,14 @@ and nothing is written there.
   `--no-fetch`, #410): a headless client uses the operator's configured
   endpoints, and a sent one is refused as an unknown argument.
   The REPL keeps every flag.
-- `install`, `uninstall`, `prepare` and `downgrade` resolve each host's
-  transaction with a dry run first and fail by name a host where it would
-  remove a protected package the call did not name, or where the dry run fails
-  (see [Removal guard](concepts.md#removal-guard)); other removals come back as
-  `<host>: the transaction also removes …`. `allow_removal: true` skips the
-  check. `run` is not checked.
+- `install`, `uninstall`, `prepare` and `downgrade` resolve each checked
+  host's transaction with a dry run first and fail by name a host where it
+  would remove a protected package the call did not name, or where the dry run
+  fails (see [Removal guard](concepts.md#removal-guard)); other removals come
+  back as `<host>: the transaction also removes …`. Transactional, SLE 11 and
+  `YUM` hosts are not checked, and each comes back as `<host>: no dry run
+  exists for this host, …`. `allow_removal: true` skips the check. `run` is
+  not checked.
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command
   could be built for a connected host (#396), so automation keying on
