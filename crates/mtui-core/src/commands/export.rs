@@ -14,7 +14,7 @@ use mtui_types::package::VersionCheck;
 use super::openqa_overview::{OverviewOpts, OverviewParams, fetch_overview};
 use super::support::{
     add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_document,
-    require_update, select_names, selects_hosts, stale_hash_gate, template_completion,
+    require_update, select_hosts, selects_hosts, stale_hash_gate, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -122,7 +122,7 @@ impl Command for Export {
 
         // #644: a Manual template with no connected host still has openQA data
         // to write; only the per-host parts need a host. A typo'd `-t` is not
-        // host-less and still fails loudly below via `select_names`.
+        // host-less and still fails loudly below via `select_hosts`.
         let hostless =
             workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty();
 
@@ -188,8 +188,7 @@ fn verified_manual_hosts(
     args: &ArgMatches,
     allow_unverified: bool,
 ) -> Result<(Vec<String>, Vec<ManualHost>, ChecksScope), CommandError> {
-    let hosts = select_names(session.targets(), args, false)
-        .map_err(|e| CommandError::Other(e.to_string()))?;
+    let hosts = select_hosts(session.targets(), args, false)?;
     let results = manual_hosts(session, &hosts);
     let unverified: Vec<(&ManualHost, Unverified)> = results
         .iter()

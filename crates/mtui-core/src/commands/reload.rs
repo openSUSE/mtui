@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_completion, host_op_budget, select_names};
+use super::support::{add_hosts_arg, host_completion, host_op_budget, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::{PackageMeta, Reseed, Session};
@@ -51,8 +51,7 @@ impl Command for ReloadProducts {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let package_meta = PackageMeta::of(session.metadata().base());
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         let mut lines: Vec<String> = Vec::new();
         let mut failed: Vec<&str> = Vec::new();
         let mut reloaded: Vec<&str> = Vec::new();

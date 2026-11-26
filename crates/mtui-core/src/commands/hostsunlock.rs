@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 
-use super::support::{add_hosts_arg, host_completion, host_op_budget, select_names};
+use super::support::{add_hosts_arg, host_completion, host_op_budget, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -71,8 +71,7 @@ impl Command for HostsUnlock {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let force = args.get_flag("force");
         let targets = session.targets_mut();
-        let names =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let names = select_hosts(targets, args, true)?;
         let selected: BTreeSet<String> = names.iter().cloned().collect();
 
         if args.get_flag("pool") {

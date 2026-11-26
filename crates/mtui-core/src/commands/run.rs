@@ -9,7 +9,7 @@ use mtui_hosts::{ContendedSurface, LockOutcome, contended_lock_reason};
 
 use super::support::{
     CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, page_output, per_host,
-    select_names,
+    select_hosts,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -69,8 +69,7 @@ impl Command for Run {
 
         let session_user = session.config.session_user.clone();
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         if hosts.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }
