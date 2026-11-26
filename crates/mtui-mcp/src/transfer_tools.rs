@@ -25,15 +25,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64ct::{Base64, Encoding};
-use mtui_core::{
-    Activation, ColorMode, CommandPromptDisplay, SingleTemplate, ambiguous_template_message,
-};
+use mtui_core::{Activation, SingleTemplate, ambiguous_template_message};
 use serde_json::{Map, Value, json};
 use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 
 use crate::audit::sha256_hex;
-use crate::capture::SharedBuf;
 use crate::report_files::normalize;
 use crate::session::{
     CallScope, CommandLock, DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink,
@@ -387,13 +384,8 @@ fn fork_activated(
 ) -> Result<mtui_core::Session, McpCommandError> {
     let rrid = resolve_rrid(guard, template)?;
     guard.release_active_guard();
-    let call_buf = SharedBuf::with_limit(session.max_output_bytes());
-    let call_display = CommandPromptDisplay::with_sink(Box::new(call_buf), ColorMode::Never);
-    let mut fork = guard.fork_for_call(call_display);
-    // Fresh token, never inherited: a hard-aborted exclusive dispatch can leave
-    // a cancelled token on the canonical session, and `activate` pushes this
-    // fork's token onto the shared `HostsGroup`.
-    fork.set_cancel_token(CancellationToken::default());
+    let (call_display, _output) = session.call_display();
+    let mut fork = session.call_fork(guard, call_display, CancellationToken::default());
     match fork.activate(&rrid) {
         Activation::Active => Ok(fork),
         Activation::Busy => Err(refuse(format!("template busy: {rrid}"))),
