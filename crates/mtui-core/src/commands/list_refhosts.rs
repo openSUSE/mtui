@@ -459,7 +459,6 @@ impl Command for ListRefhosts {
                 refhosts_path: &config.refhosts_path,
                 refhosts_https_uri: &config.refhosts_https_uri,
                 refhosts_https_expiration: config.refhosts_https_expiration,
-                ssl_verify: &config.ssl_verify,
             })
             .await
             .map_err(|e| CommandError::Other(format!("refhosts resolve failed: {e}")))?;

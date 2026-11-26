@@ -24,12 +24,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use mtui_config::SslVerify;
 use tracing::warn;
 
 use super::store::Refhosts;
 use crate::error::RefhostError;
-use crate::http::{HttpClient, VerifyPolicy, resolve_verify, sanitize_url};
+use crate::http::{HttpClient, VerifyPolicy, sanitize_url};
 
 /// The subset of configuration a [`Resolver`] needs.
 ///
@@ -46,8 +45,6 @@ pub struct ResolveConfig<'a> {
     pub refhosts_https_uri: &'a str,
     /// Seconds before a cached HTTPS fetch is considered stale.
     pub refhosts_https_expiration: u64,
-    /// The global TLS verification policy.
-    pub ssl_verify: &'a SslVerify,
 }
 
 // ---------------------------------------------------------------------------
@@ -81,14 +78,14 @@ pub trait FileStat: Send + Sync {
     fn stat(&self, path: &Path) -> StatResult;
 }
 
-/// Fetches the raw bytes of a URL under a [`VerifyPolicy`].
+/// Fetches the raw bytes of a URL.
 #[async_trait]
 pub trait Fetcher: Send + Sync {
     /// GET `uri` and return the body bytes.
     ///
     /// # Errors
     /// Returns [`RefhostError`] on any transport failure or non-2xx status.
-    async fn fetch(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError>;
+    async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError>;
 }
 
 /// Persists downloaded payload bytes to the cache path.
@@ -163,8 +160,7 @@ impl FileStat for FsStat {
 /// [`Fetcher`] backed by the shared [`HttpClient`].
 ///
 /// The client's TLS posture is fixed at build time (see [`HttpClient::new`]) by
-/// `HttpFetcher::new` from the effective [`VerifyPolicy`], so the per-call
-/// `verify` argument is ignored — it names the same policy.
+/// `HttpFetcher::new` from the effective [`VerifyPolicy`].
 #[derive(Debug)]
 pub struct HttpFetcher {
     client: HttpClient,
@@ -187,7 +183,7 @@ impl HttpFetcher {
 
 #[async_trait]
 impl Fetcher for HttpFetcher {
-    async fn fetch(&self, uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+    async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
         self.client
             .get_bytes(uri)
             .await
@@ -359,14 +355,14 @@ impl HttpsResolver {
         }
     }
 
-    /// Download `uri` under `verify` and return the bytes, best-effort
+    /// Download `uri` and return the bytes, best-effort
     /// persisting them to the cache path.
     ///
     /// A mirror-write failure (a read-only, package-managed `refhosts.path`) is
     /// logged but does not fail the download — the caller still gets the fetched
     /// bytes to build from in memory.
-    async fn refresh(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
-        let bytes = self.fetcher.fetch(uri, verify).await?;
+    async fn refresh(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
+        let bytes = self.fetcher.fetch(uri).await?;
         if let Err(e) = self.writer.write(&bytes, &self.cache_path) {
             warn!(
                 "failed to write refhosts mirror to {}: {e}",
@@ -411,12 +407,7 @@ impl HttpsResolver {
             if slot.failed_at.is_some_and(|failed| failed > wait_started) {
                 return Err(RefhostError::RefreshJustFailed);
             }
-            // refhosts.yml is served from an internal SUSE host; verify by
-            // default but let the global [mtui] ssl_verify policy override.
-            let default = VerifyPolicy::Default(true);
-            let override_ = policy_override(config.ssl_verify);
-            let verify = resolve_verify(default, override_);
-            return match self.refresh(config.refhosts_https_uri, verify).await {
+            return match self.refresh(config.refhosts_https_uri).await {
                 Ok(bytes) => {
                     slot.failed_at = None;
                     Ok(Some(bytes))
@@ -438,18 +429,6 @@ impl Resolver for HttpsResolver {
             Some(bytes) => self.builder.build_from_bytes(&bytes),
             None => self.builder.build(&self.cache_path),
         }
-    }
-}
-
-/// Map the global [`SslVerify`] onto the per-call verify override.
-///
-/// An unset policy is [`SslVerify::Enabled`], the config default, so the
-/// per-site `Default(true)` is overridden only when the user explicitly disabled
-/// verification or named a CA bundle.
-fn policy_override(ssl_verify: &SslVerify) -> Option<VerifyPolicy> {
-    match ssl_verify {
-        SslVerify::Enabled => None,
-        other => Some(VerifyPolicy::from_config(other)),
     }
 }
 
@@ -561,10 +540,7 @@ mod tests {
     async fn a_failed_download_does_not_echo_the_uri_userinfo() {
         let fetcher = HttpFetcher::new(VerifyPolicy::Default(true)).unwrap();
         let err = fetcher
-            .fetch(
-                "http://bot:s3cret@127.0.0.1:1/refhosts.yml",
-                VerifyPolicy::Default(true),
-            )
+            .fetch("http://bot:s3cret@127.0.0.1:1/refhosts.yml")
             .await
             .expect_err("nothing listens on port 1");
         let rendered = err.to_string();
@@ -572,9 +548,8 @@ mod tests {
         assert!(!rendered.contains("s3cret"), "{rendered}");
     }
 
-    /// Recorded `(uri, verifying)` fetch calls, where `verifying` is `false`
-    /// only for the `Default(false)` skip-verification posture.
-    type FetchLog = Arc<Mutex<Vec<(String, bool)>>>;
+    /// Recorded fetched URIs.
+    type FetchLog = Arc<Mutex<Vec<String>>>;
     /// Recorded `(bytes, path)` writes.
     type WriteLog = Arc<Mutex<Vec<(Vec<u8>, PathBuf)>>>;
 
@@ -594,14 +569,12 @@ default:
         path: &'a Path,
         uri: &'a str,
         expiration: u64,
-        ssl: &'a SslVerify,
     ) -> ResolveConfig<'a> {
         ResolveConfig {
             refhosts_resolvers: resolvers,
             refhosts_path: path,
             refhosts_https_uri: uri,
             refhosts_https_expiration: expiration,
-            ssl_verify: ssl,
         }
     }
 
@@ -633,7 +606,7 @@ default:
         }
     }
 
-    /// A fetcher recording `(uri, verifying)` and serving fixed bytes.
+    /// A fetcher recording each URI and serving fixed bytes.
     #[derive(Clone)]
     struct RecordingFetcher {
         calls: FetchLog,
@@ -649,11 +622,8 @@ default:
     }
     #[async_trait]
     impl Fetcher for RecordingFetcher {
-        async fn fetch(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
-            self.calls.lock().unwrap().push((
-                uri.to_string(),
-                !matches!(verify, VerifyPolicy::Default(false)),
-            ));
+        async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
+            self.calls.lock().unwrap().push(uri.to_string());
             Ok(self.payload.clone())
         }
     }
@@ -748,9 +718,8 @@ default:
             builder: Box::new(builder),
         };
         let path = PathBuf::from("/etc/refhosts.yml");
-        let ssl = SslVerify::Enabled;
         resolver
-            .resolve(cfg("path", &path, "https://x", 3600, &ssl))
+            .resolve(cfg("path", &path, "https://x", 3600))
             .await
             .unwrap();
         assert_eq!(*built.lock().unwrap(), vec![path]);
@@ -790,9 +759,8 @@ default:
             builder,
             "/tmp/refhosts.yml",
         );
-        let ssl = SslVerify::Enabled;
         resolver
-            .resolve(cfg("https", Path::new("/x"), "https://x", 3600, &ssl))
+            .resolve(cfg("https", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap();
         assert!(
@@ -818,7 +786,7 @@ default:
     }
     #[async_trait]
     impl Fetcher for SlowCountingFetcher {
-        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             Ok(self.payload.clone())
@@ -832,7 +800,7 @@ default:
     }
     #[async_trait]
     impl Fetcher for SlowFailingFetcher {
-        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             Err(RefhostError::ResolveFailed)
@@ -845,7 +813,7 @@ default:
     }
     #[async_trait]
     impl Fetcher for FailOnceFetcher {
-        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Err(RefhostError::ResolveFailed);
             }
@@ -873,7 +841,6 @@ default:
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
-        let ssl = SslVerify::Enabled;
 
         let resolves = (0..4).map(|_| {
             let fetcher = Box::new(SlowCountingFetcher {
@@ -882,10 +849,9 @@ default:
             });
             let resolver = fs_resolver(fetcher, &cache);
             let cache = cache.clone();
-            let ssl = &ssl;
             async move {
                 resolver
-                    .resolve(cfg("https", &cache, "https://x", 3600, ssl))
+                    .resolve(cfg("https", &cache, "https://x", 3600))
                     .await
             }
         });
@@ -912,7 +878,6 @@ default:
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
-        let ssl = SslVerify::Enabled;
 
         let resolves = (0..2).map(|_| {
             let fetcher = Box::new(SlowFailingFetcher {
@@ -920,10 +885,9 @@ default:
             });
             let resolver = fs_resolver(fetcher, &cache);
             let cache = cache.clone();
-            let ssl = &ssl;
             async move {
                 resolver
-                    .resolve(cfg("https", &cache, "https://x", 3600, ssl))
+                    .resolve(cfg("https", &cache, "https://x", 3600))
                     .await
             }
         });
@@ -955,7 +919,6 @@ default:
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
-        let ssl = SslVerify::Enabled;
 
         let first = fs_resolver(
             Box::new(FailOnceFetcher {
@@ -971,11 +934,11 @@ default:
         );
 
         first
-            .resolve(cfg("https", &cache, "https://x", 3600, &ssl))
+            .resolve(cfg("https", &cache, "https://x", 3600))
             .await
             .unwrap_err();
         second
-            .resolve(cfg("https", &cache, "https://x", 3600, &ssl))
+            .resolve(cfg("https", &cache, "https://x", 3600))
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "second caller re-fetched");
@@ -1033,14 +996,11 @@ default:
             RecordingBuilder::new(),
             "/dst",
         );
-        let bytes = r
-            .refresh("https://x/refhosts.yml", VerifyPolicy::Default(true))
-            .await
-            .unwrap();
+        let bytes = r.refresh("https://x/refhosts.yml").await.unwrap();
         assert_eq!(bytes, b"yaml-bytes");
         assert_eq!(
             *fcalls.lock().unwrap(),
-            vec![("https://x/refhosts.yml".to_string(), true)]
+            vec!["https://x/refhosts.yml".to_string()]
         );
         assert_eq!(
             *writes.lock().unwrap(),
@@ -1074,13 +1034,11 @@ default:
             Box::new(builder),
             PathBuf::from("/dst"),
         );
-        let ssl = SslVerify::Enabled;
         r.resolve(cfg(
             "https",
             Path::new("/x"),
             "https://x/refhosts.yml",
             3600,
-            &ssl,
         ))
         .await
         .expect("a mirror-write failure must not fail the resolve");
@@ -1107,8 +1065,7 @@ default:
             RecordingBuilder::new(),
             "/x",
         );
-        let ssl = SslVerify::Enabled;
-        r.refresh_if_needed(cfg("https", Path::new("/x"), "https://e/r.yml", 3600, &ssl))
+        r.refresh_if_needed(cfg("https", Path::new("/x"), "https://e/r.yml", 3600))
             .await
             .unwrap();
         assert!(fcalls.lock().unwrap().is_empty());
@@ -1129,51 +1086,21 @@ default:
             "/x",
         );
         // Unset (Enabled): the per-site verify default reaches the fetcher.
-        let ssl = SslVerify::Enabled;
         r.refresh_if_needed(cfg(
             "https",
             Path::new("/x"),
             "https://example.invalid/refhosts.yml",
             3600,
-            &ssl,
         ))
         .await
         .unwrap();
         assert_eq!(
             *fcalls.lock().unwrap(),
-            vec![("https://example.invalid/refhosts.yml".to_string(), true)]
+            vec!["https://example.invalid/refhosts.yml".to_string()]
         );
         assert_eq!(
             *writes.lock().unwrap(),
             vec![(b"payload".to_vec(), PathBuf::from("/x"))]
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_if_needed_honors_ssl_verify_override() {
-        let fetcher = RecordingFetcher::new(b"payload");
-        let fcalls = fetcher.calls.clone();
-        let r = https_resolver(
-            1_000_000,
-            ScriptedStat::Mtime(0),
-            fetcher,
-            RecordingWriter::default(),
-            RecordingBuilder::new(),
-            "/x",
-        );
-        let ssl = SslVerify::Disabled;
-        r.refresh_if_needed(cfg(
-            "https",
-            Path::new("/x"),
-            "https://example.invalid/refhosts.yml",
-            3600,
-            &ssl,
-        ))
-        .await
-        .unwrap();
-        assert_eq!(
-            *fcalls.lock().unwrap(),
-            vec![("https://example.invalid/refhosts.yml".to_string(), false)]
         );
     }
 
@@ -1212,9 +1139,8 @@ default:
     async fn factory_returns_first_successful_resolver() {
         let (path_r, calls) = MockResolver::ok();
         let factory = RefhostsFactory::new(vec![("path".to_string(), Box::new(path_r))]);
-        let ssl = SslVerify::Enabled;
         factory
-            .resolve(cfg("path", Path::new("/x"), "https://x", 3600, &ssl))
+            .resolve(cfg("path", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1228,9 +1154,8 @@ default:
             ("https".to_string(), Box::new(failing)),
             ("path".to_string(), Box::new(working)),
         ]);
-        let ssl = SslVerify::Enabled;
         factory
-            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600, &ssl))
+            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap();
         assert_eq!(fcalls.load(Ordering::SeqCst), 1);
@@ -1245,9 +1170,8 @@ default:
             ("https".to_string(), Box::new(f1)),
             ("path".to_string(), Box::new(f2)),
         ]);
-        let ssl = SslVerify::Enabled;
         let err = factory
-            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600, &ssl))
+            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap_err();
         assert!(matches!(err, RefhostError::ResolveFailed));
@@ -1257,15 +1181,8 @@ default:
     async fn factory_skips_unknown_resolver_and_continues() {
         let (working, calls) = MockResolver::ok();
         let factory = RefhostsFactory::new(vec![("path".to_string(), Box::new(working))]);
-        let ssl = SslVerify::Enabled;
         factory
-            .resolve(cfg(
-                "nonexistent,path",
-                Path::new("/x"),
-                "https://x",
-                3600,
-                &ssl,
-            ))
+            .resolve(cfg("nonexistent,path", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
