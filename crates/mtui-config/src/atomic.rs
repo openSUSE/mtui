@@ -1,9 +1,7 @@
 //! Secure atomic local file writes.
 //!
-//! The single implementation of mtui's temp-file + rename write, shared by the
-//! known-hosts persist path (`mtui-hosts`), the testreport exporter
-//! (`mtui-testreport`) and the refhosts cache writer (`mtui-datasources`) so the
-//! guarantees below cannot drift between call sites.
+//! The single temp-file + rename write shared by `mtui-hosts` (known-hosts),
+//! `mtui-testreport` (exporter) and `mtui-datasources` (refhosts cache).
 //!
 //! ## Guarantees
 //!
@@ -29,18 +27,14 @@ use std::path::{Path, PathBuf};
 
 /// Atomically write `data` to `path`.
 ///
-/// Creates the destination's parent directory if absent (cache locations such
-/// as `~/.cache/mtui` may not exist on a fresh checkout), writes `data` to a
-/// unique same-directory temp file opened with `create_new` (and `0o600` on
-/// unix), fsyncs it, then renames it over `path`; see the [module docs](self)
-/// for the full guarantees. Callers hand over the complete buffer — assembling
-/// it (e.g. read-existing + append) is theirs.
+/// Creates the parent directory if absent, writes to a unique sibling temp
+/// file, fsyncs it and renames it over `path`; see the [module docs](self).
+/// Callers hand over the complete buffer.
 ///
 /// # Errors
 ///
-/// Returns any I/O error from creating the parent directory, opening/writing
-/// the temp file, fsyncing it, or renaming it into place. On any failure after
-/// the temp is created, the temp file is removed before returning.
+/// Returns any I/O error from creating the parent directory, writing the temp
+/// file, fsyncing it, or renaming it. The temp file is removed on failure.
 pub fn write(data: &[u8], path: &Path) -> io::Result<()> {
     use io::Write as _;
 
@@ -74,10 +68,8 @@ pub fn write(data: &[u8], path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// A unique temp path in `dir` from `target`'s file name plus the PID
-/// (cross-process), a nanosecond timestamp and a monotonic counter
-/// (intra-process, for threads racing within one nanosecond), so concurrent
-/// writers never collide on the `create_new` open.
+/// A collision-free temp path in `dir`: PID, nanosecond timestamp and a
+/// process-wide counter.
 fn unique_temp_path(dir: &Path, target: &Path) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);

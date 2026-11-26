@@ -160,9 +160,8 @@ fn is_relative_dir_name(raw: &str) -> bool {
 
 /// Floor under a non-zero `[mcp] audit_log_max_bytes`.
 ///
-/// Below roughly one record's worth the sink rotates on every append, so the
-/// five kept generations hold five lines and the audit trail is gone. `0` is a
-/// separate, documented setting ("unbounded") and is not floored.
+/// Below about one record the sink rotates on every append and the audit trail
+/// is gone. `0` ("unbounded") is not floored.
 const MIN_MCP_AUDIT_LOG_MAX_BYTES: u64 = 4096;
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
@@ -249,9 +248,7 @@ pub(crate) struct GiteaSection {
 
 /// `[slack]` table — the Slack review-request integration.
 ///
-/// Gated twice over: `enabled` must be `true` *and* `token`/`channel` both set,
-/// so an unconfigured mtui never reaches Slack and `request_review` refuses
-/// with the reason rather than failing somewhere inside the API.
+/// Gated twice over: `enabled` must be `true` *and* `token`/`channel` both set.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct SlackSection {
@@ -279,11 +276,9 @@ pub(crate) struct LockSection {
 
 /// `[mcp]` table — `mtui-mcp` server behaviour.
 ///
-/// `session_cap` / `session_idle_timeout` are the http transport's per-client
-/// session budget, enforced application-side by
-/// `mtui_mcp::provider::SessionRegistry`. `profile` / `tools_allow` /
-/// `tools_deny` select the exposed tool surface (see `mtui_mcp::profiles`); the
-/// two list keys are native TOML arrays of strings.
+/// `session_cap` / `session_idle_timeout` budget the http transport's
+/// per-client sessions; `profile` / `tools_allow` / `tools_deny` select the
+/// exposed tool surface (the two list keys are TOML string arrays).
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpSection {
@@ -308,13 +303,11 @@ pub(crate) struct McpSection {
 /// No OBS credentials live here: the oscrc is the sole credential source (see
 /// `mtui_datasources::obs::oscrc`).
 ///
-/// * `api_url` is the OBS API mtui acts against; it must equal a section header
-///   in the user's oscrc. The oscrc is located like `osc` itself (`$OSC_CONFIG`
-///   → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), so there is no mtui-side path
-///   option — set `$OSC_CONFIG` to point at a non-default oscrc.
-/// * `request_timeout` is a **coarse** wall-clock budget checked *between* a
-///   native operation's HTTP calls (each call is itself bounded by the shared
-///   HTTP timeout) — it is not a mid-call hard kill.
+/// * `api_url` must equal a section header in the user's oscrc, which is
+///   located like `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` →
+///   `~/.oscrc`); there is no mtui-side path option.
+/// * `request_timeout` is a **coarse** budget checked *between* a native
+///   operation's HTTP calls, not a mid-call hard kill.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct ObsSection {
@@ -433,11 +426,8 @@ pub struct Config {
     /// bounded by [`connect_timeout`](Self::connect_timeout) instead.
     pub connection_timeout: u64,
     /// SSH connect handshake budget (TCP connect, banner, auth), in seconds.
-    /// Far tighter than [`connection_timeout`](Self::connection_timeout) so a
-    /// dead host leaves a batch quickly; raise it for a genuinely slow banner (a
-    /// loaded s390x LPAR, a jump-path host, a WAN/VPN refhost). Also bounds each
-    /// SFTP per-op timeout (the lock/history files), which otherwise takes the
-    /// underlying library's fixed 10s.
+    /// Tighter than [`connection_timeout`](Self::connection_timeout) so a dead
+    /// host leaves a batch quickly; also bounds each SFTP per-op timeout.
     pub connect_timeout: u64,
     /// Backoff base (seconds) for post-reboot reconnect retries; sleeps grow as
     /// `2*(reboot_timeout + 5*count)` after the first probe.
@@ -516,13 +506,10 @@ pub struct Config {
     /// a checked-out template can influence. Defaults to `https://slack.com/api`;
     /// overridable mainly for a mock server.
     pub slack_api_url: String,
-    /// Seconds between reaction polls while watching a review request. Slack's
-    /// tier-3 Web API methods allow ~50 requests/minute; the 120 s default keeps
-    /// a multi-template watch far inside that.
+    /// Seconds between reaction polls while watching a review request; the
+    /// default stays well inside Slack's ~50 requests/minute tier-3 limit.
     pub slack_poll_interval: u64,
-    /// Seconds a `request_review` watch runs before giving up. The 3600 s
-    /// default is long enough for a reviewer to notice, short enough that a
-    /// forgotten foreground watch does not pin a terminal.
+    /// Seconds a `request_review` watch runs before giving up.
     pub slack_watch_timeout: u64,
 
     // [target]
@@ -603,21 +590,16 @@ pub struct Config {
     pub mcp_tools_allow: Vec<String>,
     /// Tool names to remove regardless of profile/allow (deny wins last).
     pub mcp_tools_deny: Vec<String>,
-    /// Durable audit sink for `mtui-mcp` tool calls (JSONL): one or two records
-    /// per call — an `intent` before and an outcome after for a tool without
-    /// `readOnlyHint`, an outcome alone for a read-only one — plus a terminal
-    /// record per background job. Unset (the default) disables auditing
-    /// entirely.
+    /// Durable JSONL audit sink for `mtui-mcp` tool calls (an `intent` plus an
+    /// outcome record for a tool without `readOnlyHint`, an outcome alone for a
+    /// read-only one, plus a terminal record per background job). Unset (the
+    /// default) disables auditing.
     pub mcp_audit_log: Option<PathBuf>,
     /// Size (bytes) at which `mcp_audit_log` rotates to `<path>.1`, keeping
     /// five generations; the oldest is discarded. `0` disables rotation, which
     /// makes bounding the sink the operator's job; any other value below 4096
-    /// is raised to it with a warning, since a cap under one record's worth
-    /// rotates the trail away. Rotation is
-    /// housekeeping: it never blocks the dispatch worker and never refuses a
-    /// call. Default 268435456 (256 MiB): large enough that an ordinary
-    /// deployment never rotates, small enough that an unattended one cannot fill
-    /// a partition unnoticed.
+    /// is raised to it with a warning. Rotation never blocks the dispatch worker
+    /// or refuses a call. Default 268435456 (256 MiB).
     pub mcp_audit_log_max_bytes: u64,
     /// Opt-in allowlist for the MCP `put` tool's `source` argument: directories
     /// on the `mtui-mcp` server host whose files `put` may upload without the
@@ -629,9 +611,7 @@ pub struct Config {
 
     // [obs]
     /// The OBS/IBS API URL the native QAM review backend acts against; must
-    /// equal a section header in the user's oscrc. The oscrc is located like
-    /// `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`),
-    /// so there is no mtui-side path option. Default `https://api.suse.de`.
+    /// equal a section header in the user's oscrc. Default `https://api.suse.de`.
     pub obs_api_url: String,
     /// Coarse wall-clock budget (seconds) for a whole native OBS operation,
     /// checked *between* its HTTP calls. Default 180.

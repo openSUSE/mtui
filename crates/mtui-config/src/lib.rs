@@ -54,11 +54,7 @@ impl Config {
     }
 }
 
-/// Read and parse a single config file.
-///
-/// * `Ok(Some(raw))` — the file existed and parsed cleanly.
-/// * `Ok(None)` — the file does not exist (a normal, non-error condition).
-/// * `Err(_)` — the file existed but could not be read or was invalid TOML.
+/// Read and parse one config file; `Ok(None)` means the file does not exist.
 fn read_file(path: &Path) -> Result<Option<RawConfig>, ConfigError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
