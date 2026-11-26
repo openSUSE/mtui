@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::{ContendedSurface, LockOutcome, contended_lock_reason};
 
-use super::support::{add_hosts_arg, host_completion, select_names};
+use super::support::{add_hosts_arg, host_completion, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -56,10 +56,7 @@ impl Command for HostLock {
             .unwrap_or_default();
         let session_user = session.config.session_user.clone();
         let targets = session.targets_mut();
-        let names: BTreeSet<String> = select_names(targets, args, true)
-            .map_err(|e| CommandError::Other(e.to_string()))?
-            .into_iter()
-            .collect();
+        let names: BTreeSet<String> = select_hosts(targets, args, true)?.into_iter().collect();
         let outcomes = targets.lock(&comment, Some(&names)).await;
 
         // `Contended` is benign — another owner holds the lock — so only a real

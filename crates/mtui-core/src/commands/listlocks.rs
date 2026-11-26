@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_types::system::System;
 
-use super::support::{add_hosts_arg, select_names};
+use super::support::{add_hosts_arg, select_hosts};
 use crate::command::{Command, Scope};
 use crate::display::LockStatus;
 use crate::error::{CommandError, CommandResult};
@@ -59,8 +59,7 @@ impl Command for ListLocks {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let pool = args.get_flag("pool");
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         if hosts.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }

@@ -646,6 +646,20 @@ pub fn select_names(
     }
 }
 
+/// [`select_names`] with its error surfaced as a [`CommandError`].
+///
+/// # Errors
+///
+/// [`CommandError::Other`] carrying the [`HostError`](mtui_hosts::HostError)
+/// text when a named host is not connected.
+pub(crate) fn select_hosts(
+    group: &HostsGroup,
+    args: &ArgMatches,
+    enabled: bool,
+) -> Result<Vec<String>, CommandError> {
+    select_names(group, args, enabled).map_err(|e| CommandError::Other(e.to_string()))
+}
+
 /// Builds a [`Command::PerHost`](mtui_hosts::Command) map that runs `command` on
 /// exactly `hosts`, leaving every other host in the group untouched.
 #[must_use]
@@ -1007,6 +1021,21 @@ mod tests {
         let g = group(&[("h1", TargetState::Enabled)]);
         let err = select_names(&g, &parse(&["-t", "ghost"]), true).unwrap_err();
         assert!(matches!(err, mtui_hosts::HostError::NotConnected { host } if host == "ghost"));
+    }
+
+    #[test]
+    fn select_hosts_reports_an_unknown_host_as_other_with_the_host_error_text() {
+        let g = group(&[("h1", TargetState::Enabled)]);
+        let err = select_hosts(&g, &parse(&["-t", "ghost"]), true).unwrap_err();
+        let expected = mtui_hosts::HostError::NotConnected {
+            host: "ghost".to_owned(),
+        }
+        .to_string();
+        assert!(
+            matches!(&err, CommandError::Other(m) if *m == expected),
+            "{err:?}"
+        );
+        assert_eq!(select_hosts(&g, &parse(&[]), true).unwrap(), vec!["h1"]);
     }
 
     #[test]

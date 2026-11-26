@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_completion, select_names};
+use super::support::{add_hosts_arg, host_completion, select_hosts};
 use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -41,8 +41,7 @@ impl Command for Shell {
         // Validated so headless callers get the same argument errors the REPL
         // would; the PTY attach itself lives in the REPL binary.
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         if hosts.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }

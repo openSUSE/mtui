@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 use mtui_types::enums::TargetState;
 
-use super::support::{add_hosts_arg, select_names};
+use super::support::{add_hosts_arg, select_hosts};
 use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -54,8 +54,7 @@ impl Command for HostState {
 
         let targets = session.targets_mut();
         // enabled=false: state changes apply to disabled hosts too.
-        let hosts =
-            select_names(targets, args, false).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, false)?;
 
         for name in &hosts {
             let Some(t) = targets.get_mut(name) else {

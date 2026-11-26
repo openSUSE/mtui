@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_completion, host_op_budget, select_names};
+use super::support::{add_hosts_arg, host_completion, host_op_budget, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -48,11 +48,10 @@ impl Command for RemoveHost {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // enabled=false: remove disabled hosts too.
-        let hosts = select_names(session.targets_mut(), args, false)
-            .map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(session.targets_mut(), args, false)?;
         // Dropping a target alone never runs `close`, so the doomed hosts need
         // their own group to be torn down in — concurrently. The `Err` is
-        // unreachable, `select_names` having validated membership already.
+        // unreachable, `select_hosts` having validated membership already.
         let (mut doomed, rest) = session
             .split_targets(Some(&hosts), false)
             .map_err(|e| CommandError::Other(e.to_string()))?;

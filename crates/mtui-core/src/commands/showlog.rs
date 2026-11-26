@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, complete_fanout, hosts_arg, page_output, select_names};
+use super::support::{add_hosts_arg, complete_fanout, hosts_arg, page_output, select_hosts};
 use crate::command::{Command, Scope};
 use crate::display::CommandPromptDisplay;
 use crate::error::{CommandError, CommandResult};
@@ -115,8 +115,7 @@ impl Command for ShowLog {
             }
             selected
         } else {
-            let live = select_names(session.targets(), args, true)
-                .map_err(|e| CommandError::Other(e.to_string()))?;
+            let live = select_hosts(session.targets(), args, true)?;
             // Detached hosts a re-add made live again read from the live
             // group; only the still-gone ones extend the view.
             live.into_iter()
@@ -139,7 +138,7 @@ impl Command for ShowLog {
         // Windowed against the live log, so only selected entries are cloned and
         // `--limit 0` clones none. `total` is the pre-window count for the header.
         // Attached hosts always read live: a disabled one keeps the
-        // select_names silent drop and must never resurface its stale retained
+        // select_hosts silent drop and must never resurface its stale retained
         // log as detached. Only a truly gone host reads detached, and a
         // detached entry lost to a racing `unload` still errors when
         // explicitly named.

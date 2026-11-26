@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_completion, select_names};
+use super::support::{add_hosts_arg, host_completion, select_hosts};
 use crate::command::{Command, Scope};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Prints the installed products on the reference hosts.
@@ -43,8 +43,7 @@ impl Command for ListProducts {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // Snapshotted so the report borrow does not overlap the display's
         // mutable borrow.
-        let hosts = select_names(session.targets(), args, true)
-            .map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(session.targets(), args, true)?;
         let rows: Vec<(String, mtui_types::system::System)> = hosts
             .iter()
             .filter_map(|name| {
@@ -69,6 +68,7 @@ impl Command for ListProducts {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::error::CommandError;
 
     #[test]
     fn name_and_active_scope() {

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_types::system::System;
 
-use super::support::{add_hosts_arg, per_host, select_names};
+use super::support::{add_hosts_arg, per_host, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -84,8 +84,7 @@ impl Command for ListHistory {
 
         let targets = session.targets_mut();
         // enabled=false: history is read even from disabled hosts.
-        let hosts =
-            select_names(targets, args, false).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, false)?;
         if hosts.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }

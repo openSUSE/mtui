@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, host_completion, select_names};
+use super::support::{add_hosts_arg, host_completion, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -57,8 +57,7 @@ impl Command for SetTimeout {
         };
 
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         for name in &hosts {
             if let Some(t) = targets.get_mut(name) {
                 t.set_timeout(secs);

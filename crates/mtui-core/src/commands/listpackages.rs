@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::PackageQuerier;
 
-use super::support::{add_hosts_arg, host_completion, select_names};
+use super::support::{add_hosts_arg, host_completion, select_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -104,8 +104,7 @@ impl Command for ListPackages {
         }
 
         let targets = session.targets_mut();
-        let hosts =
-            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let hosts = select_hosts(targets, args, true)?;
         if hosts.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }
