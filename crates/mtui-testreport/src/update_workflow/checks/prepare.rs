@@ -1,6 +1,6 @@
 //! Post-prepare check.
 
-use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, not_run};
 use crate::update_workflow::{Family, UpdateError, family};
 
 /// The zypper prepare check.
@@ -9,32 +9,10 @@ use crate::update_workflow::{Family, UpdateError, family};
 ///
 /// Returns [`UpdateError`] with a reason of "update stack locked",
 /// "Dependency Error", or "RPM Error" depending on the stderr/stdout markers.
-/// This check surfaces no [`Diagnostic`]s (only `update` does).
+/// The [`Diagnostic`]s [`markers`](super::update::markers) also yields are
+/// dropped: `prepare_body` has no sink for them.
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args
-        .stderr
-        .contains("A ZYpp transaction is already in progress.")
-    {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stderr.contains("System management is locked") {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stdout.contains("(c): c") {
-        tracing::error!(
-            host = args.hostname,
-            stdout = args.stdout,
-            "unresolved dependency problem. please resolve manually"
-        );
-        return Err(UpdateError::new("Dependency Error", args.hostname));
-    }
-    if args.stderr.contains("Error:") {
-        log_failed(args);
-        return Err(UpdateError::new("RPM Error", args.hostname));
-    }
-    Ok(Vec::new())
+    super::update::markers(args).map(|_| Vec::new())
 }
 
 /// The transactional-update prepare check, for `("slmicro", true)` and
@@ -72,13 +50,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// failed to run" (exit `-1`), "update stack locked", "Dependency Error", or
 /// "RPM Error".
 fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "prepare command timed out or failed to run",
-            args.hostname,
-        ));
-    }
+    not_run(args, NOT_RUN_REASON)?;
     super::update::markers(args)
 }
 
@@ -104,15 +76,11 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Returns [`UpdateError`] with a reason of "prepare command timed out or
 /// failed to run" when the command recorded exit `-1`.
 fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "prepare command timed out or failed to run",
-            args.hostname,
-        ));
-    }
+    not_run(args, NOT_RUN_REASON)?;
     Ok(Vec::new())
 }
+
+const NOT_RUN_REASON: &str = "prepare command timed out or failed to run";
 
 /// The prepare check for `(release, transactional)`, or `None` for an unknown
 /// key.
@@ -130,7 +98,7 @@ pub(crate) fn prepare_check(release: &str, transactional: bool) -> Option<CheckF
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update_workflow::checks::ZYPPER_EXIT_INF_CAP_NOT_FOUND;
+    use crate::update_workflow::checks::{EXIT_NOT_RUN, ZYPPER_EXIT_INF_CAP_NOT_FOUND};
 
     fn args<'a>(stdout: &'a str, stderr: &'a str) -> CheckArgs<'a> {
         CheckArgs {

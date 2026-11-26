@@ -1,8 +1,8 @@
 //! Post-downgrade check.
 
 use crate::update_workflow::checks::{
-    CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
-    ZYPPER_EXIT_INF_REPO_SKIPPED, log_failed,
+    CheckArgs, CheckFn, Diagnostic, ZYPPER_EXIT_INF_CAP_NOT_FOUND, ZYPPER_EXIT_INF_REPO_SKIPPED,
+    lock_or_dependency, not_run,
 };
 use crate::update_workflow::{Family, UpdateError, family};
 
@@ -21,32 +21,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     // command records. Continuing past it turns an interrupted rollback into a
     // silent half-rollback: the remaining packages stay at the update version
     // while the flow ends looking done.
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "downgrade command timed out or failed to run",
-            args.hostname,
-        ));
-    }
-    if args
-        .stderr
-        .contains("A ZYpp transaction is already in progress.")
-    {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stderr.contains("System management is locked") {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stdout.contains("(c): c") {
-        tracing::error!(
-            host = args.hostname,
-            stdout = args.stdout,
-            "unresolved dependency problem. please resolve manually"
-        );
-        return Err(UpdateError::new("Dependency Error", args.hostname));
-    }
+    not_run(args, NOT_RUN_REASON)?;
+    lock_or_dependency(args)?;
     if args.exitcode == ZYPPER_EXIT_INF_CAP_NOT_FOUND {
         tracing::error!(
             host = args.hostname,
@@ -65,8 +41,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     Ok(Vec::new())
 }
 
-/// The transactional downgrade check, for `("slmicro", true)` and
-/// `("16", true)`.
+/// The transactional-update and yum downgrade check.
 ///
 /// Only the timed-out/unrunnable gate: transactional-update's own exit codes and
 /// messages differ from zypper's, so the zypper-specific branches (104, lock
@@ -74,46 +49,24 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// to a no-op and a dead `transactional-update` sails on to the reboot with no
 /// snapshot staged.
 ///
+/// The same holds for `yum -y downgrade`: nothing else about its transcript can
+/// be judged without guessing. The zypper branches (`104`, the lock strings) are
+/// that transcript's vocabulary, not this one's, and a non-zero status is a
+/// routine outcome on a refhost that carries only part of the update's package
+/// list. What is *not* routine is a rollback command that never ran to
+/// completion: the host stays on the update version while the flow ends looking
+/// done.
+///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "downgrade command timed out or
 /// failed to run" when the command recorded exit `-1`.
-fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "downgrade command timed out or failed to run",
-            args.hostname,
-        ));
-    }
+fn not_run_only(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+    not_run(args, NOT_RUN_REASON)?;
     Ok(Vec::new())
 }
 
-/// The yum downgrade check.
-///
-/// The same shape as [`transactional_update`] above and for the same kind of
-/// reason: only the timed-out/unrunnable gate, because nothing else about a
-/// `yum -y downgrade` transcript can be judged without guessing. The zypper
-/// branches (`104`, the lock strings) are that transcript's vocabulary, not
-/// this one's, and a non-zero status is a routine outcome on a refhost that
-/// carries only part of the update's package list. What is *not* routine is a
-/// rollback command that never ran to completion: the host stays on the update
-/// version while the flow ends looking done.
-///
-/// # Errors
-///
-/// Returns [`UpdateError`] with a reason of "downgrade command timed out or
-/// failed to run" when the command recorded exit `-1`.
-fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "downgrade command timed out or failed to run",
-            args.hostname,
-        ));
-    }
-    Ok(Vec::new())
-}
+const NOT_RUN_REASON: &str = "downgrade command timed out or failed to run";
 
 /// The downgrade check for `(release, transactional)`, or `None` for an
 /// unknown key.
@@ -122,8 +75,7 @@ pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<Chec
     family(release, transactional).map(|f| -> CheckFn {
         match f {
             Family::Zypper => Box::new(zypper),
-            Family::Yum => Box::new(yum),
-            Family::Transactional => Box::new(transactional_update),
+            Family::Yum | Family::Transactional => Box::new(not_run_only),
         }
     })
 }
@@ -131,6 +83,7 @@ pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<Chec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update_workflow::checks::EXIT_NOT_RUN;
 
     fn args<'a>(stdout: &'a str, stderr: &'a str, exitcode: i32) -> CheckArgs<'a> {
         CheckArgs {
@@ -160,14 +113,14 @@ mod tests {
     fn transactional_update_exitcode_minus_one_raises() {
         // Without this the registry falls back to a no-op and a dead
         // transactional-update sails on to the reboot with no snapshot staged.
-        let err = transactional_update(args("", "", EXIT_NOT_RUN)).unwrap_err();
+        let err = not_run_only(args("", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
     }
 
     #[test]
     fn transactional_update_clean_run_passes() {
-        assert!(transactional_update(args("", "", 0)).is_ok());
+        assert!(not_run_only(args("", "", 0)).is_ok());
     }
 
     #[test]
@@ -218,14 +171,14 @@ mod tests {
         // are not this transcript's vocabulary — but a rollback command that
         // never ran leaves the host on the update version while the flow ends
         // looking done.
-        let err = yum(args("", "", EXIT_NOT_RUN)).unwrap_err();
+        let err = not_run_only(args("", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
 
         // Everything the check cannot justify judging still passes.
-        assert!(yum(args("", "", 1)).is_ok());
-        assert!(yum(args("", "Error: nothing to downgrade", 0)).is_ok());
-        assert!(yum(args("", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).is_ok());
+        assert!(not_run_only(args("", "", 1)).is_ok());
+        assert!(not_run_only(args("", "Error: nothing to downgrade", 0)).is_ok());
+        assert!(not_run_only(args("", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).is_ok());
     }
 
     #[test]

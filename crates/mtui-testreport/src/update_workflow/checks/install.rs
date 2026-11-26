@@ -4,46 +4,23 @@
 //! Unlike the other checks, install treats *any* unrecognised non-success as an
 //! `UpdateError("Unknown Error")`.
 
-use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed, not_run};
 use crate::update_workflow::{Family, UpdateError, family};
 
-/// The zypper install check.
+/// The zypper and transactional-update install/uninstall check, for every key
+/// but `YUM`.
 ///
 /// Below its own role-neutral `-1` gate, this is [`super::update::classified`]:
 /// install and update share one exit-code/marker classifier, so the two cannot
-/// drift into different verdicts for the same transcript.
-///
-/// # Errors
-///
-/// Returns [`UpdateError`] with a reason of "command timed out or failed to
-/// run" (exit `-1`), "package not found", "update stack locked", "RPM Error",
-/// "Dependency Error", or "Unknown Error" depending on the exit code and
-/// stderr/stdout markers. Exit codes `0, 100, 101, 102, 103, 106, 107` are
-/// success. This check surfaces the same [`Diagnostic`]s `update` does on a
-/// clean transcript.
-fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "command timed out or failed to run",
-            args.hostname,
-        ));
-    }
-    super::update::classified(args)
-}
-
-/// The transactional-update install/uninstall check, for `("slmicro", true)` and
-/// `("16", true)`.
-///
-/// Reuses the `update` check's [`classified`](super::update::classified)
-/// verdict so the two `transactional-update` keys cannot drift apart. What that
-/// classifier means on this key is argued once, on `checks::update`'s
-/// `transactional_update`: the command returns **only** `0` or `1` (verified
-/// against `openSUSE/transactional-update` v6.1.3, unchanged from v2.28.3),
-/// because it absorbs zypper's status. So the informational band and the
-/// package-not-found set are inert here, while the markers still catch what an
-/// exit code cannot — a run that reported a locked update stack, a dependency
-/// prompt or an RPM error and still exited `0`.
+/// drift into different verdicts for the same transcript, nor the two
+/// `transactional-update` keys (`("slmicro", true)` and `("16", true)`) from the
+/// zypper ones. What that classifier means on a transactional key is argued
+/// once, on `checks::update`'s `transactional_update`: the command returns
+/// **only** `0` or `1` (verified against `openSUSE/transactional-update` v6.1.3,
+/// unchanged from v2.28.3), because it absorbs zypper's status. So the
+/// informational band and the package-not-found set are inert there, while the
+/// markers still catch what an exit code cannot — a run that reported a locked
+/// update stack, a dependency prompt or an RPM error and still exited `0`.
 ///
 /// The `-1` sentinel is gated here rather than left to the classifier's own
 /// [`NotRun`](super::ExitClass::NotRun) arm, which speaks the `update`
@@ -53,18 +30,17 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "command timed out or failed to
-/// run" (exit `-1`), "update stack locked", "Dependency Error", "RPM Error",
-/// "package not found" or "Unknown Error".
-fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "command timed out or failed to run",
-            args.hostname,
-        ));
-    }
+/// run" (exit `-1`), "package not found", "update stack locked", "RPM Error",
+/// "Dependency Error", or "Unknown Error" depending on the exit code and
+/// stderr/stdout markers. Exit codes `0, 100, 101, 102, 103, 106, 107` are
+/// success. This check surfaces the same [`Diagnostic`]s `update` does on a
+/// clean transcript.
+fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+    not_run(args, NOT_RUN_REASON)?;
     super::update::classified(args)
 }
+
+const NOT_RUN_REASON: &str = "command timed out or failed to run";
 
 /// The yum install/uninstall check.
 ///
@@ -92,13 +68,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Returns [`UpdateError`] with a reason of "command timed out or failed to
 /// run" (exit `-1`) or "Unknown Error" (any other non-zero exit).
 fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "command timed out or failed to run",
-            args.hostname,
-        ));
-    }
+    not_run(args, NOT_RUN_REASON)?;
     if args.exitcode != 0 {
         log_failed(args);
         return Err(UpdateError::new("Unknown Error", args.hostname));
@@ -115,9 +85,8 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {
     family(release, transactional).map(|f| -> CheckFn {
         match f {
-            Family::Zypper => Box::new(zypper),
+            Family::Zypper | Family::Transactional => Box::new(classified),
             Family::Yum => Box::new(yum),
-            Family::Transactional => Box::new(transactional_update),
         }
     })
 }
@@ -126,7 +95,7 @@ pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckF
 mod tests {
     use super::*;
     use crate::update_workflow::checks::{
-        ZYPPER_EXIT_ERR_COMMIT, ZYPPER_EXIT_ERR_PRIVILEGES, ZYPPER_EXIT_ERR_ZYPP,
+        EXIT_NOT_RUN, ZYPPER_EXIT_ERR_COMMIT, ZYPPER_EXIT_ERR_PRIVILEGES, ZYPPER_EXIT_ERR_ZYPP,
         ZYPPER_EXIT_INF_CAP_NOT_FOUND, ZYPPER_EXIT_INF_REBOOT_NEEDED, ZYPPER_EXIT_INF_REPO_SKIPPED,
         ZYPPER_EXIT_INF_RESTART_NEEDED, ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED,
         ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED, ZYPPER_EXIT_INF_UPDATE_NEEDED,
@@ -158,7 +127,7 @@ mod tests {
             ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED,
         ] {
             assert!(
-                zypper(args("", "", code)).is_ok(),
+                classified(args("", "", code)).is_ok(),
                 "code {code} should pass"
             );
         }
@@ -169,7 +138,7 @@ mod tests {
         // Sharing `classified` means a successful install surfaces the same
         // "Additional rpm output" section `update` does.
         let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
-        let diags = zypper(args(stdout, "", 0)).unwrap();
+        let diags = classified(args(stdout, "", 0)).unwrap();
         assert_eq!(diags.len(), 1);
         assert!(diags[0].highlight_warning);
         assert_eq!(diags[0].text, "\nwarning: stuff\n");
@@ -183,7 +152,7 @@ mod tests {
             ZYPPER_EXIT_ERR_PRIVILEGES,
             ZYPPER_EXIT_ERR_COMMIT,
         ] {
-            let err = zypper(args("", "", code)).unwrap_err();
+            let err = classified(args("", "", code)).unwrap_err();
             assert_eq!(err.reason, "package not found");
             assert_eq!(err.host.as_deref(), Some("h1"));
         }
@@ -196,7 +165,7 @@ mod tests {
         // markers, while `4`/`5`/`8` let the transcript name the failure. This
         // and `update`'s `only_104_outranks_the_markers` assert identical
         // verdicts, so neither side can drift.
-        let err = zypper(args(
+        let err = classified(args(
             "",
             "System management is locked",
             ZYPPER_EXIT_INF_CAP_NOT_FOUND,
@@ -204,43 +173,44 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.reason, "package not found", "104 outranks the marker");
 
-        let err = zypper(args(
+        let err = classified(args(
             "",
             "System management is locked",
             ZYPPER_EXIT_ERR_PRIVILEGES,
         ))
         .unwrap_err();
         assert_eq!(err.reason, "update stack locked", "5 + lock marker");
-        let err = zypper(args(
+        let err = classified(args(
             "",
             "A ZYpp transaction is already in progress.",
             ZYPPER_EXIT_ERR_ZYPP,
         ))
         .unwrap_err();
         assert_eq!(err.reason, "update stack locked", "4 + ZYpp marker");
-        let err = zypper(args("choose (c): c", "", ZYPPER_EXIT_ERR_ZYPP)).unwrap_err();
+        let err = classified(args("choose (c): c", "", ZYPPER_EXIT_ERR_ZYPP)).unwrap_err();
         assert_eq!(err.reason, "Dependency Error", "4 + dependency prompt");
-        let err = zypper(args("", "Error: something", ZYPPER_EXIT_ERR_COMMIT)).unwrap_err();
+        let err = classified(args("", "Error: something", ZYPPER_EXIT_ERR_COMMIT)).unwrap_err();
         assert_eq!(err.reason, "RPM Error", "8 + rpm marker");
     }
 
     #[test]
     fn zypp_lock_is_stack_locked() {
-        let err = zypper(args("", "A ZYpp transaction is already in progress.", 1)).unwrap_err();
+        let err =
+            classified(args("", "A ZYpp transaction is already in progress.", 1)).unwrap_err();
         assert_eq!(err.reason, "update stack locked");
-        let err2 = zypper(args("", "System management is locked", 1)).unwrap_err();
+        let err2 = classified(args("", "System management is locked", 1)).unwrap_err();
         assert_eq!(err2.reason, "update stack locked");
     }
 
     #[test]
     fn rpm_error_from_stderr() {
-        let err = zypper(args("", "Error: something", 1)).unwrap_err();
+        let err = classified(args("", "Error: something", 1)).unwrap_err();
         assert_eq!(err.reason, "RPM Error");
     }
 
     #[test]
     fn dependency_error_from_stdout_marker() {
-        let err = zypper(args("choose (c): c", "", 1)).unwrap_err();
+        let err = classified(args("choose (c): c", "", 1)).unwrap_err();
         assert_eq!(err.reason, "Dependency Error");
     }
 
@@ -249,13 +219,13 @@ mod tests {
         // `markers` checks the dependency prompt before stderr's `Error:`, so a
         // transcript carrying both reads "Dependency Error" — matching
         // `update`. The order is otherwise free to flip silently.
-        let err = zypper(args("choose (c): c", "Error: boom", 1)).unwrap_err();
+        let err = classified(args("choose (c): c", "Error: boom", 1)).unwrap_err();
         assert_eq!(err.reason, "Dependency Error");
     }
 
     #[test]
     fn unrecognised_failure_is_unknown_error() {
-        let err = zypper(args("", "", 1)).unwrap_err();
+        let err = classified(args("", "", 1)).unwrap_err();
         assert_eq!(err.reason, "Unknown Error");
     }
 
@@ -280,7 +250,7 @@ mod tests {
     fn slmicro_failed_exit_is_unknown_error() {
         // This key's check replaced the adapter's exit-code-only fallback, so
         // it must still fail — a check that cannot fail is worse than none.
-        let err = transactional_update(args_for(
+        let err = classified(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
             "",
@@ -298,7 +268,7 @@ mod tests {
         // here. Twin of `perform_install_ignores_stderr_on_a_clean_exit`, whose
         // string this is.
         assert!(
-            transactional_update(args_for(
+            classified(args_for(
                 "transactional-update -n pkg install pkg-a",
                 "",
                 "warning: chatty",
@@ -313,7 +283,7 @@ mod tests {
         // The markers must run on the *success* class too, or a short-circuit
         // `if exitcode == 0 { return Ok(…) }` silently passes the failure an
         // exit-code rule cannot see.
-        let err = transactional_update(args_for(
+        let err = classified(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
             "System management is locked",
@@ -328,7 +298,7 @@ mod tests {
         // Exact string: without the local `-1` gate the shared classifier's
         // `NotRun` arm answers in the *update* check's vocabulary, on a table
         // that also serves `uninstall`.
-        let err = transactional_update(args_for(
+        let err = classified(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
             "",
@@ -343,7 +313,7 @@ mod tests {
     fn install_timed_out_reason_is_role_neutral_not_updates() {
         // As above: this table also serves `uninstall`, so its `-1` gate must
         // answer role-neutrally, not in the *update* check's vocabulary.
-        let err = zypper(args("", "", EXIT_NOT_RUN))
+        let err = classified(args("", "", EXIT_NOT_RUN))
             .expect_err("a command that never ran must fail the check");
         assert_eq!(err.reason, "command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));

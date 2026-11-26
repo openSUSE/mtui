@@ -215,6 +215,43 @@ pub(crate) fn classify_exit(exitcode: i32) -> ExitClass {
     }
 }
 
+/// Raises `reason` when the command never produced a status ([`EXIT_NOT_RUN`]).
+fn not_run(args: CheckArgs<'_>, reason: &str) -> Result<(), UpdateError> {
+    if args.exitcode == EXIT_NOT_RUN {
+        log_failed(args);
+        return Err(UpdateError::new(reason, args.hostname));
+    }
+    Ok(())
+}
+
+/// The zypper lock and unresolved-dependency markers, read from stdout/stderr.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] with a reason of "update stack locked" or
+/// "Dependency Error".
+fn lock_or_dependency(args: CheckArgs<'_>) -> Result<(), UpdateError> {
+    if args
+        .stderr
+        .contains("A ZYpp transaction is already in progress.")
+        || args.stderr.contains("System management is locked")
+    {
+        log_failed(args);
+        return Err(UpdateError::new("update stack locked", args.hostname));
+    }
+    if args.stdout.contains("(c): c") {
+        tracing::error!(
+            host = args.hostname,
+            command = args.stdin,
+            stdout = args.stdout,
+            stderr = args.stderr,
+            "unresolved dependency problem. please resolve manually"
+        );
+        return Err(UpdateError::new("Dependency Error", args.hostname));
+    }
+    Ok(())
+}
+
 /// Shared diagnostic-log helper: logs a "command failed" event before each
 /// raised `UpdateError`.
 fn log_failed(args: CheckArgs<'_>) {

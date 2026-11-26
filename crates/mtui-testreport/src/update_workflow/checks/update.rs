@@ -7,8 +7,8 @@
 //! Lock / dependency / RPM failures still raise [`UpdateError`].
 
 use crate::update_workflow::checks::{
-    CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, ExitClass, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
-    ZYPPER_EXIT_INF_REPO_SKIPPED, classify_exit, log_failed,
+    CheckArgs, CheckFn, Diagnostic, ExitClass, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+    ZYPPER_EXIT_INF_REPO_SKIPPED, classify_exit, lock_or_dependency, log_failed,
 };
 use crate::update_workflow::{Family, UpdateError, family};
 
@@ -209,11 +209,10 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Returns [`UpdateError`] with a reason of "update command timed out or
 /// failed to run".
 fn not_run(args: CheckArgs<'_>) -> Result<(), UpdateError> {
-    if args.exitcode == EXIT_NOT_RUN {
-        return Err(not_run_error(args));
-    }
-    Ok(())
+    super::not_run(args, NOT_RUN_REASON)
 }
+
+const NOT_RUN_REASON: &str = "update command timed out or failed to run";
 
 /// The `-1` verdict, in one place.
 ///
@@ -224,7 +223,7 @@ fn not_run(args: CheckArgs<'_>) -> Result<(), UpdateError> {
 /// reached must not read as a package problem.
 fn not_run_error(args: CheckArgs<'_>) -> UpdateError {
     log_failed(args);
-    UpdateError::new("update command timed out or failed to run", args.hostname)
+    UpdateError::new(NOT_RUN_REASON, args.hostname)
 }
 
 /// The line the update templates print when a probe failed, and the whole of
@@ -306,30 +305,7 @@ pub(super) fn markers(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateErro
         tracing::warn!(host = args.hostname, "There was additional rpm output");
         diagnostics.push(Diagnostic::highlighted(section));
     }
-    if args
-        .stderr
-        .contains("A ZYpp transaction is already in progress.")
-    {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stderr.contains("System management is locked") {
-        log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
-    }
-    if args.stdout.contains("(c): c") {
-        // Carries `command` and `stderr` too, matching the sibling branches'
-        // `log_failed` record: this branch is reachable on `4`/`5`/`8`, the
-        // codes an operator is most likely to be investigating.
-        tracing::error!(
-            host = args.hostname,
-            command = args.stdin,
-            stdout = args.stdout,
-            stderr = args.stderr,
-            "unresolved dependency problem. please resolve manually"
-        );
-        return Err(UpdateError::new("Dependency Error", args.hostname));
-    }
+    lock_or_dependency(args)?;
     if args.stderr.contains("Error:") {
         log_failed(args);
         return Err(UpdateError::new("RPM Error", args.hostname));
