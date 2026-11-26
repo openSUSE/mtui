@@ -1282,6 +1282,7 @@ pub(crate) fn kwarg_otlp_attrs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::queued_audit;
     use serial_test::serial;
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
@@ -1649,17 +1650,12 @@ mod tests {
     #[test]
     fn export_request_carries_verbatim_body_and_mtui_attrs() {
         let audit = QueuedAudit {
-            seq: 7,
             jsonl: r#"{"v":1,"tool":"whoami"}"#.to_owned(),
             tool: "whoami".to_owned(),
-            outcome: "ok".to_owned(),
-            event: "call".to_owned(),
-            transport: "stdio".to_owned(),
             session_id: 3,
             response_bytes: Some(12),
-            trace: None,
             time_nanos: 1_700_000_000_000_000_000,
-            extra_attrs: Vec::new(),
+            ..queued_audit(7)
         };
         let record = audit_record(&audit);
         // Body string_value carries the verbatim JSONL line.
@@ -1700,17 +1696,11 @@ mod tests {
     fn intent_records_export_as_info_without_an_outcome_attr() {
         fn queued(event: &str, outcome: &str) -> QueuedAudit {
             QueuedAudit {
-                seq: 5,
                 jsonl: r#"{"v":1,"tool":"run"}"#.to_owned(),
-                tool: "run".to_owned(),
                 outcome: outcome.to_owned(),
                 event: event.to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
                 time_nanos: 1,
-                extra_attrs: Vec::new(),
+                ..queued_audit(5)
             }
         }
         fn holds(haystack: &[u8], needle: &str) -> bool {
@@ -1743,17 +1733,10 @@ mod tests {
             parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01")
                 .expect("valid");
         let audit = QueuedAudit {
-            seq: 1,
-            jsonl: "{}".to_owned(),
-            tool: "run".to_owned(),
-            outcome: "ok".to_owned(),
-            event: "call".to_owned(),
             transport: "http".to_owned(),
-            session_id: 1,
-            response_bytes: None,
             trace: Some((trace, span, flags)),
             time_nanos: 1,
-            extra_attrs: Vec::new(),
+            ..queued_audit(1)
         };
         let payload = export_request(
             "mtui",
@@ -1992,17 +1975,11 @@ mod tests {
         let exporter = OtelExporter::with_client(OtelConfig::for_tests(&endpoint, "mtui"), client);
         exporter
             .enqueue_audit(QueuedAudit {
-                seq: 1,
                 jsonl: r#"{"v":1,"tool":"whoami","seq":1}"#.to_owned(),
                 tool: "whoami".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
                 session_id: 9,
-                response_bytes: None,
-                trace: None,
                 time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
+                ..queued_audit(1)
             })
             .expect("enqueue");
         // One flush interval plus margin; the background task posts async.
@@ -2032,17 +2009,11 @@ mod tests {
         );
         exporter
             .enqueue_audit(QueuedAudit {
-                seq: 1,
                 jsonl: r#"{"v":1,"tool":"whoami","seq":1}"#.to_owned(),
                 tool: "whoami".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
                 session_id: 9,
-                response_bytes: None,
-                trace: None,
                 time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
+                ..queued_audit(1)
             })
             .expect("enqueue");
 
@@ -2086,19 +2057,7 @@ mod tests {
             headers: Vec::new(),
             service: "mtui".to_owned(),
         };
-        let audit = QueuedAudit {
-            seq: 21,
-            jsonl: "{}".to_owned(),
-            tool: "run".to_owned(),
-            outcome: "ok".to_owned(),
-            event: "call".to_owned(),
-            transport: "stdio".to_owned(),
-            session_id: 1,
-            response_bytes: None,
-            trace: None,
-            time_nanos: crate::util::epoch_nanos(),
-            extra_attrs: Vec::new(),
-        };
+        let audit = queued_audit(21);
         export_batch(
             &client,
             &failing_config,
@@ -2164,19 +2123,7 @@ mod tests {
         );
         exporter.healthy.store(false, Ordering::Relaxed);
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: 31,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(31)),
             Err(EnqueueError::Unhealthy),
             "latched outage refuses"
         );
@@ -2208,19 +2155,7 @@ mod tests {
             "successful export must clear the latch"
         );
         exporter
-            .enqueue_audit(QueuedAudit {
-                seq: 32,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
-            })
+            .enqueue_audit(queued_audit(32))
             .expect("dispatch accepted after recovery");
         exporter.shutdown().await;
     }
@@ -2243,36 +2178,12 @@ mod tests {
         );
         for seq in 0..OTEL_QUEUE_CAP {
             exporter
-                .enqueue_audit(QueuedAudit {
-                    seq: seq as u64,
-                    jsonl: "{}".to_owned(),
-                    tool: "run".to_owned(),
-                    outcome: "ok".to_owned(),
-                    event: "call".to_owned(),
-                    transport: "stdio".to_owned(),
-                    session_id: 1,
-                    response_bytes: None,
-                    trace: None,
-                    time_nanos: 0,
-                    extra_attrs: Vec::new(),
-                })
+                .enqueue_audit(queued_audit(seq as u64))
                 .expect("queue accepts to capacity");
         }
         let full_seq = OTEL_QUEUE_CAP as u64;
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: full_seq,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: 0,
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(full_seq)),
             Err(EnqueueError::Full),
             "queue full refuses"
         );
@@ -2286,19 +2197,7 @@ mod tests {
         exporter.healthy.store(false, Ordering::Relaxed);
         let next = full_seq + 1;
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: next,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: 0,
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(next)),
             Err(EnqueueError::Unhealthy),
             "unhealthy refuses"
         );
@@ -2411,22 +2310,7 @@ mod tests {
         let mut pending_gap = Some((10u64, 12u64, 3usize));
         let (audit_tx, mut audit_rx) = mpsc::channel(OTEL_QUEUE_CAP);
         let (_diag_tx, mut diag_rx) = mpsc::channel(OTEL_QUEUE_CAP);
-        audit_tx
-            .send(QueuedAudit {
-                seq: 30,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
-            })
-            .await
-            .expect("queue audit");
+        audit_tx.send(queued_audit(30)).await.expect("queue audit");
         flush_one_batch(
             &mut audit_rx,
             &mut diag_rx,
@@ -2486,19 +2370,7 @@ mod tests {
         );
         exporter.shutdown().await;
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: 7,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: 0,
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(7)),
             Err(EnqueueError::Closed)
         );
         assert_eq!(exporter.rejected_gap(), Some((7, 7, 1)));
@@ -2522,35 +2394,11 @@ mod tests {
         );
         for seq in 0..OTEL_QUEUE_CAP {
             exporter
-                .enqueue_audit(QueuedAudit {
-                    seq: seq as u64,
-                    jsonl: "{}".to_owned(),
-                    tool: "run".to_owned(),
-                    outcome: "ok".to_owned(),
-                    event: "call".to_owned(),
-                    transport: "stdio".to_owned(),
-                    session_id: 1,
-                    response_bytes: None,
-                    trace: None,
-                    time_nanos: 0,
-                    extra_attrs: Vec::new(),
-                })
+                .enqueue_audit(queued_audit(seq as u64))
                 .expect("queue accepts to capacity");
         }
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: OTEL_QUEUE_CAP as u64,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: 0,
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(OTEL_QUEUE_CAP as u64)),
             Err(EnqueueError::Full),
             "queue full refuses, never drops"
         );
@@ -2589,19 +2437,7 @@ mod tests {
             client,
         );
         exporter
-            .enqueue_audit(QueuedAudit {
-                seq: 11,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
-            })
+            .enqueue_audit(queued_audit(11))
             .expect("first enqueue while healthy");
         tokio::time::sleep(Duration::from_millis(900)).await;
         assert!(!exporter.is_healthy(), "failed batch must latch unhealthy");
@@ -2609,19 +2445,7 @@ mod tests {
         // Foreground enqueues now refuse instead of queuing into a dead sink;
         // the call they belong to still runs and still answers.
         assert_eq!(
-            exporter.enqueue_audit(QueuedAudit {
-                seq: 12,
-                jsonl: "{}".to_owned(),
-                tool: "run".to_owned(),
-                outcome: "ok".to_owned(),
-                event: "call".to_owned(),
-                transport: "stdio".to_owned(),
-                session_id: 1,
-                response_bytes: None,
-                trace: None,
-                time_nanos: crate::util::epoch_nanos(),
-                extra_attrs: Vec::new(),
-            }),
+            exporter.enqueue_audit(queued_audit(12)),
             Err(EnqueueError::Unhealthy),
             "unhealthy refuses"
         );

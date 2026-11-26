@@ -40,6 +40,8 @@ pub mod slim;
 /// succeeds once, so a second copy in a test module would capture nothing.
 #[cfg(all(test, feature = "mcp"))]
 pub(crate) mod test_log;
+#[cfg(all(test, feature = "mcp"))]
+pub(crate) mod testkit;
 #[cfg(feature = "mcp")]
 pub(crate) mod tool_args;
 #[cfg(feature = "mcp")]
