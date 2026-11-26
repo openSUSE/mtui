@@ -16,6 +16,7 @@ use futures::stream::{self, StreamExt};
 use reqwest::Method;
 use scraper::{Html, Selector};
 
+use crate::clock::utc_today;
 use crate::error::OqaSearchError;
 use crate::http::{HttpClient, MAX_API_BODY, sanitize_url};
 use crate::qem_dashboard::IncidentKey;
@@ -538,23 +539,6 @@ async fn openqa_job_issues(
     Ok(issues)
 }
 
-/// The current UTC date, as a `chrono::NaiveDate`.
-///
-/// The workspace pins `chrono` without the `clock` feature to keep the
-/// single-static-binary contract lean, so "today" comes from
-/// [`std::time::SystemTime`] in UTC rather than local time. The two differ only
-/// in the UTC-offset window around midnight, where the day-walk starts one day
-/// over — which the N-day window absorbs.
-fn current_utc_date() -> chrono::NaiveDate {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    chrono::DateTime::from_timestamp(secs as i64, 0)
-        .map(|dt| dt.date_naive())
-        .unwrap_or_default()
-}
-
 /// Count the jobs in a `/jobs/overview` response array.
 fn overview_len(value: &serde_json::Value) -> usize {
     value.as_array().map_or(0, Vec::len)
@@ -949,7 +933,7 @@ async fn scan_aggregated_for_version(
     group_id: i64,
     incident_id: Option<i64>,
 ) -> VersionResult {
-    let now = current_utc_date();
+    let now = utc_today();
     for i in 0..days {
         let day = now - chrono::Duration::days(i64::from(i));
         let build = format!("{}-1", day.format("%Y%m%d"));
