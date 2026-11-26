@@ -799,6 +799,24 @@ mod tests {
         assert!(!t.leftovers().repos_added);
     }
 
+    /// The add collided with an alias already registered, so it is there.
+    #[tokio::test]
+    async fn an_add_that_collided_with_a_registered_alias_records_it() {
+        use mtui_types::hostlog::CommandLog;
+
+        let (sles, repos) = sles_repos();
+        let ar_cmd =
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("h1")
+            .with_response(ar_cmd, CommandLog::new(ar_cmd, "", "exists", 4, 0))
+            .with_response(lr_cmd, CommandLog::new(lr_cmd, "issue-SLES", "", 0, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles, &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        assert!(t.leftovers().repos_added);
+    }
+
     #[tokio::test]
     async fn a_failed_remove_keeps_the_earlier_add() {
         use mtui_types::hostlog::CommandLog;

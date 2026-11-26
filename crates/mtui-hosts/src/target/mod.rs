@@ -150,11 +150,15 @@ pub struct Target {
     /// Packages this session's `install` put here that no later `uninstall`
     /// removed.
     installed: std::collections::BTreeSet<String>,
-    /// How far the last [`close`](Target::close) got with releasing the locks.
-    close_release: CloseRelease,
+    /// How far the last [`close`](Target::close) got with releasing the
+    /// operation lock.
+    lock_release: CloseRelease,
+    /// How far the last [`close`](Target::close) got with releasing the pool
+    /// claim.
+    pool_release: CloseRelease,
 }
 
-/// How far [`Target::close`] got with releasing this session's locks.
+/// How far [`Target::close`] got with releasing one of this session's holds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CloseRelease {
     /// The close never reached the end of the release: it was abandoned, or
@@ -163,20 +167,32 @@ pub enum CloseRelease {
     Unfinished,
     /// The link was down, so the release was skipped.
     LinkDown,
-    /// The release ran to the end.
+    /// The release ran to the end; a hold it left behind means it failed.
     Attempted,
+    /// The lock on the host now belongs to another owner, so the release left
+    /// it alone.
+    TakenOver,
+}
+
+impl CloseRelease {
+    /// The outcome of a release that ran to the end.
+    fn of(outcome: &Result<()>) -> Self {
+        if matches!(outcome, Err(HostError::TargetLocked(_))) {
+            Self::TakenOver
+        } else {
+            Self::Attempted
+        }
+    }
 }
 
 /// What this session left on a host, read from its in-memory records after a
 /// [`close`](Target::close) — no remote I/O.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostLeftovers {
-    /// This session still holds the host's operation lock.
-    pub operation_lock: bool,
-    /// This session still holds the host's pool claim.
-    pub pool_claim: bool,
-    /// Why a hold above survived the close.
-    pub release: CloseRelease,
+    /// Why this session still holds the host's operation lock, if it does.
+    pub operation_lock: Option<CloseRelease>,
+    /// Why this session still holds the host's pool claim, if it does.
+    pub pool_claim: Option<CloseRelease>,
     /// The session's last change to the update's repositories was an add.
     pub repos_added: bool,
     /// Packages the session's `install` put on the host and no later
@@ -188,7 +204,10 @@ impl HostLeftovers {
     /// Whether nothing was left.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !self.operation_lock && !self.pool_claim && !self.repos_added && self.installed.is_empty()
+        self.operation_lock.is_none()
+            && self.pool_claim.is_none()
+            && !self.repos_added
+            && self.installed.is_empty()
     }
 }
 
@@ -235,7 +254,8 @@ impl Target {
             last_repo: None,
             repos_added: false,
             installed: std::collections::BTreeSet::new(),
-            close_release: CloseRelease::Unfinished,
+            lock_release: CloseRelease::Unfinished,
+            pool_release: CloseRelease::Unfinished,
         }
     }
 
@@ -753,14 +773,16 @@ impl Target {
     pub async fn close(&mut self, action: Option<&str>) -> Result<()> {
         let active = self.connection.as_ref().is_some_and(|c| c.is_active());
         if active {
-            self.close_release = CloseRelease::Unfinished;
+            self.lock_release = CloseRelease::Unfinished;
+            self.pool_release = CloseRelease::Unfinished;
             // Best-effort release of our own locks before disconnecting; a lock
             // held by another owner is left untouched (force = false).
-            self.unlock(false).await;
-            self.pool_unlock(false).await;
-            self.close_release = CloseRelease::Attempted;
+            self.lock_release = CloseRelease::of(&self.unlock_reporting(LockKind::Op, false).await);
+            self.pool_release =
+                CloseRelease::of(&self.unlock_reporting(LockKind::Pool, false).await);
         } else {
-            self.close_release = CloseRelease::LinkDown;
+            self.lock_release = CloseRelease::LinkDown;
+            self.pool_release = CloseRelease::LinkDown;
             tracing::debug!(host = %self.hostname, "close: not connected");
         }
 
@@ -854,9 +876,11 @@ impl Target {
     #[must_use]
     pub fn leftovers(&self) -> HostLeftovers {
         HostLeftovers {
-            operation_lock: self.holds_operation_lock(),
-            pool_claim: self.held_comment(LockKind::Pool).is_some(),
-            release: self.close_release,
+            operation_lock: self.holds_operation_lock().then_some(self.lock_release),
+            pool_claim: self
+                .held_comment(LockKind::Pool)
+                .is_some()
+                .then_some(self.pool_release),
             repos_added: self.repos_added,
             installed: self.installed.iter().cloned().collect(),
         }

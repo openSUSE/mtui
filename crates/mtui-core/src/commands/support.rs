@@ -815,21 +815,18 @@ pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
 }
 
 /// One `warning:` line per item this session left on a closed host, shared by
-/// `remove_host`, `unload` and `quit`.
+/// `remove_host`, `unload`, `quit` and a reload that replaces a template.
 pub(crate) fn leftover_notices(
     leftovers: &std::collections::BTreeMap<String, mtui_hosts::HostLeftovers>,
 ) -> Vec<String> {
     use crate::display::sanitize_external;
     use mtui_hosts::CloseRelease;
 
+    // A newline or tab in a caller-supplied name would forge a second line.
+    let clean = |s: &str| sanitize_external(s, None).replace(['\n', '\t'], " ");
     let mut lines = Vec::new();
     for (host, left) in leftovers {
-        let host = sanitize_external(host, None);
-        let why = match left.release {
-            CloseRelease::LinkDown => "link down",
-            CloseRelease::Attempted => "release failed",
-            CloseRelease::Unfinished => "teardown abandoned",
-        };
+        let host = clean(host);
         let holds = [
             (
                 left.operation_lock,
@@ -844,7 +841,20 @@ pub(crate) fn leftover_notices(
                 "unlock -f -p",
             ),
         ];
-        for (_, what, age, unlock) in holds.into_iter().filter(|h| h.0) {
+        for (why, what, age, unlock) in holds {
+            let why = match why {
+                None => continue,
+                Some(CloseRelease::TakenOver) => {
+                    lines.push(format!(
+                        "warning: {host}: {what} now belongs to another owner, so the close left \
+                         it in place; it is theirs to release"
+                    ));
+                    continue;
+                }
+                Some(CloseRelease::LinkDown) => "link down",
+                Some(CloseRelease::Attempted) => "release failed",
+                Some(CloseRelease::Unfinished) => "teardown abandoned",
+            };
             lines.push(format!(
                 "warning: {host}: {what} not released ({why}); unless the host reboots, it \
                  stays until it is older than [lock] {age} or someone runs `{unlock}`"
@@ -853,16 +863,13 @@ pub(crate) fn leftover_notices(
         if left.repos_added {
             lines.push(format!(
                 "warning: {host}: the update's repositories are still configured (this \
-                 session's last repository change there was an add); re-add the host and run \
-                 `set_repo --remove`"
+                 session's last repository change there was an add); with the update loaded, \
+                 reconnect the host and run `set_repo --remove`"
             ));
         }
         if !left.installed.is_empty() {
-            let packages: std::collections::BTreeSet<String> = left
-                .installed
-                .iter()
-                .map(|p| sanitize_external(p, None))
-                .collect();
+            let packages: std::collections::BTreeSet<String> =
+                left.installed.iter().map(|p| clean(p)).collect();
             let packages: Vec<String> = packages.into_iter().collect();
             let (them, some) = if packages.len() == 1 {
                 ("it", "it may have been installed before")
@@ -896,8 +903,7 @@ mod tests {
         let leftovers = std::collections::BTreeMap::from([(
             "h1".to_owned(),
             HostLeftovers {
-                operation_lock: true,
-                release: CloseRelease::Unfinished,
+                operation_lock: Some(CloseRelease::Unfinished),
                 ..Default::default()
             },
         )]);
@@ -925,6 +931,46 @@ mod tests {
         );
         let clean = std::collections::BTreeMap::from([("h2".to_owned(), HostLeftovers::default())]);
         assert!(leftover_notices(&clean).is_empty());
+    }
+
+    #[test]
+    fn leftover_notices_keep_each_notice_on_one_line() {
+        use mtui_hosts::HostLeftovers;
+
+        let leftovers = std::collections::BTreeMap::from([(
+            "h\u{1b}[31m1\nwarning: forged".to_owned(),
+            HostLeftovers {
+                installed: vec!["pkg-a\nwarning: h2: forged".to_owned(), "pkg\tb".to_owned()],
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            leftover_notices(&leftovers),
+            [
+                "warning: h1 warning: forged: `install` ran for pkg b, pkg-a warning: h2: forged \
+                 and no later `uninstall` removed them (some may have been installed before)"
+            ]
+        );
+    }
+
+    #[test]
+    fn leftover_notices_leave_a_taken_over_claim_to_its_owner() {
+        use mtui_hosts::{CloseRelease, HostLeftovers};
+
+        let leftovers = std::collections::BTreeMap::from([(
+            "h1".to_owned(),
+            HostLeftovers {
+                pool_claim: Some(CloseRelease::TakenOver),
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            leftover_notices(&leftovers),
+            [
+                "warning: h1: pool claim now belongs to another owner, so the close left it in \
+                 place; it is theirs to release"
+            ]
+        );
     }
 
     #[test]

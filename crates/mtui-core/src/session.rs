@@ -1347,6 +1347,9 @@ impl Session {
         for host in &removed.stragglers {
             tracing::warn!("still disconnecting from {host} while reloading");
         }
+        for line in crate::commands::support::leftover_notices(&removed.leftovers) {
+            self.display.println(&line);
+        }
         if !rrid.is_empty() {
             // A reload starts a fresh generation.
             self.forget_detached_logs(&rrid);
@@ -3003,6 +3006,48 @@ mod tests {
             .await;
 
         assert_eq!(s.metadata().base().lock_comment, "");
+    }
+
+    /// A reload replacing a loaded template closes its hosts, so it warns
+    /// about what they were left with like `unload` does.
+    #[tokio::test]
+    async fn load_update_reload_names_a_lock_left_on_a_replaced_host() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::TargetState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:Maintenance:24993:275518";
+        let (_refhosts_dir, mut config) = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        let _teregen = teregen_serving(&mut config, rrid, "maintenance").await;
+        let buf = crate::commands::testkit::Buffer::new();
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut s = Session::with_display(config, false, display);
+        seed_active_report(&mut s, rrid, &[], &[]);
+        let mut down = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1").inactive()),
+        );
+        down.lock("").await.expect("operation lock taken");
+        s.targets_mut().add(down);
+
+        let update = UpdateID::parse(rrid).unwrap();
+        let loaded = s
+            .load_update(&update, true, UpdateKind::Kernel, false)
+            .await;
+
+        assert_eq!(loaded, rrid);
+        assert!(
+            buf.contents().contains(
+                "warning: h1: operation lock not released (link down); unless the host \
+                 reboots, it stays until it is older than [lock] stale_age or someone runs \
+                 `unlock -f`"
+            ),
+            "{}",
+            buf.contents()
+        );
     }
 
     /// An unloadable RRID falls back to the null report: nothing registered,

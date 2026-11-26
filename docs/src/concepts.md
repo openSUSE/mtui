@@ -218,7 +218,8 @@ the way out (`unlock -f` is only right if no other mtui is claiming the host). `
 the file's modification time, since there is no timestamp inside; a file whose
 modification time is missing or in the future is never reaped.
 
-`remove_host`, `unload` and `quit` never refuse to tear a host down, but they
+`remove_host`, `unload`, `quit`, and a `load_template` (or `regenerate`) that
+reloads an already-loaded update never refuse to tear a host down, but they
 warn about what this session left on it, one `warning: <host>: …` line per
 item, in the command's reply (so an MCP client sees it too):
 
@@ -227,10 +228,13 @@ item, in the command's reply (so an MCP client sees it too):
   `teardown abandoned` (the close ran out of time) — and how it goes away: a
   reboot clears it, otherwise it stays until it is older than
   `[lock] stale_age` (`pool_stale_age`) or someone runs `unlock -f`
-  (`unlock -f -p`);
+  (`unlock -f -p`). A lock or claim that now belongs to another owner (this
+  session's hold lapsed, e.g. it was reaped as stale and taken) is left in
+  place and named as such, with no `unlock -f` advice: it is theirs;
 - the update's repositories, when the last repository change this session
   made on the host was an add (`set_repo -A`, `prepare --update`, or an
-  `update` that stopped before removing them);
+  `update` that stopped before removing them): with the update loaded,
+  reconnect the host and run `set_repo --remove`;
 - packages this session's `install` put there that no later `uninstall`
   removed. mtui does not check beforehand which of them were already
   installed, so the line says some may have been.
