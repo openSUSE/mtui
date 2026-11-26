@@ -1345,7 +1345,8 @@ impl HostsGroup {
     ///
     /// Earliest phase wins: a host that could not be sent the reboot is
     /// reported as such rather than as whatever the later phases make of it,
-    /// since those verdicts are consequences of the first failure.
+    /// since those verdicts are consequences of the first failure. The one
+    /// exception is a failed reconnect, which outranks a dispatch failure.
     async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) -> RebootReport {
         if reboot.is_empty() {
             return RebootReport::default();
