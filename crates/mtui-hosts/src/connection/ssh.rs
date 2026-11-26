@@ -616,61 +616,85 @@ impl SshConnection {
         if let Some(cached) = &self.sftp {
             return Ok(Arc::clone(cached));
         }
-        let hostname = self.hostname.clone();
-        let session = tokio::time::timeout(
-            self.connect_timeout.as_duration(),
-            self.open_sftp_subsystem(),
-        )
-        .await
-        .map_err(|_| HostError::Transport {
-            host: hostname,
-            reason: "sftp subsystem handshake timed out".to_owned(),
-        })??;
+        let session = self
+            .within_connect_timeout(async {
+                let channel = self.open_subsystem_channel().await?;
+                RusshSftpSession::new_with_config(channel.into_stream(), self.sftp_config())
+                    .await
+                    .map_err(|e| sftp_err_for(&self.hostname, e))
+            })
+            .await?;
         let session = Arc::new(session);
         self.sftp = Some(Arc::clone(&session));
         Ok(session)
     }
 
-    /// Opens a fresh SFTP subsystem channel. Split out of [`sftp`](Self::sftp)
-    /// so the whole open sequence can be wrapped in one `tokio::time::timeout`.
-    async fn open_sftp_subsystem(&self) -> Result<RusshSftpSession> {
+    /// The SFTP client config whose per-request budget derives from
+    /// `connect_timeout`.
+    fn sftp_config(&self) -> russh_sftp::client::Config {
+        russh_sftp::client::Config {
+            request_timeout_secs: self.connect_timeout.as_secs().max(1),
+            ..Default::default()
+        }
+    }
+
+    /// Bounds an SFTP subsystem open sequence by `connect_timeout`.
+    async fn within_connect_timeout<T>(&self, open: impl Future<Output = Result<T>>) -> Result<T> {
+        timeout(self.connect_timeout.as_duration(), open)
+            .await
+            .map_err(|_| HostError::Transport {
+                host: self.hostname.clone(),
+                reason: "sftp subsystem handshake timed out".to_owned(),
+            })?
+    }
+
+    /// Opens a session channel, reconnecting and retrying on a lost link.
+    async fn open_channel_retrying(&mut self) -> Result<russh::Channel<russh::client::Msg>> {
+        let mut attempt = 0;
+        loop {
+            if !self.is_active() {
+                self.reconnect(0, false).await?;
+            }
+            match self.handle()?.channel_open_session().await {
+                Ok(ch) => return Ok(ch),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= RETRIES {
+                        return Err(HostError::ReconnectFailed {
+                            host: self.hostname.clone(),
+                        });
+                    }
+                    tracing::debug!(host = %self.hostname, "channel open failed ({e}); retrying");
+                    self.reconnect(0, false).await?;
+                }
+            }
+        }
+    }
+
+    /// Opens a session channel with the `sftp` subsystem requested on it.
+    async fn open_subsystem_channel(&self) -> Result<russh::Channel<russh::client::Msg>> {
         let channel = self
             .handle()?
             .channel_open_session()
             .await
-            .map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| sftp_err_for(&self.hostname, e))?;
         channel
             .request_subsystem(true, "sftp")
             .await
-            .map_err(|e| self.sftp_err(e))?;
-        let config = russh_sftp::client::Config {
-            request_timeout_secs: self.connect_timeout.as_secs().max(1),
-            ..Default::default()
-        };
-        RusshSftpSession::new_with_config(channel.into_stream(), config)
-            .await
-            .map_err(|e| self.sftp_err(e))
+            .map_err(|e| sftp_err_for(&self.hostname, e))?;
+        Ok(channel)
     }
 
     /// Opens a private raw SFTP session and runs INIT, for uploads that need
-    /// verbs the cached high-level session cannot send. Bounded and timed like
-    /// [`open_sftp_subsystem`](Self::open_sftp_subsystem).
+    /// verbs the cached high-level session cannot send. The caller bounds it
+    /// like [`sftp`](Self::sftp)'s open.
     async fn open_raw_sftp_subsystem(&self) -> Result<(RawSftpSession, Version)> {
-        let channel = self
-            .handle()?
-            .channel_open_session()
+        let channel = self.open_subsystem_channel().await?;
+        let raw = RawSftpSession::new_with_config(channel.into_stream(), self.sftp_config());
+        let version = raw
+            .init()
             .await
-            .map_err(|e| self.sftp_err(e))?;
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| self.sftp_err(e))?;
-        let config = russh_sftp::client::Config {
-            request_timeout_secs: self.connect_timeout.as_secs().max(1),
-            ..Default::default()
-        };
-        let raw = RawSftpSession::new_with_config(channel.into_stream(), config);
-        let version = raw.init().await.map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| sftp_err_for(&self.hostname, e))?;
         Ok((raw, version))
     }
 
@@ -704,54 +728,35 @@ impl SshConnection {
         }
     }
 
-    fn sftp_err(&self, e: impl std::fmt::Display) -> HostError {
-        sftp_err_for(&self.hostname, e)
-    }
-
-    /// Maps a russh-sftp client error to [`HostError`], routing
-    /// `SSH_FX_NO_SUCH_FILE` to [`HostError::SftpNotFound`] so the host-system
-    /// parser can branch distinctly on "not found".
-    fn sftp_err_at(&self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
-        sftp_err_at_for(&self.hostname, e, path)
-    }
-
-    /// Categorizes the error from an **atomic exclusive create**
-    /// ([`sftp_write`](Connection::sftp_write) with `exclusive = true`); see
-    /// the free [`exclusive_create_err`] for the mapping and why it fails
-    /// closed.
-    fn exclusive_create_err(
-        &self,
-        e: russh_sftp::client::error::Error,
-        path_str: &str,
-    ) -> HostError {
-        exclusive_create_err(&self.hostname, e, path_str)
-    }
-
-    /// Like [`sftp_err`](Self::sftp_err), but also invalidates the cached
-    /// subsystem on a session-fatal error. Used by every `sftp_*` verb, unlike
+    /// Maps a russh-sftp error from an SFTP verb to [`HostError`], also
+    /// invalidating the cached subsystem on a session-fatal error. The three
+    /// `sftp_verb_*` mappers are used by every `sftp_*` verb, unlike
     /// [`sftp`](Self::sftp)'s own handshake which has nothing cached yet.
     fn sftp_verb_err(&mut self, e: impl std::fmt::Display) -> HostError {
-        let err = self.sftp_err(e);
+        let err = sftp_err_for(&self.hostname, e);
         self.invalidate_sftp_if_fatal(&err);
         err
     }
 
-    /// Like [`sftp_err_at`](Self::sftp_err_at), invalidating on a session-fatal
-    /// error.
+    /// Like [`sftp_verb_err`](Self::sftp_verb_err), routing
+    /// `SSH_FX_NO_SUCH_FILE` to [`HostError::SftpNotFound`] so the host-system
+    /// parser can branch distinctly on "not found".
     fn sftp_verb_err_at(&mut self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
-        let err = self.sftp_err_at(e, path);
+        let err = sftp_err_at_for(&self.hostname, e, path);
         self.invalidate_sftp_if_fatal(&err);
         err
     }
 
-    /// Like [`exclusive_create_err`](Self::exclusive_create_err), invalidating
-    /// on a session-fatal error.
+    /// The error from an **atomic exclusive create**
+    /// ([`sftp_write`](Connection::sftp_write) with `exclusive = true`); see
+    /// the free [`exclusive_create_err`] for the mapping and why it fails
+    /// closed. Invalidates the cached subsystem on a session-fatal error.
     fn sftp_verb_exclusive_create_err(
         &mut self,
         e: russh_sftp::client::error::Error,
         path_str: &str,
     ) -> HostError {
-        let err = self.exclusive_create_err(e, path_str);
+        let err = exclusive_create_err(&self.hostname, e, path_str);
         self.invalidate_sftp_if_fatal(&err);
         err
     }
@@ -772,20 +777,23 @@ impl SshConnection {
     /// session-fatal failure, including the replay's own, always drops the
     /// cached subsystem so the next verb re-handshakes.
     ///
-    /// Returns the session alongside the result so the caller can issue further
-    /// requests against the same subsystem.
+    /// `req` receives the session and `path` rendered as the string the SFTP
+    /// client takes. Returns the session alongside the result so the caller can
+    /// issue further requests against the same subsystem.
     async fn sftp_first_request<T, ReqFut>(
         &mut self,
         replay: FirstRequestReplay,
-        req: impl Fn(Arc<RusshSftpSession>) -> ReqFut,
+        path: &Path,
+        req: impl Fn(Arc<RusshSftpSession>, String) -> ReqFut,
         map_err: impl Fn(&mut Self, russh_sftp::client::error::Error) -> HostError,
     ) -> Result<(Arc<RusshSftpSession>, T)>
     where
         ReqFut: Future<Output = std::result::Result<T, russh_sftp::client::error::Error>>,
     {
+        let path = path.to_string_lossy().to_string();
         let from_cache = self.sftp.is_some();
         let sftp = self.sftp().await?;
-        let e = match req(Arc::clone(&sftp)).await {
+        let e = match req(Arc::clone(&sftp), path.clone()).await {
             Ok(v) => return Ok((sftp, v)),
             Err(e) => e,
         };
@@ -802,7 +810,7 @@ impl SshConnection {
             "stale cached sftp session on first request; re-handshaking and retrying once"
         );
         let sftp = self.sftp().await?;
-        match req(Arc::clone(&sftp)).await {
+        match req(Arc::clone(&sftp), path).await {
             Ok(v) => Ok((sftp, v)),
             Err(e) => {
                 if is_session_fatal(&e) {
@@ -813,11 +821,73 @@ impl SshConnection {
         }
     }
 
+    /// Opens `path` with `flags` as a verb's first request, then writes `data`
+    /// and closes the handle.
+    ///
+    /// An `exclusive` open is replayed only if it never left the client (a
+    /// second attempt would collide with its own first effect). Any other open
+    /// is replayed after a lost reply so a truncating write is not left
+    /// truncated; an original open still queued on the dead session could
+    /// truncate once more after the replayed write.
+    async fn write_through_open(
+        &mut self,
+        path: &Path,
+        flags: russh_sftp::protocol::OpenFlags,
+        exclusive: bool,
+        data: &[u8],
+    ) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let replay = if exclusive {
+            FirstRequestReplay::UndeliveredOnly
+        } else {
+            FirstRequestReplay::Repeatable
+        };
+        let path_str = path.to_string_lossy().to_string();
+        let (_sftp, mut file) = self
+            .sftp_first_request(
+                replay,
+                path,
+                move |sftp, path| async move { sftp.open_with_flags(path, flags).await },
+                |s, e| {
+                    if exclusive {
+                        s.sftp_verb_exclusive_create_err(e, &path_str)
+                    } else {
+                        s.sftp_verb_err_at(e, path)
+                    }
+                },
+            )
+            .await?;
+        file.write_all(data)
+            .await
+            .map_err(|e| self.sftp_verb_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
+        Ok(())
+    }
+
     fn transport_err(&self, e: impl std::fmt::Display) -> HostError {
         HostError::Transport {
             host: self.hostname.clone(),
             reason: e.to_string(),
         }
+    }
+}
+
+/// Aborts a command that hit the non-interactive absolute deadline: closes the
+/// channel so the remote process is not orphaned, and returns the timeout.
+async fn deadline_abort(
+    hostname: &str,
+    shown: &str,
+    channel: &russh::Channel<russh::client::Msg>,
+) -> HostError {
+    tracing::warn!(
+        host = %hostname,
+        command = %shown,
+        "command exceeded absolute deadline; aborting (non-interactive)",
+    );
+    let _ = channel.close().await;
+    HostError::Timeout {
+        command: shown.to_owned(),
     }
 }
 
@@ -1320,26 +1390,7 @@ impl Connection for SshConnection {
         // log below carries this copy with URL credentials masked.
         let shown = sanitize_urls_in_text(command);
 
-        // Open a channel, reconnecting + retrying on a lost link.
-        let mut attempt = 0;
-        let mut channel = loop {
-            if !self.is_active() {
-                self.reconnect(0, false).await?;
-            }
-            match self.handle()?.channel_open_session().await {
-                Ok(ch) => break ch,
-                Err(e) => {
-                    attempt += 1;
-                    if attempt >= RETRIES {
-                        return Err(HostError::ReconnectFailed {
-                            host: self.hostname.clone(),
-                        });
-                    }
-                    tracing::debug!(host = %self.hostname, "channel open failed ({e}); retrying");
-                    self.reconnect(0, false).await?;
-                }
-            }
-        };
+        let mut channel = self.open_channel_retrying().await?;
 
         channel
             .exec(true, command)
@@ -1364,18 +1415,8 @@ impl Connection for SshConnection {
             // Checked every iteration, not only on a wait timeout: continuous
             // output keeps `channel.wait()` returning data, so the inactivity
             // branch below would never fire.
-            if let Some(d) = deadline
-                && Instant::now() >= d
-            {
-                tracing::warn!(
-                    host = %self.hostname,
-                    command = %shown,
-                    "command exceeded absolute deadline; aborting (non-interactive)",
-                );
-                let _ = channel.close().await;
-                return Err(HostError::Timeout {
-                    command: shown.clone(),
-                });
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return Err(deadline_abort(&self.hostname, &shown, &channel).await);
             }
 
             // Bound each wait so the deadline is honoured even under continuous
@@ -1388,20 +1429,8 @@ impl Connection for SshConnection {
                 // No message within the wait budget: either the absolute
                 // deadline or the no-output inactivity window elapsed.
                 Err(_) => {
-                    if let Some(d) = deadline
-                        && Instant::now() >= d
-                    {
-                        // Close the channel so the remote process is not
-                        // orphaned.
-                        tracing::warn!(
-                            host = %self.hostname,
-                            command = %shown,
-                            "command exceeded absolute deadline; aborting (non-interactive)",
-                        );
-                        let _ = channel.close().await;
-                        return Err(HostError::Timeout {
-                            command: shown.clone(),
-                        });
+                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                        return Err(deadline_abort(&self.hostname, &shown, &channel).await);
                     }
                     let decision = on_command_timeout(
                         &self.hostname,
@@ -1581,15 +1610,9 @@ impl Connection for SshConnection {
         }
         let uid = self.upload_uid(remote).await?;
         let hostname = self.hostname.clone();
-        let (mut raw, version) = timeout(
-            self.connect_timeout.as_duration(),
-            self.open_raw_sftp_subsystem(),
-        )
-        .await
-        .map_err(|_| HostError::Transport {
-            host: hostname.clone(),
-            reason: "sftp subsystem handshake timed out".to_owned(),
-        })??;
+        let (mut raw, version) = self
+            .within_connect_timeout(self.open_raw_sftp_subsystem())
+            .await?;
         let outcome = async {
             safe_upload::negotiate(&mut raw, &hostname, remote, &version).await?;
             safe_upload::publish(&raw, &hostname, uid, data, remote).await
@@ -1601,14 +1624,11 @@ impl Connection for SshConnection {
 
     async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {
         // Streamed, not buffered whole in memory.
-        let open_path = remote.to_string_lossy().to_string();
         let (_sftp, mut src) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let open_path = open_path.clone();
-                    async move { sftp.open(open_path).await }
-                },
+                remote,
+                |sftp, path| async move { sftp.open(path).await },
                 |s, e| s.sftp_verb_err(e),
             )
             .await?;
@@ -1631,14 +1651,11 @@ impl Connection for SshConnection {
         use futures::stream::{self, StreamExt};
 
         let remote_str = remote.to_string_lossy().to_string();
-        let list_path = remote_str.clone();
         let (sftp, dir) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let list_path = list_path.clone();
-                    async move { sftp.read_dir(list_path).await }
-                },
+                remote,
+                |sftp, path| async move { sftp.read_dir(path).await },
                 |s, e| s.sftp_verb_err(e),
             )
             .await?;
@@ -1706,14 +1723,11 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
-        let list_path = path.to_string_lossy().to_string();
         let (_sftp, dir) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let list_path = list_path.clone();
-                    async move { sftp.read_dir(list_path).await }
-                },
+                path,
+                |sftp, path| async move { sftp.read_dir(path).await },
                 |s, e| s.sftp_verb_err_at(e, path),
             )
             .await?;
@@ -1721,14 +1735,11 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
-        let read_path = path.to_string_lossy().to_string();
         let (_sftp, data) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let read_path = read_path.clone();
-                    async move { sftp.read(read_path).await }
-                },
+                path,
+                |sftp, path| async move { sftp.read(path).await },
                 |s, e| s.sftp_verb_err_at(e, path),
             )
             .await?;
@@ -1738,14 +1749,11 @@ impl Connection for SshConnection {
     async fn sftp_read_capped(&mut self, path: &Path, max_bytes: usize) -> Result<SftpRead> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let open_path = path.to_string_lossy().to_string();
         let (_sftp, mut file) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let open_path = open_path.clone();
-                    async move { sftp.open(open_path).await }
-                },
+                path,
+                |sftp, path| async move { sftp.open(path).await },
                 |s, e| s.sftp_verb_err_at(e, path),
             )
             .await?;
@@ -1768,10 +1776,13 @@ impl Connection for SshConnection {
                 .map_err(|e| self.sftp_verb_err_at(e, path))?
                 .size
                 .ok_or_else(|| {
-                    self.sftp_err(format!(
-                        "server reported no size for {}; refusing an unbounded read",
-                        path.display()
-                    ))
+                    sftp_err_for(
+                        &self.hostname,
+                        format!(
+                            "server reported no size for {}; refusing an unbounded read",
+                            path.display()
+                        ),
+                    )
                 })?;
             let cap = u64::try_from(max_bytes).unwrap_or(u64::MAX);
             let mut bytes = Vec::new();
@@ -1801,79 +1812,27 @@ impl Connection for SshConnection {
 
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
         use russh_sftp::protocol::OpenFlags;
-        use tokio::io::AsyncWriteExt;
 
-        let path_str = path.to_string_lossy().to_string();
-
-        let mut file = if exclusive {
-            // Atomic exclusive create; `exclusive_create_err` explains why only
-            // the generic `Failure` status maps to `AlreadyExists`.
-            let flags =
-                OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE | OpenFlags::EXCLUDE;
-            let open_path = path_str.clone();
-            let (_sftp, file) = self
-                .sftp_first_request(
-                    FirstRequestReplay::UndeliveredOnly,
-                    move |sftp| {
-                        let open_path = open_path.clone();
-                        async move { sftp.open_with_flags(open_path, flags).await }
-                    },
-                    |s, e| s.sftp_verb_exclusive_create_err(e, &path_str),
-                )
-                .await?;
-            file
-        } else {
-            // Truncating overwrite. Explicit CREATE: the `write` convenience
-            // opens WRITE-only and fails with NO_SUCH_FILE on a missing file.
-            // Replayed after a lost reply so the file is not left truncated;
-            // an original open still queued on the dead session could truncate
-            // once more after the replayed write.
-            let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
-            let open_path = path_str;
-            let (_sftp, file) = self
-                .sftp_first_request(
-                    FirstRequestReplay::Repeatable,
-                    move |sftp| {
-                        let open_path = open_path.clone();
-                        async move { sftp.open_with_flags(open_path, flags).await }
-                    },
-                    |s, e| s.sftp_verb_err_at(e, path),
-                )
-                .await?;
-            file
-        };
-        file.write_all(data)
-            .await
-            .map_err(|e| self.sftp_verb_err(e))?;
-        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
-        Ok(())
+        // Explicit CREATE: the `write` convenience opens WRITE-only and fails
+        // with NO_SUCH_FILE on a missing file. An exclusive create is atomic;
+        // `exclusive_create_err` explains why only the generic `Failure` status
+        // maps to `AlreadyExists`.
+        let mut flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
+        if exclusive {
+            flags |= OpenFlags::EXCLUDE;
+        }
+        self.write_through_open(path, flags, exclusive, data).await
     }
 
     async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
         use russh_sftp::protocol::OpenFlags;
-        use tokio::io::AsyncWriteExt;
 
         // O_APPEND: every write lands at the current EOF, so concurrent
         // appenders extend the file without a read-modify-write race. Nothing
-        // here is replayed: a repeated open or write could duplicate a
+        // past the open is replayed: a repeated write could duplicate a
         // remote-history row.
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND;
-        let open_path = path.to_string_lossy().to_string();
-        let (_sftp, mut file) = self
-            .sftp_first_request(
-                FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let open_path = open_path.clone();
-                    async move { sftp.open_with_flags(open_path, flags).await }
-                },
-                |s, e| s.sftp_verb_err_at(e, path),
-            )
-            .await?;
-        file.write_all(data)
-            .await
-            .map_err(|e| self.sftp_verb_err(e))?;
-        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
-        Ok(())
+        self.write_through_open(path, flags, false, data).await
     }
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
@@ -1885,14 +1844,11 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_mtime(&mut self, path: &Path) -> Result<Option<u64>> {
-        let stat_path = path.to_string_lossy().to_string();
         let (_sftp, meta) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let stat_path = stat_path.clone();
-                    async move { sftp.metadata(stat_path).await }
-                },
+                path,
+                |sftp, path| async move { sftp.metadata(path).await },
                 |s, e| s.sftp_verb_err_at(e, path),
             )
             .await?;
@@ -1915,14 +1871,11 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
-        let link_path = path.to_string_lossy().to_string();
         let (_sftp, target) = self
             .sftp_first_request(
                 FirstRequestReplay::Repeatable,
-                move |sftp| {
-                    let link_path = link_path.clone();
-                    async move { sftp.read_link(link_path).await }
-                },
+                path,
+                |sftp, path| async move { sftp.read_link(path).await },
                 |s, e| s.sftp_verb_err_at(e, path),
             )
             .await?;
@@ -1941,26 +1894,7 @@ impl Connection for SshConnection {
 
     #[cfg(feature = "shell")]
     async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>> {
-        // Mirrors the open->reconnect loop in `run`.
-        let mut attempt = 0;
-        let channel = loop {
-            if !self.is_active() {
-                self.reconnect(0, false).await?;
-            }
-            match self.handle()?.channel_open_session().await {
-                Ok(ch) => break ch,
-                Err(e) => {
-                    attempt += 1;
-                    if attempt >= RETRIES {
-                        return Err(HostError::ReconnectFailed {
-                            host: self.hostname.clone(),
-                        });
-                    }
-                    tracing::debug!(host = %self.hostname, "shell channel open failed ({e}); retrying");
-                    self.reconnect(0, false).await?;
-                }
-            }
-        };
+        let channel = self.open_channel_retrying().await?;
 
         // On failure, close the half-initialised channel explicitly rather than
         // relying on drop.
