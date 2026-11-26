@@ -22,7 +22,7 @@
 //! per-entry locks, carrying its own display, holding no session-wide mutex — so
 //! different-RRID calls get real concurrency, slow session-level I/O (e.g.
 //! `updates`) never head-of-line-blocks a scoped resolve behind the session
-//! mutex (#613), and per-call output isolation.
+//! mutex, and per-call output isolation.
 //!
 //! **Background jobs.** [`start_jobs`](McpSession::start_jobs) backgrounds a slow
 //! `run`/`update`/`downgrade` as one `-T`-scoped job per resolved template,
@@ -89,29 +89,25 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(1);
 /// job was scoped to.
 ///
 /// A force-aborted dispatch never reached its own `unlock()`, so the cancel
-/// releases the operation lock on its behalf — but that is an SSH round-trip per
-/// host and may queue behind another template's in-flight dispatch, so it is
-/// bounded to keep `job_cancel` responsive. On expiry the remaining locks stay
-/// held and the reply says so; the `unlock` command and the fleet's stale-lock
-/// reap are the backstop. Not a config key.
+/// releases the lock for it, bounded to keep `job_cancel` responsive. On expiry
+/// the remaining locks stay held and the reply says so; the `unlock` command
+/// and the stale-lock reap are the backstop. Not a config key.
 pub(crate) const ABORT_UNLOCK_BUDGET: Duration = Duration::from_secs(5);
 
 /// Upper bound on the `wait_seconds` budget `job_status`/`job_result` will park
 /// on.
 ///
-/// Collapses a poll loop into two or three turns even for the slowest observed
-/// job, while a parked call stays inside what clients and proxies tolerate: rmcp
-/// keeps the per-request SSE stream alive every 15s, and with a `progressToken`
-/// the heartbeat fires every [`DEFAULT_PROGRESS_INTERVAL`]. A larger value is
-/// refused rather than clamped, so a client is never told it waited longer than
-/// it did. Not a config key.
+/// Keeps a parked call inside what clients and proxies tolerate (rmcp keeps the
+/// SSE stream alive every 15s; a `progressToken` adds a
+/// [`DEFAULT_PROGRESS_INTERVAL`] heartbeat). A larger value is refused rather
+/// than clamped, so a client is never told it waited longer than it did. Not a
+/// config key.
 pub(crate) const JOB_WAIT_CAP_SECS: u64 = 120;
 
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
 ///
-/// If the future awaiting a spawned dispatch is itself cancelled (an aborted job
-/// worker, a dropped request), this aborts the dispatch too, preserving the
-/// inline path's shape: the body is dropped, not detached to run on unobserved.
+/// If the future awaiting a spawned dispatch is cancelled, the dispatch is
+/// aborted too, as on the inline path, instead of running on detached.
 struct AbortOnDrop<T>(JoinHandle<T>);
 
 impl<T> Drop for AbortOnDrop<T> {
@@ -122,15 +118,13 @@ impl<T> Drop for AbortOnDrop<T> {
 
 /// A transport-free sink for heartbeat progress frames.
 ///
-/// A trait rather than the rmcp `Peer`, so this layer stays transport-free and
-/// unit-testable with a recording double; `crate::server::PeerProgressSink` is
-/// the rmcp-backed implementation. Implementors **must not** propagate transport
-/// failures — a send error is the sink's own concern (log at DEBUG and swallow)
-/// so a flaky client can never mask the command's outcome.
+/// A trait rather than the rmcp `Peer`, so this layer stays transport-free;
+/// `crate::server::PeerProgressSink` is the rmcp-backed implementation.
+/// Implementors **must not** propagate transport failures (log at DEBUG and
+/// swallow), so a flaky client can never mask the command's outcome.
 ///
-/// [`report`](ProgressSink::report) returns a boxed future rather than being a
-/// native `async fn`, to stay `dyn`-compatible without pulling `async-trait`
-/// into this always-compiled library layer.
+/// [`report`](ProgressSink::report) returns a boxed future to stay
+/// `dyn`-compatible without `async-trait`.
 pub trait ProgressSink: Send + Sync {
     /// Emit one progress frame: `progress` elapsed seconds so far, `message` the
     /// human-readable heartbeat line. `total` is always unknown for a heartbeat.
@@ -695,7 +689,7 @@ pub enum CommandLock {
     /// ([`mtui_core::addresses_template`]). Dispatches on a
     /// [`Session::fork_for_call`](mtui_core::Session::fork_for_call) like
     /// [`CommandLock::Scoped`], never holding the canonical session mutex
-    /// across slow network I/O (#613).
+    /// across slow network I/O.
     Shared(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
     /// A registry-wide exclusive hold (canonical-session commands / unscoped
     /// fan-out).
@@ -846,7 +840,7 @@ impl McpSession {
     ///
     /// Best-effort down to the session itself: empty while an exclusive
     /// dispatch holds the session, so a record write never waits on a running
-    /// job. The record always carries `rrids`, which need no lock (#613).
+    /// job. The record always carries `rrids`, which need no lock.
     pub(crate) async fn audit_hosts(&self, scope: &CallScope) -> Vec<String> {
         if *scope == CallScope::None {
             return Vec::new();
@@ -991,10 +985,8 @@ impl McpSession {
     }
 
     /// Acquires the right lock(s) for a `name`/`argv` invocation, resolving
-    /// exactly as the foreground dispatch does (via [`resolve_command_rrids`],
-    /// gated on [`addresses_template`] exactly
-    /// like [`resolve_call_scope`](Self::resolve_call_scope), so the two cannot
-    /// disagree):
+    /// exactly as [`resolve_call_scope`](Self::resolve_call_scope) does (via
+    /// [`resolve_command_rrids`] gated on [`addresses_template`]):
     ///
     /// * a command addressing no template → the gate *shared* with **no**
     ///   per-RRID lock, so session-level calls never serialise against the
@@ -1006,11 +998,9 @@ impl McpSession {
     ///   resolving to no real template → the gate *exclusive*, draining in-flight
     ///   per-RRID commands and blocking new ones for the duration.
     ///
-    /// A single call never holds two per-RRID locks, and the shared and
-    /// exclusive paths hold only the gate, so the lock order (gate → at most
-    /// one rrid lock) is total and cannot deadlock. Resolution briefly locks
-    /// the session, released before the guard is handed back so the caller may
-    /// re-lock it for dispatch.
+    /// A call never holds two per-RRID locks, so the lock order (gate → at most
+    /// one rrid lock) is total and cannot deadlock. Resolution briefly locks the
+    /// session, released before the guard is returned.
     async fn command_lock(&self, registry: &Registry, name: &str, argv: &[String]) -> CommandLock {
         let rrids = match registry.get(name) {
             // Exclusive even when it resolves to a single template: the
@@ -1022,7 +1012,7 @@ impl McpSession {
                 // Session-level: no template to serialise on. Gated on the
                 // same predicate as `resolve_call_scope`, before resolving —
                 // `Scope::Single` alone would map to the active template's
-                // per-RRID lock here while the job path records no scope (#603).
+                // per-RRID lock here while the job path records no scope.
                 if !addresses_template(command.as_ref()) {
                     return CommandLock::Shared(self.gate_shared().await);
                 }
@@ -1061,16 +1051,13 @@ impl McpSession {
 
     /// Holds the registry-shared gate plus one template's per-RRID lock.
     ///
-    /// For the hand-written document/transfer tools, which act on one template:
-    /// the shared gate keeps the loaded set stable for the body while still
-    /// letting tools on *other* templates run in parallel, and the per-RRID lock
-    /// serialises against foreground dispatch for the *same* template.
+    /// For the hand-written document/transfer tools: the shared gate keeps the
+    /// loaded set stable while tools on *other* templates run in parallel, and
+    /// the per-RRID lock serialises against dispatch on the *same* template.
     ///
-    /// `rrid` is the target template id, or `None` to fall back to the active
-    /// one. The key is canonicalized here, so short spellings (`S:M:…`) take
-    /// the same lock as the full RRID on every caller. Callers should resolve
-    /// and validate the target report *inside* the body, where the shared gate
-    /// guarantees the registry cannot change underfoot.
+    /// `rrid` is the target template id, or `None` for the active one; the key
+    /// is canonicalized, so short spellings take the same lock as the full RRID.
+    /// Resolve and validate the target report *inside* the body.
     pub async fn scoped_lock(&self, rrid: Option<&str>) -> CommandLock {
         let shared = self.gate_shared().await;
         let (key, known) = match rrid {
@@ -1118,15 +1105,12 @@ impl McpSession {
 
     /// Releases pool claims and disconnects every loaded template's hosts.
     ///
-    /// Mirrors the REPL `quit` disconnect path but **without** its exit-flag /
-    /// history-flush tail, since the process keeps serving other clients.
-    ///
-    /// **Every** connected host goes, not just the active template's: a session
-    /// may hold several templates, and hosts attached while nothing was loaded
-    /// live in the null-report group. See
+    /// Mirrors the REPL `quit` disconnect path without its exit-flag /
+    /// history-flush tail. **Every** connected host goes, including hosts
+    /// attached while nothing was loaded (the null-report group); see
     /// [`Session::take_teardown_units`](mtui_core::Session::take_teardown_units).
     /// The timeout covers the mutex-taking preamble too, so a busy session is
-    /// abandoned rather than hanging the idle-sweep awaiting this.
+    /// abandoned rather than hanging the idle-sweep.
     pub async fn close(&self) {
         self.close_with_timeout(HOST_CLOSE_TIMEOUT).await;
     }
@@ -1205,10 +1189,8 @@ impl McpSession {
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive: `name`/`argv` go through the **same**
-    /// engine the REPL uses, under this call's `command_lock`, on a per-call
-    /// fork (scoped and session-level holds) or the canonical session
-    /// (exclusive hold) — see the body. A `--help`/`--version` request is a
-    /// *success*, matching argparse's exit-0 semantics.
+    /// engine the REPL uses, under this call's `command_lock`. A
+    /// `--help`/`--version` request is a *success*.
     ///
     /// # Errors
     ///
@@ -1230,13 +1212,8 @@ impl McpSession {
     ///
     /// The background-job worker passes its job's token so
     /// [`job_cancel`](Self::job_cancel) can cancel exactly that dispatch;
-    /// foreground tool calls pass `None` and get a fresh, never-cancelled one.
-    /// The token is set on the per-call fork on the scoped/shared paths, and on
-    /// the canonical session (restored after) on the exclusive one.
-    ///
-    /// `ran_under`, when given, is filled with the scope the dispatch resolves
-    /// once it holds its lock, from the session it runs on and under a hold it
-    /// already takes.
+    /// foreground calls pass `None`. `ran_under`, when given, is filled with the
+    /// scope the dispatch resolves once it holds its lock.
     async fn run_command_cancellable(
         &self,
         registry: &Registry,
@@ -1249,29 +1226,22 @@ impl McpSession {
         // serialise and canonical-session commands drain in-flight per-RRID work.
         let lock = self.command_lock(registry, name, argv).await;
 
-        // Per-call output isolation: its own capture buffer + display, so two
-        // overlapping calls never clobber each other's stdout.
+        // Per-call output isolation: overlapping calls never share stdout.
         let (call_display, call_buf) = self.call_display();
 
         let result = match &lock {
-            // Concurrent path. The fork *shares* the reports' per-entry locks, so
-            // a scoped call locks only its own template's entry, and the canonical
-            // mutex is not held across the dispatch — that is what lets a
-            // different-RRID call run in parallel, and what keeps a slow
-            // session-level call (e.g. `updates` network I/O) from
-            // head-of-line-blocking a scoped resolve behind the mutex (#613).
-            // Content mutations stay visible to the canonical session (same
-            // `Arc<Mutex<..>>`); the fork's own config/registry structure is
-            // discarded, sound because anything mutating those declares
-            // `requires_canonical_session` and was routed to the exclusive path
-            // below.
+            // Concurrent path. The fork *shares* the reports' per-entry locks and
+            // the canonical mutex is not held across the dispatch, so
+            // different-RRID calls run in parallel and a slow session-level call
+            // never blocks a scoped resolve. Content mutations stay visible to
+            // the canonical session; the fork's config/registry structure is
+            // discarded, which is sound because anything mutating those declares
+            // `requires_canonical_session` and takes the exclusive path.
             CommandLock::Scoped { .. } | CommandLock::Shared(_) => {
-                // *Spawned*, because the caller drives us via `join!` on one
-                // task and only a separate task yields real parallelism — hence
-                // the owned `Arc<dyn Command>` and cloned argv, making the future
-                // `Send + 'static`. The lock already proved the command
-                // resolves: the scoped lock to exactly one loaded template, the
-                // shared one to a session-level command.
+                // *Spawned*: the caller drives us via `join!` on one task, and
+                // only a separate task yields real parallelism (hence the owned
+                // `Arc<dyn Command>` and cloned argv). The lock already proved
+                // the command resolves.
                 let command = registry
                     .get(name)
                     .expect("shared/scoped lock implies a resolvable command")
@@ -1388,26 +1358,18 @@ impl McpSession {
     /// two-stage contract as [`job_cancel`](Self::job_cancel): cooperative signal
     /// → [`CANCEL_GRACE`] → forced abort → best-effort operation-lock release.
     ///
-    /// Only a synthesised **command** tool can hold `/var/lock/mtui.lock`
-    /// (document/transfer tools do not dispatch through the engine at all), so
-    /// this is the one call site the server layer routes here rather than through
-    /// the bare `cancellable`.
+    /// Only a synthesised **command** tool can hold `/var/lock/mtui.lock`, so
+    /// only the server's command-tool path routes here.
     ///
-    /// A cooperative stop inside the grace unwinds the dispatch's own flow, which
-    /// runs its own `unlock()`, so [`ToolOutcome::Completed`] carries that flow's
-    /// verdict exactly as an uncancelled call would; only a forced abort yields
-    /// [`ToolOutcome::Aborted`].
+    /// A cooperative stop inside the grace unwinds the dispatch's own flow,
+    /// which runs its own `unlock()`, so [`ToolOutcome::Completed`] carries that
+    /// flow's verdict; only a forced abort yields [`ToolOutcome::Aborted`].
     ///
-    /// The post-abort unlock releases the scope the dispatch ran under, which
-    /// it records once it holds its lock. A dispatch aborted before that is
-    /// resolved afresh, with only a quarter of [`ABORT_UNLOCK_BUDGET`]: that
-    /// locks the session, which a concurrent *exclusive* dispatch can hold for
-    /// minutes, so a slow resolve falls back to no scope (every loaded
-    /// template) rather than eating the budget this method's
-    /// `job_cancel`-grade responsiveness depends on.
-    ///
-    /// `ran_under` only ever holds the scope the dispatch resolved under its
-    /// lock: an abort before that leaves it empty.
+    /// The post-abort unlock releases the scope recorded in `ran_under` (empty
+    /// if the abort preceded the lock). In that case the scope is resolved
+    /// afresh with a quarter of [`ABORT_UNLOCK_BUDGET`]: a concurrent
+    /// *exclusive* dispatch can hold the session for minutes, so a slow resolve
+    /// falls back to every loaded template rather than eat the budget.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_command_client_cancellable(
         &self,
@@ -1697,16 +1659,15 @@ impl McpSession {
     /// Start `name`/`argv` in the background, fanning out one job per template.
     ///
     /// Resolves the target templates as the foreground path does and mints one
-    /// `-T`-scoped job each, so a backgrounded fan-out is independently
-    /// observable and cancellable per template. A single template (or none)
-    /// yields one job with the unchanged `<command>-<n>` id.
+    /// `-T`-scoped job each, so a fan-out is observable and cancellable per
+    /// template. A single template (or none) yields one job with the plain
+    /// `<command>-<n>` id.
     ///
-    /// The single-template job is `-T`-scoped too, because resolution happens at
-    /// mint and dispatch later: a `load_template` in between would otherwise
-    /// widen an unscoped dispatch beyond what the job record names, and a cancel
-    /// would strand the unrecorded template's locks behind a success-shaped
-    /// reply. A command that addresses no template
-    /// ([`mtui_core::addresses_template`]) gets neither the `-T` nor a scope.
+    /// The single-template job is `-T`-scoped too: a `load_template` between
+    /// mint and dispatch would otherwise widen the dispatch beyond what the job
+    /// record names, and a cancel would strand the unrecorded template's locks.
+    /// A command addressing no template ([`mtui_core::addresses_template`]) gets
+    /// neither the `-T` nor a scope.
     ///
     /// # Errors
     ///
@@ -1802,10 +1763,9 @@ impl McpSession {
     /// Return `job_id`'s state view, first parking up to `budget` for the job to
     /// become terminal.
     ///
-    /// A zero `budget` is the plain poll. The record is looked up
-    /// **once** and its `Arc` held across the wait, so a concurrent eviction
-    /// cannot turn a job that settled during the wait into `"no such job"` under
-    /// the waiter.
+    /// A zero `budget` is the plain poll. The record is looked up **once** and
+    /// its `Arc` held across the wait, so a concurrent eviction cannot turn a
+    /// job that settled meanwhile into `"no such job"`.
     ///
     /// # Errors
     ///
@@ -1826,10 +1786,9 @@ impl McpSession {
     ///
     /// A zero `budget` is the plain fetch. The wait is not a guarantee: a job
     /// still running when the budget lapses gets the "still running" error, and a
-    /// wait woken by a `job_cancel` claim near-deterministically returns the
-    /// *bare* `job <id> was cancelled` — both the cooperative verdict's `stderr`
-    /// detail and any partial stdout land only once the aborted worker resumes.
-    /// Exactly what a poll at that instant would have seen.
+    /// wait woken by a `job_cancel` claim returns the *bare* `job <id> was
+    /// cancelled` (detail and partial stdout land once the aborted worker
+    /// resumes) — exactly what a poll at that instant would see.
     ///
     /// # Errors
     ///
@@ -1850,27 +1809,22 @@ impl McpSession {
     ///
     /// Truthful and two-stage: the job's [`CancellationToken`] is cancelled
     /// first, then the worker task is aborted if the cooperative grace elapses.
-    /// The underlying SSH/subprocess operation may still run to completion on the
-    /// host — the same caveat as interrupting a foreground `run` — so the reply
-    /// says the abort was forced.
+    /// The remote SSH/subprocess operation may still run to completion, so the
+    /// reply says the abort was forced.
     ///
-    /// A forced abort drops the dispatch's future mid-`await`, so the operation's
-    /// own `unlock()` never runs and `/var/lock/mtui.lock` would be stranded on
-    /// every host of every template the job was scoped to. The forced arm
-    /// therefore releases it on the job's behalf and reports the per-host outcome;
-    /// the cooperative arm does **not**, since a body that unwound through its own
-    /// flow ran its own unlock discipline. Only locks the job's **own** host group
+    /// A forced abort drops the dispatch mid-`await`, so its own `unlock()` never
+    /// runs and `/var/lock/mtui.lock` would be stranded on every host of every
+    /// template the job was scoped to. The forced arm therefore releases it and
+    /// reports the per-host outcome; the cooperative arm does **not**, since the
+    /// unwound flow ran its own unlock. Only locks the job's **own** host group
     /// took are released, never a comment-marked exclusive reservation — see
     /// [`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held).
     ///
-    /// Releasing under this uncertainty matches the command-timeout path, which
-    /// also unlocks unconditionally. A package transaction stays serialised by
-    /// the package manager's own system-wide lock, and `/var/lock/mtui.lock` is
-    /// mtui's coordination layer on top, so leaving it behind blocks every other
-    /// tester on those hosts. A `run` or `reboot` has no such second layer, so
-    /// there the release is purely mtui-side bookkeeping and the remote command
-    /// may still be executing. Nothing else is done at the hosts — no reboot, no
-    /// downgrade, no disconnect.
+    /// Unlocking unconditionally matches the command-timeout path. For a package
+    /// transaction the package manager's own lock still serialises, so leaving
+    /// mtui's lock behind would only block other testers; for a `run` or `reboot`
+    /// the release is mtui-side bookkeeping and the remote command may still be
+    /// executing. Nothing else is done at the hosts.
     ///
     /// A job already terminal is **not** re-cancelled: the reply names its actual
     /// state instead of claiming a cancellation that never happened.
@@ -1886,9 +1840,7 @@ impl McpSession {
     /// [`job_cancel`](Self::job_cancel) with an explicit post-abort unlock
     /// budget.
     ///
-    /// The timeout seam exists for the same reason
-    /// [`close_with_timeout`](Self::close_with_timeout)'s does: the colocated
-    /// budget-expiry test bounds the wait to a fraction of a second.
+    /// The seam lets the budget-expiry test bound the wait.
     ///
     /// # Errors
     ///
@@ -1973,42 +1925,35 @@ impl McpSession {
     /// Releases the operation lock a force-aborted dispatch left behind, on
     /// the groups its `scope` could have locked: each of its
     /// [`Templates`](CallScope::Templates); for
-    /// [`NothingLoaded`](CallScope::NothingLoaded) the null sentinel alone, as
-    /// the dispatch held the exclusive gate over an empty registry, so a
-    /// template loaded since is another dispatch's; for
-    /// [`None`](CallScope::None) every loaded template plus the sentinel, the
-    /// conservative answer for a dispatch that may have held the gate
-    /// exclusively and locked hosts across all of them. The sentinel joins only
-    /// when it holds hosts. The whole pass is bounded by `budget`, **including
-    /// the preamble**: a template not reached in time is reported unknown
-    /// rather than waited out, so `job_cancel` stays responsive. Within that, the sentinel is
-    /// capped at one group's equal share of what the preamble left, so neither
-    /// side can starve the other. Per template it does nothing but release the
-    /// group's own held locks — no disconnect, no pool release, no history row.
+    /// [`NothingLoaded`](CallScope::NothingLoaded) the null sentinel alone (the
+    /// dispatch held the exclusive gate over an empty registry, so a template
+    /// loaded since is another dispatch's); for [`None`](CallScope::None) every
+    /// loaded template plus the sentinel, the conservative answer. The sentinel
+    /// joins only when it holds hosts. The whole pass is bounded by `budget`,
+    /// **including the preamble**: a template not reached in time is reported
+    /// unknown rather than waited out. The sentinel is capped at one group's
+    /// equal share of what the preamble left, so neither side starves the other.
+    /// Per template it only releases the group's own held locks — no
+    /// disconnect, no pool release, no history row.
     async fn unlock_after_abort(&self, scope: &CallScope, budget: Duration) -> AbortUnlock {
         let mut summary = AbortUnlock::default();
-        // Armed before the first await: the preamble takes the canonical session
-        // mutex, which an exclusive dispatch holds for its whole duration
-        // (scoped calls and transfers take it only briefly to resolve and
-        // fork), and leaving that outside the budget is exactly the
-        // minutes-long block `ABORT_UNLOCK_BUDGET` promises to prevent.
+        // Armed before the first await: the preamble takes the session mutex,
+        // which an exclusive dispatch holds for minutes, so it must be inside
+        // the budget.
         let deadline = Instant::now() + budget;
 
         // Preamble, deliberately **gate-free and unconditional**: drop the active
         // guard an aborted *exclusive* dispatch left on the canonical session,
-        // then resolve the fallback scope. Doing it before, and independently of,
-        // the per-template holds is load-bearing — that guard blocks
+        // then resolve the fallback scope. Load-bearing: that guard blocks
         // `Session::activate`'s `try_lock_owned`, so every later scoped dispatch
-        // on the template would be refused as `template busy`, the `list_locks`
-        // the reply recommends included. Dropped only inside the
-        // per-template pass, a busy gate (the gate is a fair `RwLock`, so one
-        // pending `load_template` blocks shared acquisition) could burn the
-        // budget and leave the session poisoned.
+        // on the template would be refused as `template busy`, and a busy gate
+        // (one pending `load_template` blocks shared acquisition) could burn the
+        // budget before a per-template drop ran.
         //
-        // Gate-free is safe here, and `close_with_timeout` relies on the same
-        // property: every writer of the canonical active guard either runs under
-        // the exclusive gate or holds the session mutex for the whole write, so
-        // taking the mutex makes the drop atomic against them.
+        // Gate-free is safe, as `close_with_timeout` also relies: every writer of
+        // the canonical active guard runs under the exclusive gate or holds the
+        // session mutex for the whole write, so taking the mutex makes the drop
+        // atomic against them.
         let preamble = async {
             let mut session = self.session.lock().await;
             session.release_active_guard();
@@ -2023,7 +1968,7 @@ impl McpSession {
                 }
                 // The registry alone is not the set of connected hosts: a host
                 // attached with nothing loaded lives on the null sentinel, whose
-                // RRID is empty and so is never returned by `rrids()` (#485).
+                // RRID is empty and so is never returned by `rrids()`.
                 // Include it when it actually holds hosts, alongside the
                 // registry's RRIDs.
                 CallScope::None => (

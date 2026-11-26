@@ -16,13 +16,12 @@
 //! - `switch`: REPL-only active-template pointer; tools select a template per
 //!   call via the `template` parameter.
 //! - `get`, `put`: their synthesized forms exchange **server-local paths** a
-//!   remote `--transport http` client cannot reach. The hand-written tools in
-//!   [`crate::transfer_tools`] carry the content in-band under the same names
-//!   instead (#434) — the `edit` → report-document tools precedent, with name reuse
-//!   made collision-free by this very deny.
+//!   remote `--transport http` client cannot reach; [`crate::transfer_tools`]
+//!   carries the content in-band under the same names, made collision-free by
+//!   this very deny.
 //! - `config_set`: writes operator config — endpoints, credentials, identity,
 //!   timeouts — retargeting the infrastructure the session trusts, with no
-//!   operator-visible artifact (#410). `config_show` stays exposed, so a client
+//!   operator-visible artifact. `config_show` stays exposed, so a client
 //!   can still verify the posture it operates under.
 //!
 //! `unload` is deliberately **not** denied: it names an explicit RRID, mutates
@@ -37,7 +36,7 @@ pub(crate) fn is_denied(name: &str) -> bool {
     MCP_DENYLIST.contains(&name)
 }
 
-/// Per-tool argument deny (#410): `clap` args an MCP tool must not advertise
+/// Per-tool argument deny: `clap` args an MCP tool must not advertise
 /// in its schema. At dispatch a sent one is refused as an unknown key.
 ///
 /// The `url_*` overrides retarget trust — endpoints, not the operator's

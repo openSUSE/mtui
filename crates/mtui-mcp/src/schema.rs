@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 /// Decided by the arg's action, not its id: a command may declare its own arg
 /// named `version` (e.g. `list_refhosts --version <VERSION>`), and matching on
 /// the id would drop that real input from the schema, the argv reconstruction
-/// and the unknown-key check alike (#681).
+/// and the unknown-key check alike.
 #[must_use]
 pub(crate) fn is_clap_builtin(arg: &Arg) -> bool {
     matches!(
@@ -135,7 +135,7 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
     if is_list {
         let mut array = Map::new();
         array.insert("type".to_owned(), Value::String("array".to_owned()));
-        // Mirror, not move (#545): clients may render either level.
+        // Mirror, not move: clients may render either level.
         if let Some(desc) = description(arg) {
             array.insert("description".to_owned(), Value::String(desc));
         }

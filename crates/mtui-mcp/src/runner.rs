@@ -88,13 +88,10 @@ async fn serve_stdio(args: &McpArgs, log_level: Option<LogLevelControl>) -> anyh
 
 /// Prove the configured `[mcp] audit_log` can be opened, before serving.
 ///
-/// A sink that cannot take a record refuses every call it is asked to record,
-/// so a broken path is a start-up error, not a first-tool-call surprise. This
-/// runs before [`init_otel_exporter`] so a local misconfiguration is reported
-/// without waiting out a network probe, and the error goes to stderr only —
-/// naming the path there is what makes it actionable.
-///
-/// The open itself rides `spawn_blocking` inside `check_writable_async`.
+/// A sink that cannot take a record refuses every call, so a broken path is a
+/// start-up error rather than a first-tool-call surprise. Runs before
+/// [`init_otel_exporter`] so a local misconfiguration is reported without
+/// waiting out a network probe; the error goes to stderr only.
 async fn probe_audit_sink(config: &mtui_config::Config) -> anyhow::Result<()> {
     let Some(path) = config.mcp_audit_log.as_ref() else {
         return Ok(());
@@ -177,11 +174,10 @@ async fn wait_for_shutdown(
 
 /// Serve the tool surface over streamable HTTP (one process, many clients).
 ///
-/// rmcp's [`StreamableHttpService`] keys clients by `Mcp-Session-Id` and calls
-/// the [`SessionRegistry`] factory once per new session, so each client gets a
-/// **fully isolated** [`McpServer`] (own `targets` / `metadata`). The service is
-/// a `tower::Service`, mounted as an `axum` fallback. rmcp defaults
-/// `allowed_hosts` to loopback (DNS-rebinding guard).
+/// rmcp's [`StreamableHttpService`] calls the [`SessionRegistry`] factory once
+/// per `Mcp-Session-Id`, so each client gets a **fully isolated**
+/// [`McpServer`]. rmcp defaults `allowed_hosts` to loopback (DNS-rebinding
+/// guard).
 ///
 /// # Errors
 ///
@@ -343,9 +339,8 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
 ///
 /// The stderr level is the **server's**: one filter per process, so under
 /// `--transport http` a `set_log_level` from any client changes it for every
-/// session. A reload replaces the whole filter, as in the REPL — per-target
-/// `RUST_LOG` directives are discarded, and the event format is unchanged.
-/// The OTLP tracing diagnostics keep the startup filter.
+/// session. A reload replaces the whole filter, discarding per-target `RUST_LOG`
+/// directives; OTLP tracing diagnostics keep the startup filter.
 fn init_tracing(debug: bool, color: ColorMode) -> Option<LogLevelControl> {
     let (filter, notice) = startup_filter(debug);
     let fmt = tracing_subscriber::fmt::layer()
@@ -435,21 +430,18 @@ fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
 /// The default `EnvFilter` directive string when `RUST_LOG` is unset.
 ///
 /// Beyond the base level (`debug` under `-d/--debug`, else `info`), pins
-/// `rmcp::service=warn`: `AbortController`-based streamable-http clients abort
-/// each per-request controller ~10-30ms *after* a successful `tools/call`, which
-/// rmcp logs as a no-op `CancelledNotification` at INFO. Silencing that target
-/// drops the noise while keeping every `mtui_*` INFO line.
+/// `rmcp::service=warn`: streamable-http clients abort each request controller
+/// just *after* a successful `tools/call`, which rmcp logs as a no-op
+/// `CancelledNotification` at INFO.
 ///
 /// Under `-d/--debug` it also appends [`TRANSPORT_LOG_CARVE_OUT`], holding
-/// `hyper_util`/`hyper`/`reqwest` at `INFO`: those log connection details at
-/// `DEBUG`, and hyper-util's pool key carries an authority a hostile redirect can
-/// load with userinfo (#439). The `info` arm's base level already caps them.
+/// `hyper_util`/`hyper`/`reqwest` at `INFO`: hyper-util's pool key carries an
+/// authority a hostile redirect can load with userinfo. The `info` arm's base
+/// level already caps them.
 ///
-/// An explicit `RUST_LOG` replaces *these* directives — `rmcp::service=warn`
-/// included — but not the transport cap: [`startup_filter`] layers that back on
-/// through [`resolve_log_directives`] unless the operator named a transport
-/// target, so `RUST_LOG=debug` does not reopen the leak while
-/// `RUST_LOG=hyper_util=debug` still exposes the transport's view on request.
+/// An explicit `RUST_LOG` replaces *these* directives but not the transport cap:
+/// [`startup_filter`] layers it back on through [`resolve_log_directives`]
+/// unless the operator named a transport target.
 fn default_directives(debug: bool) -> String {
     if debug {
         format!("debug,rmcp::service=warn,{TRANSPORT_LOG_CARVE_OUT}")

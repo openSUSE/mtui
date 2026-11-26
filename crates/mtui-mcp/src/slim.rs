@@ -1,31 +1,26 @@
 //! Token-slimming helpers for the MCP wire surface.
 //!
-//! Two token-budget concerns live here, co-located:
-//!
 //! * `cap_output` — the per-tool-result byte bound.
 //! * `slim_tool_schema` — the JSON-Schema pass that drops redundant `title`
 //!   keys, flattens `anyOf: [{type: X}, {type: null}]` unions and terse-rewrites
 //!   the long shared `help` strings before the tool list goes on the wire.
 //!
-//! `crate::schema` builds the schema straight from `clap`, so it never emits a
-//! `title` and the `title`-drop is mostly defensive; the substantive wins are the
-//! nullable flatten and the terse descriptions. The transforms run on the plain
-//! [`ToolDescriptor`](crate::tools::ToolDescriptor) schema `Value`s in
-//! [`crate::server::McpServer::new`], before conversion to `rmcp::model::Tool`.
+//! `crate::schema` never emits a `title`, so that drop is defensive; the
+//! substantive wins are the nullable flatten and the terse descriptions. The
+//! transforms run in [`crate::server::McpServer::new`], before conversion to
+//! `rmcp::model::Tool`.
 
 use serde_json::{Map, Value};
 
 /// Truncate `text` to at most `limit` bytes (UTF-8), appending a notice.
 ///
-/// A single tool result — a `run` over many hosts, a multi-thousand-line install
-/// log — can dwarf the rest of the client's context. Over `limit` the **tail** is
-/// dropped, the head usually carrying the command echo and the most diagnostic
-/// output, and a `…[truncated N bytes; …]` notice points at the paged readers.
+/// Over `limit` the **tail** is dropped (the head usually carries the command
+/// echo and the most diagnostic output) and a `…[truncated N bytes; …]` notice
+/// points at the paged readers.
 ///
 /// `limit == 0` disables the cap and under-cap text is returned byte-identical.
-/// The cut lands on a `char` boundary, so the result is always valid UTF-8. The
-/// reported count is the budget overrun `total − limit`, independent of the few
-/// extra bytes a codepoint-boundary trim may shed.
+/// The cut lands on a `char` boundary; the reported count is the budget overrun
+/// `total − limit`, independent of the bytes the boundary trim sheds.
 #[must_use]
 pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if limit == 0 {
@@ -50,13 +45,9 @@ pub(crate) fn cap_output(text: String, limit: usize) -> String {
 /// The one-line truncation notice appended when output is capped.
 ///
 /// Shared by [`cap_output`] and the write-time
-/// [`SharedBuf`](crate::capture::SharedBuf) path in
-/// [`McpSession::run_command`](crate::session::McpSession::run_command), so both
-/// emit byte-identical text. `dropped` is the budget overrun.
-///
-/// The cap is shared by every tool, but only `show_log` and `report_file_read`
-/// offer offset/limit paging, so that recourse is stated as
-/// tool-conditional rather than universal.
+/// [`SharedBuf`](crate::capture::SharedBuf) path, so both emit byte-identical
+/// text. `dropped` is the budget overrun. Only `show_log` and `report_file_read`
+/// offer paging, so that recourse is stated as tool-conditional.
 #[must_use]
 pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
     format!(
