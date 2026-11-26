@@ -1750,4 +1750,58 @@ mod tests {
             assert_eq!(c.refhosts_path, home.join("qam/refhosts.yml"));
         }
     }
+
+    /// Renders a [`Config`] with its environment-derived fields (`$TEMPLATE_DIR`,
+    /// `$USER`, `$HOME`) pinned, so the output is machine-independent.
+    fn render(mut c: Config) -> String {
+        c.template_dir = PathBuf::from("<template_dir>");
+        c.session_user = "<session_user>".to_owned();
+        c.refhosts_path = PathBuf::from("<refhosts_path>");
+        format!("{c:#?}\n")
+    }
+
+    fn parse(toml: &str) -> RawConfig {
+        toml::from_str(toml).unwrap()
+    }
+
+    const FULL_A: &str = include_str!("../tests/fixtures/golden/full_a.toml");
+    const FULL_B: &str = include_str!("../tests/fixtures/golden/full_b.toml");
+    const INVALID: &str = include_str!("../tests/fixtures/golden/invalid.toml");
+    const DEFAULT_GOLDEN: &str = include_str!("../tests/fixtures/golden/default.txt");
+    const FULL_A_GOLDEN: &str = include_str!("../tests/fixtures/golden/full_a.txt");
+    const FULL_B_GOLDEN: &str = include_str!("../tests/fixtures/golden/full_b.txt");
+    const INVALID_GOLDEN: &str = include_str!("../tests/fixtures/golden/invalid.txt");
+
+    #[test]
+    fn config_default_is_pinned_in_full() {
+        assert_eq!(render(Config::default()), DEFAULT_GOLDEN);
+    }
+
+    #[test]
+    fn from_raw_of_a_fully_populated_file_is_pinned_in_full() {
+        assert_eq!(render(Config::from_raw(parse(FULL_A))), FULL_A_GOLDEN);
+        assert_eq!(render(Config::from_raw(parse(FULL_B))), FULL_B_GOLDEN);
+    }
+
+    #[test]
+    fn from_raw_of_invalid_values_is_pinned_in_full() {
+        assert_eq!(render(Config::from_raw(parse(INVALID))), INVALID_GOLDEN);
+    }
+
+    /// Every option of the later document wins over the earlier one, in either
+    /// order, and an empty document changes nothing.
+    #[test]
+    fn merge_overrides_every_option() {
+        let mut ab = parse(FULL_A);
+        ab.merge(parse(FULL_B));
+        assert_eq!(render(Config::from_raw(ab)), FULL_B_GOLDEN);
+
+        let mut ba = parse(FULL_B);
+        ba.merge(parse(FULL_A));
+        assert_eq!(render(Config::from_raw(ba)), FULL_A_GOLDEN);
+
+        let mut a = parse(FULL_A);
+        a.merge(RawConfig::default());
+        assert_eq!(render(Config::from_raw(a)), FULL_A_GOLDEN);
+    }
 }
