@@ -7,6 +7,7 @@ use crate::command::{Command, Scope};
 use crate::commands::support::{document_edits_guard, leftover_notices};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+use crate::template_registry::RemoveReport;
 use crate::template_scope::canonical_template_name;
 
 /// Unloads one loaded template, closing only its host connections.
@@ -98,15 +99,7 @@ impl Command for Unload {
         for host in &removed.stragglers {
             tracing::warn!("still disconnecting from {host}");
         }
-        let mut msg = format!("unloaded {rrid}");
-        if !removed.failed.is_empty() || !removed.stragglers.is_empty() {
-            msg.push_str(&format!(
-                " ({} failed, {} still disconnecting)",
-                removed.failed.len(),
-                removed.stragglers.len()
-            ));
-        }
-        session.display.println(&msg);
+        session.display.println(&summary(&rrid, &removed));
         for line in leftover_notices(&removed.leftovers) {
             session.display.println(&line);
         }
@@ -114,10 +107,43 @@ impl Command for Unload {
     }
 }
 
+/// The one-line `unload` result, counting each kind of unfinished teardown.
+fn summary(rrid: &str, removed: &RemoveReport) -> String {
+    let mut msg = format!("unloaded {rrid}");
+    if !removed.release_unfinished.is_empty()
+        || !removed.failed.is_empty()
+        || !removed.stragglers.is_empty()
+    {
+        msg.push_str(&format!(
+            " ({} pool-claim release unfinished, {} failed, {} still disconnecting)",
+            removed.release_unfinished.len(),
+            removed.failed.len(),
+            removed.stragglers.len()
+        ));
+    }
+    msg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, fake_report, matches, session_with_hosts};
+
+    #[test]
+    fn summary_counts_an_unfinished_pool_claim_release() {
+        let removed = RemoveReport {
+            release_unfinished: vec!["hung".to_owned()],
+            ..RemoveReport::default()
+        };
+        assert_eq!(
+            summary("SUSE:Maintenance:1:1", &removed),
+            "unloaded SUSE:Maintenance:1:1 (1 pool-claim release unfinished, 0 failed, 0 still disconnecting)"
+        );
+        assert_eq!(
+            summary("SUSE:Maintenance:1:1", &RemoveReport::default()),
+            "unloaded SUSE:Maintenance:1:1"
+        );
+    }
 
     #[test]
     fn name_and_single_scope() {

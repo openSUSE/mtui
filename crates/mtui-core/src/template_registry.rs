@@ -56,6 +56,8 @@ fn remove_close_timeout() -> Duration {
 /// Best-effort diagnostics to log; removal always completes regardless.
 #[derive(Debug, Default)]
 pub struct RemoveReport {
+    /// Hosts whose pool-claim release had not finished when its budget expired.
+    pub(crate) release_unfinished: Vec<String>,
     /// Hosts that failed to disconnect, as `(hostname, error)` pairs.
     pub(crate) failed: Vec<(String, String)>,
     /// Hosts still disconnecting when the close budget expired.
@@ -144,9 +146,11 @@ impl TemplateRegistry {
     /// The bounded teardown the REPL `quit` runs:
     /// [`release_pool_claims`](mtui_testreport::TestReport::release_pool_claims)
     /// then [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)`, each under
-    /// `remove_close_timeout`. Only then is the entry dropped and, if active, the
+    /// `remove_close_timeout`; the close retries a hung release, so a removal can
+    /// take twice the budget. Only then is the entry dropped and, if active, the
     /// pointer repointed, so a reader never sees a half-torn-down active report.
-    /// A no-op if `rrid` is absent. Returns per-host failures and stragglers.
+    /// A no-op if `rrid` is absent. Returns the hosts whose release did not
+    /// finish, per-host failures and stragglers.
     pub async fn remove(&mut self, rrid: &str) -> RemoveReport {
         if !self.entries.contains_key(rrid) {
             return RemoveReport::default();
@@ -162,8 +166,10 @@ impl TemplateRegistry {
         if let Some(entry) = self.entries.get(rrid).cloned() {
             let mut report = entry.lock().await;
             // Before disconnecting; a no-op without pooling.
-            for host in report.release_pool_claims(timeout).await {
-                tracing::warn!("still releasing the pool claim on {host}");
+            result.release_unfinished = report.release_pool_claims(timeout).await;
+            let secs = timeout.as_secs();
+            for host in &result.release_unfinished {
+                tracing::warn!("pool-claim release on {host} unfinished after {secs} seconds");
             }
             // So a straggler can still be named per host.
             let hosts = report.base_mut().targets.names();
@@ -275,6 +281,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use mtui_hosts::{MockConnection, Owner, Target};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
@@ -416,6 +423,38 @@ mod tests {
         assert_eq!(removed.stragglers, vec!["wedged".to_owned()]);
 
         gate.notify_waiters();
+        CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn remove_bounds_a_pool_claim_release_that_hangs() {
+        let _guard = CLOSE_TIMEOUT_LOCK.lock().await;
+        CLOSE_TIMEOUT_MS.store(50, Ordering::SeqCst);
+
+        let good = MockConnection::new("good");
+        let mut base = mtui_testreport::TestReportBase::new(Config::default());
+        base.rrid = "SUSE:Maintenance:1:1".parse().ok();
+        base.targets = mtui_hosts::HostsGroup::new(
+            vec![
+                target_with("hung", |c| {
+                    c.with_sftp_session_delay(Duration::from_secs(3600))
+                }),
+                Target::with_connection("good", TargetState::Enabled, Box::new(good.clone())),
+            ],
+            false,
+        );
+        base.pool_claims.insert("hung".to_owned());
+        let mut reg = registry();
+        reg.add(fake_report_from_base(base));
+
+        // Catches a release with no budget of its own: remove then never returns.
+        let removed =
+            tokio::time::timeout(Duration::from_secs(5), reg.remove("SUSE:Maintenance:1:1"))
+                .await
+                .expect("remove must return despite the hung release");
+        assert!(!reg.contains("SUSE:Maintenance:1:1"), "removal completes");
+        assert_eq!(removed.release_unfinished, vec!["hung".to_owned()]);
+        assert!(good.is_closed(), "good: still closed");
         CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);
     }
 
