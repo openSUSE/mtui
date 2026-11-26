@@ -22,6 +22,7 @@ use mtui_hosts::{
     Command, HostError, HostsGroup, LockOutcome, Operation, OperationGroup, RebootFailure,
     RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo,
 };
+use mtui_types::RequestReviewID;
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
 
@@ -225,47 +226,9 @@ mod rollback_scope {
     }
 }
 
-/// Drives [`perform_update`] from a concrete report, reading the package list
-/// and `$repa` selector (`maintenance_id` / `review_id`) off the report's RRID.
-///
-/// The shared body behind every report's `perform_update` override, so SL / PI
-/// / OBS each delegate in one line. `report` supplies both the
-/// [`TestReport`](crate::testreport::TestReport) metadata (RRID, package list)
-/// and the [`SetRepo`] repo hook.
-pub async fn perform_update_from_report<R>(
-    report: &R,
-    targets: &mut HostsGroup,
-    noprepare: bool,
-    newpackage: bool,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), UpdateFailure>
-where
-    R: crate::testreport::TestReport + SetRepo,
-{
-    let Some(rrid) = report.base().rrid.as_ref() else {
-        debug!("perform_update: no RRID loaded; nothing to update");
-        return Ok(());
-    };
-    let id = rrid.to_string();
-    let maintenance_id = rrid.maintenance_id.clone();
-    let review_id = rrid.review_id.to_string();
-    let packages = report.get_package_list();
-    perform_update(
-        targets,
-        report,
-        &packages,
-        &maintenance_id,
-        &review_id,
-        Some(&id),
-        noprepare,
-        newpackage,
-        diagnostics,
-    )
-    .await
-}
-
-/// Drives [`perform_update_from_report`] and rolls the packages back via
-/// [`perform_downgrade_for`], before re-surfacing the original error, on the
+/// Drives [`perform_update`] for the report's `rrid` (`$repa` selector and
+/// history id) and rolls the packages back via [`perform_downgrade_for`],
+/// before re-surfacing the original error, on the
 /// two failures that leave the group repairable: a *check* failure, and a
 /// reboot that did not take effect on a host still reachable
 /// ([`UpdateFailure::RebootNotTaken`]), as [`UpdateFailure::rollback`] decides.
@@ -283,27 +246,39 @@ where
 /// never answered raises it (#451). The call site logs that error at WARN and
 /// re-surfaces the original update error, so a failed rollback can never bury
 /// the failure it was trying to repair; do not simplify the call away.
-pub async fn perform_update_with_rollback<R>(
-    report: &R,
+pub async fn perform_update_with_rollback(
+    report: &dyn SetRepo,
+    rrid: Option<&RequestReviewID>,
+    packages: &[String],
     targets: &mut HostsGroup,
     noprepare: bool,
     newpackage: bool,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), UpdateError>
-where
-    R: crate::testreport::TestReport + SetRepo,
-{
-    let failure =
-        match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await
-        {
-            Ok(()) => return Ok(()),
-            Err(failure) => failure,
-        };
+) -> Result<(), UpdateError> {
+    let Some(rrid) = rrid else {
+        debug!("perform_update: no RRID loaded; nothing to update");
+        return Ok(());
+    };
+    let id = rrid.to_string();
+    let failure = match perform_update(
+        targets,
+        report,
+        packages,
+        &rrid.maintenance_id,
+        &rrid.review_id.to_string(),
+        Some(&id),
+        noprepare,
+        newpackage,
+        diagnostics,
+    )
+    .await
+    {
+        Ok(()) => return Ok(()),
+        Err(failure) => failure,
+    };
     if let Some(scope) = failure.rollback() {
         error!("Update failed");
         warn!("Error while updating. Rolling back changes");
-        let pkgs = report.get_package_list();
-        let id = report.base().rrid.as_ref().map(ToString::to_string);
         let hosts = scope.hosts();
         // The downgrade's own per-package checkpoint must not see a cancel
         // that landed during the run phase: it would abort the rollback at
@@ -320,8 +295,8 @@ where
             targets,
             hosts,
             report,
-            &pkgs,
-            id.as_deref(),
+            packages,
+            Some(&id),
             Some(after_patch),
             diagnostics,
         )
@@ -13276,7 +13251,7 @@ mod tests {
     // --- report parity: PI and OBS inherit the same flows ------------------
 
     /// Seeds a report's base with a loaded RRID + one metadata package so
-    /// `perform_update_from_report` reads a real `$repa`/package list, and a
+    /// `perform_update` reads a real `$repa`/package list, and a
     /// test repository for each of the products the update tests' hosts carry:
     /// `SLES 15.5 x86_64` ([`sles_target`]) and `SL-Micro 6.0 x86_64` (the
     /// transactional ones). Works for any concrete report via its `base_mut()`.

@@ -1,12 +1,8 @@
 //! The SUSE Linux [`TestReport`] implementation ([`SlReport`]).
 //!
-//! Keys its identity on the parsed [`RequestReviewID`], derives its update-repo
+//! Keys its identity on the parsed [`RequestReviewID`](mtui_types::RequestReviewID), derives its update-repo
 //! map by dispatching among the [`repoparse`](super::repoparse) helpers, and
 //! verifies its git commit hash against Gitea.
-//!
-//! `list_update_commands` is a documented no-op stub: the doer seam
-//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
-//! install/uninstall but has no listing consumer.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -14,12 +10,11 @@ use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
 use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
-use mtui_types::{RequestReviewID, SystemProduct};
+use mtui_types::SystemProduct;
 use tracing::debug;
 
 use super::repoparse::{gitrepoparse, reporepoparse};
 use super::set_repo_with_add_flags;
-use super::update_flow;
 use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// A [`TestReport`] for SUSE Linux updates.
@@ -47,15 +42,6 @@ impl TestReport for SlReport {
         &mut self.base
     }
 
-    fn id(&self) -> String {
-        // Empty when nothing is loaded.
-        self.base
-            .rrid
-            .as_ref()
-            .map(RequestReviewID::to_string)
-            .unwrap_or_default()
-    }
-
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         // The `repositories` short-circuit must stay first: it is populated
         // upstream of TeReGen and can start appearing for a git-served update
@@ -72,69 +58,6 @@ impl TestReport for SlReport {
         // `perform_update` below runs the per-host `updater` commands; the
         // read-only listing command only ever prints a placeholder.
         debug!("list_update_commands: no-op stub, not yet implemented");
-    }
-
-    // SL/PI/OBS behave identically here, but an object-safe `dyn TestReport`
-    // cannot express a `where Self: SetRepo` default, so each report delegates
-    // to the shared `update_flow` free functions.
-    async fn perform_install(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_install(targets, packages, diagnostics).await
-    }
-
-    async fn perform_uninstall(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_uninstall(targets, packages, diagnostics).await
-    }
-
-    async fn perform_prepare(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        force: bool,
-        testing: bool,
-        installed_only: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_prepare(
-            targets,
-            self,
-            packages,
-            force,
-            testing,
-            installed_only,
-            diagnostics,
-        )
-        .await
-    }
-
-    async fn perform_downgrade(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        let id = self.rrid().map(ToString::to_string);
-        update_flow::perform_downgrade(targets, self, packages, id.as_deref(), diagnostics).await
-    }
-
-    async fn perform_update(
-        &self,
-        targets: &mut HostsGroup,
-        noprepare: bool,
-        newpackage: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage, diagnostics)
-            .await
     }
 
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {

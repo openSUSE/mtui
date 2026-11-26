@@ -22,6 +22,8 @@ use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::package::Package;
 use mtui_types::{OpenQAResults, RequestReviewID, System, SystemProduct, UpdateSource, Workflow};
 
+use crate::reports::update_flow;
+
 /// The concrete openQA state holder carried on a report.
 ///
 /// Monomorphizes [`OpenQAResults`] to the QEM-dashboard "auto" result, the
@@ -326,7 +328,9 @@ pub trait TestReport {
     fn base_mut(&mut self) -> &mut TestReportBase;
 
     /// The report ID. Empty for an unloaded report.
-    fn id(&self) -> String;
+    fn id(&self) -> String {
+        self.rrid().map(ToString::to_string).unwrap_or_default()
+    }
 
     /// The update-repository parser table.
     ///
@@ -534,15 +538,19 @@ pub trait TestReport {
     /// Returns `Err` when the install command failed on one or more hosts
     /// (non-zero exit or non-empty stderr after the fan-out). Holds lost in
     /// the reboot gap are degradation, not failure: each is pushed onto
-    /// `diagnostics` as a degradation. The null object's
-    /// default is a no-op `Ok(())`.
+    /// `diagnostics` as a degradation. A report with no
+    /// [`as_set_repo`](Self::as_set_repo) (the null object) is a no-op
+    /// `Ok(())`; the same holds for every `perform_*` default below.
     async fn perform_install(
         &self,
-        _targets: &mut HostsGroup,
-        _packages: &[String],
-        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        Ok(())
+        if self.as_set_repo().is_none() {
+            return Ok(());
+        }
+        update_flow::perform_install(targets, packages, diagnostics).await
     }
 
     /// Uninstalls `packages` from every host in `targets`.
@@ -553,11 +561,14 @@ pub trait TestReport {
     /// the reboot gap are reported on `diagnostics` as degradations.
     async fn perform_uninstall(
         &self,
-        _targets: &mut HostsGroup,
-        _packages: &[String],
-        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        Ok(())
+        if self.as_set_repo().is_none() {
+            return Ok(());
+        }
+        update_flow::perform_uninstall(targets, packages, diagnostics).await
     }
 
     /// Prepares `packages` on every host.
@@ -573,17 +584,29 @@ pub trait TestReport {
     /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
     /// fan-out, a per-host prepare-command failure, or a prepare check failure.
     /// Holds lost in the reboot gap are reported on `diagnostics` as
-    /// degradations. The null object's default is a no-op `Ok(())`.
+    /// degradations.
     async fn perform_prepare(
         &self,
-        _targets: &mut HostsGroup,
-        _packages: &[String],
-        _force: bool,
-        _testing: bool,
-        _installed_only: bool,
-        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        force: bool,
+        testing: bool,
+        installed_only: bool,
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        Ok(())
+        let Some(report) = self.as_set_repo() else {
+            return Ok(());
+        };
+        update_flow::perform_prepare(
+            targets,
+            report,
+            packages,
+            force,
+            testing,
+            installed_only,
+            diagnostics,
+        )
+        .await
     }
 
     /// Downgrades `packages` on every host.
@@ -595,15 +618,18 @@ pub trait TestReport {
     ///
     /// Returns `Err` on a missing downgrader, lock contention, or a per-host
     /// downgrade check failure. Holds lost in the reboot gap are reported on
-    /// `diagnostics` as degradations. The null object's default is a no-op
-    /// `Ok(())`.
+    /// `diagnostics` as degradations.
     async fn perform_downgrade(
         &self,
-        _targets: &mut HostsGroup,
-        _packages: &[String],
-        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        Ok(())
+        let Some(report) = self.as_set_repo() else {
+            return Ok(());
+        };
+        let id = self.rrid().map(ToString::to_string);
+        update_flow::perform_downgrade(targets, report, packages, id.as_deref(), diagnostics).await
     }
 
     /// Updates the hosts with this report's maintenance update.
@@ -617,26 +643,40 @@ pub trait TestReport {
     ///
     /// Returns `Err` on a per-host `updater` check failure (after a best-effort
     /// downgrade rollback) or a hard missing-updater failure; non-fatal
-    /// diagnostics from the check are appended to `diagnostics`. The null
-    /// object's default is a no-op `Ok(())`.
+    /// diagnostics from the check are appended to `diagnostics`.
     async fn perform_update(
         &self,
-        _targets: &mut HostsGroup,
-        _noprepare: bool,
-        _newpackage: bool,
-        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
+        targets: &mut HostsGroup,
+        noprepare: bool,
+        newpackage: bool,
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        Ok(())
+        let Some(report) = self.as_set_repo() else {
+            return Ok(());
+        };
+        let packages = self.get_package_list();
+        update_flow::perform_update_with_rollback(
+            report,
+            self.rrid(),
+            &packages,
+            targets,
+            noprepare,
+            newpackage,
+            diagnostics,
+        )
+        .await
     }
 
     /// Verifies the loaded template hash.
     ///
     /// Returns a [`HashCheck`] rather than raising, so the async load
     /// orchestrator ([`make_testreport`](crate::make_testreport)) can branch on
-    /// it. The null object and the non-git reports (OBS/PI) report
-    /// [`HashCheck::Ok`], having nothing to verify; async because git-backed
+    /// it. The default, for the null object and the non-git reports (OBS/PI),
+    /// is [`HashCheck::Ok`], having nothing to verify; async because git-backed
     /// reports compare against a hash fetched from Gitea.
-    async fn check_hash(&self) -> HashCheck;
+    async fn check_hash(&self) -> HashCheck {
+        HashCheck::Ok
+    }
 
     /// The working directory for target artifacts.
     ///
@@ -662,7 +702,8 @@ pub trait TestReport {
     /// downcast to, but `set_repo` needs a `&dyn SetRepo` for
     /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup). SL/PI/OBS
     /// override this to return `Some(self)`; the null report keeps the `None`
-    /// default, which the command surfaces as "no update loaded".
+    /// default, which the command surfaces as "no update loaded" and which makes
+    /// every `perform_*` default a no-op.
     fn as_set_repo(&self) -> Option<&dyn SetRepo> {
         None
     }

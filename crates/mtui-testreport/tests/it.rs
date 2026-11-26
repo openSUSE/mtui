@@ -31,5 +31,7 @@ mod pi_report;
 mod products;
 #[path = "repoparse.rs"]
 mod repoparse;
+#[path = "report_flows.rs"]
+mod report_flows;
 #[path = "sl_report.rs"]
 mod sl_report;
