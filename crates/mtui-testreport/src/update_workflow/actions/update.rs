@@ -88,12 +88,14 @@ yum repolist
 yum -y update $packages
 ";
 
-/// zypper update command.
-///
-/// See the module docs for why the patch's status is captured rather than left
-/// to the shell's last-command-wins rule, why the two commands that produce the
-/// patch list are guarded, and why `zypper -n refresh` is not one of them.
-const ZYPPER_UPDATE: &str = r#"
+/// The zypper-family update script. `$refresh` is a whole line (or nothing) run
+/// after the repository listing, and `$install` the patch-install command, up to
+/// its `-l -y -t patch` arguments; everything else, the probe guard included, is
+/// the same on both families.
+macro_rules! zypper_update_script {
+    ($refresh:literal, $install:literal) => {
+        concat!(
+            r#"
 export LANG=
 mtui_issue_repo_present() {
   zypper -n lr | awk -F "|" '/$repa\>/ { found = 1 } END { exit !found }'
@@ -112,8 +114,9 @@ mtui_probe_ok() {
   exit "$$2"
 }
 zypper -n lr -puU
-zypper -n refresh
-zypper -n patches | grep $repa
+"#,
+            $refresh,
+            r#"zypper -n patches | grep $repa
 mtui_patch_rows=$$(zypper -n patches)
 mtui_probe_ok "zypper -n patches" $$?
 mtui_patches=$$(printf '%s\n' "$$mtui_patch_rows" | awk -F "|" '/$repa\>/ { print $2; }')
@@ -121,13 +124,25 @@ mtui_probe_ok "awk" $$?
 mtui_status=0
 set -- $$mtui_patches
 if [ "$$#" -gt 0 ]; then
-  zypper -n in -l -y -t patch "$$@"
+  "#,
+            $install,
+            r#" -l -y -t patch "$$@"
   mtui_status=$$?
 fi
 zypper -n patches | grep $repa
 zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
 exit $$mtui_status
-"#;
+"#
+        )
+    };
+}
+
+/// zypper update command.
+///
+/// See the module docs for why the patch's status is captured rather than left
+/// to the shell's last-command-wins rule, why the two commands that produce the
+/// patch list are guarded, and why `zypper -n refresh` is not one of them.
+const ZYPPER_UPDATE: &str = zypper_update_script!("zypper -n refresh\n", "zypper -n in");
 
 /// slmicro update command.
 ///
@@ -136,40 +151,7 @@ exit $$mtui_status
 /// the patch list are guarded. Note this template carries no `zypper -n
 /// refresh` line at all — it never refreshes, so stale metadata here yields a
 /// legitimately empty list that no guard can see.
-const SLM_UPDATE: &str = r#"
-export LANG=
-mtui_issue_repo_present() {
-  zypper -n lr | awk -F "|" '/$repa\>/ { found = 1 } END { exit !found }'
-}
-mtui_probe_ok() {
-  case "$$2" in
-  0) return 0 ;;
-  106)
-    if mtui_issue_repo_present; then
-      printf 'mtui: note: %s exited 106, a repository was skipped; the update repo is present, continuing\n' "$$1"
-      return 0
-    fi
-    ;;
-  esac
-  printf 'mtui: could not %s\n' "determine what to patch: $$1 exited $$2"
-  exit "$$2"
-}
-zypper -n lr -puU
-zypper -n patches | grep $repa
-mtui_patch_rows=$$(zypper -n patches)
-mtui_probe_ok "zypper -n patches" $$?
-mtui_patches=$$(printf '%s\n' "$$mtui_patch_rows" | awk -F "|" '/$repa\>/ { print $2; }')
-mtui_probe_ok "awk" $$?
-mtui_status=0
-set -- $$mtui_patches
-if [ "$$#" -gt 0 ]; then
-  transactional-update --continue -n pkg in -l -y -t patch "$$@"
-  mtui_status=$$?
-fi
-zypper -n patches | grep $repa
-zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
-exit $$mtui_status
-"#;
+const SLM_UPDATE: &str = zypper_update_script!("", "transactional-update --continue -n pkg in");
 
 fn yum() -> ActionCommands {
     ActionCommands::command_only(YUM_UPDATE).with_mode(SubstMode::Safe)
@@ -200,6 +182,25 @@ mod tests {
 
     use super::*;
     use crate::update_workflow::checks::update::PROBE_FAILURE_MARKER;
+
+    /// Both update scripts are rendered from one shared body; their bytes are
+    /// what runs on every refhost, so any drift must be deliberate.
+    #[test]
+    fn the_update_templates_are_byte_stable() {
+        fn fnv1a(s: &str) -> u64 {
+            s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        }
+        assert_eq!(
+            (ZYPPER_UPDATE.len(), fnv1a(ZYPPER_UPDATE)),
+            (972, 0x7d52187710fe09df)
+        );
+        assert_eq!(
+            (SLM_UPDATE.len(), fnv1a(SLM_UPDATE)),
+            (983, 0xc585f637c819d245)
+        );
+    }
 
     fn vars<'a>(repa: &'a str, packages: &'a str) -> HashMap<&'a str, &'a str> {
         [("repa", repa), ("packages", packages)]
