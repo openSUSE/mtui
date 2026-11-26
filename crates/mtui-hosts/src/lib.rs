@@ -6,7 +6,7 @@
 //! [`Target`] state machine (enabled/disabled command gating + connection-only
 //! `connect`), and the [`HostsGroup`] composite with its parallel/serial
 //! command + SFTP fan-out, the remote-lock protocol ([`TargetLock`] /
-//! [`PoolLock`] / [`RemoteLock`]), the in-process [`HostArbiter`], and the
+//! [`RemoteLock`]), the in-process [`HostArbiter`], and the
 //! host-output parsers —
 //! [`parse_system`] / [`parse_product`](target::parsers::product::parse_product) / [`parse_os_release`](target::parsers::product::parse_os_release) plus the
 //! [`PackageQuerier`], and the install/uninstall [`Operation`] template
@@ -35,9 +35,9 @@ pub use target::{
     Check, CheckArgs, CheckFailure, Clock, Command, ContendedSurface, Doer, HostArbiter,
     HostOutput, HostPlan, HostsGroup, InstallOperation, LockOutcome, LockOwner, LostHold,
     LostHoldKind, LostHoldProof, OpLockHolders, Operation, OperationGroup, OperationReport, Owner,
-    POOL_LOCK_PATH, PackageQuerier, PlanProvider, PoolLock, RebootFailure, RebootFailureCause,
-    RebootReport, RemoteLock, RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo, Sink,
-    SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, Transactional,
-    TtySpinner, UninstallOperation, contended_lock_reason, get_arbiter, parse_system,
-    set_test_sink, sibling_holder_name, spinner, suspend,
+    POOL_LOCK_PATH, PackageQuerier, PlanProvider, RebootFailure, RebootFailureCause, RebootReport,
+    RemoteLock, RepoFailure, RepoManager, RepoOp, RepoOutcome, SetRepo, Sink, SpinnerGuard,
+    Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, Transactional, TtySpinner,
+    UninstallOperation, contended_lock_reason, get_arbiter, parse_system, set_test_sink,
+    sibling_holder_name, spinner, suspend,
 };

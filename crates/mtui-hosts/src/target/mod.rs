@@ -19,7 +19,7 @@
 //! reached through object-safe seams, keeping `mtui-hosts` acyclic:
 //!
 //! * remote locks — the [`locks`] module provides the zypper op-lock
-//!   ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
+//!   ([`TargetLock`]) and the pool-claim lock (a [`TargetLock`] over [`POOL_LOCK_PATH`]);
 //!   [`Target::connect`] builds both objects over the live connection and runs
 //!   the connect-time op-lock check + stale-reap
 //!   (`check_stale_lock`),
@@ -50,9 +50,8 @@ pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome, LostHold, LostHoldKind, LostHoldProof, RebootReport};
 pub use locks::{
-    Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, PoolLock,
-    RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
-    sibling_holder_name,
+    Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, RemoteLock,
+    SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason, sibling_holder_name,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
@@ -143,8 +142,8 @@ pub struct Target {
     /// from a clone of this target's connection and seeded with [`rrid`](Self::rrid).
     /// `None` until connected. Drives
     /// [`pool_unlock`](Target::pool_unlock).
-    pool_lock: Option<PoolLock>,
-    /// The owning template's RRID, used as the [`PoolLock`] ownership identity.
+    pool_lock: Option<TargetLock>,
+    /// The owning template's RRID, used as the pool claim's ownership identity.
     /// Empty for directly-constructed reports that
     /// never use pool selection; the report layer pushes it down via
     /// [`set_rrid`](Self::set_rrid).
@@ -282,7 +281,7 @@ impl Target {
         // Build the pool-claim lock from a clone of the injected connection too,
         // so the test seam mirrors the connected state (a fresh target has no
         // RRID yet — the report layer pushes it down via `set_rrid`).
-        let pool_lock = Some(PoolLock::new(
+        let pool_lock = Some(TargetLock::pool(
             connection.clone_box(),
             &config,
             String::new(),
@@ -545,7 +544,7 @@ impl Target {
         self.pool_lock.is_some()
     }
 
-    /// Sets the owning template's RRID, the [`PoolLock`] ownership identity.
+    /// Sets the owning template's RRID, the pool claim's ownership identity.
     ///
     /// The report layer pushes the RRID down onto each target (see
     /// `HostsGroup::set_rrid`) so a pool claim already built for a connected
@@ -599,7 +598,7 @@ impl Target {
 
     /// Releases this target's pool claim, best-effort.
     ///
-    /// Delegates to `PoolLock::unlock`
+    /// Delegates to the pool claim's [`TargetLock::unlock`]
     /// (RRID-based ownership), swallowing a [`HostError::TargetLocked`] (the
     /// claim is owned by another template and `force` was not set) so a cleanup
     /// path never fails. A no-op when the target is not connected (no pool lock
@@ -616,7 +615,7 @@ impl Target {
     /// # Errors
     ///
     /// Propagates [`HostError::TargetLocked`] for a foreign-owned claim and any
-    /// transport error from the underlying `PoolLock::unlock`.
+    /// transport error from the underlying pool [`TargetLock::unlock`].
     async fn pool_unlock_reporting(&mut self, force: bool) -> Result<()> {
         let Some(pool) = self.pool_lock.as_mut() else {
             tracing::debug!(host = %self.hostname, "pool_unlock: no pool lock (not connected)");
@@ -638,7 +637,7 @@ impl Target {
     /// Claims this target's remote pool lock with `comment` (the
     /// `mtui pool <RRID> [<owner>]` stamp), returning whether the claim was won.
     ///
-    /// Delegates to `PoolLock::try_claim`
+    /// Delegates to the pool claim's [`TargetLock::try_claim`]
     /// (RRID-based ownership). `true` when this session now holds the remote
     /// claim (freshly won or already ours); `false` when another process holds
     /// it — the caller then drops the host so a sibling can be tried. A
@@ -754,7 +753,7 @@ impl Target {
     pub(crate) fn loaded_pool_owner(&self) -> LockOwner {
         self.pool_lock
             .as_ref()
-            .map(PoolLock::loaded_owner)
+            .map(TargetLock::loaded_owner)
             .unwrap_or_default()
     }
 
@@ -1219,7 +1218,7 @@ impl Target {
             lock.set_label(self.rrid.clone());
             self.lock = Some(lock);
             // Pool claims use a separate remote file + RRID-based ownership.
-            self.pool_lock = Some(PoolLock::new(
+            self.pool_lock = Some(TargetLock::pool(
                 conn.clone_box(),
                 &self.config,
                 self.rrid.clone(),
