@@ -1,36 +1,33 @@
 //! Strategies for producing a [`Refhosts`] from a YAML source.
 //!
-//! Each [`Resolver`] knows one way to obtain `refhosts.yml`:
-//! - [`PathResolver`] builds a [`Refhosts`] from a local file
-//!   (`config.refhosts_path`);
-//! - [`HttpsResolver`] downloads it from an HTTPS URL, caching the payload on
-//!   disk and only re-fetching once the cache is older than
+//! The [`RefhostsFactory`] tries the named resolvers in the order given by
+//! `config.refhosts_resolvers` (a comma-separated string), returning the first
+//! success and logging every failure along the way:
+//! - `path` builds a [`Refhosts`] from a local file (`config.refhosts_path`);
+//! - `https` downloads it from an HTTPS URL, caching the payload on disk and
+//!   only re-fetching once the cache is older than
 //!   `config.refhosts_https_expiration`.
 //!
-//! The [`RefhostsFactory`] tries a set of named resolvers in the order given by
-//! `config.refhosts_resolvers` (a comma-separated string), returning the first
-//! success and logging every failure along the way.
-//!
 //! # Testability seams
-//! The clock, `stat`, the URL opener, the file writer and the `Refhosts`
-//! factory are injected as small object-safe traits ([`Clock`], [`FileStat`],
-//! [`Fetcher`], [`FileWriter`], [`RefhostsBuilder`]) so the cache-refresh logic
-//! can be driven offline; production wires [`SystemClock`], [`FsStat`],
-//! [`HttpFetcher`], [`AtomicFileWriter`] and [`PathRefhostsBuilder`].
+//! The clock and the URL opener are injected as small object-safe traits
+//! ([`Clock`], [`Fetcher`]) so the cache-refresh logic can be driven offline;
+//! production wires [`SystemClock`] and [`HttpFetcher`]. The cache itself is a
+//! real file, so tests point it at a temp directory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
 use tracing::warn;
 
 use super::store::Refhosts;
+use crate::clock::unix_now;
 use crate::error::RefhostError;
 use crate::http::{HttpClient, VerifyPolicy, sanitize_url};
 
-/// The subset of configuration a [`Resolver`] needs.
+/// The subset of configuration a resolver needs.
 ///
 /// A borrowed view rather than the whole `mtui_config::Config`, so resolvers
 /// stay decoupled from the full config surface and are trivial to construct in
@@ -48,34 +45,13 @@ pub struct ResolveConfig<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Seams: clock / stat / URL fetch / file write / refhosts factory
+// Seams: clock / URL fetch
 // ---------------------------------------------------------------------------
 
 /// A source of the current wall-clock time.
 pub trait Clock: Send + Sync {
     /// Current time as seconds since the Unix epoch.
     fn now_unix(&self) -> u64;
-}
-
-/// The result of stat-ing the cache file.
-///
-/// A typed three-state so tests can drive every [`HttpsResolver`] refresh branch
-/// deterministically, without real filesystem timing.
-#[derive(Debug)]
-pub enum StatResult {
-    /// The cache file does not exist (`ENOENT`) → force a refresh.
-    NotFound,
-    /// The cache file exists with this mtime (seconds since the Unix epoch).
-    Mtime(u64),
-    /// Stat-ing the file failed for a reason other than "not found"; the error
-    /// propagates instead of silently forcing a refresh.
-    Err(std::io::Error),
-}
-
-/// A `stat`-like probe of the cache file's freshness.
-pub trait FileStat: Send + Sync {
-    /// Stat `path`, mapping the outcome onto a [`StatResult`].
-    fn stat(&self, path: &Path) -> StatResult;
 }
 
 /// Fetches the raw bytes of a URL.
@@ -88,72 +64,13 @@ pub trait Fetcher: Send + Sync {
     async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError>;
 }
 
-/// Persists downloaded payload bytes to the cache path.
-pub trait FileWriter: Send + Sync {
-    /// Write `bytes` to `path`.
-    ///
-    /// # Errors
-    /// Returns [`RefhostError::Io`] if the file cannot be written.
-    fn write(&self, bytes: &[u8], path: &Path) -> Result<(), RefhostError>;
-}
-
-/// Builds a [`Refhosts`] from a local path.
-///
-/// Seam over [`Refhosts::from_path`] so [`HttpsResolver::resolve`] and
-/// [`PathResolver::resolve`] can be tested without a real `refhosts.yml`.
-pub trait RefhostsBuilder: Send + Sync {
-    /// Build a [`Refhosts`] from the file at `path`.
-    ///
-    /// # Errors
-    /// Returns [`RefhostError`] if the file cannot be read or parsed.
-    fn build(&self, path: &Path) -> Result<Refhosts, RefhostError>;
-
-    /// Build a [`Refhosts`] directly from already-downloaded bytes, without
-    /// reading `path` back off disk.
-    ///
-    /// Lets a successful HTTPS download populate the store even when
-    /// persisting it to `path` failed (e.g. a read-only mirror location).
-    ///
-    /// # Errors
-    /// Returns [`RefhostError`] if `bytes` cannot be parsed.
-    fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError>;
-}
-
-// ---------------------------------------------------------------------------
-// Production seam implementations
-// ---------------------------------------------------------------------------
-
 /// [`Clock`] backed by the real system clock.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now_unix(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    }
-}
-
-/// [`FileStat`] backed by [`std::fs::metadata`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsStat;
-
-impl FileStat for FsStat {
-    fn stat(&self, path: &Path) -> StatResult {
-        match std::fs::metadata(path) {
-            Ok(meta) => match meta.modified() {
-                Ok(mtime) => match mtime.duration_since(UNIX_EPOCH) {
-                    Ok(d) => StatResult::Mtime(d.as_secs()),
-                    // mtime predates the epoch → treat as very old (refresh).
-                    Err(_) => StatResult::Mtime(0),
-                },
-                Err(e) => StatResult::Err(e),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatResult::NotFound,
-            Err(e) => StatResult::Err(e),
-        }
+        u64::try_from(unix_now()).unwrap_or(0)
     }
 }
 
@@ -194,74 +111,33 @@ impl Fetcher for HttpFetcher {
     }
 }
 
-/// [`FileWriter`] that writes atomically via [`mtui_config::atomic::write`], the
-/// single secure temp-file + rename implementation shared across the workspace.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct AtomicFileWriter;
-
-impl FileWriter for AtomicFileWriter {
-    fn write(&self, bytes: &[u8], path: &Path) -> Result<(), RefhostError> {
-        mtui_config::atomic::write(bytes, path).map_err(|source| RefhostError::Io {
-            path: path.display().to_string(),
-            source,
-        })
-    }
-}
-
-/// [`RefhostsBuilder`] backed by [`Refhosts::from_path`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PathRefhostsBuilder;
-
-impl RefhostsBuilder for PathRefhostsBuilder {
-    fn build(&self, path: &Path) -> Result<Refhosts, RefhostError> {
-        Refhosts::from_path(path)
-    }
-
-    fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError> {
-        Refhosts::from_bytes(bytes)
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Resolver trait + strategies
+// The https strategy
 // ---------------------------------------------------------------------------
 
-/// A strategy for producing a [`Refhosts`] from a source.
-#[async_trait]
-pub trait Resolver: Send + Sync {
-    /// Return a [`Refhosts`] built from this resolver's source.
-    ///
-    /// # Errors
-    /// Returns [`RefhostError`] if this resolver cannot produce a usable
-    /// database (missing file, HTTP failure, parse failure, …).
-    async fn resolve(&self, config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError>;
+/// The result of stat-ing the cache file.
+enum StatResult {
+    /// The cache file does not exist (`ENOENT`) → force a refresh.
+    NotFound,
+    /// The cache file exists with this mtime (seconds since the Unix epoch).
+    Mtime(u64),
+    /// Stat-ing the file failed for a reason other than "not found"; the error
+    /// propagates instead of silently forcing a refresh.
+    Err(std::io::Error),
 }
 
-/// Resolve refhosts from a local file at `config.refhosts_path`.
-pub struct PathResolver {
-    builder: Box<dyn RefhostsBuilder>,
-}
-
-impl PathResolver {
-    /// A resolver using the production [`PathRefhostsBuilder`].
-    #[must_use]
-    fn new() -> Self {
-        Self {
-            builder: Box::new(PathRefhostsBuilder),
-        }
-    }
-}
-
-impl Default for PathResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Resolver for PathResolver {
-    async fn resolve(&self, config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError> {
-        self.builder.build(config.refhosts_path)
+fn stat_cache(path: &Path) -> StatResult {
+    match std::fs::metadata(path) {
+        Ok(meta) => match meta.modified() {
+            Ok(mtime) => match mtime.duration_since(UNIX_EPOCH) {
+                Ok(d) => StatResult::Mtime(d.as_secs()),
+                // mtime predates the epoch → treat as very old (refresh).
+                Err(_) => StatResult::Mtime(0),
+            },
+            Err(e) => StatResult::Err(e),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatResult::NotFound,
+        Err(e) => StatResult::Err(e),
     }
 }
 
@@ -303,36 +179,13 @@ fn refresh_lock(cache_path: &Path) -> Arc<tokio::sync::Mutex<RefreshSlot>> {
 /// `resolve` runs the cache-refresh check (re-downloading only when the cache is
 /// missing or older than `config.refhosts_https_expiration`) and then builds the
 /// [`Refhosts`] from the cached file.
-pub struct HttpsResolver {
+struct HttpsResolver {
     clock: Box<dyn Clock>,
-    stat: Box<dyn FileStat>,
     fetcher: Box<dyn Fetcher>,
-    writer: Box<dyn FileWriter>,
-    builder: Box<dyn RefhostsBuilder>,
     cache_path: PathBuf,
 }
 
 impl HttpsResolver {
-    /// Build an HTTPS resolver from injected seams.
-    #[must_use]
-    fn new(
-        clock: Box<dyn Clock>,
-        stat: Box<dyn FileStat>,
-        fetcher: Box<dyn Fetcher>,
-        writer: Box<dyn FileWriter>,
-        builder: Box<dyn RefhostsBuilder>,
-        cache_path: PathBuf,
-    ) -> Self {
-        Self {
-            clock,
-            stat,
-            fetcher,
-            writer,
-            builder,
-            cache_path,
-        }
-    }
-
     /// Whether the cache should be re-downloaded.
     ///
     /// A missing cache always refreshes; otherwise refresh iff it is older than
@@ -342,7 +195,7 @@ impl HttpsResolver {
     /// Returns [`RefhostError::Io`] if stat-ing the cache fails for a reason
     /// other than "not found".
     fn is_refresh_needed(&self, expiration: u64) -> Result<bool, RefhostError> {
-        match self.stat.stat(&self.cache_path) {
+        match stat_cache(&self.cache_path) {
             StatResult::NotFound => Ok(true),
             StatResult::Err(source) => Err(RefhostError::Io {
                 path: self.cache_path.display().to_string(),
@@ -363,7 +216,7 @@ impl HttpsResolver {
     /// bytes to build from in memory.
     async fn refresh(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
         let bytes = self.fetcher.fetch(uri).await?;
-        if let Err(e) = self.writer.write(&bytes, &self.cache_path) {
+        if let Err(e) = mtui_config::atomic::write(&bytes, &self.cache_path) {
             warn!(
                 "failed to write refhosts mirror to {}: {e}",
                 self.cache_path.display()
@@ -386,7 +239,7 @@ impl HttpsResolver {
     /// waiting when the failure happened retries normally.
     ///
     /// Returns `Some(bytes)` when this call performed the download — so
-    /// [`resolve`](Resolver::resolve) builds from those rather than re-reading a
+    /// [`resolve`](Self::resolve) builds from those rather than re-reading a
     /// cache that may not have been written — and `None` when no download
     /// happened.
     async fn refresh_if_needed(
@@ -420,14 +273,11 @@ impl HttpsResolver {
         }
         Ok(None)
     }
-}
 
-#[async_trait]
-impl Resolver for HttpsResolver {
     async fn resolve(&self, config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError> {
         match self.refresh_if_needed(config).await? {
-            Some(bytes) => self.builder.build_from_bytes(&bytes),
-            None => self.builder.build(&self.cache_path),
+            Some(bytes) => Refhosts::from_bytes(&bytes),
+            None => Refhosts::from_path(&self.cache_path),
         }
     }
 }
@@ -436,12 +286,12 @@ impl Resolver for HttpsResolver {
 /// writable, so a caller can forewarn that the https mirror write is likely
 /// to fail — e.g. a read-only, package-managed `refhosts.path`.
 ///
-/// [`AtomicFileWriter`] creates its temp file in that same directory, so the
-/// directory — not the target file — is what must be writable. A missing
-/// directory counts as "not writable" even though `mtui_config::atomic::write`
-/// would try to create it, since a directory missing at this level (e.g.
-/// `/usr/share/qam-metadata`) is typically root-owned and uncreatable anyway.
-/// A plain permission-bit probe (no ACLs/mounts), so it gates only a warning.
+/// `mtui_config::atomic::write` creates its temp file in that same directory,
+/// so the directory — not the target file — is what must be writable. A missing
+/// directory counts as "not writable" even though the write would try to create
+/// it, since a directory missing at this level (e.g. `/usr/share/qam-metadata`)
+/// is typically root-owned and uncreatable anyway. A plain permission-bit probe
+/// (no ACLs/mounts), so it gates only a warning.
 fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
     let Some(parent) = refhosts_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return true;
@@ -453,50 +303,29 @@ fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
 // Factory
 // ---------------------------------------------------------------------------
 
-/// Dispatches to a configured [`Resolver`] to build a [`Refhosts`].
+/// Builds a [`Refhosts`] from the configured resolvers.
 ///
 /// Each name in `config.refhosts_resolvers` is tried in turn; an unknown name
 /// or a resolver error is logged and the next is tried, and an exhausted list
 /// is [`RefhostError::ResolveFailed`].
 pub struct RefhostsFactory {
-    resolvers: Vec<(String, Box<dyn Resolver>)>,
+    https: HttpsResolver,
 }
 
 impl RefhostsFactory {
-    /// Build a factory from a name→resolver association list.
-    ///
-    /// The list preserves insertion order, but the *try* order is always the one
-    /// named by `config.refhosts_resolvers` at resolve time.
-    #[must_use]
-    fn new(resolvers: Vec<(String, Box<dyn Resolver>)>) -> Self {
-        Self { resolvers }
-    }
-
-    /// The production factory: an `https` resolver + a `path` resolver.
+    /// The production factory, caching the https download at `cache_path`.
     ///
     /// # Errors
     /// Returns [`RefhostError`] if the HTTPS fetcher's client cannot be built
     /// (e.g. an unreadable configured CA bundle).
     pub fn production(cache_path: PathBuf, verify: VerifyPolicy) -> Result<Self, RefhostError> {
-        let https = HttpsResolver::new(
-            Box::new(SystemClock),
-            Box::new(FsStat),
-            Box::new(HttpFetcher::new(verify)?),
-            Box::new(AtomicFileWriter),
-            Box::new(PathRefhostsBuilder),
-            cache_path,
-        );
-        Ok(Self::new(vec![
-            ("https".to_string(), Box::new(https)),
-            ("path".to_string(), Box::new(PathResolver::new())),
-        ]))
-    }
-
-    fn get(&self, name: &str) -> Option<&dyn Resolver> {
-        self.resolvers
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, r)| r.as_ref())
+        Ok(Self {
+            https: HttpsResolver {
+                clock: Box::new(SystemClock),
+                fetcher: Box::new(HttpFetcher::new(verify)?),
+                cache_path,
+            },
+        })
     }
 
     /// Try each configured resolver in order; return the first success.
@@ -506,18 +335,24 @@ impl RefhostsFactory {
     /// database.
     pub async fn resolve(&self, config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError> {
         for name in config.refhosts_resolvers.split(',').map(str::trim) {
-            let Some(resolver) = self.get(name) else {
-                warn!("Refhosts: invalid resolver: {name}");
-                continue;
+            let result = match name {
+                "https" => {
+                    if !refhosts_mirror_dir_writable(config.refhosts_path) {
+                        warn!(
+                            "refhosts mirror directory for {} is missing or not writable; \
+                             the https download will not be cached on disk",
+                            config.refhosts_path.display()
+                        );
+                    }
+                    self.https.resolve(config).await
+                }
+                "path" => Refhosts::from_path(config.refhosts_path),
+                _ => {
+                    warn!("Refhosts: invalid resolver: {name}");
+                    continue;
+                }
             };
-            if name == "https" && !refhosts_mirror_dir_writable(config.refhosts_path) {
-                warn!(
-                    "refhosts mirror directory for {} is missing or not writable; \
-                     the https download will not be cached on disk",
-                    config.refhosts_path.display()
-                );
-            }
-            match resolver.resolve(config).await {
+            match result {
                 Ok(refhosts) => return Ok(refhosts),
                 Err(e) => warn!("Refhosts: resolver {name} failed: {e}"),
             }
@@ -528,30 +363,13 @@ impl RefhostsFactory {
 
 #[cfg(test)]
 mod tests {
-    //! The mock seams below drive each collaborator and record their calls.
+    //! The cache is a real file in a temp directory; only the clock and the
+    //! fetch are scripted.
 
-    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex};
 
     use super::*;
-
-    #[tokio::test]
-    async fn a_failed_download_does_not_echo_the_uri_userinfo() {
-        let fetcher = HttpFetcher::new(VerifyPolicy::Default(true)).unwrap();
-        let err = fetcher
-            .fetch("http://bot:s3cret@127.0.0.1:1/refhosts.yml")
-            .await
-            .expect_err("nothing listens on port 1");
-        let rendered = err.to_string();
-        assert!(rendered.contains("127.0.0.1:1"), "{rendered}");
-        assert!(!rendered.contains("s3cret"), "{rendered}");
-    }
-
-    /// Recorded fetched URIs.
-    type FetchLog = Arc<Mutex<Vec<String>>>;
-    /// Recorded `(bytes, path)` writes.
-    type WriteLog = Arc<Mutex<Vec<(Vec<u8>, PathBuf)>>>;
 
     const FIXTURE_HOSTS: &str = "\
 default:
@@ -578,8 +396,6 @@ default:
         }
     }
 
-    // --- mock seams --------------------------------------------------------
-
     struct FixedClock(u64);
     impl Clock for FixedClock {
         fn now_unix(&self) -> u64 {
@@ -587,252 +403,208 @@ default:
         }
     }
 
-    /// A stat seam serving one scripted outcome.
-    enum ScriptedStat {
-        NotFound,
-        Mtime(u64),
-        Denied,
-    }
-    impl FileStat for ScriptedStat {
-        fn stat(&self, _path: &Path) -> StatResult {
-            match self {
-                ScriptedStat::NotFound => StatResult::NotFound,
-                ScriptedStat::Mtime(m) => StatResult::Mtime(*m),
-                ScriptedStat::Denied => StatResult::Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "denied",
-                )),
-            }
-        }
-    }
-
-    /// A fetcher recording each URI and serving fixed bytes.
-    #[derive(Clone)]
-    struct RecordingFetcher {
-        calls: FetchLog,
-        payload: Vec<u8>,
-    }
-    impl RecordingFetcher {
-        fn new(payload: &[u8]) -> Self {
-            Self {
-                calls: Arc::new(Mutex::new(Vec::new())),
-                payload: payload.to_vec(),
-            }
-        }
-    }
-    #[async_trait]
-    impl Fetcher for RecordingFetcher {
-        async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
-            self.calls.lock().unwrap().push(uri.to_string());
-            Ok(self.payload.clone())
-        }
-    }
-
-    /// A writer recording `(bytes, path)` of each write.
-    #[derive(Clone, Default)]
-    struct RecordingWriter {
-        writes: WriteLog,
-    }
-    impl FileWriter for RecordingWriter {
-        fn write(&self, bytes: &[u8], path: &Path) -> Result<(), RefhostError> {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((bytes.to_vec(), path.to_path_buf()));
-            Ok(())
-        }
-    }
-
-    /// A builder recording the path (or bytes) it was asked to build from and
-    /// serving a store.
-    #[derive(Clone)]
-    struct RecordingBuilder {
-        built: Arc<Mutex<Vec<PathBuf>>>,
-        built_from_bytes: Arc<Mutex<Vec<Vec<u8>>>>,
-    }
-    impl RecordingBuilder {
-        fn new() -> Self {
-            Self {
-                built: Arc::new(Mutex::new(Vec::new())),
-                built_from_bytes: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-    }
-    impl RefhostsBuilder for RecordingBuilder {
-        fn build(&self, path: &Path) -> Result<Refhosts, RefhostError> {
-            self.built.lock().unwrap().push(path.to_path_buf());
-            Ok(Refhosts::from_hosts(Vec::new()))
-        }
-
-        fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError> {
-            self.built_from_bytes.lock().unwrap().push(bytes.to_vec());
-            Ok(Refhosts::from_hosts(Vec::new()))
-        }
-    }
-
-    /// A resolver double: scripted success/failure, recording call count.
-    struct MockResolver {
-        outcome: Result<(), ()>,
+    /// Serves fixed bytes (or a failure), recording each URI and optionally
+    /// dwelling like a slow transport.
+    struct ScriptedFetcher {
         calls: Arc<AtomicU64>,
+        uris: Arc<StdMutex<Vec<String>>>,
+        payload: Option<Vec<u8>>,
+        dwell: std::time::Duration,
     }
-    impl MockResolver {
-        fn ok() -> (Self, Arc<AtomicU64>) {
-            let calls = Arc::new(AtomicU64::new(0));
-            (
-                Self {
-                    outcome: Ok(()),
-                    calls: calls.clone(),
-                },
-                calls,
-            )
+    impl ScriptedFetcher {
+        fn serving(payload: &[u8]) -> Self {
+            Self {
+                calls: Arc::default(),
+                uris: Arc::default(),
+                payload: Some(payload.to_vec()),
+                dwell: std::time::Duration::ZERO,
+            }
         }
-        fn failing() -> (Self, Arc<AtomicU64>) {
-            let calls = Arc::new(AtomicU64::new(0));
-            (
-                Self {
-                    outcome: Err(()),
-                    calls: calls.clone(),
-                },
-                calls,
-            )
+        fn failing() -> Self {
+            Self {
+                payload: None,
+                ..Self::serving(b"")
+            }
+        }
+        fn slow(mut self) -> Self {
+            self.dwell = std::time::Duration::from_millis(50);
+            self
+        }
+        /// A fetcher sharing this one's counters, for several resolver
+        /// instances over one cache.
+        fn sharing(&self) -> Self {
+            Self {
+                calls: self.calls.clone(),
+                uris: self.uris.clone(),
+                payload: self.payload.clone(),
+                dwell: self.dwell,
+            }
+        }
+        fn calls(&self) -> u64 {
+            self.calls.load(Ordering::SeqCst)
         }
     }
     #[async_trait]
-    impl Resolver for MockResolver {
-        async fn resolve(&self, _config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError> {
+    impl Fetcher for ScriptedFetcher {
+        async fn fetch(&self, uri: &str) -> Result<Vec<u8>, RefhostError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            match self.outcome {
-                Ok(()) => Ok(Refhosts::from_hosts(Vec::new())),
-                Err(()) => Err(RefhostError::ResolveFailed),
-            }
+            self.uris.lock().unwrap().push(uri.to_owned());
+            tokio::time::sleep(self.dwell).await;
+            self.payload.clone().ok_or(RefhostError::ResolveFailed)
         }
     }
 
-    // --- PathResolver ------------------------------------------------------
+    fn resolver(clock: Box<dyn Clock>, fetcher: ScriptedFetcher, cache: &Path) -> HttpsResolver {
+        HttpsResolver {
+            clock,
+            fetcher: Box::new(fetcher),
+            cache_path: cache.to_path_buf(),
+        }
+    }
+
+    /// A resolver on the real clock, as every production call site builds its
+    /// own instance.
+    fn live(fetcher: ScriptedFetcher, cache: &Path) -> HttpsResolver {
+        resolver(Box::new(SystemClock), fetcher, cache)
+    }
+
+    /// A cache file whose age, as the resolver sees it, is `age` seconds.
+    fn aged_cache(age: u64) -> (tempfile::TempDir, PathBuf, Box<dyn Clock>) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("refhosts.yml");
+        std::fs::write(&cache, FIXTURE_HOSTS).unwrap();
+        let mtime = match stat_cache(&cache) {
+            StatResult::Mtime(m) => m,
+            _ => panic!("fresh file must have an mtime"),
+        };
+        (dir, cache, Box::new(FixedClock(mtime + age)))
+    }
 
     #[tokio::test]
-    async fn path_resolver_uses_configured_path() {
-        let builder = RecordingBuilder::new();
-        let built = builder.built.clone();
-        let resolver = PathResolver {
-            builder: Box::new(builder),
-        };
-        let path = PathBuf::from("/etc/refhosts.yml");
-        resolver
-            .resolve(cfg("path", &path, "https://x", 3600))
+    async fn a_failed_download_does_not_echo_the_uri_userinfo() {
+        let fetcher = HttpFetcher::new(VerifyPolicy::Default(true)).unwrap();
+        let err = fetcher
+            .fetch("http://bot:s3cret@127.0.0.1:1/refhosts.yml")
             .await
-            .unwrap();
-        assert_eq!(*built.lock().unwrap(), vec![path]);
+            .expect_err("nothing listens on port 1");
+        let rendered = err.to_string();
+        assert!(rendered.contains("127.0.0.1:1"), "{rendered}");
+        assert!(!rendered.contains("s3cret"), "{rendered}");
     }
 
     // --- HttpsResolver: resolve --------------------------------------------
 
-    fn https_resolver(
-        clock: u64,
-        stat: ScriptedStat,
-        fetcher: RecordingFetcher,
-        writer: RecordingWriter,
-        builder: RecordingBuilder,
-        cache: &str,
-    ) -> HttpsResolver {
-        HttpsResolver::new(
-            Box::new(FixedClock(clock)),
-            Box::new(stat),
-            Box::new(fetcher),
-            Box::new(writer),
-            Box::new(builder),
-            PathBuf::from(cache),
-        )
-    }
-
     #[tokio::test]
-    async fn resolve_uses_cache_path_after_refresh_check() {
-        let fetcher = RecordingFetcher::new(b"");
-        let builder = RecordingBuilder::new();
-        let built = builder.built.clone();
-        let fetch_calls = fetcher.calls.clone();
-        let resolver = https_resolver(
-            1_000_000,
-            ScriptedStat::Mtime(999_999),
-            fetcher,
-            RecordingWriter::default(),
-            builder,
-            "/tmp/refhosts.yml",
-        );
-        resolver
+    async fn a_fresh_cache_is_built_from_without_fetching() {
+        let (_dir, cache, clock) = aged_cache(10);
+        let fetcher = ScriptedFetcher::serving(b"not yaml");
+        let calls = fetcher.calls.clone();
+        let store = resolver(clock, fetcher, &cache)
             .resolve(cfg("https", Path::new("/x"), "https://x", 3600))
             .await
             .unwrap();
-        assert!(
-            fetch_calls.lock().unwrap().is_empty(),
-            "fresh cache: no fetch"
-        );
-        assert_eq!(
-            *built.lock().unwrap(),
-            vec![PathBuf::from("/tmp/refhosts.yml")]
-        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "fresh cache: no fetch");
+        assert_eq!(store.hosts().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stale_cache_is_refetched_persisted_and_built_from_the_download() {
+        let (_dir, cache, clock) = aged_cache(7200);
+        std::fs::write(&cache, "stale: [").unwrap();
+        let fetcher = ScriptedFetcher::serving(FIXTURE_HOSTS.as_bytes());
+        let uris = fetcher.uris.clone();
+        let store = resolver(clock, fetcher, &cache)
+            .resolve(cfg(
+                "https",
+                Path::new("/x"),
+                "https://x/refhosts.yml",
+                3600,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(*uris.lock().unwrap(), vec!["https://x/refhosts.yml"]);
+        assert_eq!(std::fs::read(&cache).unwrap(), FIXTURE_HOSTS.as_bytes());
+        assert_eq!(store.hosts().len(), 1);
+    }
+
+    /// A mirror that cannot be written must not fail the resolve: the store is
+    /// built from the downloaded bytes, never re-read from the unwritten path.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_mirror_write_failure_is_non_fatal() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let cache = dir.path().join("refhosts.yml");
+        let result = resolver(
+            Box::new(FixedClock(1_000_000)),
+            ScriptedFetcher::serving(FIXTURE_HOSTS.as_bytes()),
+            &cache,
+        )
+        .resolve(cfg(
+            "https",
+            Path::new("/x"),
+            "https://x/refhosts.yml",
+            3600,
+        ))
+        .await;
+        let written = cache.exists();
+        // Restore permissions so `tempdir` can clean up on drop.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let store = result.expect("a mirror-write failure must not fail the resolve");
+        assert_eq!(store.hosts().len(), 1);
+        assert!(!written, "premise: the mirror could not be written");
     }
 
     // --- HttpsResolver: is_refresh_needed ----------------------------------
 
+    #[test]
+    fn is_refresh_needed_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = resolver(
+            Box::new(FixedClock(1_000_000)),
+            ScriptedFetcher::failing(),
+            &dir.path().join("absent.yml"),
+        );
+        assert!(r.is_refresh_needed(3600).unwrap());
+    }
+
+    #[test]
+    fn is_refresh_needed_other_error_raises() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let r = resolver(
+            Box::new(FixedClock(1_000_000)),
+            ScriptedFetcher::failing(),
+            &blocker.join("refhosts.yml"),
+        );
+        let err = r.is_refresh_needed(3600).unwrap_err();
+        assert!(matches!(err, RefhostError::Io { .. }));
+    }
+
+    #[test]
+    fn is_refresh_needed_fresh_cache() {
+        let (_dir, cache, clock) = aged_cache(10);
+        let r = resolver(clock, ScriptedFetcher::failing(), &cache);
+        assert!(!r.is_refresh_needed(3600).unwrap());
+    }
+
+    #[test]
+    fn is_refresh_needed_stale_cache() {
+        let (_dir, cache, clock) = aged_cache(3601);
+        let r = resolver(clock, ScriptedFetcher::failing(), &cache);
+        assert!(r.is_refresh_needed(3600).unwrap());
+    }
+
+    #[test]
+    fn is_refresh_needed_at_the_expiration_boundary_is_fresh() {
+        let (_dir, cache, clock) = aged_cache(3600);
+        let r = resolver(clock, ScriptedFetcher::failing(), &cache);
+        assert!(!r.is_refresh_needed(3600).unwrap());
+    }
+
     // --- HttpsResolver: refresh single-flight ------------------------------
-
-    /// Dwells long enough for every concurrent resolver to pass its unlocked
-    /// staleness pre-check while the leader is mid-download — the exact window
-    /// the thundering herd lived in.
-    struct SlowCountingFetcher {
-        calls: Arc<AtomicU64>,
-        payload: Vec<u8>,
-    }
-    #[async_trait]
-    impl Fetcher for SlowCountingFetcher {
-        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            Ok(self.payload.clone())
-        }
-    }
-
-    /// Dwells like [`SlowCountingFetcher`] but always fails — a down server
-    /// with a real transport timeout.
-    struct SlowFailingFetcher {
-        calls: Arc<AtomicU64>,
-    }
-    #[async_trait]
-    impl Fetcher for SlowFailingFetcher {
-        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            Err(RefhostError::ResolveFailed)
-        }
-    }
-
-    /// A fetcher whose first call fails and later calls succeed.
-    struct FailOnceFetcher {
-        calls: Arc<AtomicU64>,
-    }
-    #[async_trait]
-    impl Fetcher for FailOnceFetcher {
-        async fn fetch(&self, _uri: &str) -> Result<Vec<u8>, RefhostError> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Err(RefhostError::ResolveFailed);
-            }
-            Ok(b"payload".to_vec())
-        }
-    }
-
-    /// One production-shaped resolver: real clock/stat/writer against a real
-    /// cache file, mirroring how every call site builds its own instance.
-    fn fs_resolver(fetcher: Box<dyn Fetcher>, cache: &Path) -> HttpsResolver {
-        HttpsResolver::new(
-            Box::new(SystemClock),
-            Box::new(FsStat),
-            fetcher,
-            Box::new(AtomicFileWriter),
-            Box::new(RecordingBuilder::new()),
-            cache.to_path_buf(),
-        )
-    }
 
     #[tokio::test]
     async fn concurrent_stale_resolves_share_one_fetch() {
@@ -840,32 +612,24 @@ default:
         // four concurrent sessions each constructing their own factory.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
-        let calls = Arc::new(AtomicU64::new(0));
+        let template = ScriptedFetcher::serving(FIXTURE_HOSTS.as_bytes()).slow();
 
         let resolves = (0..4).map(|_| {
-            let fetcher = Box::new(SlowCountingFetcher {
-                calls: calls.clone(),
-                payload: b"payload".to_vec(),
-            });
-            let resolver = fs_resolver(fetcher, &cache);
+            let r = live(template.sharing(), &cache);
             let cache = cache.clone();
-            async move {
-                resolver
-                    .resolve(cfg("https", &cache, "https://x", 3600))
-                    .await
-            }
+            async move { r.resolve(cfg("https", &cache, "https://x", 3600)).await }
         });
         let results = futures::future::join_all(resolves).await;
 
         assert!(results.iter().all(Result::is_ok), "all resolves succeed");
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            template.calls(),
             1,
             "concurrent stale resolves must share a single download"
         );
         assert_eq!(
             std::fs::read(&cache).unwrap(),
-            b"payload",
+            FIXTURE_HOSTS.as_bytes(),
             "the shared fetch was persisted to the cache"
         );
     }
@@ -877,24 +641,17 @@ default:
         // timeout for the group, not one per waiter.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
-        let calls = Arc::new(AtomicU64::new(0));
+        let template = ScriptedFetcher::failing().slow();
 
         let resolves = (0..2).map(|_| {
-            let fetcher = Box::new(SlowFailingFetcher {
-                calls: calls.clone(),
-            });
-            let resolver = fs_resolver(fetcher, &cache);
+            let r = live(template.sharing(), &cache);
             let cache = cache.clone();
-            async move {
-                resolver
-                    .resolve(cfg("https", &cache, "https://x", 3600))
-                    .await
-            }
+            async move { r.resolve(cfg("https", &cache, "https://x", 3600)).await }
         });
         let results = futures::future::join_all(resolves).await;
 
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            template.calls(),
             1,
             "the waiter must not repeat the failed download"
         );
@@ -918,189 +675,23 @@ default:
         // No poisoned/latched single-flight state: the next caller may retry.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
-        let calls = Arc::new(AtomicU64::new(0));
+        let failing = ScriptedFetcher::failing();
+        let serving = ScriptedFetcher::serving(FIXTURE_HOSTS.as_bytes());
+        let (failed_calls, served_calls) = (failing.calls.clone(), serving.calls.clone());
 
-        let first = fs_resolver(
-            Box::new(FailOnceFetcher {
-                calls: calls.clone(),
-            }),
-            &cache,
-        );
-        let second = fs_resolver(
-            Box::new(FailOnceFetcher {
-                calls: calls.clone(),
-            }),
-            &cache,
-        );
-
-        first
+        live(failing, &cache)
             .resolve(cfg("https", &cache, "https://x", 3600))
             .await
             .unwrap_err();
-        second
+        live(serving, &cache)
             .resolve(cfg("https", &cache, "https://x", 3600))
             .await
             .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "second caller re-fetched");
-    }
-
-    fn refresh_probe(clock: u64, stat: ScriptedStat) -> HttpsResolver {
-        https_resolver(
-            clock,
-            stat,
-            RecordingFetcher::new(b""),
-            RecordingWriter::default(),
-            RecordingBuilder::new(),
-            "/tmp/refhosts.yml",
-        )
-    }
-
-    #[test]
-    fn is_refresh_needed_missing_file() {
-        let r = refresh_probe(1_000_000, ScriptedStat::NotFound);
-        assert!(r.is_refresh_needed(3600).unwrap());
-    }
-
-    #[test]
-    fn is_refresh_needed_other_error_raises() {
-        let r = refresh_probe(1_000_000, ScriptedStat::Denied);
-        let err = r.is_refresh_needed(3600).unwrap_err();
-        assert!(matches!(err, RefhostError::Io { .. }));
-    }
-
-    #[test]
-    fn is_refresh_needed_fresh_cache() {
-        let r = refresh_probe(1_000_000, ScriptedStat::Mtime(999_999));
-        assert!(!r.is_refresh_needed(3600).unwrap());
-    }
-
-    #[test]
-    fn is_refresh_needed_stale_cache() {
-        let r = refresh_probe(1_000_000, ScriptedStat::Mtime(0));
-        assert!(r.is_refresh_needed(3600).unwrap());
-    }
-
-    // --- HttpsResolver: refresh / refresh_if_needed ------------------------
-
-    #[tokio::test]
-    async fn refresh_writes_url_payload() {
-        let fetcher = RecordingFetcher::new(b"yaml-bytes");
-        let writer = RecordingWriter::default();
-        let fcalls = fetcher.calls.clone();
-        let writes = writer.writes.clone();
-        let r = https_resolver(
+        assert_eq!(failed_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            served_calls.load(Ordering::SeqCst),
             1,
-            ScriptedStat::Mtime(0),
-            fetcher,
-            writer,
-            RecordingBuilder::new(),
-            "/dst",
-        );
-        let bytes = r.refresh("https://x/refhosts.yml").await.unwrap();
-        assert_eq!(bytes, b"yaml-bytes");
-        assert_eq!(
-            *fcalls.lock().unwrap(),
-            vec!["https://x/refhosts.yml".to_string()]
-        );
-        assert_eq!(
-            *writes.lock().unwrap(),
-            vec![(b"yaml-bytes".to_vec(), PathBuf::from("/dst"))]
-        );
-    }
-
-    /// A writer that always fails (e.g. a read-only mirror location).
-    #[derive(Clone, Default)]
-    struct FailingWriter;
-    impl FileWriter for FailingWriter {
-        fn write(&self, _bytes: &[u8], path: &Path) -> Result<(), RefhostError> {
-            Err(RefhostError::Io {
-                path: path.display().to_string(),
-                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn refresh_write_failure_is_non_fatal() {
-        let fetcher = RecordingFetcher::new(b"yaml-bytes");
-        let builder = RecordingBuilder::new();
-        let built_from_bytes = builder.built_from_bytes.clone();
-        let built_from_path = builder.built.clone();
-        let r = HttpsResolver::new(
-            Box::new(FixedClock(1_000_000)),
-            Box::new(ScriptedStat::NotFound),
-            Box::new(fetcher),
-            Box::new(FailingWriter),
-            Box::new(builder),
-            PathBuf::from("/dst"),
-        );
-        r.resolve(cfg(
-            "https",
-            Path::new("/x"),
-            "https://x/refhosts.yml",
-            3600,
-        ))
-        .await
-        .expect("a mirror-write failure must not fail the resolve");
-        assert_eq!(
-            *built_from_bytes.lock().unwrap(),
-            vec![b"yaml-bytes".to_vec()],
-            "store must be built from the downloaded bytes"
-        );
-        assert!(
-            built_from_path.lock().unwrap().is_empty(),
-            "must not re-read the (unwritten) cache path"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_if_needed_skips_when_fresh() {
-        let fetcher = RecordingFetcher::new(b"");
-        let fcalls = fetcher.calls.clone();
-        let r = https_resolver(
-            1_000_000,
-            ScriptedStat::Mtime(999_999),
-            fetcher,
-            RecordingWriter::default(),
-            RecordingBuilder::new(),
-            "/x",
-        );
-        r.refresh_if_needed(cfg("https", Path::new("/x"), "https://e/r.yml", 3600))
-            .await
-            .unwrap();
-        assert!(fcalls.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn refresh_if_needed_refreshes_when_stale() {
-        let fetcher = RecordingFetcher::new(b"payload");
-        let writer = RecordingWriter::default();
-        let fcalls = fetcher.calls.clone();
-        let writes = writer.writes.clone();
-        let r = https_resolver(
-            1_000_000,
-            ScriptedStat::Mtime(0),
-            fetcher,
-            writer,
-            RecordingBuilder::new(),
-            "/x",
-        );
-        // Unset (Enabled): the per-site verify default reaches the fetcher.
-        r.refresh_if_needed(cfg(
-            "https",
-            Path::new("/x"),
-            "https://example.invalid/refhosts.yml",
-            3600,
-        ))
-        .await
-        .unwrap();
-        assert_eq!(
-            *fcalls.lock().unwrap(),
-            vec!["https://example.invalid/refhosts.yml".to_string()]
-        );
-        assert_eq!(
-            *writes.lock().unwrap(),
-            vec![(b"payload".to_vec(), PathBuf::from("/x"))]
+            "second caller re-fetched"
         );
     }
 
@@ -1135,43 +726,69 @@ default:
 
     // --- RefhostsFactory ---------------------------------------------------
 
+    fn factory(fetcher: ScriptedFetcher, cache: &Path) -> RefhostsFactory {
+        RefhostsFactory {
+            https: live(fetcher, cache),
+        }
+    }
+
+    fn fixture_file(dir: &tempfile::TempDir) -> PathBuf {
+        let path = dir.path().join("local.yml");
+        std::fs::write(&path, FIXTURE_HOSTS).unwrap();
+        path
+    }
+
     #[tokio::test]
-    async fn factory_returns_first_successful_resolver() {
-        let (path_r, calls) = MockResolver::ok();
-        let factory = RefhostsFactory::new(vec![("path".to_string(), Box::new(path_r))]);
-        factory
-            .resolve(cfg("path", Path::new("/x"), "https://x", 3600))
+    async fn path_resolver_reads_the_configured_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = fixture_file(&dir);
+        let fetcher = ScriptedFetcher::failing();
+        let calls = fetcher.calls.clone();
+        let store = factory(fetcher, &dir.path().join("cache.yml"))
+            .resolve(cfg("path", &local, "https://x", 3600))
             .await
             .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.hosts().len(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "path never fetches");
+    }
+
+    #[tokio::test]
+    async fn factory_returns_first_successful_resolver() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = fixture_file(&dir);
+        let fetcher = ScriptedFetcher::serving(FIXTURE_HOSTS.as_bytes());
+        let calls = fetcher.calls.clone();
+        factory(fetcher, &dir.path().join("cache.yml"))
+            .resolve(cfg("https,path", &local, "https://x", 3600))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "https answered first");
     }
 
     #[tokio::test]
     async fn factory_falls_back_to_next_resolver_on_failure() {
-        let (failing, fcalls) = MockResolver::failing();
-        let (working, wcalls) = MockResolver::ok();
-        let factory = RefhostsFactory::new(vec![
-            ("https".to_string(), Box::new(failing)),
-            ("path".to_string(), Box::new(working)),
-        ]);
-        factory
-            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600))
+        let dir = tempfile::tempdir().unwrap();
+        let local = fixture_file(&dir);
+        let fetcher = ScriptedFetcher::failing();
+        let calls = fetcher.calls.clone();
+        let store = factory(fetcher, &dir.path().join("cache.yml"))
+            .resolve(cfg("https,path", &local, "https://x", 3600))
             .await
             .unwrap();
-        assert_eq!(fcalls.load(Ordering::SeqCst), 1);
-        assert_eq!(wcalls.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.hosts().len(), 1);
     }
 
     #[tokio::test]
     async fn factory_raises_when_all_resolvers_fail() {
-        let (f1, _) = MockResolver::failing();
-        let (f2, _) = MockResolver::failing();
-        let factory = RefhostsFactory::new(vec![
-            ("https".to_string(), Box::new(f1)),
-            ("path".to_string(), Box::new(f2)),
-        ]);
-        let err = factory
-            .resolve(cfg("https,path", Path::new("/x"), "https://x", 3600))
+        let dir = tempfile::tempdir().unwrap();
+        let err = factory(ScriptedFetcher::failing(), &dir.path().join("cache.yml"))
+            .resolve(cfg(
+                "https,path",
+                &dir.path().join("missing.yml"),
+                "https://x",
+                3600,
+            ))
             .await
             .unwrap_err();
         assert!(matches!(err, RefhostError::ResolveFailed));
@@ -1179,42 +796,24 @@ default:
 
     #[tokio::test]
     async fn factory_skips_unknown_resolver_and_continues() {
-        let (working, calls) = MockResolver::ok();
-        let factory = RefhostsFactory::new(vec![("path".to_string(), Box::new(working))]);
-        factory
-            .resolve(cfg("nonexistent,path", Path::new("/x"), "https://x", 3600))
+        let dir = tempfile::tempdir().unwrap();
+        let local = fixture_file(&dir);
+        factory(ScriptedFetcher::failing(), &dir.path().join("cache.yml"))
+            .resolve(cfg("nonexistent,path", &local, "https://x", 3600))
             .await
             .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     // --- production seams (smoke) ------------------------------------------
 
     #[test]
-    fn atomic_writer_roundtrips_via_tempdir() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sub").join("refhosts.yml");
-        AtomicFileWriter.write(b"data", &path).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"data");
-    }
-
-    #[test]
-    fn fs_stat_reports_not_found_and_mtime() {
+    fn stat_cache_reports_not_found_and_mtime() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("nope.yml");
-        assert!(matches!(FsStat.stat(&missing), StatResult::NotFound));
+        assert!(matches!(stat_cache(&missing), StatResult::NotFound));
         let present = dir.path().join("there.yml");
         std::fs::write(&present, b"x").unwrap();
-        assert!(matches!(FsStat.stat(&present), StatResult::Mtime(_)));
-    }
-
-    #[test]
-    fn path_refhosts_builder_reads_fixture() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("refhosts.yml");
-        std::fs::write(&path, FIXTURE_HOSTS).unwrap();
-        let store = PathRefhostsBuilder.build(&path).unwrap();
-        assert_eq!(store.hosts().len(), 1);
+        assert!(matches!(stat_cache(&present), StatResult::Mtime(_)));
     }
 
     #[test]
