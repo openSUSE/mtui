@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, select_names};
+use super::support::{add_hosts_arg, host_completion, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -43,12 +43,7 @@ impl Command for SetTimeout {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        session
-            .targets()
-            .names()
-            .into_iter()
-            .filter(|n| n.starts_with(text))
-            .collect()
+        host_completion(session, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {

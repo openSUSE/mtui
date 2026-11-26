@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, host_op_budget, select_names};
+use super::support::{add_hosts_arg, host_completion, host_op_budget, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::{PackageMeta, Reseed, Session};
@@ -45,12 +45,7 @@ impl Command for ReloadProducts {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        session
-            .targets()
-            .names()
-            .into_iter()
-            .filter(|n| n.starts_with(text))
-            .collect()
+        host_completion(session, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
