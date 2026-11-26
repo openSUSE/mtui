@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use mtui_config::Config;
 use mtui_core::register_all;
-use mtui_mcp::provider::{SessionProvider, StdioProvider};
 use mtui_mcp::server::McpServer;
+use mtui_mcp::session::McpSession;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 
@@ -38,8 +38,7 @@ async fn build_server() -> McpServer {
 /// `[mcp] audit_log` at a temp file.
 async fn build_server_with_config(config: Config) -> McpServer {
     let registry = Arc::new(register_all());
-    let provider = StdioProvider::new(config);
-    let session = provider.get_or_create("<default>").await;
+    let session = McpSession::new(config);
     McpServer::new(registry, session)
 }
 
@@ -284,8 +283,7 @@ async fn tools_deny_removes_transfer_tool_from_surface_and_dispatch() {
     config.session_user = "testuser".to_owned();
     config.mcp_tools_deny = vec!["put".to_owned()];
     let registry = Arc::new(register_all());
-    let provider = StdioProvider::new(config);
-    let session = provider.get_or_create("<default>").await;
+    let session = McpSession::new(config);
     let server = McpServer::new(registry, session);
 
     let (server_io, client_io) = tokio::io::duplex(4096);
@@ -828,8 +826,7 @@ impl mtui_core::Command for GatedProbe {
 async fn job_status_wait_seconds_round_trips_over_the_wire() {
     let mut config = Config::default();
     config.session_user = "testuser".to_owned();
-    let provider = StdioProvider::new(config);
-    let session = provider.get_or_create("<default>").await;
+    let session = McpSession::new(config);
 
     // The job runs the gated probe; the served surface stays the real one.
     let gate = Arc::new(tokio::sync::Notify::new());

@@ -7,8 +7,7 @@
 //! `[mcp] max_output_bytes` cap. The non-interactive contract
 //! (`interactive = false`, unset prompter) comes from `capture::session` passing
 //! `is_repl = false`. stdio has one instance, http one per client, both reached
-//! through the [`crate::provider::SessionProvider`] seam so the tool layer stays
-//! transport-agnostic.
+//! through the same tool layer, which stays transport-agnostic.
 //!
 //! **Per-template lock discipline.** A shared/exclusive registry gate
 //! (a `tokio::sync::RwLock`) plus a lazily-created per-RRID lock map:

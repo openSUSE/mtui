@@ -103,8 +103,7 @@ enum Transport {
 }
 
 impl McpServer {
-    /// Builds the server from a registry and the client's session (as resolved
-    /// through a [`crate::provider::SessionProvider`]).
+    /// Builds the server from a registry and the client's session.
     ///
     /// Synthesises the full tool surface once, plus the route map
     /// [`call_tool`](ServerHandler::call_tool) uses.
