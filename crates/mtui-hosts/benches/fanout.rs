@@ -179,7 +179,7 @@ fn bench_lock(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || build_group(n, PER_HOST_DELAY),
                 |mut group| async move {
-                    group.lock(black_box("")).await;
+                    group.lock(black_box(""), None).await;
                     group
                 },
                 criterion::BatchSize::SmallInput,
@@ -200,7 +200,7 @@ fn bench_lock(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || (build_group(n, PER_HOST_DELAY), selected.clone()),
                 |(mut group, names)| async move {
-                    group.lock_selected(black_box(""), &names).await;
+                    group.lock(black_box(""), Some(&names)).await;
                     group
                 },
                 criterion::BatchSize::SmallInput,

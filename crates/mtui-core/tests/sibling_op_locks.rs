@@ -31,7 +31,7 @@ fn two_templates_on_one_host() -> (Session, Buffer, MockConnection) {
 async fn take_operation_lock(session: &mut Session, rrid: &str) {
     let names: BTreeSet<String> = ["h1".to_owned()].into();
     assert!(session.activate(rrid).is_active());
-    session.targets_mut().lock_selected("", &names).await;
+    session.targets_mut().lock("", Some(&names)).await;
     session.release_active_guard();
 }
 

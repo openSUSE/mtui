@@ -634,7 +634,7 @@ impl<C: Clock> TargetLock<C> {
     ///   ([`RemoteLock::comment`]): the PI assignment lock the session
     ///   re-applies on every connect and after every reboot, or an operator's
     ///   `lock <text>` reservation. The operation flows (`update_lock`, `run`'s
-    ///   `lock_selected("")`) all stamp an empty comment, so this separates a
+    ///   `lock("", Some(..))`) all stamp an empty comment, so this separates a
     ///   transient operation hold from a deliberate reservation.
     #[must_use]
     pub(crate) fn holds_unmarked(&self) -> bool {

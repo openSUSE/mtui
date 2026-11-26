@@ -494,14 +494,9 @@ async fn transfer_get(
         if let Some(ref names) = hosts {
             check_hosts(targets, names, "no content returned")?;
         }
-        let map = match hosts {
-            Some(ref names) => {
-                targets
-                    .sftp_read_capped_selected(Path::new(remote), names, max_input)
-                    .await
-            }
-            None => targets.sftp_read_capped(Path::new(remote), max_input).await,
-        };
+        let map = targets
+            .sftp_read_capped(Path::new(remote), max_input, hosts.as_ref())
+            .await;
         // Release the call session (the fork's entry guard, or the canonical
         // session mutex) and then the gate before formatting — both only
         // guarded the fan-out, and the rest works on owned data.
@@ -778,15 +773,12 @@ async fn transfer_put(
     // `put` uses — so a `target_tempdir` of another loaded report cannot leak in.
     let remote = call_session_mut.metadata().target_wd(&[filename]);
     let targets = call_session_mut.targets_mut();
-    let map = match hosts {
-        Some(ref names) => {
-            check_hosts(targets, names, "nothing written")?;
-            targets
-                .sftp_put_bytes_selected(&payload, &remote, names)
-                .await
-        }
-        None => targets.sftp_put_bytes(&payload, &remote).await,
-    };
+    if let Some(ref names) = hosts {
+        check_hosts(targets, names, "nothing written")?;
+    }
+    let map = targets
+        .sftp_put_bytes(&payload, &remote, hosts.as_ref())
+        .await;
     // Release the call session (the fork's entry guard, or the canonical
     // session mutex) and then the gate before formatting — both only guarded
     // the fan-out, and the rest works on owned data.
@@ -2256,7 +2248,7 @@ mod tests {
         let map = call_session
             .get_mut()
             .targets_mut()
-            .sftp_put_bytes(b"x", &remote)
+            .sftp_put_bytes(b"x", &remote, None)
             .await;
         drop(call_session);
 
@@ -2584,7 +2576,7 @@ mod tests {
         {
             let mut guard = session.session().lock().await;
             let names: BTreeSet<String> = ["h1".to_owned()].into();
-            let outcome = guard.targets_mut().lock_selected("probe", &names).await;
+            let outcome = guard.targets_mut().lock("probe", Some(&names)).await;
             assert!(
                 matches!(outcome.get("h1"), Some(LockOutcome::Contended(_))),
                 "fixture must be a foreign lock: {outcome:?}"

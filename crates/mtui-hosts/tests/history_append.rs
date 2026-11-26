@@ -142,7 +142,7 @@ async fn hostsgroup_add_history_appends_once_per_host() {
     let mut group = HostsGroup::new(vec![t1, t2], false);
 
     group
-        .add_history(&["install".to_owned(), "pkg".to_owned()])
+        .add_history(&["install".to_owned(), "pkg".to_owned()], None)
         .await;
 
     for m in [&m1, &m2] {

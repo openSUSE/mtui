@@ -328,7 +328,7 @@ mod tests {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         // This session must have taken the lock itself for a plain `unlock`
         // to release it (#C: it skips a lock it never took).
-        session.targets_mut().lock("").await;
+        session.targets_mut().lock("", None).await;
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
         assert!(
@@ -511,7 +511,7 @@ mod tests {
             "SUSE:Maintenance:1:1",
             vec![target("h1", c1.clone()), target("h2", c2.clone())],
         );
-        session.targets_mut().lock("").await;
+        session.targets_mut().lock("", None).await;
         let line1 = c1.file_contents(TARGET_LOCK_PATH);
         let args = matches(&HostsUnlock, &["-t", "h2"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
@@ -574,7 +574,7 @@ mod tests {
             "SUSE:Maintenance:1:1",
             vec![target("broken", broken.clone())],
         );
-        session.targets_mut().lock("").await;
+        session.targets_mut().lock("", None).await;
         let args = matches(&HostsUnlock, &[]);
         let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
         assert!(

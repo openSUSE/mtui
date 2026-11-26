@@ -1289,7 +1289,7 @@ async fn sftp_put_refusals_stay_attributed_per_host_through_the_group() {
     let mut group = HostsGroup::new(targets, false);
 
     let results = group
-        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"))
+        .sftp_put_bytes(b"NEW", std::path::Path::new("/pub/upload.bin"), None)
         .await;
 
     assert_eq!(results["good"], Ok(()));

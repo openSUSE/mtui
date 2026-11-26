@@ -406,7 +406,7 @@ pub async fn add_op_history_for(
     packages: &[String],
 ) {
     let fields = op_history_fields(op, id_field, packages);
-    targets.add_history_for(hosts, &fields).await;
+    targets.add_history(&fields, Some(hosts)).await;
 }
 
 /// The colon-joined field list of a history row: `op[:id]:pkg-a pkg-b`.
@@ -1327,10 +1327,7 @@ async fn perform_prepare_classified(
         }
     };
 
-    let locked = match selected {
-        Some(hosts) => targets.update_lock_selected(hosts).await,
-        None => targets.update_lock().await,
-    };
+    let locked = targets.update_lock(selected).await;
     if let Err(e) = locked {
         // Beside a refusal, one failure per locked host, as for a missing
         // preparer above; the prefix keeps a non-contention reason (a
@@ -1363,10 +1360,7 @@ async fn perform_prepare_classified(
     .await;
     // Exactly the set locked above: releasing a host we never locked would
     // report a failure for a lock nobody took.
-    let unlocked = match selected {
-        Some(hosts) => targets.unlock_selected(hosts).await,
-        None => targets.unlock().await,
-    };
+    let unlocked = targets.unlock(selected).await;
     warn_on_unlock_failures("prepare", &unlocked);
     result
 }
@@ -1409,10 +1403,7 @@ async fn prepare_body(
 ) -> Result<(), PrepareFailure> {
     let in_scope = |host: &str| selected.is_none_or(|s| s.contains(host));
 
-    match selected {
-        Some(hosts) => targets.fanout_set_repo_for(hosts, operation, report).await,
-        None => targets.fanout_set_repo(operation, report).await,
-    }
+    targets.fanout_set_repo(operation, report, selected).await;
 
     // The issue repo could not be set on some host, so prepare never ran.
     // Reads the aggregated `Target::last_repo` verdict rather than
@@ -2157,7 +2148,7 @@ async fn perform_downgrade_for(
         }
     };
 
-    if let Err(e) = targets.update_lock_selected(hosts).await {
+    if let Err(e) = targets.update_lock(Some(hosts)).await {
         return Err(UpdateError::reason_only(e.to_string()));
     }
 
@@ -2173,7 +2164,7 @@ async fn perform_downgrade_for(
         diagnostics,
     )
     .await;
-    warn_on_unlock_failures("downgrade", &targets.unlock_selected(hosts).await);
+    warn_on_unlock_failures("downgrade", &targets.unlock(Some(hosts)).await);
     result
 }
 
@@ -2193,7 +2184,7 @@ async fn downgrade_body(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     targets
-        .fanout_set_repo_for(hosts, RepoOp::Remove, report)
+        .fanout_set_repo(RepoOp::Remove, report, Some(hosts))
         .await;
 
     // Per-host failures (repo removal + per-package/combined checks) are
@@ -2597,7 +2588,7 @@ async fn downgrade_verdict(
     probe_dead: &BTreeSet<String>,
     left_out: &BTreeSet<String>,
 ) -> BTreeMap<String, Vec<String>> {
-    targets.query_versions_selected(hosts).await;
+    targets.query_versions(Some(hosts)).await;
 
     let mut not_downgraded: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for target in targets
@@ -2871,9 +2862,9 @@ pub async fn perform_update(
         )));
     }
 
-    targets.package_check_selected(false, &eligible).await;
+    targets.package_check(false, Some(&eligible)).await;
 
-    if let Err(e) = targets.update_lock_selected(&eligible).await {
+    if let Err(e) = targets.update_lock(Some(&eligible)).await {
         let reason = if noprepare {
             e.to_string()
         } else {
@@ -2886,7 +2877,7 @@ pub async fn perform_update(
     }
 
     targets
-        .fanout_set_repo_for(&eligible, RepoOp::Add, report)
+        .fanout_set_repo(RepoOp::Add, report, Some(&eligible))
         .await;
 
     // A repo genuinely absent after the add means the patch below would find
@@ -2913,12 +2904,12 @@ pub async fn perform_update(
         // to these hosts — `eligible` shrinks right after, and the lock scope
         // must shrink with it or these hosts strand a lock nobody releases.
         targets
-            .fanout_set_repo_for(&failed, RepoOp::Remove, report)
+            .fanout_set_repo(RepoOp::Remove, report, Some(&failed))
             .await;
         // A successful undo refresh already made a snapshot off the booted one the default.
         let undo_failed = transactional_repo_failures(targets, &failed);
         let reset = reset_default_snapshot(targets, undo_failed.keys()).await;
-        warn_on_unlock_failures("update", &targets.unlock_selected(&failed).await);
+        warn_on_unlock_failures("update", &targets.unlock(Some(&failed)).await);
         let blocking: Vec<UpdateError> = blocking
             .into_iter()
             .map(|mut e| {
@@ -2955,9 +2946,9 @@ pub async fn perform_update(
             // Remove the repo we just added and abort. A hard failure rather
             // than a logged success, so it never reports "finished".
             targets
-                .fanout_set_repo_for(&eligible, RepoOp::Remove, report)
+                .fanout_set_repo(RepoOp::Remove, report, Some(&eligible))
                 .await;
-            warn_on_unlock_failures("update", &targets.unlock_selected(&eligible).await);
+            warn_on_unlock_failures("update", &targets.unlock(Some(&eligible)).await);
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
@@ -2970,9 +2961,9 @@ pub async fn perform_update(
     if targets.cancel_requested() {
         tracing::info!("cancelled: stopping before the update command was dispatched");
         targets
-            .fanout_set_repo_for(&eligible, RepoOp::Remove, report)
+            .fanout_set_repo(RepoOp::Remove, report, Some(&eligible))
             .await;
-        warn_on_unlock_failures("update", &targets.unlock_selected(&eligible).await);
+        warn_on_unlock_failures("update", &targets.unlock(Some(&eligible)).await);
         // With a prepare behind us the host is not untouched: the repo add is
         // undone, a completed prepare's packages are not.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
@@ -3132,7 +3123,7 @@ async fn finish_update(
         )));
     }
 
-    targets.package_check_selected(true, hosts).await;
+    targets.package_check(true, Some(hosts)).await;
 
     remove_test_repos(targets, hosts, report, diagnostics).await;
 }
@@ -3158,7 +3149,7 @@ async fn remove_test_repos(
     report: &dyn SetRepo,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if let Err(e) = targets.update_lock_selected(hosts).await {
+    if let Err(e) = targets.update_lock(Some(hosts)).await {
         warn!(
             error = %e,
             "could not lock hosts to remove the test update repositories; \
@@ -3172,7 +3163,7 @@ async fn remove_test_repos(
         return;
     }
     targets
-        .fanout_set_repo_for(hosts, RepoOp::Remove, report)
+        .fanout_set_repo(RepoOp::Remove, report, Some(hosts))
         .await;
     // The lock succeeded but the removal command may still have failed on a
     // host — #409's complaint (a stale test repo) can happen silently here too,
@@ -3194,7 +3185,7 @@ async fn remove_test_repos(
         )));
     }
 
-    let unlock_outcomes = targets.unlock_selected(hosts).await;
+    let unlock_outcomes = targets.unlock(Some(hosts)).await;
     warn_on_unlock_failures("update", &unlock_outcomes);
     let unlock_failures: Vec<(String, String)> = unlock_outcomes
         .iter()
@@ -3364,7 +3355,7 @@ async fn update_run_phase(
         })
     };
 
-    warn_on_unlock_failures("update", &targets.unlock_selected(locked).await);
+    warn_on_unlock_failures("update", &targets.unlock(Some(locked)).await);
     result
 }
 
@@ -12017,7 +12008,7 @@ mod tests {
     async fn perform_prepare_leaves_an_operators_reservation_in_place() {
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
-        group.lock("reserved").await;
+        group.lock("reserved", None).await;
         let reserved = handle.file_contents(TARGET_LOCK_PATH).expect("reserved");
 
         let res = perform_prepare(
@@ -12053,7 +12044,7 @@ mod tests {
             false,
         );
         let mut group = HostsGroup::new(vec![t], false);
-        group.lock("reserved").await;
+        group.lock("reserved", None).await;
         let reserved = handle.file_contents(TARGET_LOCK_PATH).expect("reserved");
         let report = report_with_rrid();
         let packages = report.get_package_list();
@@ -14210,7 +14201,7 @@ mod tests {
             let left_out: Vec<&str> = unreached.iter().filter_map(|e| e.host.as_deref()).collect();
             let before: Vec<usize> = handles.iter().map(|(_, h)| h.commands().len()).collect();
 
-            group.fanout_set_repo(RepoOp::Add, &report).await;
+            group.fanout_set_repo(RepoOp::Add, &report, None).await;
 
             let added_nothing: Vec<&str> = handles
                 .iter()
