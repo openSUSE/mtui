@@ -2126,6 +2126,7 @@ fn enqueue_reason(reason: crate::otel::EnqueueError) -> &'static str {
     match reason {
         crate::otel::EnqueueError::Full => "otlp queue full",
         crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+        crate::otel::EnqueueError::Closed => "otlp closed",
     }
 }
 
