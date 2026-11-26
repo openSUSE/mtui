@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::HttpClient;
 use mtui_testreport::{
     AutoExport, ChecksScope, DenyOverwrite, ExportContext, KernelExport, ManualExport, ManualHost,
 };
@@ -13,8 +12,8 @@ use mtui_types::package::VersionCheck;
 
 use super::openqa_overview::{OverviewOpts, OverviewParams, fetch_overview};
 use super::support::{
-    add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_document,
-    require_update, select_hosts, selects_hosts, stale_hash_gate, template_completion,
+    OpenqaCtx, add_hosts_arg, named_hosts, require_document, require_update, select_hosts,
+    selects_hosts, session_http, stale_hash_gate, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -128,24 +127,9 @@ impl Command for Export {
 
         let manual_results = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
-                let http = build_http(session)?;
-                let dashboard_api = session.config.qem_dashboard_api.clone();
-                let openqa_instance = session.config.openqa_instance.clone();
-                let pr_url = session.metadata().base().giteapr.clone();
-                let incident = build_incident(
-                    rrid.clone(),
-                    dashboard_api,
-                    http,
-                    session.metadata().update_source(),
-                    pr_url.as_deref(),
-                )
-                .await;
-                let mut auto = build_auto_openqa(
-                    openqa_instance,
-                    &incident,
-                    rrid.clone(),
-                    session.config.max_parallel as usize,
-                );
+                let ctx = OpenqaCtx::snapshot(session, rrid.clone())?;
+                let incident = ctx.incident().await;
+                let mut auto = ctx.auto(&incident);
                 // A failed fetch folds to "no results" so the export still
                 // renders the rest of the report rather than aborting.
                 if let Err(e) = auto.run().await {
@@ -290,7 +274,7 @@ impl Export {
         let mut checks_lines = Vec::new();
         let (touched, written) = match workflow {
             Workflow::Auto => {
-                let http = build_http(session)?;
+                let http = session_http(session)?;
                 let auto = session.metadata().openqa().auto.clone();
                 let touched =
                     author_onto_document(session, auto.as_ref(), &[], overview.as_ref(), None);
@@ -298,7 +282,7 @@ impl Export {
                 (touched, written)
             }
             Workflow::Kernel => {
-                let http = build_http(session)?;
+                let http = session_http(session)?;
                 let kernel = session.metadata().openqa().kernel.clone();
                 let touched = author_onto_document(session, None, &kernel, overview.as_ref(), None);
                 let written = KernelExport::new(ctx, kernel).write_logs(&http).await;
@@ -425,13 +409,6 @@ async fn ensure_overview(session: &mut Session, rrid: &mtui_types::RequestReview
     }
 }
 
-/// Borrows the session-scoped HTTP client, so one pool serves every command.
-fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
-    session
-        .http_client()
-        .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
-}
-
 /// Why the exporter has nothing to verify a host's install result against.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unverified {
@@ -538,6 +515,7 @@ fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::support::{build_auto_openqa, build_incident};
     use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
     use wiremock::MockServer;
 

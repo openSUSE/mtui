@@ -9,7 +9,8 @@ use mtui_types::Workflow;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{
-    build_auto_openqa, build_incident, build_kernel_openqa, require_update, template_completion,
+    OpenqaCtx, dashboard_fetch_err, fetch_kernel, refresh_auto, refresh_kernel, require_update,
+    session_openqa_transport, template_completion,
 };
 use crate::error::{CommandError, CommandResult};
 use crate::session::{LogLevel, Session};
@@ -139,79 +140,39 @@ impl Command for SetWorkflow {
             .ok_or_else(|| CommandError::Other("workflow is required".to_owned()))?;
 
         // Snapshot config primitives so no `&Session` borrow crosses `.await`.
-        let http = session
-            .http_client()
-            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
-        let openqa_transport = session
-            .openqa_transport()
-            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
-        let dashboard_api = session.config.qem_dashboard_api.clone();
-        let openqa_instance = session.config.openqa_instance.clone();
-        let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
+        let ctx = OpenqaCtx::snapshot(session, rrid)?;
+        let openqa_transport = session_openqa_transport(session)?;
         let current = session.metadata().workflow();
-        let source = session.metadata().update_source();
-        let pr_url = session.metadata().base().giteapr.clone();
-
-        let incident = build_incident(
-            rrid.clone(),
-            dashboard_api,
-            http.clone(),
-            source,
-            pr_url.as_deref(),
-        )
-        .await;
+        let incident = ctx.incident().await;
 
         match desired {
             Workflow::Kernel => {
                 if current == Workflow::Kernel {
                     tracing::info!("Desired workflow kernel is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid.clone()).await?;
-                    let stale = std::mem::take(&mut session.metadata_mut().openqa_mut().kernel);
-                    let mut refreshed = Vec::with_capacity(stale.len());
-                    for oqa in stale {
-                        refreshed.push(oqa.run().await.map_err(openqa_fetch_err)?);
-                    }
-                    session.metadata_mut().openqa_mut().kernel = refreshed;
+                    refresh_auto(session, &ctx, &incident).await?;
+                    refresh_kernel(session).await?;
                     print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'kernel'");
                 session.set_workflow(Workflow::Kernel);
-                let mut auto = build_auto_openqa(
-                    openqa_instance.clone(),
-                    &incident,
-                    rrid.clone(),
-                    session.config.max_parallel as usize,
-                );
+                let mut auto = ctx.auto(&incident);
                 auto.run().await.map_err(dashboard_fetch_err)?;
                 session.metadata_mut().openqa_mut().auto = Some(auto);
                 let mut kernel = Vec::new();
-                for host in [openqa_instance, openqa_baremetal] {
-                    kernel.push(
-                        build_kernel_openqa(&incident, &host, openqa_transport.clone())
-                            .map_err(openqa_fetch_err)?
-                            .run()
-                            .await
-                            .map_err(openqa_fetch_err)?,
-                    );
-                }
+                fetch_kernel(&ctx, &incident, &openqa_transport, &mut kernel).await?;
                 session.metadata_mut().openqa_mut().kernel = kernel;
             }
             Workflow::Auto => {
                 if current == Workflow::Auto {
                     tracing::info!("Desired workflow auto is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid).await?;
+                    refresh_auto(session, &ctx, &incident).await?;
                     print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'auto'");
                 session.set_workflow(Workflow::Auto);
-                let mut auto = build_auto_openqa(
-                    openqa_instance,
-                    &incident,
-                    rrid,
-                    session.config.max_parallel as usize,
-                );
+                let mut auto = ctx.auto(&incident);
                 auto.run().await.map_err(dashboard_fetch_err)?;
                 let no_results = auto.results.is_none();
                 session.metadata_mut().openqa_mut().auto = Some(auto);
@@ -228,13 +189,13 @@ impl Command for SetWorkflow {
             Workflow::Manual => {
                 if current == Workflow::Manual {
                     tracing::info!("Desired workflow manual is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid).await?;
+                    refresh_auto(session, &ctx, &incident).await?;
                     print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'manual'");
                 session.set_workflow(Workflow::Manual);
-                refresh_auto(session, &incident, &openqa_instance, rrid).await?;
+                refresh_auto(session, &ctx, &incident).await?;
                 session.metadata_mut().openqa_mut().kernel = Vec::new();
             }
         }
@@ -255,41 +216,10 @@ fn print_workflow(session: &mut Session) {
         .println(&format!("Workflow set to '{workflow}'"));
 }
 
-/// Map a QEM Dashboard fetch failure to a user-facing command error.
-fn dashboard_fetch_err(e: mtui_datasources::QemDashboardError) -> CommandError {
-    CommandError::Other(format!(
-        "could not fetch openQA data from QEM Dashboard: {e}"
-    ))
-}
-
-/// Map an openQA jobs fetch failure to a user-facing command error.
-fn openqa_fetch_err(e: mtui_datasources::OpenQAError) -> CommandError {
-    CommandError::Other(format!("could not fetch openQA data: {e}"))
-}
-
-/// Refreshes the report's "auto" openQA result in place. The holder starts empty
-/// rather than being populated at load, so a `None` here builds and runs a fresh
-/// connector instead of panicking; a fetch failure propagates as `Err`.
-async fn refresh_auto(
-    session: &mut Session,
-    incident: &mtui_datasources::qem_dashboard::incident::QemIncident,
-    openqa_instance: &str,
-    rrid: mtui_types::RequestReviewID,
-) -> CommandResult {
-    let max_parallel = session.config.max_parallel as usize;
-    if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
-        auto.run().await.map_err(dashboard_fetch_err)?;
-    } else {
-        let mut auto = build_auto_openqa(openqa_instance.to_owned(), incident, rrid, max_parallel);
-        auto.run().await.map_err(dashboard_fetch_err)?;
-        session.metadata_mut().openqa_mut().auto = Some(auto);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::support::{build_incident, build_kernel_openqa};
     use crate::commands::testkit::{empty_session, fake_report, matches, session_with_hosts};
     use std::sync::{Arc, Mutex};
 

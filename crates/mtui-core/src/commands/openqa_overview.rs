@@ -6,7 +6,8 @@ use mtui_datasources::oqa_search as oqa;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{
-    require_document, require_update, resolve_dashboard_key, template_completion,
+    openqa_client_err, require_document, require_update, resolve_dashboard_key, session_http,
+    session_openqa_transport, template_completion,
 };
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -328,12 +329,8 @@ impl OverviewParams {
         opts: OverviewOpts,
     ) -> Result<Self, CommandError> {
         let config = &session.config;
-        let http = session
-            .http_client()
-            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
-        let openqa_transport = session
-            .openqa_transport()
-            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
+        let http = session_http(session)?;
+        let openqa_transport = session_openqa_transport(session)?;
         Ok(Self {
             rrid,
             packages: session.metadata().get_package_list(),
@@ -383,7 +380,7 @@ pub(crate) async fn fetch_overview(
 
     let oqa_client =
         mtui_datasources::openqa::build_openqa_client_with_transport(openqa_transport, &url_openqa)
-            .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
+            .map_err(openqa_client_err)?;
 
     // SLFO's maintenance id is not an integer ("1.2"), so fall back to the
     // review id (the Gitea PR number) there.

@@ -124,6 +124,157 @@ pub(crate) fn build_kernel_openqa(
     Ok(KernelOpenQA::new(base))
 }
 
+/// Builds the session-scoped HTTP client, so one pool serves every command.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the client cannot be built.
+pub(crate) fn session_http(session: &Session) -> Result<HttpClient, CommandError> {
+    session
+        .http_client()
+        .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
+}
+
+/// Builds the session-scoped openQA transport.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the transport cannot be built.
+pub(crate) fn session_openqa_transport(session: &Session) -> Result<reqwest::Client, CommandError> {
+    session
+        .openqa_transport()
+        .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))
+}
+
+/// Maps an openQA client build failure to a user-facing command error.
+pub(crate) fn openqa_client_err(e: OpenQAError) -> CommandError {
+    CommandError::Other(format!("could not build openQA client: {e}"))
+}
+
+/// Maps a QEM Dashboard fetch failure to a user-facing command error.
+pub(crate) fn dashboard_fetch_err(e: mtui_datasources::QemDashboardError) -> CommandError {
+    CommandError::Other(format!(
+        "could not fetch openQA data from QEM Dashboard: {e}"
+    ))
+}
+
+/// Maps an openQA jobs fetch failure to a user-facing command error.
+pub(crate) fn openqa_fetch_err(e: OpenQAError) -> CommandError {
+    CommandError::Other(format!("could not fetch openQA data: {e}"))
+}
+
+/// The session values an openQA/dashboard refresh needs, snapshotted so no
+/// `&Session` borrow (it is not `Sync`) crosses an `.await`.
+pub(crate) struct OpenqaCtx {
+    pub rrid: RequestReviewID,
+    pub http: HttpClient,
+    pub dashboard_api: String,
+    pub openqa_instance: String,
+    pub openqa_baremetal: String,
+    pub source: UpdateSource,
+    pub pr_url: Option<String>,
+    pub max_parallel: usize,
+}
+
+impl OpenqaCtx {
+    /// # Errors
+    ///
+    /// [`CommandError::Other`] when the HTTP client cannot be built.
+    pub(crate) fn snapshot(session: &Session, rrid: RequestReviewID) -> Result<Self, CommandError> {
+        Ok(Self {
+            rrid,
+            http: session_http(session)?,
+            dashboard_api: session.config.qem_dashboard_api.clone(),
+            openqa_instance: session.config.openqa_instance.clone(),
+            openqa_baremetal: session.config.openqa_instance_baremetal.clone(),
+            source: session.metadata().update_source(),
+            pr_url: session.metadata().base().giteapr.clone(),
+            max_parallel: session.config.max_parallel as usize,
+        })
+    }
+
+    pub(crate) async fn incident(&self) -> QemIncident {
+        build_incident(
+            self.rrid.clone(),
+            self.dashboard_api.clone(),
+            self.http.clone(),
+            self.source,
+            self.pr_url.as_deref(),
+        )
+        .await
+    }
+
+    pub(crate) fn auto(&self, incident: &QemIncident) -> DashboardAutoOpenQA {
+        build_auto_openqa(
+            self.openqa_instance.clone(),
+            incident,
+            self.rrid.clone(),
+            self.max_parallel,
+        )
+    }
+}
+
+/// Fetches the kernel results of the primary and baremetal instances into
+/// `out`, one instance at a time so a later failure leaves the earlier ones.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] on the first build or fetch failure.
+pub(crate) async fn fetch_kernel(
+    ctx: &OpenqaCtx,
+    incident: &QemIncident,
+    transport: &reqwest::Client,
+    out: &mut Vec<KernelOpenQA>,
+) -> Result<(), CommandError> {
+    for host in [&ctx.openqa_instance, &ctx.openqa_baremetal] {
+        let oqa = build_kernel_openqa(incident, host, transport.clone())
+            .map_err(openqa_fetch_err)?
+            .run()
+            .await
+            .map_err(openqa_fetch_err)?;
+        out.push(oqa);
+    }
+    Ok(())
+}
+
+/// Re-runs the kernel connectors in place. `KernelOpenQA::run` consumes `self`,
+/// so this drains and rebuilds.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] on the first failed fetch, leaving the holder empty.
+pub(crate) async fn refresh_kernel(session: &mut Session) -> Result<(), CommandError> {
+    let stale = std::mem::take(&mut session.metadata_mut().openqa_mut().kernel);
+    let mut refreshed = Vec::with_capacity(stale.len());
+    for oqa in stale {
+        refreshed.push(oqa.run().await.map_err(openqa_fetch_err)?);
+    }
+    session.metadata_mut().openqa_mut().kernel = refreshed;
+    Ok(())
+}
+
+/// Refreshes the report's "auto" openQA result in place. The holder starts
+/// empty rather than being populated at load, so a `None` builds and runs a
+/// fresh connector instead of panicking.
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the dashboard fetch fails.
+pub(crate) async fn refresh_auto(
+    session: &mut Session,
+    ctx: &OpenqaCtx,
+    incident: &QemIncident,
+) -> Result<(), CommandError> {
+    if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
+        auto.run().await.map_err(dashboard_fetch_err)?;
+    } else {
+        let mut auto = ctx.auto(incident);
+        auto.run().await.map_err(dashboard_fetch_err)?;
+        session.metadata_mut().openqa_mut().auto = Some(auto);
+    }
+    Ok(())
+}
+
 /// Guards a command body that requires a loaded update, so a data-source
 /// command fails cleanly instead of building a client for an empty RRID.
 ///
