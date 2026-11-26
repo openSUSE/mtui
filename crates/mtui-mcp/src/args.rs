@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 #[cfg(any(feature = "mcp", test))]
 use mtui_config::{Config, SslVerify};
-use mtui_core::ColorArg;
+use mtui_core::{ColorArg, LONG_VERSION};
 
 /// Top-level `mtui-mcp` process arguments.
 ///
@@ -25,8 +25,8 @@ use mtui_core::ColorArg;
 #[command(
     name = "mtui-mcp",
     // Reuse the REPL's build-provenance block for `-V`/`--version`.
-    version = env!("MTUI_LONG_VERSION"),
-    long_version = env!("MTUI_LONG_VERSION"),
+    version = LONG_VERSION,
+    long_version = LONG_VERSION,
     about = "MCP server for mtui (tools synthesised from the command registry)",
     long_about = None,
     disable_help_subcommand = true

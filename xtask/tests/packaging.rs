@@ -350,17 +350,17 @@ fn distro_package_names_stay_split() {
     }
 }
 
-/// `mtui-core` and `mtui-mcp` stamp `git describe` into `--version` at build
-/// time. Built from a crates.io tarball unpacked inside an unrelated git
-/// checkout (a dotfiles `$HOME`), the lookup would stamp that repository's
+/// `mtui-core` stamps `git describe` into `--version` at build time (and
+/// `mtui-mcp` reuses the stamp). Built from a crates.io tarball unpacked inside
+/// an unrelated git checkout (a dotfiles `$HOME`), the lookup would stamp that repository's
 /// SHA — and `rerun-if-changed=../../.git/HEAD` points outside the package,
-/// rerunning the script on every build. Both build scripts therefore skip the
+/// rerunning the script on every build. The build script therefore skips the
 /// git lookup when `.cargo_vcs_info.json` sits beside the manifest (cargo
 /// adds it to every packaged crate) and when git's toplevel is not the
 /// workspace root.
 ///
 /// Proven the way CI cannot (`cargo package --no-verify` never compiles the
-/// tarball): each real `build.rs` is copied into a scratch crate at the same
+/// tarball): the real `build.rs` is copied into a scratch crate at the same
 /// `crates/<name>/` depth and built under a fake `$HOME`-that-is-a-git-repo,
 /// both with and without the vcs marker, plus once in its own checkout as a
 /// control. The `ws-packaged` case is silenced by either guard, so it cannot
@@ -369,42 +369,40 @@ fn distro_package_names_stay_split() {
 /// and the foreign cases go red.
 #[test]
 fn build_scripts_ignore_foreign_git_repos() {
-    for krate in ["mtui-core", "mtui-mcp"] {
-        let foreign = FakeHome::new();
-        // Packaged crate inside a foreign checkout: the vcs marker alone
-        // must silence the lookup.
-        let out = foreign.build_scratch(krate, "ws-packaged", true);
-        foreign.assert_unstamped(krate, &out);
-        foreign.assert_no_rerun_directive(krate, &foreign.build_directives("ws-packaged"));
-        // Unpackaged sources inside a foreign checkout (a vendored tree, a
-        // tarball with the marker stripped): the toplevel check must silence it.
-        let out = foreign.build_scratch(krate, "ws-bare", false);
-        foreign.assert_unstamped(krate, &out);
-        foreign.assert_watches_git_head(krate, &foreign.build_directives("ws-bare"));
-        // Packaged crate at the foreign checkout's own toplevel: git's
-        // toplevel equals the build root, so only the marker can silence the
-        // lookup — disable it and this case stamps the foreign SHA.
-        let out = foreign.build_scratch(krate, "", true);
-        foreign.assert_unstamped(krate, &out);
-        foreign.assert_no_rerun_directive(krate, &foreign.build_directives(""));
-    }
+    let krate = "mtui-core";
+    let foreign = FakeHome::new();
+    // Packaged crate inside a foreign checkout: the vcs marker alone
+    // must silence the lookup.
+    let out = foreign.build_scratch(krate, "ws-packaged", true);
+    foreign.assert_unstamped(krate, &out);
+    foreign.assert_no_rerun_directive(krate, &foreign.build_directives("ws-packaged"));
+    // Unpackaged sources inside a foreign checkout (a vendored tree, a
+    // tarball with the marker stripped): the toplevel check must silence it.
+    let out = foreign.build_scratch(krate, "ws-bare", false);
+    foreign.assert_unstamped(krate, &out);
+    foreign.assert_watches_git_head(krate, &foreign.build_directives("ws-bare"));
+    // Packaged crate at the foreign checkout's own toplevel: git's
+    // toplevel equals the build root, so only the marker can silence the
+    // lookup — disable it and this case stamps the foreign SHA.
+    let out = foreign.build_scratch(krate, "", true);
+    foreign.assert_unstamped(krate, &out);
+    foreign.assert_no_rerun_directive(krate, &foreign.build_directives(""));
 }
 
 /// Control for the above: in its own checkout the lookup still stamps, so the
 /// guards cannot be "fixed" by deleting the git call.
 #[test]
 fn build_scripts_stamp_their_own_checkout() {
-    for krate in ["mtui-core", "mtui-mcp"] {
-        let home = FakeHome::new();
-        // Scratch crate straight under the repo root, so git's toplevel is
-        // the build root itself.
-        let out = home.build_scratch(krate, "", false);
-        assert!(
-            out.contains(&home.short),
-            "{krate}: own checkout no longer stamps (got {out:?})"
-        );
-        home.assert_watches_git_head(krate, &home.build_directives(""));
-    }
+    let krate = "mtui-core";
+    let home = FakeHome::new();
+    // Scratch crate straight under the repo root, so git's toplevel is
+    // the build root itself.
+    let out = home.build_scratch(krate, "", false);
+    assert!(
+        out.contains(&home.short),
+        "{krate}: own checkout no longer stamps (got {out:?})"
+    );
+    home.assert_watches_git_head(krate, &home.build_directives(""));
 }
 
 /// A git repository with one commit, standing in for a foreign dotfiles

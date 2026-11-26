@@ -27,6 +27,10 @@ use clap::{Parser, ValueEnum};
 use mtui_config::{Config, SslVerify};
 use mtui_types::{UpdateID, Workflow};
 
+/// Build-provenance block (`<ver> (<ref>, <profile>, <target>)`) stamped by
+/// `build.rs`; shared with `mtui-mcp`, whose `-V` must match the REPL's.
+pub const LONG_VERSION: &str = env!("MTUI_LONG_VERSION");
+
 /// Top-level `mtui` process arguments.
 ///
 /// Parse with [`Args::parse`] (exits the process on `--help`/`--version`/error,
@@ -38,8 +42,8 @@ use mtui_types::{UpdateID, Workflow};
     name = "mtui",
     // Both `-V` and `--version` carry the full provenance block: clap uses
     // `version` for `-V` and `long_version` for `--version`, so set both.
-    version = env!("MTUI_LONG_VERSION"),
-    long_version = env!("MTUI_LONG_VERSION"),
+    version = LONG_VERSION,
+    long_version = LONG_VERSION,
     about = "Maintenance Test Update Installer",
     long_about = None,
     disable_help_subcommand = true
