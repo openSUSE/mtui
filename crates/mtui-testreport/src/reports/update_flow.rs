@@ -1020,6 +1020,24 @@ async fn perform_operation_with(
     aggregate_failures(op, failures).map_err(|e| e.with_completed(completed))
 }
 
+/// Removes the test repositories from `hosts` and releases their operation lock:
+/// the undo for an update that stops after its repo add and before any patch.
+async fn abandon_add(targets: &mut HostsGroup, hosts: &BTreeSet<String>, report: &dyn SetRepo) {
+    targets
+        .fanout_set_repo(RepoOp::Remove, report, Some(hosts))
+        .await;
+    warn_on_unlock_failures("update", &targets.unlock(Some(hosts)).await);
+}
+
+/// `hosts` as the comma-separated list log fields and messages use.
+fn join_hosts<'a>(hosts: impl IntoIterator<Item = &'a String>) -> String {
+    hosts
+        .into_iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Renders the WARN for an `install`/`uninstall` operation lock that did not
 /// release, naming the affected hosts and the manual remedy.
 ///
@@ -1042,8 +1060,12 @@ fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> Str
 /// `install`/`uninstall`.
 ///
 /// [`LockOutcome::Contended`] is excluded — benign, another tester owns the
-/// lock — so this only warns on a real transport/SFTP error.
-pub fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
+/// lock — so this only warns on a real transport/SFTP error. Returns the
+/// `(host, reason)` pairs it warned about.
+pub fn warn_on_unlock_failures(
+    op: &str,
+    outcomes: &BTreeMap<String, LockOutcome>,
+) -> Vec<(String, String)> {
     let failures: Vec<(String, String)> = outcomes
         .iter()
         .filter_map(|(host, outcome)| match outcome {
@@ -1054,6 +1076,7 @@ pub fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome
     if !failures.is_empty() {
         warn!("{}", unlock_failure_message(op, &failures));
     }
+    failures
 }
 
 /// Renders a [`RebootFailure`] as the operator-facing per-host error.
@@ -2245,7 +2268,7 @@ async fn downgrade_body(
         if repo_errors.is_empty() {
             return Err(UpdateError::new(
                 "package version probe failed",
-                dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
+                join_hosts(&dead_probes),
             ));
         }
         let probes = dead_probes
@@ -2474,11 +2497,10 @@ async fn downgrade_body(
 
     // Then the dead probes, now that the healthy hosts have rolled back.
     if !dead_probes.is_empty() {
-        return Err(UpdateError::new(
-            "package version probe failed",
-            dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
-        )
-        .with_completed(completed));
+        return Err(
+            UpdateError::new("package version probe failed", join_hosts(&dead_probes))
+                .with_completed(completed),
+        );
     }
 
     // `downgrade_verdict` has already logged the per-host detail; fail so a
@@ -2567,14 +2589,14 @@ async fn downgrade_verdict(
 
     if !probe_dead.is_empty() {
         warn!(
-            hosts = %probe_dead.iter().cloned().collect::<Vec<_>>().join(", "),
+            hosts = %join_hosts(probe_dead),
             "no package version probe answered on these hosts, so nothing was \
              downgraded there and their package state is unverified"
         );
     }
     if !left_out.is_empty() {
         warn!(
-            hosts = %left_out.iter().cloned().collect::<Vec<_>>().join(", "),
+            hosts = %join_hosts(left_out),
             "the repository step failed on these hosts, so they were not probed or \
              downgraded and their package state is unverified"
         );
@@ -2691,7 +2713,7 @@ pub async fn perform_update(
     }
     if !unreached.is_empty() {
         warn!(
-            hosts = %unreached.iter().cloned().collect::<Vec<_>>().join(", "),
+            hosts = %join_hosts(&unreached),
             "the update's repositories do not reach these hosts; excluding them from the update"
         );
         if targets
@@ -2845,7 +2867,7 @@ pub async fn perform_update(
         repo_add_seen = true;
         let failed: BTreeSet<String> = blocking.iter().filter_map(|e| e.host.clone()).collect();
         warn!(
-            hosts = %failed.iter().cloned().collect::<Vec<_>>().join(", "),
+            hosts = %join_hosts(&failed),
             "test update repository failed to register or refresh; excluding from the patch"
         );
         // Undo the partial add and release the lock while it is still scoped
@@ -2893,10 +2915,7 @@ pub async fn perform_update(
         Err(e) => {
             // Remove the repo we just added and abort. A hard failure rather
             // than a logged success, so it never reports "finished".
-            targets
-                .fanout_set_repo(RepoOp::Remove, report, Some(&eligible))
-                .await;
-            warn_on_unlock_failures("update", &targets.unlock(Some(&eligible)).await);
+            abandon_add(targets, &eligible, report).await;
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
@@ -2908,10 +2927,7 @@ pub async fn perform_update(
     // genuinely undoes the repo add and the lock.
     if targets.cancel_requested() {
         tracing::info!("cancelled: stopping before the update command was dispatched");
-        targets
-            .fanout_set_repo(RepoOp::Remove, report, Some(&eligible))
-            .await;
-        warn_on_unlock_failures("update", &targets.unlock(Some(&eligible)).await);
+        abandon_add(targets, &eligible, report).await;
         // With a prepare behind us the host is not untouched: the repo add is
         // undone, a completed prepare's packages are not.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
@@ -3133,15 +3149,7 @@ async fn remove_test_repos(
         )));
     }
 
-    let unlock_outcomes = targets.unlock(Some(hosts)).await;
-    warn_on_unlock_failures("update", &unlock_outcomes);
-    let unlock_failures: Vec<(String, String)> = unlock_outcomes
-        .iter()
-        .filter_map(|(host, outcome)| match outcome {
-            LockOutcome::Failed(reason) => Some((host.clone(), reason.clone())),
-            _ => None,
-        })
-        .collect();
+    let unlock_failures = warn_on_unlock_failures("update", &targets.unlock(Some(hosts)).await);
     if !unlock_failures.is_empty() {
         diagnostics.push(Diagnostic::degradation(unlock_failure_message(
             "update",
@@ -8399,6 +8407,10 @@ mod tests {
             "an abort that dispatched nothing must leave no row: {:?}",
             handle.file_contents(HISTORY_LOG)
         );
+        assert!(
+            handle.file_contents(TARGET_LOCK_PATH).is_none(),
+            "the abort must release the operation lock it took"
+        );
     }
 
     #[tokio::test]
@@ -8428,6 +8440,25 @@ mod tests {
             "a host that ran no downgrade gets no row: {:?}",
             downgrade_events(&handle)
         );
+    }
+
+    #[tokio::test]
+    async fn downgrade_all_probes_dead_names_every_host() {
+        let (h1, _) = sles_target_with_exit("h1", "", -1);
+        let (h2, _) = sles_target_with_exit("h2", "", -1);
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+
+        let err = perform_downgrade(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("dead probes abort");
+
+        assert_eq!(err.to_string(), "h1, h2: package version probe failed");
     }
 
     #[tokio::test]
