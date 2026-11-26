@@ -9,7 +9,7 @@
 //! transactional reboot templates) and the paired *check* callable — and the
 //! base drives:
 //!
-//! 1. [`collect`](Operation::collect) the per-host command map + the
+//! 1. `collect` the per-host command map + the
 //!    transactional-only reboot map (early-return on the configured
 //!    plan error),
 //! 2. `group.update_lock()`,
@@ -182,8 +182,8 @@ pub struct HostOutput {
     pub exitcode: i32,
 }
 
-/// One host's contribution to an [`Operation`], resolved during
-/// [`collect`](Operation::collect).
+/// One host's contribution to an [`Operation`], resolved while it collects
+/// its per-host command maps.
 ///
 /// Groups the fields the template reads per target so the [`OperationGroup`]
 /// seam can hand them over in one shot: the doer (for the command + reboot
@@ -391,8 +391,7 @@ impl OperationKind {
 /// The install/uninstall template: `lock → run → check → reboot → unlock` over
 /// an [`OperationGroup`], for one [`OperationKind`] and package list.
 ///
-/// [`collect`](Self::collect) and [`run`](Self::run) reproduce the control flow
-/// behaviour-for-behaviour.
+/// [`run`](Self::run) reproduces the control flow behaviour-for-behaviour.
 #[derive(Debug, Clone)]
 pub struct Operation {
     kind: OperationKind,
