@@ -439,9 +439,8 @@ impl MockConnection {
     }
 
     /// Marks the transport as inactive (e.g. to test `is_active` handling).
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn inactive(mut self) -> Self {
+    pub fn inactive(mut self) -> Self {
         self.active = false;
         self
     }

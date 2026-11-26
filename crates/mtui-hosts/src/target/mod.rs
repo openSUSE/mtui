@@ -144,6 +144,52 @@ pub struct Target {
     /// run's verdict. `None` means not attempted for this report, and every consumer
     /// must treat it as benign, like [`last_upload`](Self::last_upload)'s `None`.
     last_repo: Option<std::result::Result<RepoOutcome, RepoFailure>>,
+    /// Whether this session's last change to the update's repositories here
+    /// was an add.
+    repos_added: bool,
+    /// Packages this session's `install` put here that no later `uninstall`
+    /// removed.
+    installed: std::collections::BTreeSet<String>,
+    /// How far the last [`close`](Target::close) got with releasing the locks.
+    close_release: CloseRelease,
+}
+
+/// How far [`Target::close`] got with releasing this session's locks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CloseRelease {
+    /// The close never reached the end of the release: it was abandoned, or
+    /// never ran.
+    #[default]
+    Unfinished,
+    /// The link was down, so the release was skipped.
+    LinkDown,
+    /// The release ran to the end.
+    Attempted,
+}
+
+/// What this session left on a host, read from its in-memory records after a
+/// [`close`](Target::close) — no remote I/O.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostLeftovers {
+    /// This session still holds the host's operation lock.
+    pub operation_lock: bool,
+    /// This session still holds the host's pool claim.
+    pub pool_claim: bool,
+    /// Why a hold above survived the close.
+    pub release: CloseRelease,
+    /// The session's last change to the update's repositories was an add.
+    pub repos_added: bool,
+    /// Packages the session's `install` put on the host and no later
+    /// `uninstall` removed.
+    pub installed: Vec<String>,
+}
+
+impl HostLeftovers {
+    /// Whether nothing was left.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.operation_lock && !self.pool_claim && !self.repos_added && self.installed.is_empty()
+    }
 }
 
 /// The placeholder [`System`] a new [`Target`] carries before it is parsed: an
@@ -187,6 +233,9 @@ impl Target {
             last_upload: None,
             last_download: None,
             last_repo: None,
+            repos_added: false,
+            installed: std::collections::BTreeSet::new(),
+            close_release: CloseRelease::Unfinished,
         }
     }
 
@@ -704,11 +753,14 @@ impl Target {
     pub async fn close(&mut self, action: Option<&str>) -> Result<()> {
         let active = self.connection.as_ref().is_some_and(|c| c.is_active());
         if active {
+            self.close_release = CloseRelease::Unfinished;
             // Best-effort release of our own locks before disconnecting; a lock
             // held by another owner is left untouched (force = false).
             self.unlock(false).await;
             self.pool_unlock(false).await;
+            self.close_release = CloseRelease::Attempted;
         } else {
+            self.close_release = CloseRelease::LinkDown;
             tracing::debug!(host = %self.hostname, "close: not connected");
         }
 
@@ -781,6 +833,33 @@ impl Target {
     /// resolution in `mtui-testreport`.
     pub fn set_packages(&mut self, packages: Vec<Package>) {
         self.packages = packages;
+    }
+
+    /// Records that this session's `install` put `packages` on the host.
+    pub fn note_installed(&mut self, packages: &[String]) {
+        self.installed.extend(packages.iter().cloned());
+    }
+
+    /// Records that this session's `uninstall` removed `packages` from the host.
+    pub fn note_uninstalled(&mut self, packages: &[String]) {
+        for p in packages {
+            self.installed.remove(p);
+        }
+    }
+
+    /// What this session left on the host, from its in-memory records only.
+    ///
+    /// Meant for after [`close`](Self::close): a hold still recorded then is
+    /// one the close did not release.
+    #[must_use]
+    pub fn leftovers(&self) -> HostLeftovers {
+        HostLeftovers {
+            operation_lock: self.holds_operation_lock(),
+            pool_claim: self.held_comment(LockKind::Pool).is_some(),
+            release: self.close_release,
+            repos_added: self.repos_added,
+            installed: self.installed.iter().cloned().collect(),
+        }
     }
 
     /// Installs the interactive command-timeout prompt applied by the next

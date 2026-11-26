@@ -905,6 +905,16 @@ impl HostsGroup {
         .await;
     }
 
+    /// Each host's [`Target::leftovers`], keyed by hostname, omitting hosts
+    /// that left nothing.
+    #[must_use]
+    pub fn leftovers(&self) -> BTreeMap<String, crate::HostLeftovers> {
+        self.targets()
+            .map(|t| (t.hostname().to_owned(), t.leftovers()))
+            .filter(|(_, l)| !l.is_empty())
+            .collect()
+    }
+
     /// Reports the lock state of every host to `sink`, in sorted hostname order: the
     /// operation lock, or the pool-claim lock when `pool` is `true`, via
     /// [`Target::lock_status`](Target::lock_status). Best-effort per host: a read failure

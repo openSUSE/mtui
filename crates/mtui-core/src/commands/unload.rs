@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use crate::command::{Command, Scope};
-use crate::commands::support::document_edits_guard;
+use crate::commands::support::{document_edits_guard, leftover_notices};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 use crate::template_scope::canonical_template_name;
@@ -107,6 +107,9 @@ impl Command for Unload {
             ));
         }
         session.display.println(&msg);
+        for line in leftover_notices(&removed.leftovers) {
+            session.display.println(&line);
+        }
         Ok(())
     }
 }
@@ -200,6 +203,46 @@ mod tests {
             arbiter.owner_of("unload-claim-h1").is_none(),
             "the unloaded report's arbiter claim is released"
         );
+    }
+
+    /// The lock is taken over a link that is down by the close, so the
+    /// release is skipped and the hold survives the teardown.
+    #[tokio::test]
+    async fn unload_names_a_lock_left_on_a_host() {
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::TargetState;
+
+        let mut down = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h1").inactive()),
+        );
+        down.lock("").await.expect("operation lock taken");
+        let mut clean = Target::with_connection(
+            "h2",
+            TargetState::Enabled,
+            Box::new(MockConnection::new("h2")),
+        );
+        clean.lock("").await.expect("operation lock taken");
+        let (mut session, buf) = crate::commands::testkit::session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![down, clean],
+        );
+
+        let args = matches(&Unload, &["SUSE:Maintenance:1:1"]);
+        Unload.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("unloaded SUSE:Maintenance:1:1"), "{out}");
+        assert!(
+            out.contains(
+                "warning: h1: operation lock not released (link down); unless the host \
+                 reboots, it stays until it is older than [lock] stale_age or someone runs \
+                 `unlock -f`"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("h2:"), "h2 released its lock: {out}");
     }
 
     #[tokio::test]

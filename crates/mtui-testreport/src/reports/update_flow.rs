@@ -965,9 +965,28 @@ async fn perform_operation_with(
             completed: Vec::new(),
         })
         .collect();
+    // An install may have landed even where the reboot then failed, so only a
+    // failed check rules a host out; an uninstall counts only where it completed.
+    let installed_on: Vec<String> = targets
+        .names()
+        .into_iter()
+        .filter(|h| is_enabled(targets, h))
+        .filter(|h| !failures.iter().any(|e| e.host.as_deref() == Some(h)))
+        .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     // Every host was planned and nothing rolls back, so each one not failed is done.
     let completed = completed_hosts(targets, &targets.names(), &failures);
+    let install = matches!(op, Op::Install);
+    let hosts = if install { &installed_on } else { &completed };
+    for host in hosts {
+        if let Some(t) = targets.get_mut(host) {
+            if install {
+                t.note_installed(packages);
+            } else {
+                t.note_uninstalled(packages);
+            }
+        }
+    }
     aggregate_failures(label, failures).map_err(|e| e.with_completed(completed))
 }
 
@@ -7366,6 +7385,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_is_recorded_until_an_uninstall_removes_it() {
+        let (t, _h) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        let pkgs = ["pkg-a".to_owned(), "pkg-b".to_owned()];
+        perform_install(&mut group, &pkgs, &mut Vec::new())
+            .await
+            .expect("a clean install");
+        assert_eq!(group.get("h1").unwrap().leftovers().installed, pkgs);
+        perform_uninstall(&mut group, &pkgs[..1], &mut Vec::new())
+            .await
+            .expect("a clean uninstall");
+        assert_eq!(group.get("h1").unwrap().leftovers().installed, ["pkg-b"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_install_is_not_recorded() {
+        let (t, _h) = sles_target_with_exit("h1", "", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        perform_install(&mut group, &["pkg-a".to_owned()], &mut Vec::new())
+            .await
+            .expect_err("non-zero exit surfaces as Err");
+        assert!(group.get("h1").unwrap().leftovers().installed.is_empty());
+    }
+
+    #[tokio::test]
     async fn perform_install_surfaces_a_failed_command() {
         // The verdict comes from the template's own check.
         let (t, _h) = sles_target_with_exit("h1", "", 104);
@@ -9383,6 +9427,7 @@ mod tests {
             "reason: {}",
             err.reason
         );
+        assert_eq!(group.get("h1").unwrap().leftovers().installed, ["pkg-a"]);
     }
 
     #[tokio::test]

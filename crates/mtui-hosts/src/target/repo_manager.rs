@@ -315,6 +315,8 @@ impl<'a> RepoManager<'a> {
         // (a failed `ar`/`rr`, or the trailing `ref`) is a per-host failure, though only
         // the last command lands in the `HostLog`.
         let mut failure: Option<RepoFailure> = None;
+        let mut registered = false;
+        let mut remove_failed = false;
 
         // Snapshot the flattened system so its borrow does not overlap the mutable calls
         // below.
@@ -364,7 +366,9 @@ impl<'a> RepoManager<'a> {
                 let args = quote_args(&[alias.as_str(), url.as_str(), alias.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
                 // Surface a failed add instead of returning silent success.
-                if self.target.lastexit() != Some(0) {
+                if self.target.lastexit() == Some(0) {
+                    registered = true;
+                } else {
                     let err = last_error_line(self.target);
                     warn!(
                         "adding repo {alias} on {hostname} failed: zypper exited {}{}",
@@ -378,6 +382,7 @@ impl<'a> RepoManager<'a> {
                     let probe_args = quote_args(&[alias.as_str()]);
                     self.target.run(&format!("zypper -n lr {probe_args}")).await;
                     if self.target.lastexit() == Some(0) {
+                        registered = true;
                         warn!(
                             "repo {alias} on {hostname} is already registered; \
                              treating the failed add as a benign collision"
@@ -401,6 +406,7 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
+                    remove_failed = true;
                     failure.get_or_insert(RepoFailure::Remove { url: safe_url });
                 }
             } else {
@@ -455,6 +461,12 @@ impl<'a> RepoManager<'a> {
             None => failure.map_or(Ok(RepoOutcome::Done), Err),
         };
         self.target.set_last_repo(recorded);
+        // A failed remove may have left an earlier add in place.
+        if is_ar {
+            self.target.repos_added |= registered;
+        } else if is_rr && !remove_failed {
+            self.target.repos_added = false;
+        }
         true
     }
 }
@@ -740,6 +752,66 @@ mod tests {
             "expected a force-unlock sftp_remove of {TARGET_LOCK_PATH}, got {:?}",
             handle.sftp_ops()
         );
+    }
+
+    // --- run_zypper: the session's repository record ------------------------
+
+    fn sles_repos() -> (SystemProduct, BTreeMap<SystemProduct, String>) {
+        let sles = product("SLES", "15-SP5");
+        let repos = BTreeMap::from([(sles.clone(), "https://example/repo".to_owned())]);
+        (sles, repos)
+    }
+
+    #[tokio::test]
+    async fn an_add_records_repositories_added_and_a_remove_clears_it() {
+        let (sles, repos) = sles_repos();
+        let (mut t, _conn) = target_with(system_of(sles, &[]), false);
+        assert!(!t.leftovers().repos_added);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        assert!(t.leftovers().repos_added, "a registered add is recorded");
+        t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
+        assert!(!t.leftovers().repos_added, "a clean remove clears it");
+    }
+
+    /// The products match nothing, so the add registers no repository.
+    #[tokio::test]
+    async fn an_add_that_matched_nothing_records_nothing() {
+        let (_, repos) = sles_repos();
+        let (mut t, _conn) = target_with(system_of(product("SLES", "16.0"), &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        assert!(!t.leftovers().repos_added);
+    }
+
+    #[tokio::test]
+    async fn a_failed_add_records_nothing() {
+        use mtui_types::hostlog::CommandLog;
+
+        let (sles, repos) = sles_repos();
+        let ar_cmd =
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("h1")
+            .with_response(ar_cmd, CommandLog::new(ar_cmd, "", "boom", 4, 0))
+            .with_response(lr_cmd, CommandLog::new(lr_cmd, "", "not found", 3, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles, &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        assert!(!t.leftovers().repos_added);
+    }
+
+    #[tokio::test]
+    async fn a_failed_remove_keeps_the_earlier_add() {
+        use mtui_types::hostlog::CommandLog;
+
+        let (sles, repos) = sles_repos();
+        let rr_cmd = "zypper -n rr https://example/repo";
+        let conn = MockConnection::new("h1")
+            .with_response(rr_cmd, CommandLog::new(rr_cmd, "", "boom", 1, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles, &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
+        assert!(t.leftovers().repos_added);
     }
 
     // --- run_zypper: matched == 0 warning ----------------------------------
