@@ -390,8 +390,8 @@ impl RemoteLock {
     }
 
     /// A formatted lock-creation time, or `"unknown"` when the stored timestamp
-    /// is missing/malformed. Shared by [`TargetLock::time`] and the one-read
-    /// snapshot path so both render identically.
+    /// is missing/malformed. Shared by the one-read
+    /// snapshot path and [`TargetLock::loaded_owner`] so both render identically.
     #[must_use]
     pub(crate) fn display_time(&self) -> String {
         match self.timestamp.parse::<i64>() {
@@ -437,7 +437,7 @@ enum Ownership {
 
 /// Manages one remote lock for a single target: the operation lock
 /// (`/var/lock/mtui.lock`, PID-based ownership) or the pool claim
-/// (`/var/lock/mtui-pool.lock`, RRID-based ownership), per its [`Ownership`].
+/// (`/var/lock/mtui-pool.lock`, RRID-based ownership), per its ownership rule.
 ///
 /// Drives the injected [`Connection`] for all remote I/O and an injected
 /// [`Clock`] for the wait queue.
