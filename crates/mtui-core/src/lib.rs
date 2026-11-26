@@ -35,7 +35,7 @@ pub mod session;
 pub mod template_registry;
 pub mod template_scope;
 
-pub use args::{Args, ColorArg, Sut, Update};
+pub use args::{Args, ColorArg, LONG_VERSION, Sut, Update};
 pub use command::{
     Command, ResolvedTemplates, Scope, addresses_template, resolve_command_rrids,
     resolve_command_templates,
