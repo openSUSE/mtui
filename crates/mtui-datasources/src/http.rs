@@ -307,6 +307,17 @@ impl HttpClient {
         let response = self.inner.get(url).send().await?.error_for_status()?;
         read_body_capped(response, max).await
     }
+
+    /// GET `url` and parse the body, capped at [`MAX_API_BODY`], as JSON.
+    ///
+    /// # Errors
+    ///
+    /// As [`get_bytes_capped`](Self::get_bytes_capped), plus
+    /// [`HttpError::Json`] for a body that is not valid JSON.
+    pub(crate) async fn get_json(&self, url: &str) -> Result<serde_json::Value> {
+        let bytes = self.get_bytes_capped(url, MAX_API_BODY).await?;
+        serde_json::from_slice(&bytes).map_err(HttpError::Json)
+    }
 }
 
 /// Read `response`'s body into a `Vec`, rejecting any body larger than `max`.
@@ -864,6 +875,37 @@ mod tests {
     /// `HttpError::status()` must surface the real non-2xx status from a
     /// live response, not just from a hand-built error — this is the seam
     /// `xtask corpus-survey` depends on to tell 404 apart from 503.
+    #[tokio::test]
+    async fn get_json_parses_and_names_a_malformed_body_verbatim() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"a":1}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/bad"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        let client = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+
+        let ok = client.get_json(&format!("{}/ok", server.uri())).await;
+        assert_eq!(ok.unwrap(), serde_json::json!({"a": 1}));
+        let bad = client
+            .get_json(&format!("{}/bad", server.uri()))
+            .await
+            .unwrap_err();
+        let expected = serde_json::from_str::<serde_json::Value>("not json")
+            .unwrap_err()
+            .to_string();
+        assert!(matches!(bad, HttpError::Json(_)), "{bad:?}");
+        assert_eq!(bad.to_string(), expected);
+    }
+
     #[tokio::test]
     async fn get_bytes_capped_error_status_matches_response() {
         use wiremock::matchers::{method, path};

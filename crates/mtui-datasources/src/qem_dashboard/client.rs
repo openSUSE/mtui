@@ -11,8 +11,8 @@ use std::time::Duration;
 use mtui_types::UpdateSource;
 use serde_json::Value;
 
-use crate::error::QemDashboardError;
-use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, join_url};
+use crate::error::{HttpError, QemDashboardError};
+use crate::http::{HttpClient, VerifyPolicy, join_url};
 
 use super::key::IncidentKey;
 
@@ -71,15 +71,8 @@ impl QemDashboardClient {
     /// A transport error, non-2xx status or malformed JSON body is logged at
     /// `debug` and returns `None`.
     async fn get(&self, path: &str) -> Option<Value> {
-        let url = join_url(&self.apiurl, path, "");
-        match self.http.get_bytes_capped(&url, MAX_API_BODY).await {
-            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(value) => Some(value),
-                Err(e) => {
-                    tracing::debug!("QEM Dashboard returned invalid JSON: {e}");
-                    None
-                }
-            },
+        match self.fetch(path).await {
+            Ok(value) => Some(value),
             Err(e) => {
                 tracing::debug!("QEM Dashboard request failed: {e}");
                 None
@@ -104,19 +97,17 @@ impl QemDashboardClient {
     /// [`QemDashboardError::Fetch`] instead of `None`, so a caller can
     /// distinguish "unreachable" from "empty", while a valid-but-`null` body is
     /// `Ok(None)`. The description is URL-free because the URL is stripped where
-    /// the `reqwest::Error` becomes an [`HttpError`](crate::HttpError) (#431).
+    /// the `reqwest::Error` becomes an [`HttpError`] (#431).
     async fn try_get(&self, path: &str) -> Result<Option<Value>, QemDashboardError> {
+        Ok(Some(self.fetch(path).await?).filter(|v| !v.is_null()))
+    }
+
+    async fn fetch(&self, path: &str) -> Result<Value, QemDashboardError> {
         let url = join_url(&self.apiurl, path, "");
-        let bytes = self
-            .http
-            .get_bytes_capped(&url, MAX_API_BODY)
-            .await
-            .map_err(|e| QemDashboardError::Fetch(e.to_string()))?;
-        match serde_json::from_slice::<Value>(&bytes) {
-            Ok(Value::Null) => Ok(None),
-            Ok(value) => Ok(Some(value)),
-            Err(e) => Err(QemDashboardError::Fetch(format!("invalid JSON: {e}"))),
-        }
+        self.http.get_json(&url).await.map_err(|e| match e {
+            HttpError::Json(e) => QemDashboardError::Fetch(format!("invalid JSON: {e}")),
+            other => QemDashboardError::Fetch(other.to_string()),
+        })
     }
 
     /// GET a list endpoint, surfacing failures as `Err`.
@@ -324,6 +315,39 @@ mod tests {
 
         let client = client_for(&server);
         assert!(client.get_list("incident_settings/1").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn try_settings_invalid_json_names_the_parse_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .try_incident_settings(&smelt("1"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, QemDashboardError::Fetch(m) if m.starts_with("invalid JSON: ")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn null_body_is_some_null_when_best_effort_and_none_when_fallible() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/null"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        assert_eq!(client.get("null").await, Some(Value::Null));
+        assert_eq!(client.try_get("null").await.unwrap(), None);
     }
 
     #[tokio::test]
