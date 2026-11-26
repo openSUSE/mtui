@@ -67,7 +67,7 @@ impl Refhosts {
     /// Parse an already-in-memory `refhosts.yml` document into a store.
     ///
     /// [`from_path`](Self::from_path) without the file read, so
-    /// [`HttpsResolver`](super::HttpsResolver) can build from a freshly
+    /// `HttpsResolver` can build from a freshly
     /// downloaded payload rather than re-reading the on-disk mirror.
     ///
     /// # Errors

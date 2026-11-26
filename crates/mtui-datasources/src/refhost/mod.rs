@@ -4,9 +4,8 @@
 //!   parser.
 //! - [`store`] — the [`Refhosts`] search engine over a loaded `refhosts.yml`
 //!   (search surface only).
-//! - [`resolvers`] — the resolver chain ([`PathResolver`]/[`HttpsResolver`]) and
-//!   the config-driven [`RefhostsFactory`] that decides *where* `refhosts.yml`
-//!   comes from.
+//! - [`resolvers`] — the config-driven [`RefhostsFactory`] that decides *where*
+//!   `refhosts.yml` comes from (a local path, or a cached https download).
 //! - [`verify`] — advisory product-drift comparison between a detected
 //!   [`System`](mtui_types::System) and a `refhosts.yml` [`Host`](mtui_types::Host)
 //!   row, yielding a [`ProductDiff`].
@@ -21,6 +20,6 @@ pub mod store;
 pub mod verify;
 
 pub use models::Attributes;
-pub use resolvers::{HttpsResolver, PathResolver, RefhostsFactory, ResolveConfig, Resolver};
+pub use resolvers::{RefhostsFactory, ResolveConfig};
 pub use store::{Refhosts, Slot};
 pub use verify::{ProductDiff, compare};
