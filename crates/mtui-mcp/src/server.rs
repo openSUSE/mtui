@@ -49,8 +49,8 @@ use crate::session::{
     AbortUnlock, CallScope, McpSession, ProgressSink, ScopeSlot, ToolOutcome, forced_abort_note,
 };
 use crate::tools::{
-    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_call_waits,
-    job_tool_descriptors, tool_routes,
+    ToolDescriptor, ToolRoute, dispatch_job_tool, dispatch_tool, job_call_waits,
+    job_tool_descriptors, synthesise,
 };
 
 /// The runtime-synthesised MCP server backing one [`McpSession`].
@@ -161,11 +161,16 @@ impl McpServer {
         transport: Transport,
         session_handle: Option<SessionHandle>,
     ) -> Self {
-        let command_descriptors = build_tools(&registry);
+        let (command_descriptors, mut routes) = synthesise(&registry);
         let job_descriptors = job_tool_descriptors();
         let document_descriptors = crate::document_tools::document_tool_descriptors();
         let transfer_descriptors = crate::transfer_tools::transfer_tool_descriptors();
-        let mut routes = tool_routes(&registry);
+        let family_names = |descriptors: &[ToolDescriptor]| -> Vec<String> {
+            descriptors.iter().map(|d| d.name.clone()).collect()
+        };
+        let job_names = family_names(&job_descriptors);
+        let document_names = family_names(&document_descriptors);
+        let transfer_names = family_names(&transfer_descriptors);
 
         // Command tools + the four job tools + the report-document tools
         // + the in-band get/put transfer tools (#434 — their command forms are on
@@ -194,21 +199,12 @@ impl McpServer {
         // Keep the dispatch views in lockstep with the (possibly filtered) tool
         // list so a profiled-out tool cannot still be called.
         routes.retain(|name, _| kept.contains(name));
-        let job_tools: HashSet<String> = job_tool_descriptors()
-            .iter()
-            .map(|d| d.name.clone())
-            .filter(|n| kept.contains(n))
-            .collect();
-        let document_tools: HashSet<String> = crate::document_tools::document_tool_descriptors()
-            .iter()
-            .map(|d| d.name.clone())
-            .filter(|n| kept.contains(n))
-            .collect();
-        let transfer_tools: HashSet<String> = crate::transfer_tools::transfer_tool_descriptors()
-            .iter()
-            .map(|d| d.name.clone())
-            .filter(|n| kept.contains(n))
-            .collect();
+        let kept_of = |names: Vec<String>| -> HashSet<String> {
+            names.into_iter().filter(|n| kept.contains(n)).collect()
+        };
+        let job_tools = kept_of(job_names);
+        let document_tools = kept_of(document_names);
+        let transfer_tools = kept_of(transfer_names);
 
         // From the post-profile descriptors, so membership is exactly what the
         // surface advertises — the pin `read_only_tools_match_advertised_hints`
@@ -268,6 +264,15 @@ fn descriptor_to_tool(descriptor: &ToolDescriptor) -> Tool {
         Arc::new(descriptor.input_schema.clone()),
     )
     .with_annotations(ToolAnnotations::new().read_only(descriptor.read_only))
+}
+
+fn outcome_of<T, E>(result: &Result<T, E>) -> crate::audit::AuditOutcome {
+    use crate::audit::AuditOutcome;
+    if result.is_ok() {
+        AuditOutcome::Ok
+    } else {
+        AuditOutcome::Error
+    }
 }
 
 /// Extract the tool-call arguments as a JSON object (empty when omitted).
@@ -513,11 +518,7 @@ impl McpServer {
             // cancelling `job_cancel` makes no sense.
             if !job_call_waits(name, kwargs) {
                 let dispatched = dispatch_job_tool(&self.session, name, kwargs, None).await;
-                outcome = if dispatched.is_ok() {
-                    AuditOutcome::Ok
-                } else {
-                    AuditOutcome::Error
-                };
+                outcome = outcome_of(&dispatched);
                 result = Ok(render(dispatched).into());
             } else {
                 match cancellable(
@@ -531,30 +532,43 @@ impl McpServer {
                         result = Err(cancelled_error(None));
                     }
                     Some(dispatched) => {
-                        outcome = if dispatched.is_ok() {
-                            AuditOutcome::Ok
-                        } else {
-                            AuditOutcome::Error
-                        };
+                        outcome = outcome_of(&dispatched);
                         result = Ok(render(dispatched).into());
                     }
                 }
             }
         }
-        // A hand-written report-document tool: edits the loaded document in
-        // memory, never the engine or a host, so a plain drop on cancel strands
-        // nothing.
-        else if self.document_tools.contains(name) {
-            // Filled only once the tool resolved its template under its lock.
+        // A hand-written report-document or in-band transfer (get/put, #434)
+        // tool. The document tools edit the loaded document in memory, never the
+        // engine or a host, so a plain drop on cancel strands nothing; a transfer
+        // holds only per-call locks.
+        else if self.document_tools.contains(name) || self.transfer_tools.contains(name) {
+            // Filled only once the tool resolved its template (or chose its
+            // session) under its locks.
             let ran_under = auditing.then(ScopeSlot::new);
+            let is_document = self.document_tools.contains(name);
             let dispatched = cancellable(
-                crate::document_tools::dispatch_document_tool_scoped(
-                    &self.session,
-                    name,
-                    kwargs,
-                    sink,
-                    ran_under.as_ref(),
-                ),
+                async {
+                    if is_document {
+                        crate::document_tools::dispatch_document_tool_scoped(
+                            &self.session,
+                            name,
+                            kwargs,
+                            sink,
+                            ran_under.as_ref(),
+                        )
+                        .await
+                    } else {
+                        crate::transfer_tools::dispatch_transfer_tool_scoped(
+                            &self.session,
+                            name,
+                            kwargs,
+                            sink,
+                            ran_under.as_ref(),
+                        )
+                        .await
+                    }
+                },
                 client_ct,
             )
             .await;
@@ -567,45 +581,8 @@ impl McpServer {
                     result = Err(cancelled_error(None));
                 }
                 Some(dispatched) => {
-                    outcome = if dispatched.is_ok() {
-                        AuditOutcome::Ok
-                    } else {
-                        AuditOutcome::Error
-                    };
-                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
-                }
-            }
-        }
-        // A hand-written in-band transfer tool (get/put, #434).
-        else if self.transfer_tools.contains(name) {
-            // Filled only once the transfer chose its session under its holds.
-            let ran_under = auditing.then(ScopeSlot::new);
-            let dispatched = cancellable(
-                crate::transfer_tools::dispatch_transfer_tool_scoped(
-                    &self.session,
-                    name,
-                    kwargs,
-                    sink,
-                    ran_under.as_ref(),
-                ),
-                client_ct,
-            )
-            .await;
-            scope = ran_under
-                .and_then(ScopeSlot::into_inner)
-                .unwrap_or_default();
-            match dispatched {
-                None => {
-                    outcome = AuditOutcome::Error;
-                    result = Err(cancelled_error(None));
-                }
-                Some(dispatched) => {
-                    outcome = if dispatched.is_ok() {
-                        AuditOutcome::Ok
-                    } else {
-                        AuditOutcome::Error
-                    };
-                    if auditing && name == "put" {
+                    outcome = outcome_of(&dispatched);
+                    if auditing && !is_document && name == "put" {
                         upload = dispatched
                             .as_ref()
                             .ok()
@@ -633,11 +610,7 @@ impl McpServer {
             scope = dispatched.scope;
             match dispatched.outcome {
                 ToolOutcome::Completed(inner) => {
-                    outcome = if inner.is_ok() {
-                        AuditOutcome::Ok
-                    } else {
-                        AuditOutcome::Error
-                    };
+                    outcome = outcome_of(&inner);
                     if !dispatched.jobs.is_empty() {
                         event = AuditEvent::Dispatch;
                         job_ids = dispatched.jobs;
@@ -929,6 +902,21 @@ mod tests {
 
     fn tool_names(server: &McpServer) -> Vec<String> {
         server.tools.iter().map(|t| t.name.to_string()).collect()
+    }
+
+    #[test]
+    fn deny_drift_is_warned_once_per_server() {
+        let (_, logs) = crate::test_log::capture_logs_blocking(|| {
+            McpServer::new(
+                Arc::new(mtui_core::Registry::new()),
+                McpSession::new(Config::default()),
+            )
+        });
+        let hits = logs
+            .lines()
+            .filter(|l| l.starts_with("deny-list entries missing"))
+            .count();
+        assert_eq!(hits, 1, "one drift warning per server: {logs:?}");
     }
 
     #[test]
