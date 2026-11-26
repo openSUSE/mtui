@@ -11,21 +11,16 @@ use crate::update_workflow::{Family, UpdateError, family};
 /// but `YUM`.
 ///
 /// Below its own role-neutral `-1` gate, this is [`super::update::classified`]:
-/// install and update share one exit-code/marker classifier, so the two cannot
-/// drift into different verdicts for the same transcript, nor the two
-/// `transactional-update` keys (`("slmicro", true)` and `("16", true)`) from the
-/// zypper ones. What that classifier means on a transactional key is argued
-/// once, on `checks::update`'s `transactional_update`: the command returns
-/// **only** `0` or `1` (verified against `openSUSE/transactional-update` v6.1.3,
-/// unchanged from v2.28.3), because it absorbs zypper's status. So the
+/// install and update share one classifier so they cannot drift into different
+/// verdicts for the same transcript. On a transactional key the command returns
+/// **only** `0` or `1` (see `checks::update`'s `transactional_update`), so the
 /// informational band and the package-not-found set are inert there, while the
-/// markers still catch what an exit code cannot — a run that reported a locked
-/// update stack, a dependency prompt or an RPM error and still exited `0`.
+/// markers still catch a run that reported a locked stack, a dependency prompt
+/// or an RPM error and still exited `0`.
 ///
-/// The `-1` sentinel is gated here rather than left to the classifier's own
-/// [`NotRun`](super::ExitClass::NotRun) arm, which speaks the `update`
-/// vocabulary; this table serves `install` *and* `uninstall`, hence the
-/// role-neutral wording.
+/// The `-1` sentinel is gated here rather than by the classifier's
+/// [`NotRun`](super::ExitClass::NotRun) arm, whose wording is `update`'s; this
+/// table serves `install` *and* `uninstall`.
 ///
 /// # Errors
 ///
@@ -49,19 +44,16 @@ const NOT_RUN_REASON: &str = "command timed out or failed to run";
 ///
 /// * **The accepted statuses.** `yum(8)`/`dnf(8)` document `0` as success and
 ///   anything else as an error for `install`/`remove`; there is no
-///   informational band. zypper's `100`-`107` must **not** transfer — `dnf`'s
-///   only documented `100` belongs to `check-update`, which no doer here runs,
-///   so accepting it would pass a failed transaction. `-1` keeps its own
-///   reason, so a host mtui never reached is not reported as a package failure.
-/// * **No markers**, for the reason the yum *update* check argues: three of
-///   [`markers`](super::update::markers)' four strings are zypper-only and the
-///   fourth was written against zypper transcripts.
+///   informational band. zypper's `100`-`107` must **not** transfer (`dnf`'s
+///   only documented `100` belongs to `check-update`, which no doer runs).
+///   `-1` keeps its own reason so an unreached host is not reported as a
+///   package failure.
+/// * **No markers**, for the reason the yum *update* check argues: they are
+///   zypper vocabulary.
 ///
-/// "Unknown Error" is therefore an admission, not a diagnosis: naming the
-/// failure needs observed `yum`/`dnf` output from a real RHEL refhost. Reading
-/// the exit code at all is safe here only because a failed install/uninstall
-/// verdict fails just the operation asked for, where the *update* check's would
-/// fire the rollback downgrade.
+/// "Unknown Error" is therefore an admission, not a diagnosis. Reading the exit
+/// code is safe here only because a failed install/uninstall verdict fails just
+/// the operation asked for, where the *update* check's would fire the rollback.
 ///
 /// # Errors
 ///

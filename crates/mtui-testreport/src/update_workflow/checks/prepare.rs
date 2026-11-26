@@ -21,28 +21,22 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Two rules, and the *absence* of a third is the load-bearing part.
 ///
 /// * **`-1`**, mtui's "timed out / connection lost / not connected" sentinel:
-///   the transcript is empty, so no marker would catch it. Worth its own
-///   verdict even though `host_command_failures` also reports the host —
-///   "prepare command failed" says the command ran and returned a failure, `-1`
-///   says it did neither, and the operator's next step differs. `prepare_body`
-///   drops its coarser entry for a host this check has named, so the sharper
-///   reason survives *and* stays attributed.
-/// * **The shared stdout/stderr [`markers`](super::update::markers)**, closing
-///   the hole this check exists for: `transactional-update` can report a locked
-///   update stack, a dependency prompt or an RPM error and still exit `0`, and
-///   nothing else in `prepare_body` sees that — the reboot gate reads exit
-///   codes and check verdicts, deliberately not stderr — so the host rebooted
-///   straight into the failed transaction. The markers'
-///   `Error:`-from-a-sibling-command caveat does not arise here: a prepare
-///   command is a single `transactional-update` invocation.
+///   the transcript is empty, so no marker would catch it. Its own verdict
+///   because "prepare command failed" says the command ran, `-1` says it did
+///   not, and the operator's next step differs. `prepare_body` drops its coarser
+///   entry for a host this check has named.
+/// * **The shared [`markers`](super::update::markers)**, closing the hole this
+///   check exists for: `transactional-update` can report a locked update stack,
+///   a dependency prompt or an RPM error and still exit `0`, and the reboot
+///   gate reads exit codes and check verdicts, not stderr, so the host rebooted
+///   into the failed transaction. The markers' `Error:`-from-a-sibling-command
+///   caveat does not arise: a prepare command is a single invocation.
 ///
-/// **No bare non-zero-exit arm, on purpose.** `prepare_body` owns exit codes:
-/// `note_dispatch` feeds them to the reboot gate and `host_command_failures`
-/// reports them accurately, the prepare templates being a single command so a
-/// non-zero status *is* the prepare's own. An arm here could only reword that
-/// (this key's `transactional-update` returns just `0` or `1`) while changing
-/// the reason string
-/// `perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed` pins.
+/// **No bare non-zero-exit arm, on purpose.** `prepare_body` owns exit codes
+/// (`note_dispatch` feeds them to the reboot gate, `host_command_failures`
+/// reports them), and an arm here could only reword that while changing the
+/// reason string `perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed`
+/// pins.
 ///
 /// # Errors
 ///
@@ -56,20 +50,15 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 
 /// The yum prepare check.
 ///
-/// Gates **only** on the `-1` sentinel and claims nothing else. Both richer
-/// signals are ruled out, by different arguments than on the sibling install
-/// check:
+/// Gates **only** on the `-1` sentinel and claims nothing else:
 ///
-/// * **The exit code**, which the install check *does* read, is unreadable on
-///   this role: `prepare --installed-only` renders `rpm -q $package
-///   &>/dev/null && yum … install $package`
-///   ([`crate::update_workflow::actions::prepare`]), which exits `1` on the
-///   routine "the host does not carry this package" skip that the flag exists
-///   to serve, indistinguishably from a failed `yum`. (The zypper and slmicro
-///   forms use `if …; then …; fi`, which exits `0` on the same skip.)
-/// * **The markers**, for the reason the yum *update* check records: three of
-///   the four strings are zypper-only vocabulary and the fourth was written
-///   against zypper transcripts.
+/// * **The exit code**, which the install check reads, is unreadable here:
+///   `prepare --installed-only` renders `rpm -q $package &>/dev/null && yum …
+///   install $package` ([`crate::update_workflow::actions::prepare`]), which
+///   exits `1` on the routine "host does not carry this package" skip,
+///   indistinguishably from a failed `yum`. (The zypper and slmicro forms use
+///   `if …; then …; fi`, which exits `0` on the same skip.)
+/// * **The markers**, as for the yum *update* check: they are zypper vocabulary.
 ///
 /// # Errors
 ///

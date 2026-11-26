@@ -17,10 +17,8 @@ use crate::update_workflow::{Family, UpdateError, family};
 /// result passes. This check surfaces no [`Diagnostic`]s (only `update`
 /// does).
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    // Exit -1 is what a timed-out (SSH no-output window exceeded) or unrunnable
-    // command records. Continuing past it turns an interrupted rollback into a
-    // silent half-rollback: the remaining packages stay at the update version
-    // while the flow ends looking done.
+    // Continuing past `-1` would turn an interrupted rollback into a silent
+    // half-rollback.
     not_run(args, NOT_RUN_REASON)?;
     lock_or_dependency(args)?;
     if args.exitcode == ZYPPER_EXIT_INF_CAP_NOT_FOUND {
@@ -43,19 +41,12 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 
 /// The transactional-update and yum downgrade check.
 ///
-/// Only the timed-out/unrunnable gate: transactional-update's own exit codes and
-/// messages differ from zypper's, so the zypper-specific branches (104, lock
-/// strings) must not be reused here. Without this check the registry falls back
-/// to a no-op and a dead `transactional-update` sails on to the reboot with no
-/// snapshot staged.
-///
-/// The same holds for `yum -y downgrade`: nothing else about its transcript can
-/// be judged without guessing. The zypper branches (`104`, the lock strings) are
-/// that transcript's vocabulary, not this one's, and a non-zero status is a
-/// routine outcome on a refhost that carries only part of the update's package
-/// list. What is *not* routine is a rollback command that never ran to
-/// completion: the host stays on the update version while the flow ends looking
-/// done.
+/// Only the timed-out/unrunnable gate: the zypper-specific branches (104, lock
+/// strings) are zypper vocabulary and must not be reused for
+/// `transactional-update` or `yum -y downgrade`. Without this check a dead
+/// `transactional-update` sails on to the reboot with no snapshot staged. A
+/// non-zero `yum` status is routine on a refhost carrying only part of the
+/// package list; a rollback that never ran to completion is not.
 ///
 /// # Errors
 ///

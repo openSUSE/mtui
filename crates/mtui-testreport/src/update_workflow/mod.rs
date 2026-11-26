@@ -10,10 +10,8 @@
 //!
 //! [`WorkflowRegistry`] resolves them for the bespoke prepare/update/downgrade
 //! flows, and implements `mtui_hosts::PlanProvider` for the shared
-//! install/uninstall template. The `PlanProvider` impl is legal here
-//! and nowhere else — foreign trait, local type, and the check tables'
-//! `CheckArgs` fields are `pub(crate)`. `impl OperationGroup for HostsGroup`
-//! stays in `mtui-hosts`, so that crate never depends on this one.
+//! install/uninstall template. `impl OperationGroup for HostsGroup` stays in
+//! `mtui-hosts`, so that crate never depends on this one.
 
 pub mod actions;
 pub mod checks;
@@ -36,11 +34,9 @@ pub(crate) enum Family {
 }
 
 /// The [`Family`] shared by every action and check table, from a *release*
-/// token — a product major version (`"11"`, `"12"`, `"15"`, `"16"`), the
-/// package-manager family `"YUM"`, or `"slmicro"` — and a *transactional* flag
-/// (read-only-root hosts, e.g. SL Micro). `("16", true)`, SLES 16 with a
-/// read-only root, resolves SL Micro's `transactional-update` entries. `None`
-/// for an unknown key.
+/// token (`"11"`, `"12"`, `"15"`, `"16"`, `"YUM"` or `"slmicro"`) and a
+/// *transactional* flag (read-only-root hosts). `("16", true)` resolves SL
+/// Micro's `transactional-update` entries. `None` for an unknown key.
 #[must_use]
 pub(crate) fn family(release: &str, transactional: bool) -> Option<Family> {
     match (release, transactional) {
@@ -54,16 +50,13 @@ pub(crate) fn family(release: &str, transactional: bool) -> Option<Family> {
 /// A failure recognised by a post-run [`checks`] function.
 ///
 /// `Display` renders `"{host}: {reason}"`, or just `"{reason}"` with no host.
-/// The `reason` strings are operator-facing diagnoses asserted on by tests
-/// ("package not found", "update stack locked", "RPM Error", "Dependency
-/// Error", "could not determine what to patch", "Unknown Error", "Unspecified
-/// Error", the per-role never-ran verdicts "update/downgrade/prepare command
-/// timed out or failed to run" and install/uninstall's role-neutral "command
-/// timed out or failed to run"); no code branches on them, so a check may pick
-/// the most accurate one for a transcript. The contract is the `UpdateFailure`
-/// variant a failure routes to, which decides whether the group is rolled back
-/// — hence the probe failure travelling as the typed `probe_failed` flag rather
-/// than as its string.
+/// The `reason` strings are operator-facing diagnoses ("package not found",
+/// "update stack locked", "RPM Error", "Dependency Error", "Unknown Error", the
+/// per-role never-ran verdicts, …); no code branches on them, so a check may
+/// pick the most accurate one for a transcript. The contract is the
+/// `UpdateFailure` variant a failure routes to, which decides whether the group
+/// is rolled back — hence the probe failure travels as the typed `probe_failed`
+/// flag rather than as its string.
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
     /// The failure reason: a short diagnosis for the operator, not a value
@@ -72,17 +65,13 @@ pub struct UpdateError {
     /// The host the command ran on, if known.
     pub(crate) host: Option<String>,
     /// `true` when the flow stopped at a cancellation checkpoint rather than
-    /// failing. Lets the command layer report a cancel *without* inferring it
-    /// from the session token, which would misreport a genuine host failure
-    /// that merely coincided with a cancel.
+    /// failing. Lets the command layer report a cancel without inferring it from
+    /// the session token, which would misreport a genuine host failure that
+    /// coincided with a cancel.
     pub(crate) cancelled: bool,
     /// `true` when the update command ran but could not work out what to patch,
-    /// so dispatched none (`checks::update`'s `probe_failure`).
-    ///
-    /// A flag for the same reason `cancelled` is: the flow must route this away
-    /// from the rollback downgrade, and the alternative — matching on the
-    /// `reason` string — would be the first place in the tree where control
-    /// flow depended on a reason's text.
+    /// so dispatched none (`checks::update`'s `probe_failure`). A flag, not a
+    /// `reason` match, so the flow can route it away from the rollback.
     pub(crate) probe_failed: bool,
     /// The hosts the operation completed on despite this error, sorted. Set
     /// only where every one of them is known to be done; empty otherwise.
@@ -202,8 +191,7 @@ impl Role {
     ///
     /// `mtui_hosts::PlanProvider` is keyed by `&str` because `mtui-hosts` cannot
     /// name this enum without a crate cycle; this is the inverse of
-    /// [`as_operation_role`](Self::as_operation_role) and the only place that
-    /// stringly-typed seam is decoded.
+    /// [`as_operation_role`](Self::as_operation_role).
     #[must_use]
     pub fn from_operation_role(role: &str) -> Option<Self> {
         match role {
@@ -227,9 +215,9 @@ impl Role {
 /// The registry of action and check tables, keyed by
 /// `(role, release, transactional)`.
 ///
-/// The one concrete registry every flow builds and, for install/uninstall,
-/// injects into the `HostsGroup` as a `mtui_hosts::PlanProvider`. Carries the
-/// prepare-only `force` / `testing` flags, which the other actions ignore.
+/// Injected into the `HostsGroup` as a `mtui_hosts::PlanProvider` for
+/// install/uninstall. Carries the prepare-only `force` / `testing` flags, which
+/// the other actions ignore.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowRegistry {
     /// The `--force-resolution` flag threaded into `prepare` doers.
@@ -293,8 +281,8 @@ impl WorkflowRegistry {
 /// Adapts the registry to the `mtui-hosts` install/uninstall template seam.
 ///
 /// [`mtui_hosts::Operation`] resolves each host's command through
-/// [`mtui_hosts::PlanProvider`], declared in `mtui-hosts` purely in terms of
-/// `mtui-hosts` types so that crate never depends on this one. Injected by
+/// [`mtui_hosts::PlanProvider`], declared in `mtui-hosts` in its own types so
+/// that crate never depends on this one. Injected by
 /// `update_flow::perform_install` / `perform_uninstall` immediately before the
 /// template runs.
 impl mtui_hosts::PlanProvider for WorkflowRegistry {
@@ -310,11 +298,9 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
             return Err(HostError::missing_for(role, release));
         };
         let commands = self.action_commands(role, release, transactional)?;
-        // Raw templates, not rendered strings: the package list is only known
-        // inside `mtui-hosts`, at `Operation::collect` time. `Doer` substitutes
-        // `$packages` with a plain `replace`, which agrees with this crate's
-        // substitution for every install/uninstall template (each holds exactly
-        // one `$packages` and no `$$` or `${}`), as
+        // Raw templates: the package list is only known inside `mtui-hosts`.
+        // `Doer`'s plain `replace` of `$packages` agrees with this crate's
+        // substitution for every install/uninstall template, as
         // `doer_templates_render_like_the_action_tables` pins.
         Ok(mtui_hosts::Doer::new(
             commands.command_template(),
@@ -357,14 +343,11 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
                     }),
                 }
             }
-            // Defensive only: since #406 every key with an installer or
-            // uninstaller has an install-table check, so no real key reaches
-            // here. It stays for the window in which a doer is added before its
-            // check, falling back to the exit code alone — never "any stderr is
-            // a failure", which `transactional-update` and `yum` both produce on
-            // a successful run. Driven directly by
-            // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`,
-            // since nothing in production reaches it.
+            // Defensive only: every key with an installer or uninstaller has an
+            // install-table check. Falls back to the exit code alone, never "any
+            // stderr is a failure", which `transactional-update` and `yum` both
+            // produce on success. Pinned by
+            // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`.
             None if a.exitcode != 0 => Err(mtui_hosts::CheckFailure::new(format!(
                 "{op} command failed"
             ))),

@@ -1,11 +1,8 @@
 //! Maps a v2 [`ReportDocument`] onto a [`TestReportBase`].
 //!
 //! Pure and I/O-free: one entry point, [`apply_document`], plus a small pure
-//! helper per non-trivial mapping rule — every rule here transcribes the
-//! document schema's fields rather than inventing new derivations.
-//!
-//! Always compiled: it performs no I/O and nothing calls it on a default load,
-//! so compiling it everywhere changes no runtime behaviour.
+//! helper per non-trivial mapping rule; every rule transcribes the document
+//! schema's fields rather than inventing new derivations.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -20,14 +17,12 @@ use crate::testreport::{HostPackages, SlackReviewMarker, TestReportBase, is_high
 
 /// Whether `composed`/`repositories` are populated for `doc`.
 ///
-/// **Invariant, not timidity**: the document ships `install.targets[]` (and
-/// therefore binaries and repo URLs) for *classic maintenance* too, where
-/// `metadata.json` ships neither. Populating them for a classic update would
-/// newly engage the `composed` narrowing on a path that exists to prevent
+/// **Invariant**: the document ships `install.targets[]` (and therefore
+/// binaries and repo URLs) for *classic maintenance* too. Populating them there
+/// would engage the `composed` narrowing on a path that exists to prevent
 /// `zypper 104`, and for `SlReport` would flip the load-bearing `repositories`
-/// short-circuit (#433). Extending the composition to classic maintenance is a
-/// deliberate, separate change — do not switch this on to "complete" the
-/// mapping.
+/// short-circuit. Extending the composition to classic maintenance is a
+/// separate change; do not switch this on to "complete" the mapping.
 #[must_use]
 fn should_compose(doc: &ReportDocument) -> bool {
     matches!(doc.workflow, DocWorkflow::Gitea) || matches!(doc.kind, DocumentKind::Pi)
@@ -47,8 +42,7 @@ pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
 
 /// Applies `doc` onto `base`, filling every field the document maps to.
 /// Downstream derivations (`update_repos_parser()`, `packages_for_host`,
-/// `register`/`normalize*`, `check_hash`, `composition()`) are untouched —
-/// this only changes what feeds them.
+/// `register`/`normalize*`, `check_hash`, `composition()`) are untouched.
 pub fn apply_document(base: &mut TestReportBase, doc: &ReportDocument) {
     base.rrid = RequestReviewID::parse(&doc.id).ok();
     if base.rrid.is_none() {
@@ -121,10 +115,9 @@ fn product_lines(products: &[mtui_types::report_document::Product]) -> Vec<Strin
 /// `base={class}(major={major},minor={minor});arch=[{archs sorted, comma-joined}]`,
 /// with an optional `;addon={class}(major=…,minor=…)`.
 ///
-/// The arch list is `tp.archs` verbatim (sorted): the quirk that it holds the
-/// *addon's* archs when an addon is present, else the base's, is baked into
-/// the document by the generator (`95_ExportMetadata.pm:72-75`) — nothing
-/// here re-derives it.
+/// The arch list is `tp.archs` verbatim (sorted): that it holds the *addon's*
+/// archs when an addon is present, else the base's, is baked into the document
+/// by the generator (`95_ExportMetadata.pm:72-75`).
 fn testplatform_lines(platforms: &[TestPlatform]) -> Vec<String> {
     platforms
         .iter()
@@ -153,9 +146,8 @@ fn testplatform_lines(platforms: &[TestPlatform]) -> Vec<String> {
 ///
 /// Key is `"standard"` for `kind ∈ {slfo, pi}` (mirrors
 /// `21_FetchOBSPackages.pm:243,413`'s hardcode), else `target.version`. Value
-/// is `binaries[name]` with the final dot-segment (the arch) stripped: the
-/// schema pins `version-release.arch` while `metadata.json` carried
-/// `version-release`. The strip matters for arches outside
+/// is `binaries[name]` with the final dot-segment (the arch) stripped, as the
+/// schema pins `version-release.arch`; this matters for arches outside
 /// `RPMVersion::parse`'s own strip list.
 fn packages_map(doc: &ReportDocument) -> HashMap<String, HashMap<String, String>> {
     let standard_key = product_agnostic(doc);
@@ -217,9 +209,8 @@ fn host_packages(doc: &ReportDocument) -> HostPackages {
     HostPackages::PerProduct(out)
 }
 
-/// Strips the final dot-segment of `version-release.arch`, returning the
-/// input unchanged if it carries no dot (defensive; every schema-valid
-/// binaries value has one).
+/// Strips the final dot-segment of `version-release.arch`; unchanged if there
+/// is no dot (every schema-valid value has one).
 fn strip_arch_suffix(version_release_arch: &str) -> String {
     version_release_arch
         .rsplit_once('.')
@@ -232,11 +223,10 @@ fn repositories_set(targets: &[Target]) -> HashSet<String> {
     targets.iter().map(|t| t.repository.clone()).collect()
 }
 
-/// `install.targets[]` -> `SystemProduct -> update repository URL`: the
-/// update repos of the classic OBS workflow. A target whose URL fails `RepoUrl` validation is dropped.
-///
-/// Deliberately independent of `should_compose`: this feeds `update_repos`
-/// only, never `repositories`/`composed`.
+/// `install.targets[]` -> `SystemProduct -> update repository URL`: the update
+/// repos of the classic OBS workflow. A target whose URL fails `RepoUrl`
+/// validation is dropped. Independent of `should_compose`: this feeds
+/// `update_repos` only.
 #[must_use]
 pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> {
     obs_targets(doc)
@@ -250,15 +240,15 @@ pub fn obs_update_repos(doc: &ReportDocument) -> HashMap<SystemProduct, String> 
         .collect()
 }
 
-/// Records `names` for `raw` under one key per normalizer the tree's repo
-/// parsers use — raw (`gitrepoparse`), `normalize_16`
-/// (`reporepoparse`) and `normalize` (the OBS update repos) — because the host reports whichever form its own
-/// `/etc/products.d` carries. Where two agree the entry simply merges; where a
-/// normalizer's output collides with another product's raw name the sets
-/// union, which is over-inclusive and so degrades toward today's behaviour.
+/// Records `names` for `raw` under one key per normalizer the repo parsers use
+/// — raw (`gitrepoparse`), `normalize_16` (`reporepoparse`) and `normalize`
+/// (the OBS update repos) — because the host reports whichever form its own
+/// `/etc/products.d` carries. Where a normalizer's output collides with another
+/// product's raw name the sets union, which is over-inclusive and so degrades
+/// toward not narrowing.
 ///
-/// An empty `names` still creates the keys: "composes nothing here" is a
-/// statement, distinct from an absent key's "nothing is known here".
+/// An empty `names` still creates the keys: "composes nothing here" is
+/// distinct from an absent key's "nothing is known here".
 pub(crate) fn register(
     out: &mut HashMap<SystemProduct, BTreeSet<String>>,
     raw: SystemProduct,
@@ -275,11 +265,9 @@ pub(crate) fn register(
 /// For each target, registers `binaries.keys()` under
 /// `(product, version, arch)`. Then, for every `(product, version, arch)`
 /// [`update.products[].archs`](mtui_types::report_document::Update) declares
-/// with no matching target row, registers an **explicit empty set** — the
-/// document's equivalent of `97_ExportJSON.pm`'s `next unless %binaries`,
-/// and what makes `narrow_to_composed` refuse the host by name instead of
-/// falling open. Unconditional — [`apply_document`] gates the call with
-/// [`should_compose`].
+/// with no matching target row, registers an **explicit empty set**, which makes
+/// `narrow_to_composed` refuse the host by name instead of falling open.
+/// Unconditional — [`apply_document`] gates the call with [`should_compose`].
 fn composed_index(doc: &ReportDocument) -> HashMap<SystemProduct, BTreeSet<String>> {
     let mut out: HashMap<SystemProduct, BTreeSet<String>> = HashMap::new();
 
@@ -317,9 +305,7 @@ fn composed_index(doc: &ReportDocument) -> HashMap<SystemProduct, BTreeSet<Strin
 }
 
 /// `issues` -> `(bugs, jira)`, splitting each key on its tracker: `bsc#` /
-/// `bnc#` / `boo#` go to `bugs`, `jsc#` to `jira`; the value is
-/// `issue.title`, so no placeholder description or `patchinfo.xml` overlay is
-/// needed.
+/// `bnc#` / `boo#` go to `bugs`, `jsc#` to `jira`; the value is `issue.title`.
 fn issue_maps(issues: &Issues) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut bugs = HashMap::new();
     let mut jira = HashMap::new();
@@ -340,9 +326,7 @@ fn issue_maps(issues: &Issues) -> (HashMap<String, String>, HashMap<String, Stri
     (bugs, jira)
 }
 
-/// `update.origin.{pull_request,api,commit}`, only when `workflow == gitea` —
-/// an OBS-workflow document's origin never carries these regardless, but the
-/// gate is explicit rather than incidental.
+/// `update.origin.{pull_request,api,commit}`, only when `workflow == gitea`.
 fn origin_fields(doc: &ReportDocument) -> (Option<String>, Option<String>, Option<String>) {
     if matches!(doc.workflow, DocWorkflow::Gitea) {
         (
@@ -355,9 +339,8 @@ fn origin_fields(doc: &ReportDocument) -> (Option<String>, Option<String>, Optio
     }
 }
 
-/// `testing.install.checks[].refhost` — empty on every document in today's
-/// corpus: no live report yet carries `testing.install.checks[]`, since
-/// nothing writes it there yet.
+/// `testing.install.checks[].refhost`; no live report carries
+/// `testing.install.checks[]` yet.
 fn refhosts(doc: &ReportDocument) -> HashSet<String> {
     doc.testing
         .install

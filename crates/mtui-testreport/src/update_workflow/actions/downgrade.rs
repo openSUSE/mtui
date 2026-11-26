@@ -8,22 +8,20 @@
 //! transactional with a reboot, and `LIST_COMMAND`'s leading newline keeps the
 //! first command off the prompt line in the transcript `show_log` prints.
 //!
-//! # The probe guard (#451)
+//! # The probe guard
 //!
 //! `LIST_COMMAND`'s output *is* the downgrade, so a silently failing probe
 //! hands [`crate::reports::update_flow::perform_downgrade`] an empty version
-//! map: zero commands run, success reported. This is
-//! [`crate::update_workflow::actions::update`]'s #447 in the path that matters
-//! most, the rollback running *after* an update has already failed — and
-//! `dead_probes`' `lastexit != 0` gate cannot see it, because as one pipeline
-//! the script's status was awk's and awk exits `0` over empty input.
+//! map: zero commands run, success reported — in the rollback that runs after
+//! an update has already failed. `dead_probes`' `lastexit != 0` gate cannot see
+//! it, because as one pipeline the script's status was awk's, which exits `0`
+//! over empty input.
 //!
-//! The technique is the update templates', argued in full there: per-stage
-//! capture (POSIX XCU 2.9.1), a **builtin** `printf` feeding the filter so no
-//! `ARG_MAX` limit sits between them, and `mtui_probe_ok` printing a
-//! start-of-line marker — split across `printf`'s format string and its
-//! argument so the script's own text never carries it — before exiting with the
-//! tool's own status. awk is guarded too, as the stage that produces the list.
+//! The technique is the update templates' (see
+//! [`crate::update_workflow::actions::update`]): per-stage capture, a
+//! **builtin** `printf` feeding the filter, and `mtui_probe_ok` printing a
+//! start-of-line marker, split across `printf`'s format string and argument,
+//! before exiting with the tool's own status. awk is guarded too.
 //!
 //! ## Why the accepted set is `0`, `104` and `106`
 //!
@@ -32,19 +30,16 @@
 //! packages", routine in a mixed group. Refusing it would fail the rollback on
 //! every host the update never touched.
 //!
-//! `106` (`ZYPPER_EXIT_INF_REPO_SKIPPED`) is accepted on the fleet argument
-//! `a249a00d` made for the update path — `init_repos()` raises it for **any**
-//! skipped repository without saying which, and here the run *is* the recovery
-//! from a failed update, so aborting hosts that would have rolled back
-//! correctly is the more expensive mistake. The update templates answer `106`
-//! by asking whether the update's own repo survived; that cannot be asked here,
-//! because `downgrade_body` removes the issue repository from every host before
-//! the probe runs and the released versions come from the host's ordinary
-//! repositories. **Residual:** if the skipped repository is the one carrying
-//! those versions the list is silently short. `downgrade_verdict` catches that
-//! against the update's `required` version, but a standalone `downgrade` has
-//! none loaded — only such a comparison can carry the verdict, which is what
-//! the transcript note exists to prompt.
+//! `106` (`ZYPPER_EXIT_INF_REPO_SKIPPED`) is accepted because `init_repos()`
+//! raises it for **any** skipped repository without saying which, and here the
+//! run *is* the recovery from a failed update, so aborting hosts that would have
+//! rolled back correctly is the more expensive mistake. The update templates
+//! ask whether the update's own repo survived; that cannot be asked here, as
+//! `downgrade_body` removes the issue repository before the probe runs.
+//! **Residual:** if the skipped repository carries the released versions the
+//! list is silently short. `downgrade_verdict` catches that against the update's
+//! `required` version, but a standalone `downgrade` has none loaded; the
+//! transcript note exists to prompt that comparison.
 //!
 //! ## The notes share a stream with the parser
 //!
@@ -52,22 +47,18 @@
 //! [`crate::reports::update_flow::parse_downgrade_versions`] reads back as the
 //! version list, taking *any* line containing a space-equals-space as a
 //! `name`/`version` row. They are safe only because neither contains that
-//! separator — a reword into "no package = no rollback" would inject a bogus
-//! package the flow then downgrades — which the `printf` sites restate and
-//! `rendered_script::the_probe_notes_never_parse_as_versions` pins. stderr is
-//! no free escape: [`crate::reports::update_flow`]'s `host_command_failures`
-//! counts *any* stderr as a failure and judges the repo removal running
-//! immediately before this probe; a stderr note survives *today* only because
-//! the probe step is gated on the exit status alone (`dead_probes`), one call
-//! site's choice rather than a property of the flow.
+//! separator (a reword into "no package = no rollback" would inject a bogus
+//! package the flow then downgrades), which
+//! `rendered_script::the_probe_notes_never_parse_as_versions` pins. stderr is no
+//! escape: [`crate::reports::update_flow`]'s `host_command_failures` counts
+//! *any* stderr as a failure and judges the repo removal just before this probe.
 //!
 //! ## What is not guarded
 //!
 //! The middle of the filter chain: `grep`, `sed` or a missing binary among them
-//! yields an empty list at awk's `0`. The same residual the update templates
-//! carry; closing it needs `pipefail` (not POSIX) or `${PIPESTATUS[@]}`
-//! (bash-only), while these scripts run under whatever `/bin/sh` a refhost
-//! provides.
+//! yields an empty list at awk's `0`. Closing it needs `pipefail` (not POSIX) or
+//! `${PIPESTATUS[@]}` (bash-only), while these scripts run under whatever
+//! `/bin/sh` a refhost provides.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 use crate::update_workflow::{Family, family};
@@ -75,16 +66,14 @@ use crate::update_workflow::{Family, family};
 /// zypper/slmicro downgrade list command, shared by both.
 ///
 /// One `zypper -n se -s` invocation for the whole package list: a per-package
-/// `for` loop reloads the repo metadata once per package and, piped through a
-/// block-buffered awk with no PTY, emits nothing until the last iteration — so
-/// on a slow host a long list blows the SSH no-output timeout
-/// (`connection_timeout`, default 300s) with no versions resolved. See the
-/// module docs for the probe guard and its accepted statuses.
+/// `for` loop reloads the repo metadata each time and, piped through a
+/// block-buffered awk with no PTY, emits nothing until the last iteration — so a
+/// long list blows the SSH no-output timeout (`connection_timeout`, default
+/// 300s). See the module docs for the probe guard.
 ///
 /// Every `$` meant for the remote shell is written `$$`; the awk field refs
-/// (`$2`, `$4`) stay bare, the tested convention for [`SubstMode::Safe`]. Shell
-/// variables are `mtui_`-prefixed *and* `$$`-escaped, so no future `$name`
-/// template variable can expand one away.
+/// (`$2`, `$4`) stay bare. Shell variables are `mtui_`-prefixed *and*
+/// `$$`-escaped, so no future `$name` template variable can expand one away.
 const LIST_COMMAND: &str = r#"
 mtui_probe_ok() {
   case "$$2" in

@@ -7,13 +7,12 @@
 //! breadcrumb logged before each raised error.
 //!
 //! Only `update`'s check has its *diagnostic sections* surfaced to the
-//! operator's terminal: it returns two non-fatal stdout sections as
-//! [`Diagnostic`]s on the `Ok` path, which the command layer
-//! (`mtui-core::commands::perform`) renders through `session.display`, where
-//! the color mode lives — stdout parity without a crate cycle. The prepare and
-//! install `("slmicro", true)` checks reuse `update`'s marker classification so
-//! they can return sections too, but neither caller renders them
-//! (`prepare_body` discards its sink, the `PlanProvider` adapter info-logs).
+//! operator: it returns two non-fatal stdout sections as [`Diagnostic`]s on the
+//! `Ok` path, which the command layer (`mtui-core::commands::perform`) renders
+//! through `session.display`. The prepare and install `("slmicro", true)`
+//! checks reuse its marker classification but neither caller renders the
+//! sections (`prepare_body` discards its sink, the `PlanProvider` adapter
+//! info-logs).
 
 pub(crate) mod downgrade;
 pub(crate) mod install;
@@ -22,28 +21,22 @@ pub(crate) mod update;
 
 use crate::update_workflow::UpdateError;
 
-/// Any non-fatal degradation a flow wants surfaced to the operator's
-/// terminal — a check's recognised stdout section, or a flow-level
-/// side-effect that changed what the caller got (a composition refusal, a
-/// stranded lock, a repo left configured) with nothing else to report it but
-/// a log line.
+/// Any non-fatal degradation a flow wants surfaced to the operator — a check's
+/// recognised stdout section, or a flow-level side-effect that changed what the
+/// caller got (a composition refusal, a stranded lock, a repo left configured).
 ///
 /// Carried out on the `Ok` path (and, for a flow-level push, the `Err` path
-/// too — a real failure should not hide an unrelated degradation) and
-/// rendered by the command layer through `session.display`, so the source
-/// stays free of any display or color dependency. `highlight_warning` marks
-/// the "Additional rpm output" section, printed with the word `warning`
-/// recolored yellow; every other diagnostic — including a flow-level one — is
-/// printed plain.
+/// too) and rendered by the command layer through `session.display`, so this
+/// crate has no display or color dependency. `highlight_warning` marks the
+/// "Additional rpm output" section, printed with `warning` recolored yellow;
+/// every other diagnostic is printed plain.
 ///
-/// The two kinds this doc describes are **not interchangeable to a caller
-/// summarising a run**, so `degradation` makes the distinction machine-
-/// readable rather than leaving it to prose. A check section says the patch's
-/// own output contained something worth reading and is routine — mtui installs
-/// from a test update repo whose vendor differs from the official one, so the
-/// vendor notice fires on ordinary successful updates. A flow-level push says
-/// the caller got *less than it asked for*. Counting the first as if it were
-/// the second would make a healthy update look degraded (#534 review).
+/// The two kinds are **not interchangeable to a caller summarising a run**, so
+/// `degradation` makes the distinction machine-readable. A check section is
+/// routine (mtui installs from a test update repo whose vendor differs from the
+/// official one, so the vendor notice fires on ordinary successful updates); a
+/// flow-level push says the caller got *less than it asked for*. Counting the
+/// first as the second would make a healthy update look degraded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// The section text to print, verbatim as sliced from stdout.
@@ -130,20 +123,18 @@ pub(crate) const EXIT_NOT_RUN: i32 = -1;
 
 /// What a package manager's exit status says about the run.
 ///
-/// zypper's status is not a boolean. Per `man zypper` (verified against zypper
-/// 1.14.98): *"Codes below 100 denote an error, codes above 100 provide a
-/// specific information, 0 represents a normal successful run."* The
-/// informational band is therefore **100-107**, not 100-106 — and *"specific
-/// information"* is not *"the transaction committed"*: `104`
-/// ([`ZYPPER_EXIT_INF_CAP_NOT_FOUND`], nothing was installed) is classified
-/// [`PackageNotFound`] and `105` (`ZYPPER_EXIT_ON_SIGNAL`, aborted on SIGINT or
-/// SIGTERM) [`Unknown`].
+/// zypper's status is not a boolean. Per `man zypper`: *"Codes below 100
+/// denote an error, codes above 100 provide a specific information, 0
+/// represents a normal successful run."* The informational band is therefore
+/// **100-107**, and *"specific information"* is not *"the transaction
+/// committed"*: `104` ([`ZYPPER_EXIT_INF_CAP_NOT_FOUND`], nothing was installed)
+/// is [`PackageNotFound`] and `105` (`ZYPPER_EXIT_ON_SIGNAL`, aborted on SIGINT
+/// or SIGTERM) [`Unknown`].
 ///
-/// The band's *extent* is load-bearing: `107`
-/// ([`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`]) once sat outside it, making a
-/// routine kernel/dracut `%posttrans` hiccup a failed update — and an `update`
-/// check failure fires the rollback downgrade on every patched host. `102`
-/// ("reboot needed" after a kernel patch) is the same shape.
+/// The band's *extent* is load-bearing: failing `107`
+/// ([`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`], a routine kernel/dracut `%posttrans`
+/// hiccup) or `102` ("reboot needed") would fire the rollback downgrade on
+/// every patched host.
 ///
 /// [`PackageNotFound`]: ExitClass::PackageNotFound
 /// [`Unknown`]: ExitClass::Unknown
@@ -159,16 +150,11 @@ pub(crate) enum ExitClass {
     PackageNotFound,
     /// `-1`, mtui's own sentinel: the command never produced a status at all.
     ///
-    /// Its own variant rather than a member of [`Unknown`], because the two
-    /// mean opposite things — an unrecognised status is a patch that ran and
-    /// failed, `-1` is a host mtui never reached, and "Unknown Error" about a
-    /// host never contacted is a wrong diagnosis, not a vaguer one. It does
-    /// **not** change the rollback: `never_ran` in `reports::update_flow` vetoes
-    /// the rollback downgrade from the target's recorded `lastexit()`, never
-    /// from a class or reason. Being a variant also makes the distinction
-    /// structural — the one `match` on this enum is exhaustive, so removing the
-    /// arm is a compile error (for exhaustive matchers; a `_ =>` still
-    /// compiles).
+    /// Its own variant rather than a member of [`Unknown`]: an unrecognised
+    /// status is a patch that ran and failed, `-1` is a host mtui never reached,
+    /// and "Unknown Error" about it is a wrong diagnosis. It does **not** change
+    /// the rollback, which `reports::update_flow` vetoes from the target's
+    /// recorded `lastexit()`, never from a class or reason.
     ///
     /// [`Unknown`]: ExitClass::Unknown
     NotRun,
@@ -179,21 +165,17 @@ pub(crate) enum ExitClass {
 
 /// Classifies a zypper-family exit status.
 ///
-/// The `104 | 4 | 5 | 8` grouping is the install check's, reproduced exactly so
-/// one exit code cannot be sorted into two classes by two checks: only `104`
+/// The `104 | 4 | 5 | 8` grouping is shared by the install and update checks so
+/// one exit code cannot be sorted into two classes: only `104`
 /// ([`ZYPPER_EXIT_INF_CAP_NOT_FOUND`]) literally means "capability not found",
 /// while `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`. What a
 /// check *says* about those three is its own decision — `update`'s `classified`
 /// lets the transcript name them where it can.
 ///
-/// `-1` classifies as [`NotRun`], not [`Unknown`]: it is mtui's own "never ran
-/// to completion" sentinel, and "Unknown Error" about a host mtui never
-/// contacted is the wrong thing to tell an operator. `not_run` in [`update`] is
+/// `-1` classifies as [`NotRun`], not [`Unknown`]; `not_run` in [`update`] is
 /// the gate that normally catches it first. The reason string is **not** what
-/// vetoes the rollback for such a host — `reports::update_flow`
-/// routes on `Target::lastexit()` and `UpdateError`'s typed `probe_failed`
-/// flag. Nothing in the tree makes control flow depend on a reason's text, and
-/// nothing should.
+/// vetoes the rollback — `reports::update_flow` routes on `Target::lastexit()`
+/// and `UpdateError`'s typed `probe_failed` flag, never on a reason's text.
 ///
 /// [`NotRun`]: ExitClass::NotRun
 /// [`Unknown`]: ExitClass::Unknown
