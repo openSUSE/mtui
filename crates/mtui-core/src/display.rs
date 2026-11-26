@@ -160,14 +160,6 @@ impl CommandPromptDisplay {
         let _ = writeln!(self.output, "{msg}");
     }
 
-    /// Writes `msg` followed by an explicit end-of-line string.
-    ///
-    /// Suspends any live spinner for the write, like [`println`](Self::println).
-    pub(crate) fn print_eol(&mut self, msg: &str, eol: &str) {
-        let _quiet = mtui_hosts::suspend();
-        let _ = write!(self.output, "{msg}{eol}");
-    }
-
     /// Prints the per-template banner labelling fan-out output.
     ///
     /// Exactly `=== {rrid} ===`, printed before each template's output block so
@@ -176,54 +168,42 @@ impl CommandPromptDisplay {
         self.println(&format!("=== {rrid} ==="));
     }
 
-    /// Wraps `text` in green when color resolves on, else returns it unchanged.
-    #[must_use]
-    pub(crate) fn green(&self, text: &str) -> String {
+    fn paint(&self, text: &str, style: impl FnOnce(&&str) -> String) -> String {
         if self.color.resolve() {
-            OwoColorize::green(&text).to_string()
+            style(&text)
         } else {
             text.to_owned()
         }
+    }
+
+    /// Wraps `text` in green when color resolves on, else returns it unchanged.
+    #[must_use]
+    pub(crate) fn green(&self, text: &str) -> String {
+        self.paint(text, |t| OwoColorize::green(t).to_string())
     }
 
     /// Wraps `text` in red when color resolves on, else returns it unchanged.
     #[must_use]
     pub fn red(&self, text: &str) -> String {
-        if self.color.resolve() {
-            OwoColorize::red(&text).to_string()
-        } else {
-            text.to_owned()
-        }
+        self.paint(text, |t| OwoColorize::red(t).to_string())
     }
 
     /// Wraps `text` in yellow when color resolves on, else returns it unchanged.
     #[must_use]
     pub(crate) fn yellow(&self, text: &str) -> String {
-        if self.color.resolve() {
-            OwoColorize::yellow(&text).to_string()
-        } else {
-            text.to_owned()
-        }
+        self.paint(text, |t| OwoColorize::yellow(t).to_string())
     }
 
     /// Wraps `text` dimmed when color resolves on, else returns it unchanged.
     #[must_use]
     pub(crate) fn dim(&self, text: &str) -> String {
-        if self.color.resolve() {
-            OwoColorize::dimmed(&text).to_string()
-        } else {
-            text.to_owned()
-        }
+        self.paint(text, |t| OwoColorize::dimmed(t).to_string())
     }
 
     /// Wraps `text` in blue when color resolves on, else returns it unchanged.
     #[must_use]
     pub(crate) fn blue(&self, text: &str) -> String {
-        if self.color.resolve() {
-            OwoColorize::blue(&text).to_string()
-        } else {
-            text.to_owned()
-        }
+        self.paint(text, |t| OwoColorize::blue(t).to_string())
     }
 
     /// Displays a list of bugs and Jira issues.
@@ -339,12 +319,11 @@ impl CommandPromptDisplay {
                 None => lock.locked_by.clone(),
             };
             let since = Self::yellow(self, &format!("since {} by {by}", lock.time));
-            self.print_eol(&format!("{hostname:20} {sys:20}: {since}"), "");
-            if lock.comment.is_empty() {
-                self.println("");
-            } else {
-                self.println(&format!(" : {}", lock.comment));
+            let mut line = format!("{hostname:20} {sys:20}: {since}");
+            if !lock.comment.is_empty() {
+                line.push_str(&format!(" : {}", lock.comment));
             }
+            self.println(&line);
         } else {
             let not_locked = Self::green(self, "not locked");
             self.println(&format!("{hostname:20} {sys:20}: {not_locked}"));
@@ -461,21 +440,14 @@ impl Default for CommandPromptDisplay {
     }
 }
 
-/// Displays long text, non-interactively.
+/// Forwards every line to `writer` with trailing `\r`/`\n` stripped, unpaged
+/// (the MCP / headless path).
 ///
-/// With no `writer` this is a no-op; with one, every line is forwarded with
-/// trailing `\r`/`\n` stripped (the MCP / headless path).
-///
-/// `interactive == true` is **not** handled here — the REPL uses the async
-/// [`page_interactive`] driver, which reads Enter/`q` through the session's
-/// [`Prompter`](mtui_hosts::Prompter). Passing it here still forwards unpaged
-/// rather than blocking on a read this function cannot perform.
-pub(crate) fn page(text: &[String], interactive: bool, writer: Option<&mut dyn FnMut(&str)>) {
-    let _ = interactive;
-    if let Some(w) = writer {
-        for line in text {
-            w(line.trim_end_matches(['\r', '\n']));
-        }
+/// The REPL uses the async [`page_interactive`] driver instead, which reads
+/// Enter/`q` through the session's [`Prompter`](mtui_hosts::Prompter).
+pub(crate) fn page(text: &[String], writer: &mut dyn FnMut(&str)) {
+    for line in text {
+        writer(line.trim_end_matches(['\r', '\n']));
     }
 }
 
@@ -829,11 +801,11 @@ mod tests {
     #[test]
     fn color_always_emits_escapes() {
         let d = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always);
-        assert!(d.green("ok").contains('\u{1b}'));
-        assert!(d.red("bad").contains('\u{1b}'));
-        assert!(d.yellow("warn").contains('\u{1b}'));
-        assert!(d.blue("info").contains('\u{1b}'));
-        assert!(d.dim("pending").contains('\u{1b}'));
+        assert_eq!(d.green("ok"), "ok".green().to_string());
+        assert_eq!(d.red("bad"), "bad".red().to_string());
+        assert_eq!(d.yellow("warn"), "warn".yellow().to_string());
+        assert_eq!(d.blue("info"), "info".blue().to_string());
+        assert_eq!(d.dim("pending"), "pending".dimmed().to_string());
     }
 
     #[test]
@@ -842,14 +814,6 @@ mod tests {
         assert_eq!(d.color(), ColorMode::Never);
         d.set_color(ColorMode::Always);
         assert_eq!(d.color(), ColorMode::Always);
-    }
-
-    #[test]
-    fn print_eol_uses_explicit_terminator() {
-        let (mut d, buf) = buffered(ColorMode::Never);
-        d.print_eol("a", "");
-        d.print_eol("b", "|");
-        assert_eq!(rendered(&buf), "ab|");
     }
 
     #[test]
@@ -1168,13 +1132,6 @@ mod tests {
     }
 
     #[test]
-    fn page_non_interactive_no_writer_is_noop() {
-        let text = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
-        page(&text, false, None);
-        assert_eq!(text, vec!["a", "b", "c"]);
-    }
-
-    #[test]
     fn page_non_interactive_writer_strips_line_endings() {
         let mut captured: Vec<String> = Vec::new();
         {
@@ -1184,7 +1141,7 @@ mod tests {
                 "beta\n".to_owned(),
                 "gamma\r\n".to_owned(),
             ];
-            page(&text, false, Some(&mut w));
+            page(&text, &mut w);
         }
         assert_eq!(captured, vec!["alpha", "beta", "gamma"]);
     }

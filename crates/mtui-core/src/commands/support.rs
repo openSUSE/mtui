@@ -836,7 +836,7 @@ pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
         crate::display::page_interactive(output, &mut session.display, prompter.as_ref()).await;
     } else {
         let mut writer = |line: &str| session.display.println(line);
-        crate::display::page(output, false, Some(&mut writer));
+        crate::display::page(output, &mut writer);
     }
 }
 
