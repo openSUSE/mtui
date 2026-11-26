@@ -1506,9 +1506,7 @@ impl HostsGroup {
     /// strand it under a later plain `unlock`'s skip. A host that held
     /// nothing is untouched.
     async fn reapply_holds<S>(
-        data: &mut BTreeMap<String, Target>,
-        is_repl: bool,
-        max_parallel: usize,
+        &mut self,
         select: &S,
         reconnected: &std::sync::Mutex<BTreeSet<String>>,
         held: &BTreeMap<String, HeldHolds>,
@@ -1516,9 +1514,9 @@ impl HostsGroup {
     ) where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        actions::run_fanout(data, is_repl, max_parallel, Some("relock"), select, |t| {
+        self.fanout("relock", select, |t| {
             let (held, lost, reconnected) = (held, lost, reconnected);
-            Box::pin(async move {
+            boxed(async move {
                 if !reconnected.lock().unwrap().contains(t.hostname()) {
                     return;
                 }
@@ -1580,15 +1578,13 @@ impl HostsGroup {
                         }
                     }
                 }
-            }) as actions::BoxTargetFut<'_>
+            })
         })
         .await;
     }
 
     /// Shared implementation behind [`reboot_selected`](Self::reboot_selected):
-    /// the `select` predicate is handed to each
-    /// [`run_fanout`](super::actions::run_fanout)
-    /// phase (and to the relock).
+    /// the `select` predicate is handed to every phase (and to the relock).
     async fn reboot_where<S>(
         &mut self,
         command: &str,
@@ -1598,8 +1594,6 @@ impl HostsGroup {
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        use std::sync::Mutex;
-
         if self.data.is_empty() {
             tracing::info!("No hosts to reboot");
             return RebootReport::default();
@@ -1615,187 +1609,8 @@ impl HostsGroup {
             return RebootReport::default();
         }
         tracing::info!(hosts = %names.join(", "), "Rebooting");
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-
-        // Snapshot this session's holds before the reboot wipes `/var/lock`
-        // — and before the relock below overwrites the in-memory record.
-        // Only hosts whose reconnect succeeds get their holds re-applied
-        // after.
-        let held = self.snapshot_holds(&select);
-
-        // Phase 1: record boot ids before rebooting (concurrently), so we can
-        // confirm a fresh boot afterwards.
-        let old_boot_ids: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("boot_id"),
-            &select,
-            |t| {
-                let old_boot_ids = &old_boot_ids;
-                Box::pin(async move {
-                    let id = t.boot_id().await;
-                    old_boot_ids
-                        .lock()
-                        .unwrap()
-                        .insert(t.hostname().to_owned(), id);
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-        let old_boot_ids = old_boot_ids.into_inner().unwrap();
-
-        // Per-host outcome, collected across the dispatch + reconnect + verify
-        // phases so the returned map is deterministic regardless of completion
-        // order (as in `close`). Earliest phase wins: a reboot that could not be
-        // dispatched takes precedence over a reconnect failure, which in turn
-        // takes precedence over the verify phase — each later verdict is a
-        // consequence of the earlier failure rather than an independent one.
-        let outcomes: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
-
-        // Phase 2: fire the reboot on every host (it drops the connection). A
-        // dispatch that fails leaves the session live, so phase 3's reconnect
-        // would succeed trivially and the host would report a clean reboot it
-        // never received.
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("reboot"),
-            &select,
-            |t| {
-                let command = command.to_owned();
-                let outcomes = &outcomes;
-                Box::pin(async move {
-                    if let Err(e) = t.reboot(&command).await {
-                        outcomes
-                            .lock()
-                            .unwrap()
-                            .insert(t.hostname().to_owned(), Err(e));
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-
-        // Phase 3: reconnect every host (concurrently) with retry + backoff.
-        // The re-apply gate reads this set, not the verified outcomes: a
-        // host that came back holds a wiped `/var/lock` whether or not its
-        // boot id later verified, and re-taking is idempotent.
-        let reconnected: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("reconnect"),
-            &select,
-            |t| {
-                let outcomes = &outcomes;
-                let reconnected = &reconnected;
-                Box::pin(async move {
-                    let hostname = t.hostname().to_owned();
-                    let retry = t.reboot_retries();
-                    let outcome = match t.reconnect(retry, true).await {
-                        Ok(()) => {
-                            tracing::info!(host = %hostname, "is back up");
-                            reconnected.lock().unwrap().insert(hostname.clone());
-                            Ok(())
-                        }
-                        Err(e) => {
-                            tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
-                            Err(e)
-                        }
-                    };
-                    let mut map = outcomes.lock().unwrap();
-                    // As in `reboot_transactional`: a failed reconnect is the
-                    // only direct evidence about reachability and outranks
-                    // phase 2's dispatch diagnosis, but a *successful* one must
-                    // not erase a dispatch failure — that reconnect succeeded
-                    // only because the session was never torn down.
-                    match (&outcome, map.get(&hostname)) {
-                        (Err(_), _) | (Ok(()), None) => {
-                            map.insert(hostname, outcome);
-                        }
-                        (Ok(()), Some(_)) => {}
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-
-        // Phase 4: verify each host's boot id changed (concurrently). Only a host
-        // that reconnected cleanly can be downgraded here — a reconnect failure
-        // already recorded above is the more fundamental error and is preserved.
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("verify_reboot"),
-            &select,
-            |t| {
-                let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
-                let outcomes = &outcomes;
-                Box::pin(async move {
-                    let hostname = t.hostname().to_owned();
-                    let new_boot_id = t.boot_id().await;
-                    if Self::verify_boot_id(&hostname, &old, &new_boot_id).is_err() {
-                        let mut map = outcomes.lock().unwrap();
-                        // Preserve an earlier failure; only mark a host that got
-                        // this far cleanly as never having rebooted.
-                        if !matches!(map.get(&hostname), Some(Err(_))) {
-                            map.insert(
-                                hostname.clone(),
-                                Err(HostError::RebootDidNotHappen { host: hostname }),
-                            );
-                        }
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-
-        if !relock_comment.is_empty() {
-            tracing::info!("Re-applying lock after reboot");
-            // Re-lock only the hosts that were rebooted (a reboot clears
-            // `/var/lock`); a targeted reboot must not touch unselected hosts.
-            // Hosts that already hold an operation lock are re-taken by phase
-            // 5 with loss reporting, so stamping the relock here too would be
-            // an extra SFTP write and a brief wrong stamp before the recorded
-            // hold overwrites it. Skipping every held host keeps the outcome
-            // the same — the reservation still wins — without the transient.
-            let relock: std::collections::BTreeSet<String> = names
-                .iter()
-                .filter(|h| held.get(h.as_str()).is_none_or(|holds| holds.op.is_none()))
-                .cloned()
-                .collect();
-            if !relock.is_empty() {
-                let _ = self.lock(relock_comment, Some(&relock)).await;
-            }
-        }
-
-        // Phase 5: re-apply the holds the reboot wiped, exactly as recorded
-        // above, for every host whose reconnect succeeded. A reservation or
-        // pool claim held before the reboot is gone with `/var/lock`; a host
-        // that failed to reconnect keeps its outcome and its untouched holds.
-        // A hold that could not be re-taken lands in `lost_holds` for
-        // the caller to report; it never fails the run.
-        let lost: Mutex<Vec<LostHold>> = Mutex::new(Vec::new());
-        Self::reapply_holds(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            &select,
-            &reconnected,
-            &held,
-            &lost,
-        )
-        .await;
-
-        RebootReport {
-            outcomes: outcomes.into_inner().unwrap(),
-            lost_holds: lost.into_inner().unwrap(),
-        }
+        self.reboot_phases(select, |_host| command.to_owned(), relock_comment)
+            .await
     }
 
     /// Reboots the *transactional* hosts named in `reboot` and reconnects each.
@@ -1832,12 +1647,10 @@ impl HostsGroup {
     /// reported as such rather than as whatever the later phases make of it,
     /// since those verdicts are consequences of the first failure.
     async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) -> RebootReport {
-        use std::sync::Mutex;
-
         if reboot.is_empty() {
             return RebootReport::default();
         }
-        // The single predicate every phase below shares. A **disabled** host is
+        // The single predicate every phase shares. A **disabled** host is
         // skipped by all of them: `plans()` resolves a plan per target
         // regardless of state, so a disabled transactional host reaches this
         // map -- but it was excluded from the command fan-out, so it staged no
@@ -1858,158 +1671,169 @@ impl HostsGroup {
             hosts = %names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
             "Rebooting transactional hosts"
         );
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        self.reboot_phases(
+            selected,
+            |host| reboot.get(host).cloned().unwrap_or_default(),
+            "",
+        )
+        .await
+    }
 
-        // Snapshot this session's holds before the reboot wipes `/var/lock`.
+    /// The reboot lifecycle both reboot paths share: boot-id snapshot, dispatch,
+    /// reconnect, boot-id verification, optional relock, hold re-apply.
+    ///
+    /// `command_for` yields each selected host's reboot command; a non-empty
+    /// `relock_comment` re-locks the selected hosts that held no operation lock.
+    ///
+    /// Per-host outcomes are collected across the dispatch, reconnect and verify
+    /// phases so the returned map is deterministic regardless of completion
+    /// order. A host that could not be sent the reboot is reported as such
+    /// unless its reconnect also failed, which outranks it; a verify verdict
+    /// never replaces an earlier failure.
+    async fn reboot_phases<S, C>(
+        &mut self,
+        select: S,
+        command_for: C,
+        relock_comment: &str,
+    ) -> RebootReport
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+        C: Fn(&str) -> String,
+    {
+        use std::sync::Mutex;
+
+        // Snapshot this session's holds before the reboot wipes `/var/lock`
+        // — and before the relock below overwrites the in-memory record.
         // Only hosts whose reconnect succeeds get their holds re-applied
         // after.
-        let held = self.snapshot_holds(&selected);
+        let held = self.snapshot_holds(&select);
+
+        // Phase 1: record boot ids before rebooting (concurrently), so phase 4
+        // can tell a real reboot from one that was accepted and did nothing.
+        let old_boot_ids = self
+            .collect_fanout("boot_id", &select, |t| {
+                boxed(async move { Some(t.boot_id().await) })
+            })
+            .await;
 
         let outcomes: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
 
-        // Phase 1: record each host's boot id before rebooting, so phase 4 can
-        // tell a real reboot from one that was accepted and silently did
-        // nothing. Mirrors `reboot`, which has always done this.
-        let old_boot_ids: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("boot_id"),
-            &selected,
-            |t| {
-                let old_boot_ids = &old_boot_ids;
-                Box::pin(async move {
-                    let id = t.boot_id().await;
-                    old_boot_ids
+        // Phase 2: fire the reboot on every host (it drops the connection). A
+        // dispatch that fails leaves the session live, so phase 3's reconnect
+        // would succeed trivially and the host would report a clean reboot it
+        // never received.
+        self.fanout("reboot", &select, |t| {
+            let command = command_for(t.hostname());
+            let outcomes = &outcomes;
+            boxed(async move {
+                if let Err(e) = t.reboot(&command).await {
+                    outcomes
                         .lock()
                         .unwrap()
-                        .insert(t.hostname().to_owned(), id);
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
-        let old_boot_ids = old_boot_ids.into_inner().unwrap();
-
-        // Phase 2: fire the reboot on every named host (it drops the
-        // connection). A dispatch that fails is recorded here: it leaves the
-        // session live, so phase 3's reconnect would otherwise succeed
-        // trivially and the host would report a clean reboot it never got.
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("reboot"),
-            &selected,
-            |t| {
-                let command = reboot.get(t.hostname()).cloned().unwrap_or_default();
-                let outcomes = &outcomes;
-                Box::pin(async move {
-                    if let Err(e) = t.reboot(&command).await {
-                        outcomes
-                            .lock()
-                            .unwrap()
-                            .insert(t.hostname().to_owned(), Err(e));
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
+                        .insert(t.hostname().to_owned(), Err(e));
+                }
+            })
+        })
         .await;
 
-        // Phase 3: reconnect each host once it is back up. The re-apply gate
-        // reads this set (a host that came back holds a wiped `/var/lock`).
+        // Phase 3: reconnect every host (concurrently) with retry + backoff.
+        // The re-apply gate reads this set, not the verified outcomes: a
+        // host that came back holds a wiped `/var/lock` whether or not its
+        // boot id later verified, and re-taking is idempotent.
         let reconnected: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("reconnect"),
-            &selected,
-            |t| {
-                let outcomes = &outcomes;
-                let reconnected = &reconnected;
-                Box::pin(async move {
-                    let hostname = t.hostname().to_owned();
-                    let retry = t.reboot_retries();
-                    let outcome = match t.reconnect(retry, true).await {
-                        Ok(()) => {
-                            tracing::info!(host = %hostname, "is back up");
-                            reconnected.lock().unwrap().insert(hostname.clone());
-                            Ok(())
-                        }
-                        Err(e) => {
-                            tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
-                            Err(e)
-                        }
-                    };
+        self.fanout("reconnect", &select, |t| {
+            let outcomes = &outcomes;
+            let reconnected = &reconnected;
+            boxed(async move {
+                let hostname = t.hostname().to_owned();
+                let retry = t.reboot_retries();
+                let outcome = match t.reconnect(retry, true).await {
+                    Ok(()) => {
+                        tracing::info!(host = %hostname, "is back up");
+                        reconnected.lock().unwrap().insert(hostname.clone());
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
+                        Err(e)
+                    }
+                };
+                let mut map = outcomes.lock().unwrap();
+                // Precedence is deliberately *not* plain earliest-wins.
+                //
+                // A failed reconnect is the only direct evidence anyone
+                // gathers about reachability, and reachability is what
+                // decides whether the caller runs a destructive rollback.
+                // So it outranks phase 2's dispatch diagnosis: a link that
+                // died before the dispatch produces a `Transport` error
+                // there, which would otherwise claim the host is still up and
+                // send every patched host into a rollback on behalf of a
+                // machine nothing can reach.
+                //
+                // A *successful* reconnect must not overwrite a dispatch
+                // failure, though — it succeeded only because the session
+                // was never torn down.
+                match (&outcome, map.get(&hostname)) {
+                    (Err(_), _) | (Ok(()), None) => {
+                        map.insert(hostname, outcome);
+                    }
+                    (Ok(()), Some(_)) => {}
+                }
+            })
+        })
+        .await;
+
+        // Phase 4: verify each host's boot id changed (concurrently). Only a
+        // host that got this far cleanly can be downgraded here — an earlier
+        // failure is the more fundamental one and is preserved.
+        self.fanout("verify_reboot", &select, |t| {
+            let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
+            let outcomes = &outcomes;
+            boxed(async move {
+                let hostname = t.hostname().to_owned();
+                let new_boot_id = t.boot_id().await;
+                if Self::verify_boot_id(&hostname, &old, &new_boot_id).is_err() {
                     let mut map = outcomes.lock().unwrap();
-                    // Precedence is deliberately *not* plain earliest-wins.
-                    //
-                    // A failed reconnect is the only direct evidence anyone
-                    // gathers about reachability, and reachability is what
-                    // decides whether the caller runs a destructive rollback.
-                    // So it outranks phase 2's dispatch diagnosis: a
-                    // link that died before the dispatch produces a `Transport`
-                    // error there, which would otherwise claim the host is
-                    // still up and send every patched host into a rollback on
-                    // behalf of a machine nothing can reach.
-                    //
-                    // A *successful* reconnect must not overwrite a dispatch
-                    // failure, though — that is the trivially-succeeding
-                    // reconnect this whole change exists to catch.
-                    match (&outcome, map.get(&hostname)) {
-                        (Err(_), _) | (Ok(()), None) => {
-                            map.insert(hostname, outcome);
-                        }
-                        (Ok(()), Some(_)) => {}
+                    if !matches!(map.get(&hostname), Some(Err(_))) {
+                        map.insert(
+                            hostname.clone(),
+                            Err(HostError::RebootDidNotHappen { host: hostname }),
+                        );
                     }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
+                }
+            })
+        })
         .await;
 
-        // Phase 4: confirm each host's boot id actually changed. Only a host
-        // that got this far cleanly can be downgraded here — an earlier failure
-        // is the more fundamental one and is preserved.
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("verify_reboot"),
-            &selected,
-            |t| {
-                let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
-                let outcomes = &outcomes;
-                Box::pin(async move {
-                    let hostname = t.hostname().to_owned();
-                    let new_boot_id = t.boot_id().await;
-                    if Self::verify_boot_id(&hostname, &old, &new_boot_id).is_err() {
-                        let mut map = outcomes.lock().unwrap();
-                        if !matches!(map.get(&hostname), Some(Err(_))) {
-                            map.insert(
-                                hostname.clone(),
-                                Err(HostError::RebootDidNotHappen { host: hostname }),
-                            );
-                        }
-                    }
-                }) as actions::BoxTargetFut<'_>
-            },
-        )
-        .await;
+        if !relock_comment.is_empty() {
+            tracing::info!("Re-applying lock after reboot");
+            // Re-lock only the hosts that were rebooted (a reboot clears
+            // `/var/lock`); a targeted reboot must not touch unselected hosts.
+            // Hosts that already hold an operation lock are re-taken by phase
+            // 5 with loss reporting, so stamping the relock here too would be
+            // an extra SFTP write and a brief wrong stamp before the recorded
+            // hold overwrites it. Skipping every held host keeps the outcome
+            // the same — the reservation still wins — without the transient.
+            let relock: BTreeSet<String> = held
+                .iter()
+                .filter(|(_, holds)| holds.op.is_none())
+                .map(|(host, _)| host.clone())
+                .collect();
+            if !relock.is_empty() {
+                let _ = self.lock(relock_comment, Some(&relock)).await;
+            }
+        }
 
-        // Phase 5: re-apply the holds the reboot wiped for reconnected hosts;
-        // a hold that could not be re-taken lands in `lost_holds`.
+        // Phase 5: re-apply the holds the reboot wiped, exactly as recorded
+        // above, for every host whose reconnect succeeded. A reservation or
+        // pool claim held before the reboot is gone with `/var/lock`; a host
+        // that failed to reconnect keeps its outcome and its untouched holds.
+        // A hold that could not be re-taken lands in `lost_holds` for
+        // the caller to report; it never fails the run.
         let lost: Mutex<Vec<LostHold>> = Mutex::new(Vec::new());
-        Self::reapply_holds(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            &selected,
-            &reconnected,
-            &held,
-            &lost,
-        )
-        .await;
+        self.reapply_holds(&select, &reconnected, &held, &lost)
+            .await;
+
         RebootReport {
             outcomes: outcomes.into_inner().unwrap(),
             lost_holds: lost.into_inner().unwrap(),
@@ -4092,7 +3916,10 @@ mod tests {
         let report = g.reboot_selected("systemctl reboot", "", &all).await;
 
         assert!(
-            matches!(report.outcomes["h1"], Err(HostError::ReconnectFailed { .. })),
+            matches!(
+                report.outcomes["h1"],
+                Err(HostError::ReconnectFailed { .. })
+            ),
             "a failed reconnect outranks the dispatch failure: {:?}",
             report.outcomes["h1"]
         );
