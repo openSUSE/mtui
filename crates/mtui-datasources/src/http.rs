@@ -1,31 +1,27 @@
 //! Single source of truth for outbound HTTP timeout and TLS policy.
 //!
-//! Every HTTP(S) caller in mtui (the Gitea PR client, the QEM Dashboard client,
-//! the openQA / QAM Dashboard search, the openQA install/result-log downloads,
-//! the `refhosts.yml` fetch) shares one `(connect, read)` timeout and one
+//! Every HTTP(S) caller in mtui shares one `(connect, read)` timeout and one
 //! TLS-verification policy instead of each deciding separately:
 //!
 //! - `HTTP_TIMEOUT` bounds a stuck socket so a broken network cannot hang mtui.
 //! - [`VerifyPolicy::from_config`] bridges the typed
 //!   [`mtui_config::SslVerify`] config value into the effective
 //!   [`VerifyPolicy`]; verification is **on by default**.
-//! - [`HttpClient`] builds one `reqwest::Client` with that fixed posture.
-//!   reqwest fixes TLS and owns its connection pool at build time, so a caller
-//!   resolves the policy first, then reuses the client.
+//! - [`HttpClient`] builds one `reqwest::Client` with that fixed posture;
+//!   reqwest fixes TLS and owns its pool at build time, so a caller resolves the
+//!   policy first, then reuses the client.
 //! - `is_ssl_verification_error` / `ssl_verification_hint` / `ssl_error_detail`
-//!   give a short, actionable message for the internal-CA hosts
-//!   (openqa.suse.de, dashboard.qam.suse.de, ...) instead of a raw transport
-//!   error.
-//! - URL redaction has three legs, most load-bearing first (#431): the strip at
-//!   the [`HttpError`] conversion boundary, which most call sites (teregen, the
-//!   QEM dashboard) rely on and nothing else; `sanitize_url`, for interpolating
-//!   a request URL into a message as context; and `root_cause`, reaching past
-//!   an error layer whose own `Display` may embed a URL.
+//!   give a short, actionable message for internal-CA hosts instead of a raw
+//!   transport error.
+//! - URL redaction has three legs, most load-bearing first: the strip at the
+//!   [`HttpError`] conversion boundary, which most call sites (teregen, the QEM
+//!   dashboard) rely on alone; `sanitize_url`, for interpolating a request URL
+//!   into a message as context; and `root_cause`, reaching past an error layer
+//!   whose own `Display` may embed a URL.
 //! - Every body is read through `read_body_capped` — [`MAX_API_BODY`] for small
-//!   JSON/text, `MAX_DOWNLOAD_BODY` for bulk downloads — so a hostile or
-//!   misconfigured datasource cannot OOM mtui. Overflow surfaces as
-//!   [`HttpError::BodyTooLarge`], which carries no URL so it cannot leak a
-//!   credential embedded in a datasource URL.
+//!   JSON/text, `MAX_DOWNLOAD_BODY` for bulk downloads — so a hostile datasource
+//!   cannot OOM mtui. Overflow surfaces as [`HttpError::BodyTooLarge`], which
+//!   carries no URL so it cannot leak a credential embedded in a datasource URL.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,18 +47,16 @@ const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
 /// The read-phase component of [`HTTP_TIMEOUT`].
 const READ_TIMEOUT: Duration = HTTP_TIMEOUT.1;
 
-/// Maximum body size for a JSON/text API response (Gitea, QEM dashboard,
-/// OBS/IBS, teregen, oqa-search): 16 MiB is orders of magnitude
-/// above any legitimate payload while still bounding a hostile server.
+/// Maximum body size for a JSON/text API response: 16 MiB is orders of
+/// magnitude above any legitimate payload while still bounding a hostile server.
 pub const MAX_API_BODY: usize = 16 * 1024 * 1024;
 
 /// Maximum body size for an openQA API response: the `job_groups` list carries
 /// every group's YAML template and is about 19 MB on openqa.suse.de.
 pub(crate) const MAX_OPENQA_BODY: usize = 64 * 1024 * 1024;
 
-/// Maximum body size for a bulk *download* — a `refhosts.yml` database or an
-/// openQA install/result log fetched via [`HttpClient::get_bytes`]. Generous
-/// (256 MiB) because these are legitimately large, but still a hard ceiling.
+/// Maximum body size for a bulk *download* (a `refhosts.yml` database or an
+/// openQA log fetched via [`HttpClient::get_bytes`]): a generous, hard ceiling.
 const MAX_DOWNLOAD_BODY: usize = 256 * 1024 * 1024;
 
 /// Fallback locations of the distribution-managed CA bundle, probed only when
@@ -101,15 +95,15 @@ pub enum VerifyPolicy {
 
 impl VerifyPolicy {
     /// Bridge a typed [`mtui_config::SslVerify`] into this layer's posture.
-    /// [`SslVerify::Enabled`] verifies against the distribution CA bundle
-    /// (`system_ca_bundle`) in preference to `Default(true)` when one is found.
+    /// [`SslVerify::Enabled`] prefers the distribution CA bundle
+    /// (`system_ca_bundle`) over `Default(true)` when one is found.
     #[must_use]
     pub fn from_config(verify: &SslVerify) -> Self {
         Self::from_config_with_bundle(verify, system_ca_bundle())
     }
 
-    /// Pure core of [`from_config`](Self::from_config), extracted so the mapping
-    /// is testable without touching the process-global `SSL_CERT_FILE`.
+    /// Pure core of [`from_config`](Self::from_config); testable without the
+    /// process-global `SSL_CERT_FILE`.
     #[must_use]
     fn from_config_with_bundle(verify: &SslVerify, system_bundle: Option<PathBuf>) -> Self {
         match verify {
@@ -124,10 +118,8 @@ impl VerifyPolicy {
 }
 
 /// Percent-encode `params` into a `key=value&...` query string, without a
-/// leading `?`.
-///
-/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
-/// `.query()` wire form, which this workspace's minimal reqwest build omits.
+/// leading `?`: `application/x-www-form-urlencoded` (space → `+`), matching
+/// reqwest's `.query()` wire form, which this build omits.
 pub(crate) fn query_string(params: &[(&str, String)]) -> String {
     params
         .iter()
@@ -153,8 +145,7 @@ pub(crate) fn join_url(base: &str, path: &str, query: &str) -> String {
     url
 }
 
-/// Warn once, process-wide, that verification is deliberately disabled; later
-/// calls are cheap no-ops, so REPL output stays readable.
+/// Warn once, process-wide, that verification is deliberately disabled.
 fn disable_insecure_warnings() {
     if !INSECURE_WARNED.swap(true, Ordering::SeqCst) {
         tracing::warn!(
@@ -165,8 +156,7 @@ fn disable_insecure_warnings() {
 }
 
 /// The timeout + TLS-verify posture shared by [`HttpClient::new`] and
-/// [`HttpClient::openqa_transport`], kept in one function so the two clients
-/// cannot drift apart.
+/// [`HttpClient::openqa_transport`].
 fn base_builder(verify: VerifyPolicy, read_timeout: Duration) -> Result<reqwest::ClientBuilder> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -236,8 +226,8 @@ impl HttpClient {
 
     /// The same client with a longer read timeout, for an upstream that answers
     /// only after a lookup of its own: the shared client's 30 s read timeout
-    /// fires before such a response arrives, whatever a request's own
-    /// `timeout` says. Built on first use and then shared by every clone.
+    /// fires first whatever a request's own `timeout` says. Built on first use
+    /// and shared by every clone.
     ///
     /// # Errors
     ///
@@ -254,13 +244,12 @@ impl HttpClient {
     /// Builds a dedicated `reqwest::Client` for injection into
     /// [`ruoqa::ClientBuilder::http_client`](https://docs.rs/ruoqa).
     ///
-    /// Shares this crate's timeout/TLS posture but **not** its connection pool,
-    /// and additionally disables redirects and reqwest-level retries, which
-    /// `ruoqa` requires of an injected client: it re-signs every request and
-    /// follows same-origin redirects itself, so a reqwest-level redirect would
-    /// forward the `X-API-Key`/`X-API-Hash` headers cross-origin (reqwest only
-    /// strips `Authorization`/`Cookie`/`Proxy-Authorization`), and a
-    /// reqwest-level retry would replay a stale signature.
+    /// Shares this crate's timeout/TLS posture but **not** its pool, and
+    /// disables redirects and reqwest-level retries, which `ruoqa` requires of an
+    /// injected client: it re-signs every request and follows same-origin
+    /// redirects itself, so a reqwest redirect would forward the
+    /// `X-API-Key`/`X-API-Hash` headers cross-origin and a retry would replay a
+    /// stale signature.
     ///
     /// # Errors
     ///
@@ -283,9 +272,7 @@ impl HttpClient {
     /// GET `url` and return the raw response body as bytes, capped at
     /// `MAX_DOWNLOAD_BODY`.
     ///
-    /// The single GET-to-bytes path for callers that just want a payload (a log
-    /// file, a YAML document). Use
-    /// [`get_bytes_capped`](Self::get_bytes_capped) with [`MAX_API_BODY`] for
+    /// Use [`get_bytes_capped`](Self::get_bytes_capped) with [`MAX_API_BODY`] for
     /// small JSON/text API responses.
     ///
     /// # Errors
@@ -323,9 +310,8 @@ impl HttpClient {
 /// Read `response`'s body into a `Vec`, rejecting any body larger than `max`.
 ///
 /// Fail-fast on the advertised `Content-Length`, then enforce the same ceiling
-/// while streaming, so a missing/lying length or an endless chunked body still
-/// cannot exceed `max` bytes buffered. Dropping `response` on rejection closes
-/// the connection instead of draining the overflow.
+/// while streaming, so a lying length or an endless chunked body cannot exceed
+/// `max` bytes buffered. Dropping `response` on rejection closes the connection.
 pub(crate) async fn read_body_capped(
     mut response: reqwest::Response,
     max: usize,
@@ -380,17 +366,15 @@ fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
     reqwest::Certificate::from_pem_bundle(&pem).map_err(HttpError::from)
 }
 
-/// The bound both source-chain walks below use against a self-referential chain
-/// looping forever. Shared so the two cannot drift apart.
+/// The bound both source-chain walks below use against a self-referential chain.
 const MAX_ERROR_SOURCE_LINKS: usize = 64;
 
 /// Return `true` if `err` is (or was caused by) a TLS certificate-verification
 /// failure.
 ///
-/// reqwest wraps the underlying rustls verification error several layers deep,
-/// so this walks the [`std::error::Error::source`] chain and falls back to
-/// matching `CERTIFICATE_VERIFY_FAILED` / a certificate-verify phrase in the
-/// stringified error, for transports that only surface it in the message.
+/// reqwest wraps the rustls verification error several layers deep, so this
+/// walks the [`std::error::Error::source`] chain, falling back to matching a
+/// certificate-verify phrase in the stringified error.
 #[must_use]
 pub(crate) fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static)) -> bool {
     let mut seen = 0usize;
@@ -415,9 +399,8 @@ pub(crate) fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static))
 
 /// A short, actionable message for a TLS certificate-verification failure.
 ///
-/// The custom-bundle example stays generic on purpose: naming the system bundle
-/// would suggest a no-op, since it is usually already the verify source that
-/// just failed.
+/// The custom-bundle example stays generic on purpose: the system bundle is
+/// usually the verify source that just failed.
 #[must_use]
 pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
     let where_ = host.map(|h| format!(" to {h}")).unwrap_or_default();
@@ -437,9 +420,8 @@ pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
 ///
 /// Taking [`HttpError`] rather than `&dyn Error` makes "already crossed the
 /// conversion boundary" a compile-time precondition, so neither branch can
-/// render a URL (#431). `HttpError::Request` keeps reqwest as its `#[source]`,
-/// so the walk reaches past reqwest's kind text ("error sending request") to
-/// the actionable rustls/IO cause.
+/// render a URL. The walk reaches past reqwest's kind text to the actionable
+/// rustls/IO cause.
 #[must_use]
 pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
     root_cause(e).unwrap_or_else(|| e.to_string())
@@ -451,7 +433,7 @@ pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
 /// `host` when known) and the root cause at `debug`; anything else is left to
 /// `plain`, which owns the message and level because they differ per service.
 /// The raw `reqwest::Error` is never rendered: its `Display` appends the
-/// request URL (#431).
+/// request URL.
 pub(crate) fn log_send_error(
     service: &str,
     host: Option<&str>,
@@ -476,13 +458,12 @@ pub(crate) fn log_send_error(
 ///
 /// That backstop handles a **single** embedded URL only: `sanitize_url` parses
 /// one `scheme://[userinfo@]host` and silently no-ops on a second one in the
-/// same string. It is a safety net for an unexpected layer, not a substitute
-/// for stripping at the boundary.
+/// same string. It is a safety net, not a substitute for stripping at the
+/// boundary.
 ///
-/// Returns `None` if `e` carries no source at all, so callers fall back to the
-/// outer error's own `Display`. A self-referential source chain is bounded by
-/// [`MAX_ERROR_SOURCE_LINKS`], as [`is_ssl_verification_error`]'s walk is —
-/// not hop-for-hop identically, but either bound only has to terminate.
+/// Returns `None` if `e` carries no source, so callers fall back to the outer
+/// error's own `Display`. A self-referential chain is bounded by
+/// [`MAX_ERROR_SOURCE_LINKS`].
 #[must_use]
 pub(crate) fn root_cause(e: &dyn std::error::Error) -> Option<String> {
     let mut deepest = e.source()?;
@@ -497,19 +478,16 @@ pub(crate) fn root_cause(e: &dyn std::error::Error) -> Option<String> {
     Some(sanitize_url(&deepest.to_string()))
 }
 
-/// The system's CA bundle path, or `None` when none is found: the first
-/// existing file among the `SSL_CERT_FILE` override (an OpenSSL-standard
-/// default-cafile variable) and the distribution paths in
-/// [`SYSTEM_CA_BUNDLES`].
+/// The system's CA bundle path, or `None`: the first existing file among the
+/// `SSL_CERT_FILE` override and the distribution paths in [`SYSTEM_CA_BUNDLES`].
 #[must_use]
 fn system_ca_bundle() -> Option<PathBuf> {
     let env_cafile = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
     resolve_ca_bundle(env_cafile, SYSTEM_CA_BUNDLES)
 }
 
-/// Pure core of [`system_ca_bundle`], extracted so the selection logic is
-/// testable without mutating the process-global `SSL_CERT_FILE` (unsound under
-/// parallel tests in edition 2024).
+/// Pure core of [`system_ca_bundle`]; testable without mutating the
+/// process-global `SSL_CERT_FILE` (unsound under parallel tests in edition 2024).
 fn resolve_ca_bundle(env_cafile: Option<PathBuf>, fallbacks: &[&str]) -> Option<PathBuf> {
     let candidates = env_cafile
         .into_iter()

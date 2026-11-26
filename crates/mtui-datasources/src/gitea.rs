@@ -14,8 +14,8 @@
 //!   comment exists **and** the group is not currently a requested reviewer.
 //!
 //! Comments are ordered by their `updated_at` timestamp (RFC3339 with offset).
-//! reqwest fixes the TLS posture per-client, so [`Gitea::new`] resolves the
-//! verify policy via [`HttpClient::from_config`] before any request is made.
+//! [`Gitea::new`] resolves the verify policy via [`HttpClient::from_config`]
+//! before any request, as reqwest fixes TLS per client.
 
 use std::cmp::Ordering;
 use std::sync::LazyLock;
@@ -70,9 +70,8 @@ fn unassign_marker(user: &str, group: &str) -> String {
 /// A URL origin: scheme (lower-cased), host (lower-cased), and effective port.
 ///
 /// The security anchor for [`Gitea`]: the token is attached only to a request
-/// whose origin equals the client's configured trusted origin. Comparison is
-/// exact on all three components, with the scheme's default port filled in so
-/// `https://h` and `https://h:443` compare equal.
+/// whose origin equals the configured trusted origin, compared exactly on all
+/// three components with the scheme's default port filled in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Origin {
     scheme: String,
@@ -82,8 +81,8 @@ struct Origin {
 
 /// Parse an `scheme://[userinfo@]host[:port]` URL into an [`Origin`]. Returns
 /// `None` for a non-URL, an empty host, a bad port, a scheme without a known
-/// default port, or userinfo — a `user:pass@host` URL could smuggle a credential
-/// and its host is easy to misread, so it is never trusted.
+/// default port, or userinfo, which could smuggle a credential and is never
+/// trusted.
 fn parse_origin(url: &str) -> Option<Origin> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
@@ -137,8 +136,8 @@ fn is_trusted(url: &str, trusted: &Origin) -> bool {
 /// # Errors
 ///
 /// [`GiteaError::UntrustedOrigin`] (carrying the sanitised URL) for anything
-/// else, so the client can never be built with a trust anchor that would
-/// silently accept a plaintext or credential-bearing endpoint.
+/// else, so a trust anchor never accepts a plaintext or credential-bearing
+/// endpoint.
 fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
     match parse_origin(gitea_url) {
         Some(o) if scheme_ok(&o) => Ok(o),
@@ -149,8 +148,8 @@ fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
 /// Whether any comment records a decision for `group`
 /// (`@<group>-review: LGTM|approve[d]|decline[d]`).
 ///
-/// Pure over an already-fetched snapshot: only that a decision marker exists.
-/// Whether it *still* stands is [`Gitea::has_review`]'s question.
+/// Pure over a fetched snapshot; whether it *still* stands is
+/// [`Gitea::has_review`]'s question.
 #[must_use]
 fn decision_present(comments: &[Comment], group: &str) -> bool {
     comments.iter().any(|c| {
@@ -276,11 +275,9 @@ impl Gitea {
     /// Build a client from an already-constructed [`HttpClient`] and explicit
     /// credentials, bypassing [`Config`].
     ///
-    /// The composition-root / test seam, letting a caller inject a client whose
-    /// TLS posture (or base host, under `wiremock`) is already fixed. The token
-    /// is trusted as non-empty here — [`new`](Self::new) is the guarded entry.
-    /// `trusted_gitea_url` is the operator-configured origin the token may be
-    /// sent to; requests to any other origin are refused.
+    /// The composition-root / test seam. The token is trusted as non-empty here;
+    /// [`new`](Self::new) is the guarded entry. `trusted_gitea_url` is the origin
+    /// the token may be sent to; requests to any other are refused.
     ///
     /// # Errors
     ///
@@ -347,10 +344,9 @@ impl Gitea {
         body: Option<serde_json::Value>,
         accept: &str,
     ) -> Result<(u16, Vec<u8>), GiteaError> {
-        // Metadata (`gitea_pr_api`) is attacker-influenceable, so the token
-        // goes only to the configured trusted origin. reqwest additionally
-        // strips the Authorization header on a cross-origin redirect, so a
-        // same-origin request can never leak it to another host.
+        // Metadata (`gitea_pr_api`) is attacker-influenceable, so the token goes
+        // only to the configured trusted origin; reqwest also strips
+        // Authorization on a cross-origin redirect.
         if !is_trusted(url, &self.trusted_origin) {
             tracing::warn!(
                 "Refusing to send Gitea token to untrusted URL {}",
@@ -432,11 +428,9 @@ impl Gitea {
     ///
     /// Returns `other` verbatim when supplied, else the token owner's login
     /// ([`resolved_user`](Self::resolved_user)): Gitea attributes comments to
-    /// that account, so an assign/approve marker must record *its* login rather
-    /// than the local session user, which need not match. A failed lookup falls
-    /// back to [`session_user`](Self::session_user) so review actions still work
-    /// (with a possibly mismatched name), and caches that too — a short-lived
-    /// CLI/MCP action does not retry.
+    /// that account, so a marker must record *its* login, not the local session
+    /// user's. A failed lookup falls back to
+    /// [`session_user`](Self::session_user) and caches that too.
     async fn acting_user(&self, other: Option<&str>) -> String {
         if let Some(user) = other {
             return user.to_string();
@@ -470,8 +464,7 @@ impl Gitea {
     /// sorted) and return the current assignee for `group`, or `None`.
     ///
     /// The last valid assignment or unassignment marker for the group wins; a
-    /// marker for another group is ignored. Touches no HTTP itself, so the
-    /// state machine can be tested by feeding in a canned comment list.
+    /// marker for another group is ignored. Touches no HTTP.
     #[must_use]
     fn assignee_from_comments(&self, comments: &[Comment], group: &str) -> Option<String> {
         let mut assignee: Option<String> = None;
@@ -491,9 +484,8 @@ impl Gitea {
 
     /// Fetch the PR comments once and return them chronologically sorted.
     ///
-    /// The single snapshot a write operation derives *all* of its state from —
-    /// assignment and decision presence — so one op issues one comments GET
-    /// instead of refetching per helper.
+    /// The single snapshot a write operation derives *all* of its state from, so
+    /// one op issues one comments GET.
     async fn load_sorted_comments(&self) -> Result<Vec<Comment>, GiteaError> {
         let mut comments = self.get_all_comments().await?;
         comments.sort();

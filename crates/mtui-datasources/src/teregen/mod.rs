@@ -9,20 +9,16 @@
 //! Most reads are best-effort: any failure returns `None` so a TeReGen hiccup
 //! never breaks the surrounding command. Two exceptions:
 //! [`updates`](TeReGen::updates) and [`checkers`](TeReGen::checkers) return a
-//! `Result`, so their caller can tell a genuinely-empty answer apart from an
-//! unreachable or failing TeReGen, and name the status and reason TeReGen
-//! gave; and the write
-//! [`regenerate`](TeReGen::regenerate) returns `None` only when TeReGen is
-//! *unreachable*, and tells a refusal (409) from a failed request.
+//! `Result`, so their caller can tell an empty answer from an unreachable or
+//! failing TeReGen; and the write [`regenerate`](TeReGen::regenerate) returns
+//! `None` only when TeReGen is *unreachable*, telling a refusal (409) from a
+//! failed request.
 //!
-//! The base URL comes from the `[teregen] api` option (default
-//! `https://qam.suse.de/api/v1`), but [`TeReGen::new`] takes it explicitly
-//! rather than reading `config.teregen_api` itself, as the
-//! [`Gitea`](crate::gitea) constructor does.
+//! [`TeReGen::new`] takes the base URL (the `[teregen] api` option, default
+//! `https://qam.suse.de/api/v1`) explicitly rather than reading config.
 //!
 //! `wait_for_template`'s inter-poll wait polls `should_stop` in small
-//! [`tokio::time::sleep`] steps, so cancellation takes effect promptly rather
-//! than after a full interval.
+//! [`tokio::time::sleep`] steps so cancellation takes effect promptly.
 
 use std::time::Duration;
 
@@ -106,20 +102,17 @@ pub struct RegenOutcome {
 /// counts, and the per-check verdicts in [`results`](Self::results).
 ///
 /// **Only what the renderer reads is modelled.** Every other served key
-/// (`run_id`, `started`, `finished`, …) is left out on purpose: modelling a key
-/// is a liability, since one served as `null` or with a drifted type fails the
-/// whole element, and `null` is exactly what an in-progress run's `finished`
-/// looks like (#522).
+/// (`run_id`, `started`, `finished`, …) is left out on purpose: a modelled key
+/// served as `null` or with a drifted type fails the whole element, and `null`
+/// is exactly what an in-progress run's `finished` looks like.
 ///
-/// Tolerance of an *added* key comes from serde ignoring unknown fields, i.e.
-/// from not setting `deny_unknown_fields`. The container-level
-/// `#[serde(default)]` covers the other direction: a **missing** key degrades to
-/// an empty value rather than the `?` this shape replaced. A *type* change on a
-/// modelled key still fails the element on purpose, so [`TeReGen::checkers`] can
-/// warn about the drift instead of silently substituting zeroes.
+/// An *added* key is tolerated as `deny_unknown_fields` is not set; the
+/// container-level `#[serde(default)]` degrades a **missing** key to an empty
+/// value. A *type* change on a modelled key still fails the element on purpose,
+/// so [`TeReGen::checkers`] can warn about the drift instead of silently
+/// substituting zeroes.
 ///
-/// The run carries no status of its own — the status vocabulary is what the
-/// `*_count` fields enumerate.
+/// The run carries no status of its own; the `*_count` fields enumerate it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct CheckerRun {
@@ -164,10 +157,8 @@ pub struct CheckerResult {
 }
 
 /// Deserialize a run's `results` element-wise, so one drifted verdict costs its
-/// own row instead of the whole run — header and good siblings included (#522).
-///
-/// A `results` served as something other than an array degrades to no rows for
-/// the same reason.
+/// own row instead of the whole run. A `results` that is not an array degrades
+/// to no rows.
 fn lenient_results<'de, D>(de: D) -> Result<Vec<CheckerResult>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -184,8 +175,8 @@ where
 ///
 /// The warning names the offending element's **key set only**: these payloads
 /// carry customer-visible check output, so neither the body nor serde's error
-/// (which quotes the offending value) may reach the log (#431, #439).
-/// `context` is appended to `TeReGen checkers` where the caller has an RRID.
+/// (which quotes the offending value) may reach the log. `context` is appended
+/// to `TeReGen checkers` where the caller has an RRID.
 fn lenient_elements<T>(context: &str, what: &str, elements: &[Value]) -> Vec<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -237,10 +228,7 @@ impl TeReGen {
     }
 
     /// Build a client from an already-constructed [`HttpClient`], bypassing
-    /// [`Config`].
-    ///
-    /// The composition-root / test seam, letting a caller inject a client whose
-    /// TLS posture (or base host, under `wiremock`) is already fixed.
+    /// [`Config`]: the composition-root / test seam.
     #[must_use]
     pub fn with_client(http: HttpClient, apiurl: &str) -> Self {
         Self {
@@ -260,12 +248,11 @@ impl TeReGen {
     /// GET `path`, surfacing failures as `Err`.
     ///
     /// The fallible sibling of [`get`](Self::get): failures become
-    /// [`TeReGenError`] instead of `None`, so a caller can distinguish a failed
-    /// lookup from a genuinely-empty successful response. The descriptions are
-    /// URL-free because every `reqwest::Error` is converted to [`HttpError`]
-    /// — which strips the URL — before it is stringified (#431), and the log line
-    /// for an error status names the status alone, never the body. Waits up to
-    /// [`SMELT_BACKED_TIMEOUT`], on a client whose read timeout allows it.
+    /// [`TeReGenError`] instead of `None`. The descriptions are URL-free because
+    /// every `reqwest::Error` is converted to [`HttpError`], which strips the
+    /// URL, before it is stringified, and the log line for an error status names
+    /// the status alone, never the body. Waits up to [`SMELT_BACKED_TIMEOUT`], on
+    /// a client whose read timeout allows it.
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
         let client = self
             .http
@@ -329,21 +316,18 @@ impl TeReGen {
     /// Live checker (build-check) result runs for a report.
     ///
     /// An element that does not deserialise as a [`CheckerRun`] is skipped and
-    /// warned about by its **key set only** — never the body nor serde's error
-    /// (which quotes the offending value), both of which carry customer-visible
-    /// check output (#431, #439). A drifted verdict inside a run is skipped the
-    /// same way, so it costs one row rather than the whole run.
+    /// warned about by its **key set only** — never the body nor serde's error,
+    /// which carry customer-visible check output. A drifted verdict inside a run
+    /// is skipped the same way, costing one row rather than the whole run.
     ///
     /// # Errors
     ///
     /// Returns [`TeReGenError::Status`] for a non-2xx answer, carrying
     /// TeReGen's own `error` text, and [`TeReGenError::Fetch`] for a transport
-    /// failure, a body that is not JSON, or one without a `checkers` array, so
-    /// the caller can tell a failed lookup apart from none. A 404 is no
-    /// exception: TeReGen answers it, with its reason, when it has no checker
-    /// results to give (every non-SLFO id, or an SLFO id SMELT does not know);
-    /// a 502 or 504 means SMELT failed or timed out, so the results are
-    /// unknown.
+    /// failure, a body that is not JSON, or one without a `checkers` array. A
+    /// 404 is TeReGen's answer, with a reason, when it has no checker results
+    /// (every non-SLFO id, or an SLFO id SMELT does not know); a 502 or 504 means
+    /// SMELT failed or timed out, so the results are unknown.
     pub async fn checkers(&self, rrid: &str) -> Result<Vec<CheckerRun>, TeReGenError> {
         let body = self
             .try_get(&format!("reports/{rrid}/checkers"), &[])
@@ -368,8 +352,7 @@ impl TeReGen {
     ///
     /// Returns [`TeReGenError::Status`] for a non-2xx answer (502/504 when SMELT
     /// failed or timed out, with TeReGen's own `error` text) and
-    /// [`TeReGenError::Fetch`] for a transport or JSON failure, so the caller
-    /// can tell a failing TeReGen apart from an empty queue. `Ok(None)` is a
+    /// [`TeReGenError::Fetch`] for a transport or JSON failure. `Ok(None)` is a
     /// successful response whose body carried no `updates` key.
     pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Result<Option<Value>, TeReGenError> {
         let mut params: Vec<(&str, String)> = Vec::new();
@@ -406,8 +389,7 @@ impl TeReGen {
     /// Returns [`RegenRequest::Enqueued`] on success (HTTP 202),
     /// [`RegenRequest::Refused`] when the server refuses (HTTP 409: the template
     /// already exists or was hand-edited), [`RegenRequest::Failed`] for any other
-    /// error status, and `None` only when TeReGen is unreachable — so callers can
-    /// tell "refused" and "failed" apart from "couldn't ask".
+    /// error status, and `None` only when TeReGen is unreachable.
     pub async fn regenerate(
         &self,
         rrid: &str,
@@ -430,7 +412,7 @@ impl TeReGen {
         {
             Ok(r) => r,
             Err(e) => {
-                // Convert before logging: reqwest's Display appends the URL (#431).
+                // Convert before logging: reqwest's Display appends the URL.
                 tracing::debug!(
                     "TeReGen POST regenerate {rrid} failed: {}",
                     HttpError::from(e)
@@ -464,9 +446,8 @@ impl TeReGen {
     ///
     /// Returns the final status dict once `minion_state` is `finished` or
     /// `failed`, else the last-seen status (or `None`) on timeout; the caller
-    /// inspects `minion_state` / `minion_error` to decide success.
-    /// `should_stop` is polled before each sleep *and* inside it, so a caller
-    /// can abandon the wait promptly and still get the last seen status.
+    /// inspects `minion_state` / `minion_error`. `should_stop` is polled before
+    /// each sleep *and* inside it, so the wait can be abandoned promptly.
     async fn wait_for_template<F>(
         &self,
         rrid: &str,
@@ -491,8 +472,7 @@ impl TeReGen {
             if should_stop() || tokio::time::Instant::now() >= deadline {
                 return last;
             }
-            // Small steps so a stop request is honoured without waiting out
-            // the whole interval.
+            // Small steps so a stop request is honoured promptly.
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
             while waited < interval && !should_stop() {
@@ -505,10 +485,9 @@ impl TeReGen {
 
     /// Enqueue a regeneration and wait for the job to finish.
     ///
-    /// Bundles [`regenerate`](Self::regenerate) + `wait_for_template` into the
-    /// single protocol both the `regenerate` command and the stale-template
-    /// loader share, returning a [`RegenOutcome`] the caller maps to its own
-    /// messaging and reload strategy.
+    /// Bundles [`regenerate`](Self::regenerate) + `wait_for_template`, the
+    /// protocol the `regenerate` command and the stale-template loader share,
+    /// returning a [`RegenOutcome`] the caller maps to its own messaging.
     pub async fn regenerate_and_wait<F>(
         &self,
         rrid: &str,
@@ -605,7 +584,7 @@ fn failure_text(body: &Value) -> Option<String> {
 }
 
 /// The comma-joined top-level key names of a JSON object, for a schema-drift
-/// warning. Names only — never values (#431, #439).
+/// warning. Names only, never values.
 fn json_keys(v: &Value) -> String {
     v.as_object().map_or_else(
         || "<not an object>".to_string(),

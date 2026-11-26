@@ -3,23 +3,19 @@
 //! Posts a review request for a loaded update into a configured channel, then
 //! reads back the reactions and threaded replies reviewers leave on it. The
 //! surface is deliberately small — post, react, reply, identity — because the
-//! review *policy* (which reaction acks, which reviewer may ack) belongs to the
-//! command, not the transport.
+//! review *policy* belongs to the command, not the transport.
 //!
-//! Two Slack-specific behaviours shape the code, neither matching the other
-//! connectors in this crate:
+//! Two Slack-specific behaviours shape the code:
 //!
 //! * **Application errors arrive as HTTP 200**, carrying `{"ok": false,
-//!   "error": "channel_not_found"}`, so the status is not enough —
-//!   `Slack::request` inspects `ok` on every response and converts a false one
-//!   into [`SlackError::Api`].
+//!   "error": "channel_not_found"}`, so `Slack::request` inspects `ok` on every
+//!   response and converts a false one into [`SlackError::Api`].
 //! * **Rate limiting is routine.** Tier-3 methods allow roughly 50 requests a
-//!   minute, so a watch loop polling several templates will meet a `429`; the
-//!   dedicated [`SlackError::RateLimited`] lets a caller back off and keep
-//!   watching instead of counting throttling as a failure.
+//!   minute, so a watch loop polling several templates will meet a `429`;
+//!   [`SlackError::RateLimited`] lets a caller back off and keep watching.
 //!
-//! As with the other connectors, [`Slack::new`] reads config and
-//! [`Slack::with_client`] is the injectable seam tests aim at `wiremock`.
+//! [`Slack::new`] reads config and [`Slack::with_client`] is the injectable seam
+//! tests aim at `wiremock`.
 
 use mtui_config::Config;
 use mtui_types::url_redaction::is_loopback;
@@ -35,8 +31,7 @@ use crate::http::{
 /// Maximum `conversations.replies` pages walked before giving up.
 ///
 /// A review thread is a handful of messages, so a cursor still yielding pages
-/// past this means a pathological thread or a server-side loop — either way the
-/// watch must not spin forever on one poll.
+/// past this means a pathological thread or a server-side loop.
 const MAX_REPLY_PAGES: usize = 10;
 
 /// Reaction names that count as an approval ack, after skin-tone stripping.
@@ -48,9 +43,8 @@ const NACK_REACTIONS: &[&str] = &["-1", "thumbsdown", "x", "no_entry"];
 /// A message this client posted, identified the way Slack wants it referenced.
 ///
 /// The `channel` is Slack's **canonical** ID from the post response, not the
-/// configured value: those differ when the config names a channel by `#name`,
-/// and every later `reactions.get` / `conversations.replies` needs the
-/// canonical form.
+/// configured value (which may be a `#name`); every later `reactions.get` /
+/// `conversations.replies` needs the canonical form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostedMessage {
     /// The canonical channel ID Slack resolved the post to.
@@ -91,8 +85,8 @@ pub struct Reply {
 /// Strip a trailing `::skin-tone-N` modifier from a Slack reaction name.
 ///
 /// Slack reports `+1::skin-tone-4` as distinct from `+1`, so a literal
-/// comparison would silently ignore an ack from anyone with a default skin tone.
-/// Normalising at the transport edge means no consumer can forget it.
+/// comparison would ignore such an ack. Normalising at the transport edge means
+/// no consumer can forget it.
 #[must_use]
 fn normalize_reaction(name: &str) -> &str {
     match name.split_once("::skin-tone-") {
@@ -115,10 +109,10 @@ pub fn is_nack_reaction(name: &str) -> bool {
 
 /// Whether `url` may carry the bearer token: `https`, or `http` to loopback.
 ///
-/// A weaker check than the Gitea connector's full origin comparison, because
-/// the Slack base is only ever read from the user's own config, never from
-/// attacker-influenceable metadata. The remaining risk is a misconfiguration
-/// putting the token on the wire in clear text, which this refuses outright.
+/// Weaker than the Gitea connector's origin comparison, because the Slack base
+/// comes only from the user's own config, never from attacker-influenceable
+/// metadata. The remaining risk is a misconfiguration sending the token in
+/// clear text, which this refuses.
 fn is_token_safe_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -143,8 +137,7 @@ fn is_token_safe_url(url: &str) -> bool {
 
 /// Percent-encode `params` into a query string, without a leading `?`.
 ///
-/// reqwest's `query` feature is disabled workspace-wide, so this is hand-rolled
-/// as in the TeReGen connector.
+/// reqwest's `query` feature is disabled workspace-wide.
 fn build_query(params: &[(&str, &str)]) -> String {
     params
         .iter()
@@ -172,9 +165,8 @@ pub struct Slack {
 impl Slack {
     /// Build a client from the session configuration.
     ///
-    /// The integration is opt-in, so the common case is a refusal:
-    /// [`SlackError::Disabled`] up front, rather than an authentication failure
-    /// several calls later.
+    /// The integration is opt-in, so the common case is
+    /// [`SlackError::Disabled`] up front, not an authentication failure later.
     ///
     /// # Errors
     ///
@@ -195,8 +187,8 @@ impl Slack {
 
     /// Build a client over an existing [`HttpClient`] against `api_base`.
     ///
-    /// The injectable seam: tests point `api_base` at a `wiremock` server,
-    /// permitted because it is loopback.
+    /// The injectable seam: tests point `api_base` at a loopback `wiremock`
+    /// server.
     ///
     /// # Errors
     ///
@@ -361,9 +353,8 @@ impl Slack {
     /// Read a message's body and reactions in one call.
     ///
     /// `reactions.get` returns the message alongside its reactions, so a caller
-    /// that must confirm *which* message it is looking at — an approval gate
-    /// checking a stored marker still points at this update's review request —
-    /// needs only one request.
+    /// confirming *which* message it is looking at (an approval gate checking a
+    /// stored marker) needs one request.
     ///
     /// # Errors
     ///

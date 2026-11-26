@@ -9,10 +9,9 @@
 //!   `config.refhosts_https_expiration`.
 //!
 //! # Testability seams
-//! The clock and the URL opener are injected as small object-safe traits
-//! ([`Clock`], [`Fetcher`]) so the cache-refresh logic can be driven offline;
-//! production wires [`SystemClock`] and [`HttpFetcher`]. The cache itself is a
-//! real file, so tests point it at a temp directory.
+//! The clock and the URL opener are injected as object-safe traits ([`Clock`],
+//! [`Fetcher`]) so the cache-refresh logic can be driven offline; production
+//! wires [`SystemClock`] and [`HttpFetcher`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,11 +26,8 @@ use crate::clock::unix_now;
 use crate::error::RefhostError;
 use crate::http::{HttpClient, VerifyPolicy, sanitize_url};
 
-/// The subset of configuration a resolver needs.
-///
-/// A borrowed view rather than the whole `mtui_config::Config`, so resolvers
-/// stay decoupled from the full config surface and are trivial to construct in
-/// tests.
+/// The subset of configuration a resolver needs, borrowed so resolvers stay
+/// decoupled from the full `mtui_config::Config`.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolveConfig<'a> {
     /// Comma-separated, ordered list of resolver names to try.
@@ -74,10 +70,8 @@ impl Clock for SystemClock {
     }
 }
 
-/// [`Fetcher`] backed by the shared [`HttpClient`].
-///
-/// The client's TLS posture is fixed at build time (see [`HttpClient::new`]) by
-/// `HttpFetcher::new` from the effective [`VerifyPolicy`].
+/// [`Fetcher`] backed by the shared [`HttpClient`], whose TLS posture is fixed
+/// at build time from the effective [`VerifyPolicy`].
 #[derive(Debug)]
 pub struct HttpFetcher {
     client: HttpClient,
@@ -144,9 +138,9 @@ fn stat_cache(path: &Path) -> StatResult {
 /// State shared by every refresh of one cache path, guarded by its
 /// [`refresh_lock`].
 ///
-/// `failed_at` is a monotonic [`std::time::Instant`], deliberately not the
-/// scriptable [`Clock`] seam: it answers "did that failure happen while *I* was
-/// waiting", an ordering question, not a cache-age computation.
+/// `failed_at` is a monotonic [`std::time::Instant`], not the [`Clock`] seam: it
+/// answers "did that failure happen while *I* was waiting", an ordering
+/// question, not a cache-age computation.
 #[derive(Default)]
 struct RefreshSlot {
     /// When the most recent download attempt failed; cleared on success.
@@ -157,12 +151,10 @@ struct RefreshSlot {
 /// [`HttpsResolver::refresh_if_needed`]).
 ///
 /// The lock cannot live on the [`HttpsResolver`] instance:
-/// [`RefhostsFactory::production`] is constructed on demand at every call site
-/// (Session autoconnect, `list_refhosts`, `add_host`), so concurrent resolves
-/// each hold their own resolver and would never share an instance field. Keyed
-/// by cache path so unrelated caches (in practice per-test temp paths —
-/// production configures exactly one `config.refhosts_path`) never serialise
-/// each other; entries are never removed, which is fine at that cardinality.
+/// [`RefhostsFactory::production`] is constructed at every call site, so
+/// concurrent resolves each hold their own resolver. Keyed by cache path so
+/// unrelated caches never serialise each other; entries are never removed,
+/// which is fine at that cardinality.
 static REFRESH_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<RefreshSlot>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -228,20 +220,17 @@ impl HttpsResolver {
     /// Refresh the cache if it is missing or stale.
     ///
     /// Concurrent resolves **single-flight** the download: the first caller to
-    /// see a stale cache takes the per-cache-path [`refresh_lock`] and fetches,
-    /// and callers arriving meanwhile wait on it, then *re-check* freshness —
-    /// the leader's write bumped the mtime, so they build from the fresh cache
-    /// instead of stampeding the server. That holds on failure too: a waiter
-    /// that waited through a *failed* download fails fast
-    /// ([`RefhostError::RefreshJustFailed`]) rather than repeating an attempt
-    /// that would almost certainly fail again, so a down server costs the group
-    /// one transport timeout, not one per waiter. A caller that was not yet
-    /// waiting when the failure happened retries normally.
+    /// see a stale cache takes the per-cache-path [`refresh_lock`] and fetches;
+    /// callers arriving meanwhile wait, then *re-check* freshness (the leader's
+    /// write bumped the mtime) instead of stampeding the server. A waiter that
+    /// waited through a *failed* download fails fast
+    /// ([`RefhostError::RefreshJustFailed`]), so a down server costs one
+    /// transport timeout, not one per waiter; a caller not yet waiting when the
+    /// failure happened retries normally.
     ///
-    /// Returns `Some(bytes)` when this call performed the download — so
-    /// [`resolve`](Self::resolve) builds from those rather than re-reading a
-    /// cache that may not have been written — and `None` when no download
-    /// happened.
+    /// Returns `Some(bytes)` when this call performed the download, so
+    /// [`resolve`](Self::resolve) builds from those rather than a cache that may
+    /// not have been written, and `None` otherwise.
     async fn refresh_if_needed(
         &self,
         config: ResolveConfig<'_>,
@@ -283,15 +272,14 @@ impl HttpsResolver {
 }
 
 /// Best-effort check whether `refhosts_path`'s parent directory looks
-/// writable, so a caller can forewarn that the https mirror write is likely
-/// to fail — e.g. a read-only, package-managed `refhosts.path`.
+/// writable, to forewarn that the https mirror write is likely to fail (e.g. a
+/// read-only, package-managed `refhosts.path`).
 ///
-/// `mtui_config::atomic::write` creates its temp file in that same directory,
-/// so the directory — not the target file — is what must be writable. A missing
-/// directory counts as "not writable" even though the write would try to create
-/// it, since a directory missing at this level (e.g. `/usr/share/qam-metadata`)
-/// is typically root-owned and uncreatable anyway. A plain permission-bit probe
-/// (no ACLs/mounts), so it gates only a warning.
+/// `mtui_config::atomic::write` creates its temp file in that directory, so it,
+/// not the target file, must be writable. A missing directory counts as "not
+/// writable": one missing at this level (e.g. `/usr/share/qam-metadata`) is
+/// typically root-owned and uncreatable. A plain permission-bit probe, so it
+/// gates only a warning.
 fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
     let Some(parent) = refhosts_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return true;

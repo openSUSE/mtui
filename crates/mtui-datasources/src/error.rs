@@ -22,17 +22,16 @@ pub enum HttpError {
     /// surfaced by `reqwest`.
     ///
     /// Renders as reqwest's kind plus the deepest cause (`error sending
-    /// request: Connection refused (os error 111)`): reqwest's own `Display`
-    /// stops at the kind, which made a reset, a DNS failure, a TLS failure and
-    /// both timeouts read identically (#594).
+    /// request: Connection refused (os error 111)`); reqwest's own `Display`
+    /// stops at the kind, so a reset, a DNS failure and a TLS failure would read
+    /// identically.
     ///
     /// **Invariant: the wrapped error carries no URL**, stripped by
     /// [`From<reqwest::Error>`](HttpError#impl-From<Error>-for-HttpError), and
     /// the cause comes through `root_cause`, i.e. through `sanitize_url`, so
-    /// neither half can render one.
-    /// `#[non_exhaustive]` makes the conversion the only way to build the
-    /// variant from outside this crate (`E0639`); inside it is convention, so
-    /// construct via `?`/`.into()` and never bare. Matching is unaffected.
+    /// neither half can render one. `#[non_exhaustive]` makes the conversion the
+    /// only way to build the variant from outside this crate; inside it,
+    /// construct via `?`/`.into()` and never bare.
     #[error("{}", request_display(.0))]
     #[non_exhaustive]
     Request(#[source] reqwest::Error),
@@ -49,10 +48,9 @@ pub enum HttpError {
 
     /// The response body exceeded the endpoint's maximum allowed size.
     ///
-    /// A defence against a hostile/misconfigured datasource OOMing mtui with an
-    /// arbitrarily large, `Content-Length`-lying or endless chunked body. The
-    /// message deliberately carries no URL, so it can never leak credentials
-    /// embedded in a datasource URL.
+    /// A defence against a hostile datasource OOMing mtui with a huge,
+    /// `Content-Length`-lying or endless chunked body. The message carries no
+    /// URL, so it can never leak credentials embedded in a datasource URL.
     #[error("response body exceeds the {limit}-byte limit")]
     BodyTooLarge {
         /// The maximum number of bytes the caller was willing to buffer.
@@ -62,21 +60,16 @@ pub enum HttpError {
         seen: Option<u64>,
     },
 
-    /// A 2xx body that is not valid JSON, as read by
-    /// `HttpClient::get_json`. Renders as
-    /// the parser's own message; serde's error carries no URL.
+    /// A 2xx body that is not valid JSON, as read by `HttpClient::get_json`.
+    /// Renders as the parser's own message; serde's error carries no URL.
     #[error("{0}")]
     Json(#[source] serde_json::Error),
 }
 
 impl HttpError {
-    /// The HTTP status code that caused this failure, when the failure was a
-    /// non-2xx response rather than a transport-level failure (`Some` only for
-    /// `Request` where the wrapped `reqwest::Error` carries one — a
-    /// `CaBundle`/`BodyTooLarge` failure never reached the wire).
-    ///
-    /// Status codes are not credentials, so returning one is not a
-    /// URL-sanitization concern the way the wrapped error's `Display` is.
+    /// The HTTP status code that caused this failure, when it was a non-2xx
+    /// response rather than a transport-level failure (`Some` only for `Request`
+    /// where the wrapped `reqwest::Error` carries one).
     #[must_use]
     pub fn status(&self) -> Option<u16> {
         match self {
@@ -88,13 +81,11 @@ impl HttpError {
 
 impl From<reqwest::Error> for HttpError {
     fn from(e: reqwest::Error) -> Self {
-        // #431: reqwest's `Display` appends the request URL verbatim
-        // (" for url (…)"), and `HttpError::Request` renders it, as does every
-        // `…Error::Http` over it, so it surfaces wherever an error is rendered
-        // — and it is not reliably credential-free: `Response::error_for_status`
+        // reqwest's `Display` appends the request URL verbatim (" for url (…)"),
+        // and it is not reliably credential-free: `Response::error_for_status`
         // reports the *redirect-updated* URL, so a `Location` header can put
-        // `user:pass@host` straight back. Supplying sanitized request context
-        // is the call site's job, via `crate::http::sanitize_url`.
+        // `user:pass@host` back. Sanitized request context is the call site's
+        // job, via `crate::http::sanitize_url`.
         Self::Request(e.without_url())
     }
 }
@@ -143,17 +134,15 @@ pub enum RefhostError {
     ///
     /// The terminal "all strategies exhausted" signal from
     /// [`RefhostsFactory`](crate::refhost::RefhostsFactory); the individual
-    /// resolver failures are logged at `warn` as they happen.
+    /// resolver failures are logged at `warn`.
     #[error("no refhosts resolver could produce a usable database")]
     ResolveFailed,
 
     /// A concurrent HTTPS cache refresh failed while this resolve waited on it.
     ///
     /// The waiter does not retry: serialised behind the refresh lock, each retry
-    /// costs a full transport timeout, multiplying a down server's latency by
-    /// the number of waiters. Failing fast caps that at one timeout, and the
-    /// caller falls back to the next configured resolver exactly as it would for
-    /// the leader's own error.
+    /// would cost a full transport timeout, multiplying a down server's latency
+    /// by the number of waiters. The caller falls back to the next resolver.
     #[error("refhosts refresh skipped: a concurrent download attempt just failed")]
     RefreshJustFailed,
 }
@@ -162,9 +151,8 @@ pub enum RefhostError {
 ///
 /// [`OpenQABase::get_jobs`](crate::openqa) is best-effort (fetch failures fold
 /// to a "no jobs" [`None`]); [`try_get_jobs`](crate::openqa) surfaces them as
-/// [`Fetch`](Self::Fetch) so a caller can tell a genuinely-empty result apart
-/// from an unreachable openQA. `ruoqa::Error` is `#[non_exhaustive]` with eleven
-/// failure modes; all collapse onto
+/// [`Fetch`](Self::Fetch) so a caller can tell an empty result from an
+/// unreachable openQA. `ruoqa::Error`'s failure modes all collapse onto
 /// [`Fetch`](Self::Fetch)/[`ClientBuild`](Self::ClientBuild) via the
 /// `openqa::client` module's `describe` helper. Userinfo cannot reach these
 /// messages: `ruoqa` >= 0.1.4 redacts it at every `Display` site and drops it in
@@ -178,14 +166,12 @@ pub enum OpenQAError {
     Http(#[from] HttpError),
 
     /// The `ruoqa` client itself failed to build: a malformed `client.conf`,
-    /// invalid TLS setup, or an incompatible builder combination. Userinfo
-    /// cannot reach this message (see the module-level doc above).
+    /// invalid TLS setup, or an incompatible builder combination.
     #[error("openQA client could not be built: {0}")]
     ClientBuild(String),
 
     /// A jobs fetch failed: a transport error, a non-2xx status, or a malformed
-    /// response body. Userinfo cannot reach this message (see the
-    /// module-level doc above).
+    /// response body.
     #[error("openQA jobs fetch failed: {0}")]
     Fetch(String),
 }
@@ -245,10 +231,9 @@ pub enum GiteaError {
 ///
 /// Slack's Web API reports application-level failures as **HTTP 200** with
 /// `{"ok": false, "error": "&lt;code&gt;"}`, so a 2xx status proves nothing —
-/// [`Api`](Self::Api) carries that code. It also rate-limits with `429` plus a
-/// `Retry-After` header, which a watch loop must treat as "back off and keep
-/// going" rather than as a failure — hence the dedicated
-/// [`RateLimited`](Self::RateLimited) variant.
+/// [`Api`](Self::Api) carries that code. Rate-limiting (`429` plus
+/// `Retry-After`) is a "back off and keep going" for a watch loop, not a
+/// failure, hence [`RateLimited`](Self::RateLimited).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SlackError {
@@ -327,9 +312,8 @@ impl From<HttpError> for OqaSearchError {
 }
 
 impl From<ruoqa::Error> for OqaSearchError {
-    /// Routed through `openqa::client::describe` first: a fetch failure must
-    /// never carry a raw URL, which could embed a credentialed openQA instance
-    /// URL (see [`OpenQAError`]).
+    /// Routed through `openqa::client::describe` first, so a failure never
+    /// carries a raw, possibly credentialed, URL (see [`OpenQAError`]).
     fn from(source: ruoqa::Error) -> Self {
         Self::Http(crate::openqa::client::describe(&source))
     }
@@ -341,9 +325,9 @@ impl From<ruoqa::Error> for OqaSearchError {
 /// `debug` and folded into a `None`/empty result. The `try_*` variants surface
 /// it as [`Fetch`](Self::Fetch), letting
 /// [`DashboardAutoOpenQA::run`](crate::qem_dashboard::DashboardAutoOpenQA)
-/// distinguish an unreachable dashboard from a genuinely-empty result.
-/// [`Http`](Self::Http) covers the failure that surfaces *before* any request:
-/// building the shared [`HttpClient`](crate::http::HttpClient).
+/// distinguish an unreachable dashboard from an empty result.
+/// [`Http`](Self::Http) covers building the shared
+/// [`HttpClient`](crate::http::HttpClient).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum QemDashboardError {
@@ -360,10 +344,10 @@ pub enum QemDashboardError {
 
 /// Errors from the TeReGen Report API client ([`crate::teregen`]).
 ///
-/// Reads are best-effort by default: a fetch failure folds to `None` so a
-/// hiccup never aborts a command. The `try_*` reads surface it as
-/// [`Fetch`](Self::Fetch) or [`Status`](Self::Status), so a caller can tell an
-/// empty successful response apart from a transport/status/JSON failure.
+/// Reads are best-effort by default: a fetch failure folds to `None`. The
+/// `try_*` reads surface it as [`Fetch`](Self::Fetch) or
+/// [`Status`](Self::Status), so a caller can tell an empty successful response
+/// from a failure.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TeReGenError {
