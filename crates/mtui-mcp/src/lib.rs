@@ -46,6 +46,8 @@ pub(crate) mod tool_args;
 pub mod tools;
 #[cfg(feature = "mcp")]
 pub mod transfer_tools;
+#[cfg(feature = "mcp")]
+pub(crate) mod util;
 
 pub use args::{McpArgs, Transport};
 #[cfg(feature = "mcp")]

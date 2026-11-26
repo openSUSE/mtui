@@ -967,7 +967,7 @@ impl McpSession {
                 .as_u64()
                 .and_then(|n| usize::try_from(n).ok()),
             trace,
-            time_nanos: crate::otel::now_nanos(),
+            time_nanos: crate::util::epoch_nanos(),
             extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
         };
         if let Err(reason) = otel.enqueue_audit(queued) {

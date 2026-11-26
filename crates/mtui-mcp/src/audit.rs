@@ -819,13 +819,7 @@ fn fingerprint_value(value: &Value) -> Value {
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     let digest = Sha256::digest(bytes);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        hex.push(HEX[(byte >> 4) as usize] as char);
-        hex.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    hex
+    crate::util::hex_encode(&digest)
 }
 
 #[cfg(test)]
