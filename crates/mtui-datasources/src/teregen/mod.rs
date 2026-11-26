@@ -32,8 +32,7 @@ use serde_json::{Value, json};
 
 use crate::error::{HttpError, TeReGenError};
 use crate::http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, VerifyPolicy, read_body_capped,
-    resolve_verify, sanitize_url,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, PATIENT_READ_TIMEOUT, read_body_capped, sanitize_url,
 };
 
 pub mod auth;
@@ -232,11 +231,7 @@ impl TeReGen {
     /// Returns [`HttpError`] if the shared HTTP client cannot be built (e.g. a
     /// configured CA bundle cannot be read).
     pub fn new(config: &Config, apiurl: &str) -> crate::Result<Self> {
-        let verify: VerifyPolicy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)?;
+        let http = HttpClient::from_config(config)?;
         Ok(Self::with_client(http, apiurl))
     }
 

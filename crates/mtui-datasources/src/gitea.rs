@@ -15,7 +15,7 @@
 //!
 //! Comments are ordered by their `updated_at` timestamp (RFC3339 with offset).
 //! reqwest fixes the TLS posture per-client, so [`Gitea::new`] resolves the
-//! verify policy via [`resolve_verify`] before any request is made.
+//! verify policy via [`HttpClient::from_config`] before any request is made.
 
 use std::cmp::Ordering;
 use std::sync::LazyLock;
@@ -30,8 +30,8 @@ use tokio::sync::OnceCell;
 
 use crate::error::{GiteaError, HttpError};
 use crate::http::{
-    HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    resolve_verify, sanitize_url, ssl_error_detail, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, is_ssl_verification_error, read_body_capped, sanitize_url,
+    ssl_error_detail, ssl_verification_hint,
 };
 
 /// The default review group a [`Gitea`] client operates on behalf of.
@@ -284,11 +284,7 @@ impl Gitea {
         if config.gitea_token.is_empty() {
             return Err(GiteaError::MissingToken);
         }
-        let verify: VerifyPolicy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)?;
+        let http = HttpClient::from_config(config)?;
         Self::with_client(
             http,
             config.gitea_token.clone(),
@@ -826,6 +822,7 @@ pub async fn token_login(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::VerifyPolicy;
 
     fn dummy() -> Gitea {
         let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();

@@ -24,8 +24,7 @@ use thiserror::Error;
 
 use crate::error::HttpError;
 use crate::http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, read_body_prefix,
-    resolve_verify, sanitize_url,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, read_body_capped, read_body_prefix, sanitize_url,
 };
 use crate::teregen::auth::{TeregenAuth, TeregenAuthError};
 
@@ -259,11 +258,7 @@ impl TeregenV2 {
     /// Returns [`HttpError`] if the shared HTTP client cannot be built (e.g. a
     /// configured CA bundle cannot be read).
     pub fn new(config: &Config, apiurl: &str) -> crate::Result<Self> {
-        let verify: VerifyPolicy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)?;
+        let http = HttpClient::from_config(config)?;
         Ok(Self::with_client(http, apiurl))
     }
 
@@ -885,6 +880,7 @@ fn error_detail(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::VerifyPolicy;
 
     /// `TeregenV2`'s `Debug` must mask userinfo in `base`: the field holds
     /// the raw apiurl used for request construction, so a derive would echo

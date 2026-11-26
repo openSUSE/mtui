@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 
 use crate::error::{HttpError, SlackError};
 use crate::http::{
-    HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    resolve_verify, sanitize_url, ssl_error_detail, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, is_ssl_verification_error, read_body_capped, sanitize_url,
+    ssl_error_detail, ssl_verification_hint,
 };
 
 /// Maximum `conversations.replies` pages walked before giving up.
@@ -199,11 +199,7 @@ impl Slack {
         if config.slack_token.is_empty() {
             return Err(SlackError::MissingToken);
         }
-        let verify: VerifyPolicy = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)?;
+        let http = HttpClient::from_config(config)?;
         Self::with_client(http, config.slack_token.clone(), &config.slack_api_url)
     }
 
@@ -520,6 +516,7 @@ impl Slack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::VerifyPolicy;
 
     fn client(base: &str) -> Result<Slack, SlackError> {
         let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
