@@ -50,8 +50,9 @@ pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome, LostHold, LostHoldKind, LostHoldProof, RebootReport};
 pub use locks::{
-    Clock, ContendedSurface, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH, RemoteLock,
-    SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason, sibling_holder_name,
+    Clock, ContendedSurface, LockKind, LockOwner, LockRow, OpLockHolders, POOL_LOCK_PATH,
+    RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
+    sibling_holder_name,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
@@ -437,14 +438,14 @@ impl Target {
     ///
     /// A no-op when the target is not connected (no lock built yet).
     pub async fn unlock(&mut self, force: bool) {
-        let _ = self.unlock_reporting(force).await;
+        let _ = self.unlock_reporting(LockKind::Op, force).await;
     }
 
-    /// Releases this target's operation lock, returning the raw outcome so the
-    /// group [`unlock`](HostsGroup::unlock) fan-out can distinguish a benign
-    /// contended lock ([`HostError::TargetLocked`]) from a real transport
-    /// failure. Unlike [`unlock`](Self::unlock) — which swallows both — this
-    /// still logs each branch but hands the result back to the caller.
+    /// Releases this target's `kind` lock, returning the raw outcome so the
+    /// group fan-outs can distinguish a benign contended lock
+    /// ([`HostError::TargetLocked`]) from a real transport failure. Unlike
+    /// [`unlock`](Self::unlock) — which swallows both — this still logs each
+    /// branch but hands the result back to the caller.
     ///
     /// `Ok(())` means released (or a no-op: not connected, or nothing to
     /// release). `Err(HostError::TargetLocked(_))` means the lock is held by
@@ -454,21 +455,36 @@ impl Target {
     ///
     /// Propagates [`HostError::TargetLocked`] for a foreign-owned lock and any
     /// transport error from the underlying [`TargetLock::unlock`].
-    async fn unlock_reporting(&mut self, force: bool) -> Result<()> {
-        let Some(lock) = self.lock.as_mut() else {
-            tracing::debug!(host = %self.hostname, "unlock: no lock (not connected)");
+    async fn unlock_reporting(&mut self, kind: LockKind, force: bool) -> Result<()> {
+        let Some(lock) = self.slot_mut(kind) else {
+            tracing::debug!(host = %self.hostname, "unlock: no {} (not connected)", kind.label());
             return Ok(());
         };
         match lock.unlock(force).await {
             Ok(()) => Ok(()),
             Err(HostError::TargetLocked(msg)) => {
-                tracing::debug!(host = %self.hostname, %msg, "unlock: lock held by another owner, ignoring");
+                tracing::debug!(host = %self.hostname, %msg, "unlock: {} held by another owner, ignoring", kind.label());
                 Err(HostError::TargetLocked(msg))
             }
             Err(e) => {
-                tracing::warn!(host = %self.hostname, error = %e, "unlock failed");
+                tracing::warn!(host = %self.hostname, error = %e, "unlock of the {} failed", kind.label());
                 Err(e)
             }
+        }
+    }
+
+    /// This target's lock of `kind`, once connected.
+    fn slot(&self, kind: LockKind) -> Option<&TargetLock> {
+        match kind {
+            LockKind::Op => self.lock.as_ref(),
+            LockKind::Pool => self.pool_lock.as_ref(),
+        }
+    }
+
+    fn slot_mut(&mut self, kind: LockKind) -> Option<&mut TargetLock> {
+        match kind {
+            LockKind::Op => self.lock.as_mut(),
+            LockKind::Pool => self.pool_lock.as_mut(),
         }
     }
 
@@ -527,21 +543,15 @@ impl Target {
         self.lock.as_ref().and_then(TargetLock::sibling_label)
     }
 
-    /// Whether this target has a built operation lock, i.e. is connected.
+    /// Whether this target has built its `kind` lock, i.e. is connected.
     ///
     /// No remote I/O: an unconnected target ([`Target::new`], never
-    /// [`connect`](Self::connect)ed) never built a [`TargetLock`], so a group
-    /// fan-out can tell "nothing to attempt" apart from "attempted and found
-    /// unlocked" before touching the wire.
+    /// [`connect`](Self::connect)ed) never built its locks, so a group fan-out
+    /// can tell "nothing to attempt" apart from "attempted and found unlocked"
+    /// before touching the wire.
     #[must_use]
-    pub(crate) fn has_operation_lock(&self) -> bool {
-        self.lock.is_some()
-    }
-
-    /// [`has_operation_lock`](Self::has_operation_lock) for the pool claim.
-    #[must_use]
-    pub(crate) fn has_pool_lock(&self) -> bool {
-        self.pool_lock.is_some()
+    pub(crate) fn has_lock(&self, kind: LockKind) -> bool {
+        self.slot(kind).is_some()
     }
 
     /// Sets the owning template's RRID, the pool claim's ownership identity.
@@ -561,77 +571,34 @@ impl Target {
         }
     }
 
-    /// The operation-lock comment this session stamped, if it holds the lock.
+    /// The `kind` lock comment this session stamped, if it holds that lock.
     ///
     /// A reboot wipes `/var/lock` but not this record; the reboot lifecycle
     /// re-applies exactly this comment.
     #[must_use]
-    pub(crate) fn held_lock_comment(&self) -> Option<String> {
-        self.lock.as_ref()?.held_comment()
+    pub(crate) fn held_comment(&self, kind: LockKind) -> Option<String> {
+        self.slot(kind)?.held_comment()
     }
 
-    /// The pool-claim comment this session stamped, if it holds the claim.
-    ///
-    /// See [`held_lock_comment`](Self::held_lock_comment).
-    #[must_use]
-    pub(crate) fn held_pool_comment(&self) -> Option<String> {
-        self.pool_lock.as_ref()?.held_comment()
-    }
-
-    /// Drops this session's in-memory operation-lock record after the remote
-    /// lock proved to be another owner's — a hold lost across a reboot that a
-    /// re-take refused to overwrite. The remote file is untouched; a later
-    /// plain `unlock` then correctly reports the session holds nothing instead
-    /// of trying to release someone else's lock.
-    pub(crate) fn forget_operation_hold(&mut self) {
-        if let Some(lock) = self.lock.as_mut() {
+    /// Drops this session's in-memory record of its `kind` lock after the
+    /// remote lock proved to be another owner's — a hold lost across a reboot
+    /// that a re-take refused to overwrite. The remote file is untouched; a
+    /// later plain `unlock` then correctly reports the session holds nothing
+    /// instead of trying to release someone else's lock.
+    pub(crate) fn forget_hold(&mut self, kind: LockKind) {
+        if let Some(lock) = self.slot_mut(kind) {
             lock.mark_released();
-        }
-    }
-
-    /// [`forget_operation_hold`](Self::forget_operation_hold) for the pool claim.
-    pub(crate) fn forget_pool_hold(&mut self) {
-        if let Some(pool) = self.pool_lock.as_mut() {
-            pool.mark_released();
         }
     }
 
     /// Releases this target's pool claim, best-effort.
     ///
-    /// Delegates to the pool claim's [`TargetLock::unlock`]
-    /// (RRID-based ownership), swallowing a [`HostError::TargetLocked`] (the
-    /// claim is owned by another template and `force` was not set) so a cleanup
-    /// path never fails. A no-op when the target is not connected (no pool lock
-    /// built yet).
+    /// Like [`unlock`](Self::unlock) with RRID-based ownership: a
+    /// [`HostError::TargetLocked`] (the claim is owned by another template and
+    /// `force` was not set) is swallowed so a cleanup path never fails. A no-op
+    /// when the target is not connected (no pool lock built yet).
     pub async fn pool_unlock(&mut self, force: bool) {
-        let _ = self.pool_unlock_reporting(force).await;
-    }
-
-    /// Releases this target's pool claim, returning the raw outcome for the
-    /// group [`pool_unlock_collecting`](HostsGroup::pool_unlock_collecting)
-    /// fan-out. Mirrors [`unlock_reporting`](Self::unlock_reporting), with
-    /// RRID-based ownership in place of PID.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`HostError::TargetLocked`] for a foreign-owned claim and any
-    /// transport error from the underlying pool [`TargetLock::unlock`].
-    async fn pool_unlock_reporting(&mut self, force: bool) -> Result<()> {
-        let Some(pool) = self.pool_lock.as_mut() else {
-            tracing::debug!(host = %self.hostname, "pool_unlock: no pool lock (not connected)");
-            return Ok(());
-        };
-        match pool.unlock(force).await {
-            Ok(()) => Ok(()),
-            Err(HostError::TargetLocked(msg)) => {
-                tracing::debug!(host = %self.hostname, %msg, "pool_unlock: claim held by another template, ignoring");
-                Err(HostError::TargetLocked(msg))
-            }
-            Err(e) => {
-                tracing::warn!(host = %self.hostname, error = %e, "pool_unlock failed");
-                Err(e)
-            }
-        }
+        let _ = self.unlock_reporting(LockKind::Pool, force).await;
     }
 
     /// Claims this target's remote pool lock with `comment` (the
@@ -725,50 +692,34 @@ impl Target {
         let Some(pool) = self.pool_lock.as_mut() else {
             return Ok(None);
         };
-        let snap = pool.snapshot().await?;
-        if snap.invalid {
+        let row = pool.snapshot().await?;
+        if row.invalid {
             return Ok(Some(String::new()));
         }
-        if snap.lock.user.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(snap.rrid))
+        Ok(row.is_locked.then_some(row.comment))
     }
 
-    /// The operation lock's owner as of its last load, with no remote read.
+    /// The `kind` lock's owner as of its last load, with no remote read.
     ///
     /// Only meaningful right after a call that failed with
     /// [`HostError::TargetLocked`], which loads before it reports; see
     /// [`TargetLock::loaded_owner`]. Default (empty) when not connected.
     #[must_use]
-    pub(crate) fn loaded_lock_owner(&self) -> LockOwner {
-        self.lock
-            .as_ref()
-            .map(TargetLock::loaded_owner)
-            .unwrap_or_default()
-    }
-
-    /// [`loaded_lock_owner`](Self::loaded_lock_owner) for the pool claim.
-    #[must_use]
-    pub(crate) fn loaded_pool_owner(&self) -> LockOwner {
-        self.pool_lock
-            .as_ref()
+    pub(crate) fn loaded_owner(&self, kind: LockKind) -> LockOwner {
+        self.slot(kind)
             .map(TargetLock::loaded_owner)
             .unwrap_or_default()
     }
 
     /// Resolves this target's current lock ownership into a [`LockRow`].
     ///
-    /// Reads the current lock ownership:
-    /// loads the operation lock (or the pool-claim lock when `pool` is `true`),
-    /// then reads `is_mine` / `time` / `locked_by` / `comment` — the same
-    /// resolution [`update_lock`](HostsGroup::update_lock) performs — and returns
-    /// the already-resolved (sync) values so the display layer stays sync. An
-    /// unconnected target (no built lock) resolves to the empty, unlocked row.
+    /// Loads the operation lock (or the pool-claim lock when `pool` is `true`)
+    /// and returns the already-resolved (sync) values so the display layer
+    /// stays sync. An unconnected target (no built lock) resolves to the empty,
+    /// unlocked row.
     ///
-    /// Best-effort: a read error on an individual accessor
-    /// degrades to its default rather than aborting the whole `list_locks`
-    /// fan-out.
+    /// Best-effort: a read error degrades to the unlocked row rather than
+    /// aborting the whole `list_locks` fan-out.
     pub async fn lock_status(&mut self, pool: bool) -> LockRow {
         self.try_lock_status(pool).await.unwrap_or_default()
     }
@@ -779,53 +730,9 @@ impl Target {
     ///
     /// Propagates any transport error raised while reading the remote lock file.
     pub async fn try_lock_status(&mut self, pool: bool) -> Result<LockRow> {
-        if pool {
-            let Some(lock) = self.pool_lock.as_mut() else {
-                return Ok(LockRow::default());
-            };
-            // Single remote read; every field is derived from the snapshot.
-            let snap = lock.snapshot().await?;
-            if snap.invalid {
-                return Ok(LockRow::invalid());
-            }
-            if snap.lock.user.is_empty() {
-                return Ok(LockRow::default());
-            }
-            let time = snap.lock.display_time();
-            Ok(LockRow {
-                is_locked: true,
-                is_mine: snap.is_mine,
-                locked_by: snap.lock.user,
-                time,
-                // A pool claim's detail is the owning template's RRID (parsed
-                // from the `mtui pool <RRID> [<owner>]` stamp), not the raw
-                // comment the operation lock carries.
-                comment: snap.rrid,
-                sibling: None,
-                invalid: false,
-            })
-        } else {
-            let Some(lock) = self.lock.as_mut() else {
-                return Ok(LockRow::default());
-            };
-            // Single remote read; every field is derived from the snapshot.
-            let snap = lock.snapshot().await?;
-            if snap.invalid {
-                return Ok(LockRow::invalid());
-            }
-            if snap.lock.user.is_empty() {
-                return Ok(LockRow::default());
-            }
-            let time = snap.lock.display_time();
-            Ok(LockRow {
-                is_locked: true,
-                is_mine: snap.is_mine,
-                locked_by: snap.lock.user,
-                time,
-                comment: snap.lock.comment,
-                sibling: snap.sibling,
-                invalid: false,
-            })
+        match self.slot_mut(LockKind::from_pool(pool)) {
+            Some(lock) => lock.snapshot().await,
+            None => Ok(LockRow::default()),
         }
     }
 
