@@ -1,28 +1,23 @@
 //! The PI [`TestReport`] implementation ([`PiReport`]).
 //!
-//! Keys its identity on the parsed [`RequestReviewID`] and derives its
+//! Keys its identity on the parsed [`RequestReviewID`](mtui_types::RequestReviewID) and derives its
 //! update-repo map by delegating unconditionally to [`reporepoparse`] — the
 //! simplest of the concrete reports, reusing the same helper as
-//! [`SlReport`](super::sl::SlReport). PI has no git commit to verify, so
-//! [`check_hash`](TestReport::check_hash) is constant.
+//! [`SlReport`](super::sl::SlReport). PI has no git commit to verify, so the
+//! default [`check_hash`](TestReport::check_hash) applies.
 //!
-//! `set_repo` adds with `-n ar -cfGkn`, same as SL. `list_update_commands` is a
-//! documented no-op stub: the doer seam
-//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
-//! install/uninstall but has no listing consumer. `id()` returns `""` when no
-//! RRID is loaded.
+//! `set_repo` adds with `-n ar -cfGkn`, same as SL.
 
 use std::collections::{BTreeSet, HashMap};
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
-use mtui_types::{RequestReviewID, SystemProduct};
+use mtui_types::SystemProduct;
 use tracing::debug;
 
 use super::repoparse::reporepoparse;
 use super::set_repo_with_add_flags;
-use super::update_flow;
-use crate::testreport::{HashCheck, TestReport, TestReportBase};
+use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for PI updates.
 pub struct PiReport {
@@ -49,96 +44,20 @@ impl TestReport for PiReport {
         &mut self.base
     }
 
-    fn id(&self) -> String {
-        // Empty when nothing is loaded.
-        self.base
-            .rrid
-            .as_ref()
-            .map(RequestReviewID::to_string)
-            .unwrap_or_default()
-    }
-
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         // No maintenance-id branching (unlike SL).
         let repos: Vec<String> = self.base.repositories.iter().cloned().collect();
         reporepoparse(&repos, &self.base.products)
     }
 
-    fn list_update_commands(&self, _targets: &HostsGroup) {
-        // `perform_update` below runs the per-host `updater` commands; the
-        // read-only listing command only ever prints a placeholder.
-        debug!("list_update_commands: no-op stub, not yet implemented");
-    }
-
-    // Shared `perform_*` flows (SL/PI/OBS behave identically). See
-    // `SlReport` for the rationale behind the per-report delegation.
-    async fn perform_install(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_install(targets, packages, diagnostics).await
-    }
-
-    async fn perform_uninstall(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_uninstall(targets, packages, diagnostics).await
-    }
-
-    async fn perform_prepare(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        force: bool,
-        testing: bool,
-        installed_only: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_prepare(
-            targets,
-            self,
-            packages,
-            force,
-            testing,
-            installed_only,
-            diagnostics,
-        )
-        .await
-    }
-
-    async fn perform_downgrade(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        let id = self.rrid().map(ToString::to_string);
-        update_flow::perform_downgrade(targets, self, packages, id.as_deref(), diagnostics).await
-    }
-
-    async fn perform_update(
-        &self,
-        targets: &mut HostsGroup,
-        noprepare: bool,
-        newpackage: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage, diagnostics)
-            .await
-    }
-
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {
         Some(self)
     }
 
-    async fn check_hash(&self) -> HashCheck {
-        // PI has no git commit, so there is nothing to verify.
-        HashCheck::Ok
+    fn list_update_commands(&self, _targets: &HostsGroup) {
+        // `perform_update` below runs the per-host `updater` commands; the
+        // read-only listing command only ever prints a placeholder.
+        debug!("list_update_commands: no-op stub, not yet implemented");
     }
 }
 

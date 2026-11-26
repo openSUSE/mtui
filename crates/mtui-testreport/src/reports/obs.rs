@@ -1,27 +1,22 @@
 //! The OBS [`TestReport`] implementation ([`ObsReport`]).
 //!
-//! Keys its identity on the parsed [`RequestReviewID`] and derives its
+//! Keys its identity on the parsed [`RequestReviewID`](mtui_types::RequestReviewID) and derives its
 //! update-repo map from the report document's `install.targets[]`
 //! ([`obs_update_repos`](crate::ingest::obs_update_repos)). OBS is not
-//! Gitea-backed, so there is no git commit to verify and
-//! [`check_hash`](TestReport::check_hash) is constant.
+//! Gitea-backed, so there is no git commit to verify and the default
+//! [`check_hash`](TestReport::check_hash) applies.
 //!
 //! `set_repo` adds with the OBS-specific `-n ar -ckn` — no `fG`, unlike SL/PI.
-//! `list_update_commands` is a documented no-op stub: the doer seam
-//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
-//! install/uninstall but has no listing consumer. `id()` returns `""` when no
-//! RRID is loaded, matching the sibling reports.
 
 use std::collections::{BTreeSet, HashMap};
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
-use mtui_types::{RequestReviewID, SystemProduct};
+use mtui_types::SystemProduct;
 use tracing::debug;
 
 use super::set_repo_with_add_flags;
-use super::update_flow;
-use crate::testreport::{HashCheck, TestReport, TestReportBase};
+use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for OBS/IBS updates.
 pub struct ObsReport {
@@ -48,15 +43,6 @@ impl TestReport for ObsReport {
         &mut self.base
     }
 
-    fn id(&self) -> String {
-        // Empty when nothing is loaded.
-        self.base
-            .rrid
-            .as_ref()
-            .map(RequestReviewID::to_string)
-            .unwrap_or_default()
-    }
-
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         match self.base.document.as_ref() {
             Some(doc) => crate::ingest::obs_update_repos(doc),
@@ -67,81 +53,14 @@ impl TestReport for ObsReport {
         }
     }
 
-    fn list_update_commands(&self, _targets: &HostsGroup) {
-        // `perform_update` below runs the per-host `updater` commands; the
-        // read-only listing command only ever prints a placeholder.
-        debug!("list_update_commands: no-op stub, not yet implemented");
-    }
-
-    // Shared `perform_*` flows (SL/PI/OBS behave identically). See
-    // `SlReport` for the rationale behind the per-report delegation.
-    async fn perform_install(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_install(targets, packages, diagnostics).await
-    }
-
-    async fn perform_uninstall(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_uninstall(targets, packages, diagnostics).await
-    }
-
-    async fn perform_prepare(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        force: bool,
-        testing: bool,
-        installed_only: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_prepare(
-            targets,
-            self,
-            packages,
-            force,
-            testing,
-            installed_only,
-            diagnostics,
-        )
-        .await
-    }
-
-    async fn perform_downgrade(
-        &self,
-        targets: &mut HostsGroup,
-        packages: &[String],
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        let id = self.rrid().map(ToString::to_string);
-        update_flow::perform_downgrade(targets, self, packages, id.as_deref(), diagnostics).await
-    }
-
-    async fn perform_update(
-        &self,
-        targets: &mut HostsGroup,
-        noprepare: bool,
-        newpackage: bool,
-        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
-    ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage, diagnostics)
-            .await
-    }
-
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {
         Some(self)
     }
 
-    async fn check_hash(&self) -> HashCheck {
-        // OBS/IBS is not Gitea-backed, so there is no hash to verify.
-        HashCheck::Ok
+    fn list_update_commands(&self, _targets: &HostsGroup) {
+        // `perform_update` below runs the per-host `updater` commands; the
+        // read-only listing command only ever prints a placeholder.
+        debug!("list_update_commands: no-op stub, not yet implemented");
     }
 }
 
