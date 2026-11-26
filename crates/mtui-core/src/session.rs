@@ -2254,13 +2254,13 @@ impl Session {
     /// Each slot's candidates are shuffled (the [`ShuffleFn`] seam) and recorded
     /// for sibling fallback, a host fewer other slots match ahead of one they
     /// also need. Each host serves at most one slot per call, and each slot key
-    /// is drawn once. A slot this owner already holds a host for, not serving
-    /// another slot, keeps it; the rest are matched to free hosts so that as
-    /// many as possible are served, earlier slots first, and each match is
-    /// claimed (a host claimed elsewhere meanwhile is matched around). A slot
-    /// no assignment of free hosts serves waits up to `[lock] wait` seconds for
-    /// a busy candidate, else is reported as [`Unserved::Busy`], or as
-    /// [`Unserved::Shared`] when every candidate serves another slot.
+    /// is drawn once. Slots are matched to free hosts and to hosts this owner
+    /// already holds, not serving another slot, so that as many as possible are
+    /// served, earlier slots first and held hosts before free ones, and each
+    /// free match is claimed (a host claimed elsewhere meanwhile is matched
+    /// around). A slot no such assignment serves waits up to `[lock] wait`
+    /// seconds for a busy candidate, else is reported as [`Unserved::Busy`], or
+    /// as [`Unserved::Shared`] when every candidate serves another slot.
     ///
     /// `served` maps each host to the slot key it was drawn for, as
     /// [`TestReportBase::pool_slots`](mtui_testreport::TestReportBase::pool_slots):
@@ -2357,41 +2357,39 @@ impl Session {
         let ours = |c: &String| arbiter.owner_of(c).as_ref() == Some(owner);
         let mut got: Vec<Option<String>> = vec![None; slots.len()];
         let mut done = vec![false; slots.len()];
-        for (i, (slot, candidates, _)) in slots.iter().enumerate() {
-            let held = candidates.iter().find(|c| {
-                !used.contains(*c) && ours(c) && served.get(*c).is_none_or(|s| s == slot)
-            });
-            if let Some(held) = held {
-                used.insert(held.clone());
-                served.insert(held.clone(), slot.clone());
-                done[i] = true;
-            }
-        }
         // A host claimed elsewhere between the match and its claim is matched around.
         let mut lost: std::collections::HashSet<String> = std::collections::HashSet::new();
         loop {
             let free: Vec<Vec<&String>> = slots
                 .iter()
                 .zip(&done)
-                .map(|((_, candidates, _), &done)| {
-                    candidates
+                .map(|((slot, candidates, _), &done)| {
+                    // A host held for another slot is offered only to that slot.
+                    let held = |c: &String| ours(c) && served.get(c).is_none_or(|s| s == slot);
+                    let mut free: Vec<&String> = candidates
                         .iter()
                         .filter(|c| {
                             !done
                                 && !used.contains(*c)
                                 && !lost.contains(*c)
-                                && arbiter.owner_of(c).is_none()
+                                && (held(c) || arbiter.owner_of(c).is_none())
                         })
-                        .collect()
+                        .collect();
+                    // Held first, so no extra host is claimed where one we hold serves.
+                    free.sort_by_key(|c| !held(c));
+                    free
                 })
                 .collect();
             let mut retry = false;
             for (i, host) in match_slots(&free).into_iter().enumerate() {
                 let Some(host) = host else { continue };
-                if arbiter.try_acquire(host, owner) {
+                let held = ours(host);
+                if held || arbiter.try_acquire(host, owner) {
                     used.insert(host.clone());
                     served.insert(host.clone(), slots[i].0.clone());
-                    got[i] = Some(host.clone());
+                    if !held {
+                        got[i] = Some(host.clone());
+                    }
                     done[i] = true;
                 } else {
                     lost.insert(host.clone());
@@ -2403,7 +2401,7 @@ impl Session {
             }
         }
 
-        // No assignment serves these from the free hosts: wait for a busy one.
+        // No assignment serves these: wait for a busy candidate.
         for (i, (slot, candidates, pos)) in slots.iter().enumerate() {
             if done[i] {
                 continue;
@@ -4374,6 +4372,53 @@ mod tests {
                 ("tyr".to_owned(), SLES_SLOT.to_owned()),
             ])
         );
+    }
+
+    /// A host this update already holds without a slot record takes part in
+    /// the matching: it serves the slot only it can serve, and the other slot
+    /// draws a free host.
+    #[tokio::test]
+    async fn pool_select_held_unrecorded_host_is_matched_not_spent_first() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        assert!(arbiter.try_acquire("h1.example.com", &owner));
+        let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned()];
+        let mut served = std::collections::HashMap::new();
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+
+        assert_eq!(unserved, Vec::new());
+        assert_eq!(chosen, vec!["h2.example.com"]);
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([
+                ("h1.example.com".to_owned(), HPC_SLOT.to_owned()),
+                ("h2.example.com".to_owned(), LTSS_SLOT.to_owned()),
+            ])
+        );
+    }
+
+    /// A held host serves its slot instead of an extra free host being claimed.
+    #[tokio::test]
+    async fn pool_select_prefers_a_held_host_over_a_free_one() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64"), ("x86-b", 15, 5, "x86_64")]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        assert!(arbiter.try_acquire("x86-b", &owner));
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
+        let mut served = std::collections::HashMap::new();
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+
+        assert_eq!(chosen, Vec::<String>::new());
+        assert_eq!(unserved, Vec::new());
+        assert_eq!(arbiter.owner_of("x86-a"), None);
+        assert_eq!(served.keys().collect::<Vec<_>>(), vec!["x86-b"]);
     }
 
     /// A slot whose only candidates serve other slots is named, not dropped.
