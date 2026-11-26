@@ -11,7 +11,7 @@
 //! transport-agnostic.
 //!
 //! **Per-template lock discipline.** A shared/exclusive registry gate
-//! ([`crate::concurrency::RwGate`]) plus a lazily-created per-RRID lock map:
+//! (a `tokio::sync::RwLock`) plus a lazily-created per-RRID lock map:
 //! `command_lock` takes the gate *shared* + one per-RRID lock for a
 //! single-template call, the gate *shared* with no per-RRID lock for a command
 //! addressing no template ([`mtui_core::addresses_template`]), and the gate
@@ -61,13 +61,12 @@ use mtui_core::{
 };
 use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
-use tokio::sync::OwnedMutexGuard;
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::audit::AuditLog;
 use crate::capture::{self, SharedBuf};
-use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
 use crate::otel::OtelExporter;
 use crate::slim::{cap_output, truncation_notice};
 
@@ -643,7 +642,7 @@ pub struct McpSession {
     /// addressing no template, *exclusive* for canonical-session commands and
     /// unscoped fan-out, draining in-flight per-RRID work.
     /// See [`command_lock`](Self::command_lock).
-    gate: RwGate,
+    gate: Arc<RwLock<()>>,
     /// Lazily-created per-RRID locks: same-RRID calls share one and serialise,
     /// different-RRID calls take different ones. The outer [`StdMutex`] guards
     /// the lazy get-or-insert only, never held across an await.
@@ -689,7 +688,7 @@ pub enum CommandLock {
         /// The per-RRID lock (dropped first).
         _rrid: OwnedMutexGuard<()>,
         /// The registry gate held in shared mode (dropped second).
-        _shared: SharedGuard,
+        _shared: OwnedRwLockReadGuard<()>,
     },
     /// A session-level hold: the registry gate shared, no per-RRID lock, for
     /// a command addressing no template
@@ -697,10 +696,10 @@ pub enum CommandLock {
     /// [`Session::fork_for_call`](mtui_core::Session::fork_for_call) like
     /// [`CommandLock::Scoped`], never holding the canonical session mutex
     /// across slow network I/O (#613).
-    Shared(#[allow(dead_code)] SharedGuard),
+    Shared(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
     /// A registry-wide exclusive hold (canonical-session commands / unscoped
     /// fan-out).
-    Exclusive(#[allow(dead_code)] ExclusiveGuard),
+    Exclusive(#[allow(dead_code)] OwnedRwLockWriteGuard<()>),
 }
 
 impl McpSession {
@@ -750,7 +749,7 @@ impl McpSession {
             profile,
             tools_allow,
             tools_deny,
-            gate: RwGate::new(),
+            gate: Arc::new(RwLock::new(())),
             rrid_locks: StdMutex::new(HashMap::new()),
             jobs: StdMutex::new(HashMap::new()),
             job_counter: AtomicU64::new(0),
@@ -1033,7 +1032,7 @@ impl McpSession {
                 // `Scope::Single` alone would map to the active template's
                 // per-RRID lock here while the job path records no scope (#603).
                 if !addresses_template(command.as_ref()) {
-                    return CommandLock::Shared(self.gate.shared().await);
+                    return CommandLock::Shared(self.gate_shared().await);
                 }
                 let session = self.session.lock().await;
                 resolve_command_rrids(command.as_ref(), &session, argv)
@@ -1044,7 +1043,7 @@ impl McpSession {
 
         match rrids {
             Some(rrids) if rrids.len() == 1 => {
-                let shared = self.gate.shared().await;
+                let shared = self.gate_shared().await;
                 let lock = self.lock_for(&rrids[0]);
                 let rrid = lock.lock_owned().await;
                 CommandLock::Scoped {
@@ -1052,8 +1051,20 @@ impl McpSession {
                     _rrid: rrid,
                 }
             }
-            _ => CommandLock::Exclusive(self.gate.exclusive().await),
+            _ => CommandLock::Exclusive(self.gate_exclusive().await),
         }
+    }
+
+    /// The registry gate in shared mode. The lock queues fairly, so a pending
+    /// exclusive waiter blocks later shared holds and a steady stream of
+    /// per-RRID commands cannot starve a `load_template`.
+    async fn gate_shared(&self) -> OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.gate).read_owned().await
+    }
+
+    /// The registry gate in exclusive mode, once every shared hold drains.
+    async fn gate_exclusive(&self) -> OwnedRwLockWriteGuard<()> {
+        Arc::clone(&self.gate).write_owned().await
     }
 
     /// Holds the registry-shared gate plus one template's per-RRID lock.
@@ -1069,7 +1080,7 @@ impl McpSession {
     /// and validate the target report *inside* the body, where the shared gate
     /// guarantees the registry cannot change underfoot.
     pub async fn scoped_lock(&self, rrid: Option<&str>) -> CommandLock {
-        let shared = self.gate.shared().await;
+        let shared = self.gate_shared().await;
         let (key, known) = match rrid {
             Some(r) => {
                 let key = canonical_template_name(r);
@@ -1110,7 +1121,7 @@ impl McpSession {
     /// The registry-wide exclusive hold a nothing-loaded dispatch takes, for a
     /// hand-written tool that must act on the canonical session itself.
     pub(crate) async fn exclusive_lock(&self) -> CommandLock {
-        CommandLock::Exclusive(self.gate.exclusive().await)
+        CommandLock::Exclusive(self.gate_exclusive().await)
     }
 
     /// Releases pool claims and disconnects every loaded template's hosts.
@@ -2023,7 +2034,7 @@ impl McpSession {
         // `Session::activate`'s `try_lock_owned`, so every later scoped dispatch
         // on the template would be refused as `template busy`, the `list_locks`
         // the reply recommends included. Dropped only inside the
-        // per-template pass, a busy gate (RwGate is writer-preferring, so one
+        // per-template pass, a busy gate (the gate is a fair `RwLock`, so one
         // pending `load_template` blocks shared acquisition) could burn the
         // budget and leave the session poisoned.
         //
@@ -2131,7 +2142,7 @@ impl McpSession {
         // Same acquire order as `command_lock` (gate-shared → one rrid lock), and
         // only ever one rrid lock at a time, so this cannot deadlock against a
         // concurrent dispatch.
-        let _shared = self.gate.shared().await;
+        let _shared = self.gate_shared().await;
         let rrid_lock = self.lock_for(rrid);
         let _rrid = rrid_lock.lock_owned().await;
 
@@ -2190,7 +2201,7 @@ impl McpSession {
     /// nothing but the gate can block it.
     pub(crate) async fn await_queued_writer(&self) {
         for _ in 0..400 {
-            if tokio::time::timeout(Duration::from_millis(5), self.gate.shared())
+            if tokio::time::timeout(Duration::from_millis(5), self.gate_shared())
                 .await
                 .is_err()
             {
@@ -2213,6 +2224,91 @@ mod tests {
 
     fn session(config: Config) -> Arc<McpSession> {
         McpSession::new(config)
+    }
+
+    const RRID_A: &str = "SUSE:Maintenance:1:1";
+    const RRID_B: &str = "SUSE:Maintenance:2:2";
+
+    /// `true` when `fut` completes within a short window.
+    async fn completes<T>(fut: impl Future<Output = T>) -> bool {
+        tokio::time::timeout(Duration::from_millis(50), fut)
+            .await
+            .is_ok()
+    }
+
+    /// Shared holds on different templates coexist.
+    #[tokio::test]
+    async fn gate_shared_holders_coexist() {
+        let sess = session(Config::default());
+        let _a = sess.scoped_lock(Some(RRID_A)).await;
+        assert!(completes(sess.scoped_lock(Some(RRID_B))).await);
+    }
+
+    /// An exclusive hold keeps a shared one out until it is released.
+    #[tokio::test]
+    async fn gate_exclusive_excludes_shared() {
+        let sess = session(Config::default());
+        let excl = sess.exclusive_lock().await;
+        assert!(!completes(sess.scoped_lock(Some(RRID_A))).await);
+        drop(excl);
+        assert!(completes(sess.scoped_lock(Some(RRID_A))).await);
+    }
+
+    /// Writer preference: a queued exclusive waiter blocks a new shared hold
+    /// even while another shared holder is live, and runs before it.
+    #[tokio::test]
+    async fn gate_queued_writer_blocks_later_readers() {
+        let sess = session(Config::default());
+        let held = sess.scoped_lock(Some(RRID_A)).await;
+
+        let writer = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                let _excl = sess.exclusive_lock().await;
+            }
+        });
+        sess.await_queued_writer().await;
+
+        let reader = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                let _shared = sess.scoped_lock(Some(RRID_B)).await;
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !reader.is_finished(),
+            "a later reader waits behind the writer"
+        );
+        assert!(
+            !writer.is_finished(),
+            "the writer waits for the live reader"
+        );
+
+        drop(held);
+        writer.await.expect("writer ran");
+        reader.await.expect("reader ran after the writer");
+    }
+
+    /// A cancelled queued writer must not leave later readers blocked.
+    #[tokio::test]
+    async fn gate_cancelled_writer_does_not_block_readers() {
+        let sess = session(Config::default());
+        let held = sess.scoped_lock(Some(RRID_A)).await;
+
+        let writer = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                let _excl = sess.exclusive_lock().await;
+            }
+        });
+        sess.await_queued_writer().await;
+        writer.abort();
+        let _ = writer.await;
+
+        assert!(completes(sess.scoped_lock(Some(RRID_B))).await);
+        drop(held);
+        assert!(completes(sess.exclusive_lock()).await);
     }
 
     /// The freshness invariant `remint_after_drop_is_a_new_session` relies on
@@ -4618,10 +4714,10 @@ mod tests {
 
         let release = Arc::new(tokio::sync::Notify::new());
         let writer = tokio::spawn({
-            let gate = sess.gate.clone();
+            let sess = Arc::clone(&sess);
             let release = Arc::clone(&release);
             async move {
-                let _exclusive = gate.exclusive().await;
+                let _exclusive = sess.gate_exclusive().await;
                 release.notified().await;
             }
         });
@@ -4630,7 +4726,7 @@ mod tests {
         // queued and the template would not block at all.
         let mut queued = false;
         for _ in 0..400 {
-            if tokio::time::timeout(Duration::from_millis(5), sess.gate.shared())
+            if tokio::time::timeout(Duration::from_millis(5), sess.gate_shared())
                 .await
                 .is_err()
             {
@@ -5461,7 +5557,7 @@ mod tests {
         sess.session().lock().await.targets_mut().add(null_target);
         let registry = register_all();
         // Nothing loaded, so the dispatch wants the exclusive gate this blocks.
-        let held = sess.gate.shared().await;
+        let held = sess.gate_shared().await;
 
         let client_ct = CancellationToken::new();
         client_ct.cancel();

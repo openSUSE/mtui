@@ -17,8 +17,6 @@ pub(crate) mod audit;
 #[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
-pub mod concurrency;
-#[cfg(feature = "mcp")]
 pub mod deny;
 #[cfg(feature = "mcp")]
 pub mod document_tools;
