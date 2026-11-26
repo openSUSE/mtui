@@ -365,8 +365,8 @@ async fn wait_terminal(job: &StdMutex<Job>, budget: Duration) {
 
 /// `job`'s terminal verdict: its stdout, or the matching failure envelope.
 ///
-/// Split out of [`McpSession::job_result`] so the waiting sibling renders the
-/// same four arms from the record it already holds locked.
+/// Split out of [`McpSession::job_result_wait`] so it renders the four arms from
+/// the record it already holds locked.
 fn result_of(job_id: &str, job: &Job) -> Result<String, McpCommandError> {
     match job.state {
         JobState::Running => {
@@ -612,15 +612,12 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 ///
 /// The [`Session`] sits behind a [`Mutex`] because dispatch
 /// ([`mtui_core::dispatch_argv`]) needs `&mut Session` while the rmcp
-/// `ServerHandler` methods take `&self`. The paired [`SharedBuf`] is the sink
-/// its display writes to; a tool call [`take`](SharedBuf::take)s it to isolate
-/// its own output.
+/// `ServerHandler` methods take `&self`. Each call captures its output on its
+/// own per-call display; the canonical session's display discards.
 pub struct McpSession {
     /// Asserts session freshness without relying on `Arc` address identity.
     id: u64,
     session: Arc<Mutex<Session>>,
-    /// The sink the session's display writes to; drained per tool call.
-    output: SharedBuf,
     /// `config.mcp_max_output_bytes`; `0` disables the cap. Copied out of the
     /// config, with the four fields below, because the server holds the session
     /// rather than the [`Config`].
@@ -702,8 +699,7 @@ pub enum CommandLock {
 }
 
 impl McpSession {
-    /// Builds a headless session from `config`, wiring its display to a fresh
-    /// capture sink. Non-interactive with color disabled — see
+    /// Builds a headless session from `config`, with a display that discards. Non-interactive with color disabled — see
     /// `capture::session`.
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
@@ -737,11 +733,10 @@ impl McpSession {
             .mcp_audit_log
             .clone()
             .map(|path| AuditLog::new(path, audit_max_bytes));
-        let (session, output) = capture::session(config);
+        let session = capture::session(config);
         Arc::new(Self {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             session: Arc::new(Mutex::new(session)),
-            output,
             max_output_bytes,
             max_input_bytes,
             put_dirs,
@@ -772,12 +767,6 @@ impl McpSession {
     #[must_use]
     pub fn session(&self) -> &Arc<Mutex<Session>> {
         &self.session
-    }
-
-    /// The capture sink, drained per tool call to isolate that call's output.
-    #[must_use]
-    pub fn output(&self) -> &SharedBuf {
-        &self.output
     }
 
     /// The per-result output-size budget in bytes (`0` disables the cap).
@@ -1364,31 +1353,8 @@ impl McpSession {
         interval: Duration,
         ran_under: Option<&ScopeSlot>,
     ) -> Result<String, McpCommandError> {
-        self.run_command_cancellable_with_progress(
-            registry, name, argv, sink, interval, None, ran_under,
-        )
-        .await
-    }
-
-    /// [`run_command_with_progress`](Self::run_command_with_progress) with an
-    /// optional per-call cancellation token installed on the session the
-    /// dispatch runs on (see [`run_command_cancellable`](Self::run_command_cancellable)).
-    ///
-    /// [`run_command_client_cancellable`](Self::run_command_client_cancellable)
-    /// is the only caller that passes `Some`.
-    #[allow(clippy::too_many_arguments)]
-    async fn run_command_cancellable_with_progress(
-        &self,
-        registry: &Registry,
-        name: &str,
-        argv: &[String],
-        sink: Option<&dyn ProgressSink>,
-        interval: Duration,
-        cancel: Option<CancellationToken>,
-        ran_under: Option<&ScopeSlot>,
-    ) -> Result<String, McpCommandError> {
         run_with_heartbeat(
-            self.run_command_cancellable(registry, name, argv, cancel, ran_under),
+            self.run_command_cancellable(registry, name, argv, None, ran_under),
             sink,
             name,
             interval,
@@ -1436,14 +1402,17 @@ impl McpSession {
         let own = ScopeSlot::new();
         let ran_under = ran_under.unwrap_or(&own);
         let token = CancellationToken::new();
-        let mut fut = Box::pin(self.run_command_cancellable_with_progress(
-            registry,
-            name,
-            argv,
+        let mut fut = Box::pin(run_with_heartbeat(
+            self.run_command_cancellable(
+                registry,
+                name,
+                argv,
+                Some(token.clone()),
+                Some(ran_under),
+            ),
             sink,
+            name,
             interval,
-            Some(token.clone()),
-            Some(ran_under),
         ));
         tokio::select! {
             biased;
@@ -1810,28 +1779,18 @@ impl McpSession {
             .collect()
     }
 
-    /// Return `job_id`'s state view, or an error if unknown.
+    /// Return `job_id`'s state view, first parking up to `budget` for the job to
+    /// become terminal.
     ///
-    /// # Errors
-    ///
-    /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when `job_id` is
-    /// not in the table.
-    pub fn job_status(&self, job_id: &str) -> Result<JobView, McpCommandError> {
-        let job = self.job(job_id)?;
-        Ok(Self::view(&job.lock().expect("job record poisoned")))
-    }
-
-    /// [`job_status`](Self::job_status), first parking up to `budget` for the job
-    /// to become terminal.
-    ///
-    /// A zero `budget` is the plain poll, byte-identical. The record is looked up
+    /// A zero `budget` is the plain poll. The record is looked up
     /// **once** and its `Arc` held across the wait, so a concurrent eviction
     /// cannot turn a job that settled during the wait into `"no such job"` under
     /// the waiter.
     ///
     /// # Errors
     ///
-    /// As [`job_status`](Self::job_status).
+    /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when `job_id` is
+    /// not in the table.
     pub async fn job_status_wait(
         &self,
         job_id: &str,
@@ -1842,20 +1801,7 @@ impl McpSession {
         Ok(Self::view(&job.lock().expect("job record poisoned")))
     }
 
-    /// Return a finished job's stdout, or the right failure envelope.
-    ///
-    /// # Errors
-    ///
-    /// [`McpCommandError`] when the id is unknown, the job is still running
-    /// (pointing the caller at `wait_seconds`), it failed (carrying its captured
-    /// stdout / error / exit code), or it was cancelled.
-    pub fn job_result(&self, job_id: &str) -> Result<String, McpCommandError> {
-        let job = self.job(job_id)?;
-        let job = job.lock().expect("job record poisoned");
-        result_of(job_id, &job)
-    }
-
-    /// [`job_result`](Self::job_result), first parking up to `budget` for the job
+    /// Return a finished job's stdout, first parking up to `budget` for the job
     /// to become terminal.
     ///
     /// A zero `budget` is the plain fetch. The wait is not a guarantee: a job
@@ -1867,7 +1813,9 @@ impl McpSession {
     ///
     /// # Errors
     ///
-    /// As [`job_result`](Self::job_result).
+    /// [`McpCommandError`] when the id is unknown, the job is still running
+    /// (pointing the caller at `wait_seconds`), it failed (carrying its captured
+    /// stdout / error / exit code), or it was cancelled.
     pub async fn job_result_wait(
         &self,
         job_id: &str,
@@ -2770,7 +2718,10 @@ mod tests {
             JobState::Done
         );
 
-        let err = sess.job_status("t-1").expect_err("the id was evicted");
+        let err = sess
+            .job_status_wait("t-1", Duration::ZERO)
+            .await
+            .expect_err("the id was evicted");
         assert!(err.stderr.contains("no such job"), "got: {err:?}");
     }
 
@@ -2832,7 +2783,8 @@ mod tests {
             .expect("the held record answers even though the id is gone");
         assert_eq!(view.state, JobState::Done);
         let err = sess
-            .job_status("held-1")
+            .job_status_wait("held-1", Duration::ZERO)
+            .await
             .expect_err("the id really is gone");
         assert!(err.stderr.contains("no such job"), "got: {err:?}");
     }
@@ -3370,19 +3322,37 @@ mod tests {
             .start_job(Arc::clone(&registry), "whoami", Vec::new())
             .expect("start_job succeeds");
         for _ in 0..500 {
-            if sess.job_status(&job_id).unwrap().state != JobState::Running {
+            if sess
+                .job_status_wait(&job_id, Duration::ZERO)
+                .await
+                .unwrap()
+                .state
+                != JobState::Running
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
+        assert_eq!(
+            sess.job_status_wait(&job_id, Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Done
+        );
 
         let msg = sess.job_cancel(&job_id).await.expect("cancel is a no-op");
         assert_eq!(msg, format!("job {job_id} already done; nothing to cancel"));
         // Not rewritten to Cancelled, and the result survives.
-        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
+        assert_eq!(
+            sess.job_status_wait(&job_id, Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Done
+        );
         assert!(
-            sess.job_result(&job_id).is_ok(),
+            sess.job_result_wait(&job_id, Duration::ZERO).await.is_ok(),
             "result survives the no-op"
         );
     }
@@ -3436,7 +3406,13 @@ mod tests {
             "cooperative cancel must not burn the grace: {:?}",
             before.elapsed()
         );
-        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Cancelled);
+        assert_eq!(
+            sess.job_status_wait(&job_id, Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Cancelled
+        );
     }
 
     /// A body that never checks the seam burns the full grace and is then
@@ -3485,8 +3461,17 @@ mod tests {
             msg.contains("forced abort"),
             "unobservant body must report the forced abort: {msg}"
         );
-        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Cancelled);
-        let err = sess.job_result(&job_id).expect_err("cancelled job raises");
+        assert_eq!(
+            sess.job_status_wait(&job_id, Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Cancelled
+        );
+        let err = sess
+            .job_result_wait(&job_id, Duration::ZERO)
+            .await
+            .expect_err("cancelled job raises");
         assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
 
         // Self-healing end-to-end: the hard abort skipped the exclusive path's
@@ -3526,7 +3511,13 @@ mod tests {
 
             let msg = sess.job_cancel(id).await.expect("terminal cancel is Ok");
             assert_eq!(msg, format!("job {id} already {state}; nothing to cancel"));
-            assert_eq!(sess.job_status(id).unwrap().state, state);
+            assert_eq!(
+                sess.job_status_wait(id, Duration::ZERO)
+                    .await
+                    .unwrap()
+                    .state,
+                state
+            );
         }
     }
 
@@ -3551,7 +3542,8 @@ mod tests {
         sess.jobs.lock().unwrap().insert("whoami-1".to_owned(), job);
 
         let err = sess
-            .job_result("whoami-1")
+            .job_result_wait("whoami-1", Duration::ZERO)
+            .await
             .expect_err("cancelled job raises on job_result");
         assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
         assert_eq!(err.exit_code, 1);
@@ -3818,12 +3810,24 @@ mod tests {
             .expect("start_jobs succeeds");
         assert_eq!(ids.len(), 1);
         for _ in 0..2000 {
-            if sess.job_status(&ids[0]).expect("job exists").state != JobState::Running {
+            if sess
+                .job_status_wait(&ids[0], Duration::ZERO)
+                .await
+                .expect("job exists")
+                .state
+                != JobState::Running
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
+        assert_eq!(
+            sess.job_status_wait(&ids[0], Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Done
+        );
         assert_eq!(
             *seen.lock().unwrap(),
             vec![Some(LOCK_RRID_A.to_owned())],
@@ -3878,12 +3882,24 @@ mod tests {
             .expect("start_jobs succeeds");
         assert_eq!(ids.len(), 1);
         for _ in 0..2000 {
-            if sess.job_status(&ids[0]).expect("job exists").state != JobState::Running {
+            if sess
+                .job_status_wait(&ids[0], Duration::ZERO)
+                .await
+                .expect("job exists")
+                .state
+                != JobState::Running
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
+        assert_eq!(
+            sess.job_status_wait(&ids[0], Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Done
+        );
         assert_eq!(*seen.lock().unwrap(), vec![None]);
         let jobs = sess.jobs.lock().unwrap();
         assert_eq!(jobs[&ids[0]].lock().unwrap().scope, CallScope::None);
@@ -4196,12 +4212,24 @@ mod tests {
         // runs its own unlock.
         gate.add_permits(1);
         for _ in 0..2000 {
-            if sess.job_status(&job_b).expect("job B exists").state != JobState::Running {
+            if sess
+                .job_status_wait(&job_b, Duration::ZERO)
+                .await
+                .expect("job B exists")
+                .state
+                != JobState::Running
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(sess.job_status(&job_b).unwrap().state, JobState::Done);
+        assert_eq!(
+            sess.job_status_wait(&job_b, Duration::ZERO)
+                .await
+                .unwrap()
+                .state,
+            JobState::Done
+        );
         assert!(saw_unlock(&beta), "job B never released its own lock");
     }
 
@@ -5812,6 +5840,63 @@ mod tests {
         let mut sorted = values.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert_eq!(values, sorted, "progress monotonic: {values:?}");
+    }
+
+    /// A slow dispatch heart-beats through both progress entrypoints.
+    #[tokio::test]
+    async fn slow_dispatches_heartbeat_through_both_progress_entrypoints() {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        struct Slow;
+        #[async_trait::async_trait]
+        impl Command for Slow {
+            fn name(&self) -> &'static str {
+                "slow_progress_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                Ok(())
+            }
+        }
+        let mut registry = Registry::new();
+        registry.register(Arc::new(Slow));
+        let sess = session(Config::default());
+        let interval = Duration::from_millis(20);
+
+        let sink = RecordingSink::default();
+        sess.run_command_with_progress(
+            &registry,
+            "slow_progress_probe",
+            &[],
+            Some(&sink),
+            interval,
+            None,
+        )
+        .await
+        .expect("slow probe succeeds");
+        assert!(!sink.calls().is_empty(), "run_command_with_progress beats");
+
+        let sink = RecordingSink::default();
+        let outcome = sess
+            .run_command_client_cancellable(
+                &registry,
+                "slow_progress_probe",
+                &[],
+                Some(&sink),
+                interval,
+                &CancellationToken::new(),
+                None,
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Completed(Ok(_))));
+        assert!(
+            !sink.calls().is_empty(),
+            "run_command_client_cancellable beats"
+        );
     }
 
     /// A future finishing well inside the interval fires zero frames.

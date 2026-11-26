@@ -83,7 +83,11 @@ async fn session_with_hosts() -> (Arc<McpSession>, TempDir) {
 /// Awaits a job's terminal state, polling as the worker records it.
 async fn await_terminal(session: &McpSession, job_id: &str) -> JobState {
     for _ in 0..1000 {
-        let state = session.job_status(job_id).expect("job exists").state;
+        let state = session
+            .job_status_wait(job_id, Duration::ZERO)
+            .await
+            .expect("job exists")
+            .state;
         if state != JobState::Running {
             return state;
         }
@@ -145,7 +149,8 @@ async fn backgrounded_success_returns_the_hosts_it_ran_over() {
             "{name}"
         );
         let out = sess
-            .job_result(&job_id)
+            .job_result_wait(&job_id, Duration::ZERO)
+            .await
             .unwrap_or_else(|e| panic!("{name} job_result: {e:?}"));
         assert!(!out.trim().is_empty(), "{name} job yielded no text");
         assert!(

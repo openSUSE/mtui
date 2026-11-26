@@ -44,8 +44,8 @@ async fn factory_mints_distinct_sessions() {
     );
 }
 
-/// Each session's capture sink is independent: output produced on one session is
-/// never observable through another's sink.
+/// Each call captures only its own output: a run on one session never shows up in
+/// another session's result.
 #[tokio::test]
 async fn sessions_capture_output_independently() {
     let reg = registry("carol");
@@ -63,12 +63,11 @@ async fn sessions_capture_output_independently() {
         "a produced output: {out_a:?}"
     );
 
-    // b never ran a command, so its sink is empty — a's output did not leak.
-    assert_eq!(
-        b.output().take(),
-        "",
-        "b's sink must be untouched by a's run"
-    );
+    let out_b = b
+        .run_command(&cmds, "whoami", &[])
+        .await
+        .expect("whoami on b");
+    assert_eq!(out_b, out_a, "b's result must not carry a's earlier output");
 }
 
 /// Sessions minted from different registries carry their **own** config clone:
@@ -153,7 +152,11 @@ async fn sessions_keep_job_isolation() {
 
     async fn await_terminal(session: &McpSession, job_id: &str) -> JobState {
         for _ in 0..500 {
-            let state = session.job_status(job_id).expect("job exists").state;
+            let state = session
+                .job_status_wait(job_id, Duration::ZERO)
+                .await
+                .expect("job exists")
+                .state;
             if state != JobState::Running {
                 return state;
             }
@@ -176,12 +179,13 @@ async fn sessions_keep_job_isolation() {
     assert_eq!(await_terminal(&a, &job_id).await, JobState::Done);
     // Same session, later call: the job resolves.
     assert!(
-        a.job_status(&job_id).is_ok(),
+        a.job_status_wait(&job_id, Duration::ZERO).await.is_ok(),
         "job_status must resolve across calls in the same session"
     );
     // Sibling session: unknown.
     let err = b
-        .job_status(&job_id)
+        .job_status_wait(&job_id, Duration::ZERO)
+        .await
         .expect_err("sibling must not see the job");
     assert!(err.stderr.contains("no such job"), "got: {err:?}");
     let err = b
