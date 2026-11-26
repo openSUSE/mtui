@@ -47,6 +47,34 @@ pub(crate) struct CrushOutcome<T> {
     pub anomaly_total: usize,
 }
 
+impl<T> CrushOutcome<T> {
+    /// [`row_notice`] for a real row-budget cut, `None` when nothing was dropped.
+    pub(crate) fn notice(&self, hint: &str) -> Option<String> {
+        (self.truncated > 0).then(|| {
+            row_notice(
+                self.truncated,
+                self.total,
+                self.anomaly_kept,
+                self.anomaly_total,
+                hint,
+            )
+        })
+    }
+
+    /// [`truncation_meta`] for a real row-budget cut, `None` when nothing was dropped.
+    pub(crate) fn meta(&self, hint: &str) -> Option<Value> {
+        (self.truncated > 0).then(|| {
+            truncation_meta(
+                self.truncated,
+                self.total,
+                self.anomaly_kept,
+                self.anomaly_total,
+                hint,
+            )
+        })
+    }
+}
+
 /// Crush `items` to budget, preserving order.
 ///
 /// Exact-dedups on `key`, then keeps head + tail + top-severity middle
@@ -105,61 +133,17 @@ pub(crate) fn crush<T, K: Eq + Hash>(
     )
 }
 
-/// Crush `items` to budget, preserving order.
-///
-/// Exact-dedups on `key`, then keeps head + tail + top-severity middle
-/// anomalies up to [`ROW_CAP`].
-/// Borrowed twin for already-owned data (openQA overview): same keep, no bulk clone.
+/// [`crush`] over borrowed rows: same keep, no bulk clone of already-owned data
+/// (openQA overview).
 pub(crate) fn crush_slice<'a, T, K: Eq + Hash>(
     items: &'a [T],
     mut key_of: impl FnMut(&'a T) -> K,
     mut severity_of: impl FnMut(&'a T) -> u8,
 ) -> CrushOutcome<&'a T> {
-    let mut seen = HashSet::new();
-    let mut uniq: Vec<&'a T> = Vec::new();
-    for it in items {
-        if seen.insert(key_of(it)) {
-            uniq.push(it);
-        }
-    }
-    let total = uniq.len();
-    if total <= ROW_CAP {
-        let n = uniq.iter().filter(|it| severity_of(it) > 0).count();
-        return CrushOutcome {
-            kept: uniq,
-            total,
-            truncated: 0,
-            anomaly_kept: n,
-            anomaly_total: n,
-        };
-    }
-    let tail_start = total - ROW_TAIL;
-    let head_anomalies = uniq[..ROW_HEAD]
-        .iter()
-        .filter(|it| severity_of(it) > 0)
-        .count();
-    let tail_anomalies = uniq[tail_start..]
-        .iter()
-        .filter(|it| severity_of(it) > 0)
-        .count();
-    let mut scored: Vec<(u8, usize)> = (ROW_HEAD..tail_start)
-        .map(|i| (severity_of(uniq[i]), i))
-        .filter(|(s, _)| *s > 0)
-        .collect();
-    let middle_total = scored.len();
-    let anomaly_total = head_anomalies + middle_total + tail_anomalies;
-    scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
-    scored.truncate(ROW_CAP - ROW_HEAD - ROW_TAIL);
-    let middle_kept = scored.len();
-    let anomaly_kept = head_anomalies + middle_kept + tail_anomalies;
-    let anomaly_idx: Vec<usize> = scored.into_iter().map(|(_, i)| i).collect();
-    keep_head_anomaly_tail(
-        uniq,
-        anomaly_idx,
-        tail_start,
-        total,
-        anomaly_kept,
-        anomaly_total,
+    crush(
+        items.iter().collect(),
+        |it| key_of(it),
+        |it| severity_of(it),
     )
 }
 
@@ -446,6 +430,27 @@ mod tests {
         let v = truncation_meta(90, 150, 5, 60, "--limit");
         assert_eq!(v["anomaly_kept"], 5);
         assert_eq!(v["anomaly_total"], 60);
+    }
+
+    #[test]
+    fn outcome_notice_and_meta_exist_only_for_a_real_cut() {
+        let under = crush((0..100).collect::<Vec<usize>>(), |v| *v, |_| 0);
+        assert!(under.notice("--limit").is_none());
+        assert!(under.meta("--limit").is_none());
+
+        let over = crush(
+            (0..150).collect::<Vec<usize>>(),
+            |v| *v,
+            |v| u8::from(*v == 50),
+        );
+        assert_eq!(
+            over.notice("--limit").as_deref(),
+            Some(row_notice(over.truncated, over.total, 1, 1, "--limit").as_str())
+        );
+        assert_eq!(
+            over.meta("--limit"),
+            Some(truncation_meta(over.truncated, over.total, 1, 1, "--limit"))
+        );
     }
 
     #[test]
