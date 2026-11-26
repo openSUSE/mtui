@@ -515,8 +515,9 @@ fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::support::{build_auto_openqa, build_incident};
     use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
+    use mtui_datasources::QemDashboardClient;
+    use mtui_datasources::qem_dashboard::incident::QemIncident;
     use wiremock::MockServer;
 
     /// Marks the overview as already fetched, so `export` does not reach the
@@ -634,10 +635,10 @@ mod tests {
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         let openqa_transport = HttpClient::openqa_transport(VerifyPolicy::Default(false)).unwrap();
-        let incident = build_incident(
+        let client = QemDashboardClient::with_client(http.clone(), format!("{}/api", oqa.uri()));
+        let incident = QemIncident::with_client(
             rrid.clone(),
-            format!("{}/api", oqa.uri()),
-            http.clone(),
+            client,
             session.metadata().update_source(),
             None,
         )
@@ -982,22 +983,11 @@ mod tests {
         record_versions(&mut session, "h1");
 
         let rrid = session.metadata().rrid().unwrap().clone();
-        let http = session.http_client().unwrap();
-        let incident = build_incident(
-            rrid.clone(),
-            format!("{}/api", server.uri()),
-            http,
-            session.metadata().update_source(),
-            None,
-        )
-        .await;
-        let max_parallel = session.config.max_parallel as usize;
-        session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
-            server.uri(),
-            &incident,
-            rrid,
-            max_parallel,
-        ));
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        let ctx = OpenqaCtx::snapshot(&session, rrid).unwrap();
+        let incident = ctx.incident().await;
+        session.metadata_mut().openqa_mut().auto = Some(ctx.auto(&incident));
 
         // A rebuild would still succeed (errors are folded away), so the
         // assertion is that the pre-seeded result survives.

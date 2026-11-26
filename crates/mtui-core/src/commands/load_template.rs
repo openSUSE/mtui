@@ -139,12 +139,9 @@ impl Command for LoadTemplate {
         ) {
             (Some(rrid), None) => (rrid, UpdateKind::Auto),
             (None, Some(rrid)) => (rrid, UpdateKind::Kernel),
-            // Unreachable: the ArgGroup guarantees exactly one is set.
-            _ => {
-                return Err(CommandError::Other(
-                    "load_template requires exactly one of -a/-k".to_owned(),
-                ));
-            }
+            _ => unreachable!(
+                "the required, exclusive `review_id` ArgGroup admits exactly one of -a/-k"
+            ),
         };
 
         let update = UpdateID::parse(rrid)

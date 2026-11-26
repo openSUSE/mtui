@@ -219,7 +219,7 @@ fn print_workflow(session: &mut Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::support::{build_incident, build_kernel_openqa};
+    use crate::commands::support::build_kernel_openqa;
     use crate::commands::testkit::{empty_session, fake_report, matches, session_with_hosts};
     use std::sync::{Arc, Mutex};
 
@@ -464,17 +464,14 @@ mod tests {
         point_at(&mut session, &server);
         // Pre-seeded to prove it gets cleared.
         let rrid = session.metadata().rrid().unwrap().clone();
-        let dashboard_api = session.config.qem_dashboard_api.clone();
-        let host = session.config.openqa_instance.clone();
-        let http = session.http_client().unwrap();
-        let source = session.metadata().update_source();
-        let incident = build_incident(rrid, dashboard_api, http.clone(), source, None).await;
+        let ctx = OpenqaCtx::snapshot(&session, rrid).unwrap();
+        let incident = ctx.incident().await;
         let openqa_transport = session.openqa_transport().unwrap();
         session
             .metadata_mut()
             .openqa_mut()
             .kernel
-            .push(build_kernel_openqa(&incident, &host, openqa_transport).unwrap());
+            .push(build_kernel_openqa(&incident, &ctx.openqa_instance, openqa_transport).unwrap());
 
         let args = matches(&SetWorkflow, &["manual"]);
         SetWorkflow.call(&mut session, &args).await.unwrap();
