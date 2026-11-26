@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use ssh_key::{HashAlg, PublicKey, Signature};
 
+use crate::clock::unix_now;
 use crate::obs::client::ObsAuth;
 use crate::obs::errors::ObsError;
 use crate::obs::sshsig;
@@ -27,17 +28,6 @@ use crate::sshsig::Signer;
 /// The [`Signer`] context label for the native OBS backend's fail-closed
 /// hints ("… {context} never prompts for a passphrase").
 const CONTEXT: &str = "the native OBS backend";
-
-/// The current wall-clock Unix timestamp, seamed for deterministic tests.
-///
-/// A signed `i64` matches `chrono`'s epoch type used elsewhere in the crate.
-fn now_unix() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
-}
 
 /// A minimal ssh-agent surface: list public identities and sign raw bytes.
 ///
@@ -161,7 +151,7 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
     /// Returns [`ObsError::Config`] for any unresolvable key/agent case
     /// (fail-closed; never prompts for a passphrase).
     pub async fn authorization(&self, realm: &str) -> Result<String, ObsError> {
-        let created = now_unix();
+        let created = unix_now();
         let blob = self.sign(realm, created).await?;
         Ok(format!(
             "Signature keyId=\"{}\",algorithm=\"ssh\",headers=\"(created)\",created={created},signature=\"{blob}\"",

@@ -325,7 +325,7 @@ async fn userinfo_in_base_never_reaches_the_write_retry_error() {
     .with_store(Some(TokenStore::at(store_file)));
     let url = format!("{}/schema", server.uri());
     let err = auth
-        .authenticated_request(reqwest::Method::GET, &url)
+        .authenticated_request_with(reqwest::Method::GET, &url, |b| b)
         .await
         .expect_err("a second 401 is surfaced as an error");
     let TeregenAuthError::Unauthorized { base, stage, .. } = &err else {
@@ -412,6 +412,59 @@ async fn verify_200_missing_token_is_protocol_and_does_not_cache() {
     assert!(!store_file.exists(), "nothing should have been cached");
 }
 
+/// A `200` body that is not JSON, or lacks the field, names which endpoint
+/// answered and what was missing.
+#[tokio::test]
+async fn a_200_without_the_expected_field_names_the_endpoint() {
+    let (_dir, store_file) = store_path();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/challenge"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>"))
+        .mount(&server)
+        .await;
+    let err = auth_for(&server, store_file.clone())
+        .challenge()
+        .await
+        .expect_err("not JSON");
+    assert!(
+        matches!(&err, TeregenAuthError::Protocol(m) if m.starts_with("challenge response is not JSON: ")),
+        "{err:?}"
+    );
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/challenge"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    let err = auth_for(&server, store_file.clone())
+        .challenge()
+        .await
+        .expect_err("no nonce");
+    assert!(
+        matches!(&err, TeregenAuthError::Protocol(m) if m == "challenge response is missing 'nonce'"),
+        "{err:?}"
+    );
+
+    let server = MockServer::start().await;
+    mount_challenge_200(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/ssh/verify"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>"))
+        .mount(&server)
+        .await;
+    let err = auth_for(&server, store_file)
+        .token()
+        .await
+        .expect_err("not JSON");
+    assert!(
+        matches!(&err, TeregenAuthError::Protocol(m) if m.starts_with("verify response is not JSON: ")),
+        "{err:?}"
+    );
+}
+
 /// 10. A second `token()` call is a cache hit: zero additional HTTP.
 #[tokio::test]
 async fn second_token_call_is_a_cache_hit() {
@@ -472,7 +525,7 @@ async fn logs_never_contain_token_signature_or_authorization() {
     );
 }
 
-/// 11 (continued). The `authenticated_request` re-mint dance (case 8) never
+/// 11 (continued). The `authenticated_request_with` re-mint dance (case 8) never
 /// logs the bearer token either — its own request carries an `Authorization`
 /// header at the transport level, which the shared HTTP layer never traces.
 #[tokio::test]
@@ -504,7 +557,7 @@ async fn logs_never_contain_the_bearer_token_across_a_remint() {
     auth.token().await.expect("initial mint");
     let url = format!("{}/schema", server.uri());
     let logs = capture_logs(|| async {
-        auth.authenticated_request(reqwest::Method::GET, &url)
+        auth.authenticated_request_with(reqwest::Method::GET, &url, |b| b)
             .await
             .expect("succeeds after one re-mint");
     })
@@ -553,7 +606,7 @@ async fn authenticated_request_remints_once_and_succeeds() {
 
     let url = format!("{}/schema", server.uri());
     let response = auth
-        .authenticated_request(reqwest::Method::GET, &url)
+        .authenticated_request_with(reqwest::Method::GET, &url, |b| b)
         .await
         .expect("succeeds after one re-mint");
     assert_eq!(response.status(), 200);
@@ -601,7 +654,7 @@ async fn authenticated_request_does_not_retry_a_second_401() {
 
     let url = format!("{}/schema", server.uri());
     let err = auth
-        .authenticated_request(reqwest::Method::GET, &url)
+        .authenticated_request_with(reqwest::Method::GET, &url, |b| b)
         .await
         .expect_err("a second 401 is surfaced as an error");
     assert!(matches!(err, TeregenAuthError::Unauthorized { .. }));
@@ -747,7 +800,7 @@ async fn write_retry_401_names_the_cause_teregen_reports() {
 
         let url = format!("{}/schema", server.uri());
         let err = auth_for(&server, store_file)
-            .authenticated_request(reqwest::Method::GET, &url)
+            .authenticated_request_with(reqwest::Method::GET, &url, |b| b)
             .await
             .expect_err("a second 401 is surfaced");
         let TeregenAuthError::Unauthorized {
@@ -791,7 +844,7 @@ async fn bearer_requests_ask_for_json() {
 
     let url = format!("{}/schema", server.uri());
     let response = auth_for(&server, store_file)
-        .authenticated_request(reqwest::Method::GET, &url)
+        .authenticated_request_with(reqwest::Method::GET, &url, |b| b)
         .await
         .expect("request goes through");
     assert_eq!(response.status().as_u16(), 200);

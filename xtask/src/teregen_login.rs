@@ -138,7 +138,7 @@ pub async fn run(args: &LoginArgs, verify: VerifyPolicy) -> Result<()> {
     if args.probe {
         let schema_url = format!("{}/schema", args.base);
         match auth
-            .authenticated_request(reqwest::Method::GET, &schema_url)
+            .authenticated_request_with(reqwest::Method::GET, &schema_url, |b| b)
             .await
         {
             Ok(response) => println!("probe:        GET /schema -> {}", response.status()),

@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::clock::now_rfc3339;
 use crate::error::HttpError;
 use crate::http::{HttpClient, MAX_API_BODY, read_body_capped, sanitize_url};
 use crate::obs::auth::{AgentKeys, RusshAgent};
@@ -143,6 +144,19 @@ async fn read_hint(response: reqwest::Response) -> Option<AuthHint> {
     AuthHint::parse(value.get("hint")?.as_str()?)
 }
 
+/// The string `field` of a `200` auth response's JSON body, `None` when it is
+/// absent or not a string. `what` names the endpoint in the not-JSON error.
+async fn str_field(
+    response: reqwest::Response,
+    what: &str,
+    field: &str,
+) -> Result<Option<String>, TeregenAuthError> {
+    let bytes = read_body_capped(response, MAX_API_BODY).await?;
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| TeregenAuthError::Protocol(format!("{what} response is not JSON: {e}")))?;
+    Ok(value.get(field).and_then(Value::as_str).map(str::to_owned))
+}
+
 /// Which request a [`TeregenAuthError::Unauthorized`] answers for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -228,22 +242,6 @@ fn is_valid_nonce(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-/// The current instant as an RFC3339 UTC timestamp, informational only (see
-/// [`CachedToken::minted_at`]).
-///
-/// The workspace pins `chrono` without the `clock` feature (single-static-
-/// binary contract), so "now" comes from [`std::time::SystemTime`] rather than
-/// `chrono::Utc::now()` — the same pattern as `oqa_search::current_utc_date`.
-fn now_rfc3339() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    chrono::DateTime::from_timestamp(secs as i64, 0)
-        .unwrap_or_default()
-        .to_rfc3339()
 }
 
 /// SSH-signature bearer-token auth for teregen's `/api/v2`.
@@ -391,32 +389,16 @@ impl<A: AgentKeys> TeregenAuth<A> {
             "teregen auth: requesting a challenge at {}",
             sanitize_url(&url)
         );
-        let body = json!({ "username": self.principal });
         let response = self
-            .http
-            .inner()
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(HttpError::from)?;
+            .post_json(&url, &json!({ "username": self.principal }))
+            .await?;
 
         match response.status().as_u16() {
-            200 => {
-                let bytes = read_body_capped(response, MAX_API_BODY).await?;
-                let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
-                    TeregenAuthError::Protocol(format!("challenge response is not JSON: {e}"))
-                })?;
-                value
-                    .get("nonce")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        TeregenAuthError::Protocol(
-                            "challenge response is missing 'nonce'".to_owned(),
-                        )
-                    })
-            }
+            200 => str_field(response, "challenge", "nonce")
+                .await?
+                .ok_or_else(|| {
+                    TeregenAuthError::Protocol("challenge response is missing 'nonce'".to_owned())
+                }),
             429 => Err(TeregenAuthError::RateLimited),
             400 => Err(TeregenAuthError::Protocol(
                 "teregen auth challenge request was refused (400)".to_owned(),
@@ -468,45 +450,20 @@ impl<A: AgentKeys> TeregenAuth<A> {
             "nonce": nonce,
             "signature": armored,
         });
-        let response = self
-            .http
-            .inner()
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(HttpError::from)?;
+        let response = self.post_json(&url, &body).await?;
 
         match response.status().as_u16() {
-            200 => {
-                let bytes = read_body_capped(response, MAX_API_BODY).await?;
-                let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
-                    TeregenAuthError::Protocol(format!("verify response is not JSON: {e}"))
-                })?;
-                value
-                    .get("token")
-                    .and_then(Value::as_str)
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        TeregenAuthError::Protocol(
-                            "verify response is missing a non-empty 'token'".to_owned(),
-                        )
-                    })
-            }
-            401 => {
-                let server_hint = read_hint(response).await;
-                Err(TeregenAuthError::Unauthorized {
-                    principal: self.principal.clone(),
-                    key: self.signed_key(),
-                    stage: AuthStage::Verify,
-                    base: sanitize_url(&self.base),
-                    hint: server_hint
-                        .map_or(UNAUTHORIZED_HINT, AuthHint::explanation)
-                        .to_owned(),
-                    server_hint,
-                })
-            }
+            200 => str_field(response, "verify", "token")
+                .await?
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| {
+                    TeregenAuthError::Protocol(
+                        "verify response is missing a non-empty 'token'".to_owned(),
+                    )
+                }),
+            401 => Err(self
+                .unauthorized(response, AuthStage::Verify, UNAUTHORIZED_HINT)
+                .await),
             400 => Err(TeregenAuthError::Protocol(
                 "teregen auth verify request was refused (400)".to_owned(),
             )),
@@ -593,7 +550,9 @@ impl<A: AgentKeys> TeregenAuth<A> {
         }
     }
 
-    /// Send `method url` with `Authorization: Bearer <token>` attached.
+    /// Send `method url` with `Authorization: Bearer <token>` attached, after
+    /// `customize` has run on the request builder — e.g. to attach a body and
+    /// extra headers for a `PUT`.
     ///
     /// On a `401`, [`invalidate`](Self::invalidate)s the cached token, mints
     /// once, and retries **once** more. A second `401` (or any other error) is
@@ -601,24 +560,7 @@ impl<A: AgentKeys> TeregenAuth<A> {
     /// "resent exactly once" rule, and matters because the challenge endpoint
     /// is rate-limited and a mint costs an ssh-agent round trip, so a retry
     /// loop against a genuinely unauthorised principal would burn the rate
-    /// budget in under a second (P2-D6). Phase 3/5's v2 client is the intended
-    /// caller; this is the one place that dance lives.
-    ///
-    /// # Errors
-    ///
-    /// See [`token`](Self::token); a transport failure on either attempt
-    /// surfaces as [`TeregenAuthError::Transport`].
-    pub async fn authenticated_request(
-        &self,
-        method: reqwest::Method,
-        url: &str,
-    ) -> Result<reqwest::Response, TeregenAuthError> {
-        self.authenticated_request_with(method, url, |b| b).await
-    }
-
-    /// Like [`authenticated_request`](Self::authenticated_request), but
-    /// `customize` runs on the request builder before it is sent — e.g. to
-    /// attach a body and extra headers for a `PUT` (Phase 5's write path).
+    /// budget in under a second (P2-D6).
     ///
     /// `customize` is `Fn`, not `FnOnce`: it is applied identically on the
     /// first attempt and again on the re-mint resend, so a `PUT`'s body and
@@ -631,7 +573,8 @@ impl<A: AgentKeys> TeregenAuth<A> {
     ///
     /// # Errors
     ///
-    /// See [`authenticated_request`](Self::authenticated_request).
+    /// See [`token`](Self::token); a transport failure on either attempt
+    /// surfaces as [`TeregenAuthError::Transport`].
     pub async fn authenticated_request_with<F>(
         &self,
         method: reqwest::Method,
@@ -653,19 +596,47 @@ impl<A: AgentKeys> TeregenAuth<A> {
         let token = self.token().await?;
         let response = self.bearer_request(method, url, &token, &customize).await?;
         if response.status().as_u16() == 401 {
-            let server_hint = read_hint(response).await;
-            return Err(TeregenAuthError::Unauthorized {
-                principal: self.principal.clone(),
-                key: self.signed_key(),
-                stage: AuthStage::WriteRetry,
-                base: sanitize_url(&self.base),
-                hint: server_hint
-                    .map_or(WRITE_AFTER_REMINT_HINT, AuthHint::explanation)
-                    .to_owned(),
-                server_hint,
-            });
+            return Err(self
+                .unauthorized(response, AuthStage::WriteRetry, WRITE_AFTER_REMINT_HINT)
+                .await);
         }
         Ok(response)
+    }
+
+    async fn post_json(
+        &self,
+        url: &str,
+        body: &Value,
+    ) -> Result<reqwest::Response, TeregenAuthError> {
+        Ok(self
+            .http
+            .inner()
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(HttpError::from)?)
+    }
+
+    /// The refusal for a `401` `response`, explained by the server's known
+    /// hint or else by `fallback_hint`.
+    async fn unauthorized(
+        &self,
+        response: reqwest::Response,
+        stage: AuthStage,
+        fallback_hint: &'static str,
+    ) -> TeregenAuthError {
+        let server_hint = read_hint(response).await;
+        TeregenAuthError::Unauthorized {
+            principal: self.principal.clone(),
+            key: self.signed_key(),
+            stage,
+            base: sanitize_url(&self.base),
+            hint: server_hint
+                .map_or(fallback_hint, AuthHint::explanation)
+                .to_owned(),
+            server_hint,
+        }
     }
 
     /// Send one bearer-authenticated request, with no retry logic of its own.

@@ -5,6 +5,7 @@
 //! client with a unified timeout and TLS-verify posture that every client in
 //! this crate builds on.
 
+mod clock;
 pub mod error;
 pub mod gitea;
 pub mod http;
