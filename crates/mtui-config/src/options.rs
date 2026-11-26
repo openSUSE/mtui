@@ -1616,13 +1616,13 @@ mod tests {
     /// order, and an empty document changes nothing.
     #[test]
     fn merge_overrides_every_option() {
-        let mut ab = parse(FULL_A);
-        ab.merge(parse(FULL_B));
-        assert_eq!(render(Config::from_raw(ab)), FULL_B_GOLDEN);
+        let mut a_then_b = parse(FULL_A);
+        a_then_b.merge(parse(FULL_B));
+        assert_eq!(render(Config::from_raw(a_then_b)), FULL_B_GOLDEN);
 
-        let mut ba = parse(FULL_B);
-        ba.merge(parse(FULL_A));
-        assert_eq!(render(Config::from_raw(ba)), FULL_A_GOLDEN);
+        let mut b_then_a = parse(FULL_B);
+        b_then_a.merge(parse(FULL_A));
+        assert_eq!(render(Config::from_raw(b_then_a)), FULL_A_GOLDEN);
 
         let mut a = parse(FULL_A);
         a.merge(RawConfig::default());
