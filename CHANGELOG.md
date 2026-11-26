@@ -27,7 +27,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   line for each operation lock or pool claim the session still holds after the
   close (the link was down, the release failed, or the teardown was
   abandoned), with how it goes away, or that it now belongs to another owner
-  and is left to it; for the update's repositories when the
+  and the close did not release it; for the update's repositories when the
   session's last repository change on that host was an add; and for packages
   the session's `install` put there that no later `uninstall` removed. The
   teardown itself is still never refused, and the check runs nothing on the
