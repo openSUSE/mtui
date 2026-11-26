@@ -1172,6 +1172,32 @@ impl McpSession {
         }
     }
 
+    /// A fresh capture buffer, bounded to the session's output budget, and the
+    /// display writing into it.
+    pub(crate) fn call_display(&self) -> (CommandPromptDisplay, SharedBuf) {
+        let buf = SharedBuf::with_limit(self.max_output_bytes);
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        (display, buf)
+    }
+
+    /// A per-call fork of `canonical` writing to `display`, with `cancel`
+    /// installed as its token.
+    ///
+    /// Installed **unconditionally**, never inherited: a hard-aborted exclusive
+    /// dispatch can leave a cancelled token on the canonical session (its
+    /// restore is skipped when the worker future is dropped), and a fork
+    /// inheriting that would die at its own pre-flight check.
+    pub(crate) fn call_fork(
+        &self,
+        canonical: &Session,
+        display: CommandPromptDisplay,
+        cancel: CancellationToken,
+    ) -> Session {
+        let mut fork = canonical.fork_for_call(display);
+        fork.set_cancel_token(cancel);
+        fork
+    }
+
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive: `name`/`argv` go through the **same**
@@ -1220,11 +1246,8 @@ impl McpSession {
         let lock = self.command_lock(registry, name, argv).await;
 
         // Per-call output isolation: its own capture buffer + display, so two
-        // overlapping calls never clobber each other's stdout. Bounded to the
-        // same budget as the session-wide sink.
-        let call_buf = SharedBuf::with_limit(self.max_output_bytes);
-        let call_display =
-            CommandPromptDisplay::with_sink(Box::new(call_buf.clone()), ColorMode::Never);
+        // overlapping calls never clobber each other's stdout.
+        let (call_display, call_buf) = self.call_display();
 
         let result = match &lock {
             // Concurrent path. The fork *shares* the reports' per-entry locks, so
@@ -1251,14 +1274,8 @@ impl McpSession {
                     .clone();
                 let mut call_session = {
                     let session = self.session.lock().await;
-                    session.fork_for_call(call_display)
+                    self.call_fork(&session, call_display, cancel.clone().unwrap_or_default())
                 };
-                // Installed **unconditionally**, never inherited: a hard-aborted
-                // exclusive dispatch can leave a cancelled token on the canonical
-                // session (its restore is skipped when the worker future is
-                // dropped), and a fork inheriting that would die at its own
-                // pre-flight check.
-                call_session.set_cancel_token(cancel.clone().unwrap_or_default());
                 record_scope(ran_under, || {
                     call_scope(registry, &call_session, name, argv)
                 });
