@@ -11,7 +11,7 @@ use super::{Req, Verdict};
 
 /// Grouped by the source of a result (`testing`).
 ///
-/// Schema-**open** (`additionalProperties: true`, P1-D2): `extra` preserves
+/// Schema-**open** (`additionalProperties: true`): `extra` preserves
 /// any key beyond the three named ones, since dropping it would discard
 /// schema-legal server data on the next `PUT`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -46,13 +46,13 @@ pub struct Openqa {
 pub struct OpenqaInstall {
     /// Failed unless every job passed or softfailed, counting jobs that never
     /// ran. Lowercase `passed`/`failed` vocabulary — distinct from the tester
-    /// [`Verdict`] (P1-D4).
+    /// [`Verdict`].
     pub verdict: Req<OpenqaVerdict>,
     pub jobs: Vec<OpenqaJob>,
 }
 
 /// openQA's own verdict vocabulary (`passed`/`failed`), distinct from the
-/// tester-facing [`Verdict`] (`PASSED`/`FAILED`) — see P1-D4.
+/// tester-facing [`Verdict`] (`PASSED`/`FAILED`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenqaVerdict {

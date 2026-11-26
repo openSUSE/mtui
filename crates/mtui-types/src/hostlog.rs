@@ -22,18 +22,15 @@ pub struct CommandLog {
     /// The command's exit code.
     ///
     /// A genuine POSIX exit code is 0–255; negative values are sentinels for
-    /// "no exit code" (e.g. the command was killed by a signal or timed out),
-    /// with `-1` as the convention. `i16` covers both ranges without the width
-    /// of a C `int`.
+    /// "no exit code" (killed by a signal, timed out), with `-1` the convention.
     pub exitcode: i16,
     /// The command's runtime, in seconds.
     pub runtime: i64,
     /// Whether the captured `stdout`/`stderr` was truncated because the command
     /// exceeded the connection layer's output byte caps.
     ///
-    /// `false` for every non-SSH producer (mocks, synthesised logs); only
-    /// [`mtui-hosts`](../../mtui_hosts)' bounded capture sets it, and then the
-    /// fields hold the capped prefix — the overflow was discarded, not buffered.
+    /// `false` for every non-SSH producer; only [`mtui-hosts`](../../mtui_hosts)'
+    /// bounded capture sets it, and then the fields hold the capped prefix.
     pub truncated: bool,
     /// Whether the command was aborted because it hit the connection layer's
     /// absolute execution deadline (as opposed to completing on its own).
@@ -66,9 +63,8 @@ impl CommandLog {
     }
 
     /// Sets the [`truncated`](Self::truncated) / [`timed_out`](Self::timed_out)
-    /// flags, returning the updated log — the SSH `run` path records capping and
-    /// deadline aborts here rather than in [`new`](Self::new)'s signature, which
-    /// the many callers that can do neither would have to carry.
+    /// flags, returning the updated log; the SSH `run` path records capping and
+    /// deadline aborts here so [`new`](Self::new) stays small.
     #[must_use]
     pub fn with_flags(mut self, truncated: bool, timed_out: bool) -> Self {
         self.truncated = truncated;
