@@ -202,6 +202,7 @@ where
 pub struct TeReGen {
     base: String,
     http: HttpClient,
+    smelt_backed_timeout: Duration,
 }
 
 impl std::fmt::Debug for TeReGen {
@@ -234,6 +235,7 @@ impl TeReGen {
         Self {
             base: apiurl.trim_end_matches('/').to_string(),
             http,
+            smelt_backed_timeout: SMELT_BACKED_TIMEOUT,
         }
     }
 
@@ -258,7 +260,8 @@ impl TeReGen {
             .http
             .patient()
             .map_err(|e| TeReGenError::Fetch(e.to_string()))?;
-        self.fetch(client, SMELT_BACKED_TIMEOUT, path, query).await
+        self.fetch(client, self.smelt_backed_timeout, path, query)
+            .await
     }
 
     async fn fetch(
@@ -681,17 +684,19 @@ mod tests {
         assert!(SMELT_BACKED_TIMEOUT >= Duration::from_secs(55));
     }
 
-    /// A SMELT-backed read gives up after exactly [`SMELT_BACKED_TIMEOUT`]: the
-    /// patient read timeout is set longer here, so only the request's own
-    /// timeout can end the wait at that mark.
+    /// A SMELT-backed read is ended by its own timeout: the patient read
+    /// timeout and the reply are both far later than the budget set here.
     #[tokio::test]
     async fn smelt_backed_reads_give_up_after_the_smelt_backed_timeout() {
-        // Unpooled: virtual time can give up before the request lands, and a
-        // pooled server would hand it to the next test's mock.
+        // Unpooled: the abandoned request must not reach another test's mock.
         let server = MockServer::builder().start().await;
         Mock::given(method("GET"))
             .and(path(checkers_path()))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3600)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({}))
+                    .set_delay(Duration::from_secs(3)),
+            )
             .mount(&server)
             .await;
         let http = HttpClient::with_read_timeouts(
@@ -700,19 +705,13 @@ mod tests {
             Duration::from_secs(600),
         )
         .unwrap();
-        // Connect in real time first: under a paused clock the connect timeout
-        // can fire before a loopback connect completes.
-        http.inner().get(server.uri()).send().await.unwrap();
-        tokio::time::pause();
-        let c = TeReGen::with_client(http, &server.uri());
-        let start = tokio::time::Instant::now();
+        let mut c = TeReGen::with_client(http, &server.uri());
+        assert_eq!(c.smelt_backed_timeout, SMELT_BACKED_TIMEOUT);
+        c.smelt_backed_timeout = Duration::from_millis(200);
+        let start = std::time::Instant::now();
         let err = c.checkers(RRID).await.unwrap_err();
         assert!(matches!(err, TeReGenError::Fetch(_)), "{err}");
-        assert_eq!(
-            start.elapsed().as_secs(),
-            SMELT_BACKED_TIMEOUT.as_secs(),
-            "{err}"
-        );
+        assert!(start.elapsed() < Duration::from_secs(2), "{err}");
     }
 
     /// The SMELT-backed reads outwait the shared client's read timeout. A
