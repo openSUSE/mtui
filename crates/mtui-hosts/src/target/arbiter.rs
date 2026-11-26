@@ -85,14 +85,7 @@ impl<C: Clock> HostArbiter<C> {
     /// did); `false` if another owner holds it.
     #[must_use]
     pub fn try_acquire(&self, host: &str, owner: &Owner) -> bool {
-        let mut owners = self.owners.lock().expect("arbiter mutex poisoned");
-        match owners.get(host) {
-            Some(held) if held != owner => false,
-            _ => {
-                owners.insert(host.to_owned(), owner.clone());
-                true
-            }
-        }
+        self.try_claim_first(&[host.to_owned()], owner).is_some()
     }
 
     /// Claim one free host from `candidates` for `owner`.

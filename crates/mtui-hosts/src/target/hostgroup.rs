@@ -733,40 +733,19 @@ impl HostsGroup {
         actions::sftp_get_all(&mut self.data, remote, local, self.is_repl, max_parallel).await;
     }
 
-    /// Reads `remote` into memory from every enabled host in parallel (#434).
+    /// Reads `remote` into memory from every enabled host in parallel (#434),
+    /// each host retaining at most `max_bytes` (`0` = unlimited) and reporting
+    /// its file size and whether the content was cut. `scope` narrows the
+    /// fan-out to the named hosts (see [`Scope`]).
     ///
     /// Returns one entry per *attempted* host — [`Disabled`] hosts are simply
-    /// absent, mirroring the `None` encoding of [`Target::sftp_read`] — keyed
-    /// by hostname, so callers attribute per host without touching the
-    /// stale-prone `last_download` bookkeeping (the returned-map shape of
-    /// [`lock`](Self::lock)).
+    /// absent, mirroring the `None` encoding of [`Target::sftp_read_capped`] —
+    /// keyed by hostname, so callers attribute per host without touching the
+    /// stale-prone `last_download` bookkeeping. Unknown names are silently
+    /// skipped; a caller that must *refuse* them checks against
+    /// [`names`](Self::names) first (the MCP `get` tool does).
     ///
     /// [`Disabled`]: super::TargetState::Disabled
-    pub async fn sftp_read(
-        &mut self,
-        remote: &Path,
-    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        bytes_only(self.sftp_read_capped(remote, 0, None).await)
-    }
-
-    /// Reads `remote` into memory from only the named hosts, otherwise
-    /// identical to [`sftp_read`](Self::sftp_read).
-    ///
-    /// Unknown names are silently skipped like every selected fan-out here —
-    /// a caller that must *refuse* unknown names checks them against
-    /// [`names`](Self::names) first (the MCP `get` tool does).
-    pub async fn sftp_read_selected(
-        &mut self,
-        remote: &Path,
-        names: &std::collections::BTreeSet<String>,
-    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-        bytes_only(self.sftp_read_capped(remote, 0, Some(names)).await)
-    }
-
-    /// Like [`sftp_read`](Self::sftp_read), but each host retains at most
-    /// `max_bytes` (`0` = unlimited) and reports its file size and whether the
-    /// content was cut. `scope` narrows the fan-out to the named hosts (see
-    /// [`Scope`]).
     pub async fn sftp_read_capped(
         &mut self,
         remote: &Path,
@@ -788,7 +767,7 @@ impl HostsGroup {
     /// The in-band counterpart of [`sftp_put`](Self::sftp_put): the payload
     /// arrives from the caller (the MCP `put` tool) rather than a local file.
     /// Returns one entry per attempted host like
-    /// [`sftp_read`](Self::sftp_read); the per-target upload still records
+    /// [`sftp_read_capped`](Self::sftp_read_capped); the per-target upload still records
     /// `last_upload`, so the REPL aggregation stays coherent if mixed. `scope`
     /// narrows the fan-out to the named hosts (see [`Scope`]).
     pub async fn sftp_put_bytes(
@@ -1843,16 +1822,6 @@ impl HostsGroup {
     }
 }
 
-/// Drops the size and truncation report from a per-host read outcome.
-fn bytes_only(
-    outcomes: BTreeMap<String, std::result::Result<SftpRead, String>>,
-) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
-    outcomes
-        .into_iter()
-        .map(|(host, res)| (host, res.map(|read| read.bytes)))
-        .collect()
-}
-
 /// Folds a release result into a [`LockOutcome`]; a foreign owner is benign
 /// contention, named from the load the failed release already did.
 fn release_outcome(result: Result<()>, owner: impl FnOnce() -> LockOwner) -> LockOutcome {
@@ -2437,7 +2406,7 @@ mod tests {
     /// Per-host DISTINCT content: identical fixtures could pass with the
     /// fan-out returning one host's bytes for every key.
     #[tokio::test]
-    async fn sftp_read_fans_out_with_distinct_content() {
+    async fn sftp_read_capped_fans_out_with_distinct_content() {
         let m1 = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
         let m2 = MockConnection::new("h2").with_file("/remote/f", b"beta".to_vec());
         let mut g = HostsGroup::new(
@@ -2448,15 +2417,15 @@ mod tests {
             false,
         );
 
-        let got = g.sftp_read(Path::new("/remote/f")).await;
+        let got = g.sftp_read_capped(Path::new("/remote/f"), 0, None).await;
 
         assert_eq!(got.len(), 2);
-        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
-        assert_eq!(got["h2"], Ok(b"beta".to_vec()));
+        assert_eq!(got["h1"].as_ref().unwrap().bytes, b"alpha");
+        assert_eq!(got["h2"].as_ref().unwrap().bytes, b"beta");
     }
 
     #[tokio::test]
-    async fn sftp_read_mixed_outcomes() {
+    async fn sftp_read_capped_mixed_outcomes() {
         let ok = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
         // h2: no seeded file -> the mock serves SftpNotFound.
         let bad = MockConnection::new("h2");
@@ -2470,9 +2439,9 @@ mod tests {
             false,
         );
 
-        let got = g.sftp_read(Path::new("/remote/f")).await;
+        let got = g.sftp_read_capped(Path::new("/remote/f"), 0, None).await;
 
-        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
+        assert_eq!(got["h1"].as_ref().unwrap().bytes, b"alpha");
         assert!(got["h2"].is_err(), "h2 must carry its failure: {got:?}");
         assert!(
             !got.contains_key("h3"),
@@ -2481,7 +2450,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sftp_read_selected_only_touches_named() {
+    async fn sftp_read_capped_scoped_only_touches_named() {
         let m1 = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
         let m2 = MockConnection::new("h2").with_file("/remote/f", b"beta".to_vec());
         let h2 = m2.clone();
@@ -2494,10 +2463,12 @@ mod tests {
         );
 
         let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into();
-        let got = g.sftp_read_selected(Path::new("/remote/f"), &names).await;
+        let got = g
+            .sftp_read_capped(Path::new("/remote/f"), 0, Some(&names))
+            .await;
 
         assert_eq!(got.len(), 1);
-        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
+        assert_eq!(got["h1"].as_ref().unwrap().bytes, b"alpha");
         assert!(
             h2.sftp_ops().is_empty(),
             "unselected host must not be touched"
