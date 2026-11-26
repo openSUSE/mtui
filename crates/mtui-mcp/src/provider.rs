@@ -1,17 +1,10 @@
-//! Session resolution seam: [`SessionProvider`] + the stdio [`StdioProvider`],
-//! plus the http [`SessionRegistry`] factory with its cap + idle-TTL enforcement.
+//! The http [`SessionRegistry`] factory with its cap + idle-TTL enforcement.
 //!
-//! The tool layer resolves the [`McpSession`] for each call through a
-//! [`SessionProvider`], so it never cares which transport it runs under. Both
-//! implementers answer the same `get_or_create(key)`, which is why the trait —
-//! not a concrete session — is the seam:
-//!
-//! - **stdio** ([`StdioProvider`]) — one process, one client, one session for
-//!   every call (the `key` is ignored).
-//! - **http** — a fresh isolated session per client, bound by the
-//!   [`SessionRegistry`] *factory* (`try_make_server`), which rmcp's
-//!   streamable-HTTP transport calls once per new MCP session; rmcp's session
-//!   manager owns the `Mcp-Session-Id` keying and the transport teardown.
+//! Under stdio one process serves one client with a single [`McpSession`]. Under
+//! http a fresh isolated session per client is bound by the [`SessionRegistry`]
+//! *factory* (`try_make_server`), which rmcp's streamable-HTTP transport calls
+//! once per new MCP session; rmcp's session manager owns the `Mcp-Session-Id`
+//! keying and the transport teardown.
 //!
 //! ## Cap + idle-TTL
 //!
@@ -68,61 +61,13 @@ pub(crate) fn now_millis() -> u64 {
 pub type LogLevelControl = Arc<dyn Fn(LogLevel) + Send + Sync>;
 
 /// Point `session`'s `set_log_level` at the process-wide `control`.
-fn install_log_level(session: &McpSession, control: &LogLevelControl) {
+pub(crate) fn install_log_level(session: &McpSession, control: &LogLevelControl) {
     let control = Arc::clone(control);
     session
         .session()
         .try_lock()
         .expect("a session minted a moment ago is uncontended")
         .set_log_level_sink(Box::new(move |level| control(level)));
-}
-
-/// The minimal surface the tool layer resolves a session through.
-///
-/// Maps a per-client `key` to the [`McpSession`] the call dispatches against,
-/// minting one on first use where applicable.
-///
-/// A native `async fn` is fine here: the trait is consumed by a concrete
-/// provider type (the rmcp `ServerHandler` is not `dyn`-compatible anyway), so
-/// no `dyn SessionProvider` boxing is required.
-pub trait SessionProvider {
-    /// Returns the session bound to `key`, minting one if needed. Single-session
-    /// providers (stdio) ignore `key` and always return the same session.
-    fn get_or_create(&self, key: &str) -> impl Future<Output = Arc<McpSession>> + Send;
-}
-
-/// The stdio single-session provider: one [`McpSession`] reused for every call.
-///
-/// One stdio process serves exactly one client, so there is no per-client
-/// isolation to do and `get_or_create` returns the same session for any `key`.
-#[derive(Clone)]
-pub struct StdioProvider {
-    session: Arc<McpSession>,
-}
-
-impl StdioProvider {
-    /// Builds the provider's single headless session from `config`.
-    #[must_use]
-    pub fn new(config: Config) -> Self {
-        Self {
-            session: McpSession::new(config),
-        }
-    }
-
-    /// Lets `set_log_level` change the process log level through `control`.
-    #[must_use]
-    pub fn with_log_level(self, control: LogLevelControl) -> Self {
-        install_log_level(&self.session, &control);
-        self
-    }
-}
-
-impl SessionProvider for StdioProvider {
-    async fn get_or_create(&self, _key: &str) -> Arc<McpSession> {
-        // The key is intentionally ignored; per-client keying is the http
-        // registry's job.
-        Arc::clone(&self.session)
-    }
 }
 
 /// One tracked live session in the [`SessionRegistry`]'s live set.
@@ -599,32 +544,6 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A stdio provider is single-entry: any two keys resolve to the same
-    /// session instance.
-    #[tokio::test]
-    async fn stdio_provider_returns_same_session_for_any_key() {
-        let provider = StdioProvider::new(Config::default());
-
-        let a = provider.get_or_create("client-a").await;
-        let b = provider.get_or_create("client-b").await;
-
-        assert!(
-            Arc::ptr_eq(&a, &b),
-            "stdio provider must return the same session for different keys"
-        );
-    }
-
-    /// The resolved session exposes the guarded [`Session`] and capture sink the
-    /// dispatch path needs, the sink starting empty.
-    #[tokio::test]
-    async fn resolved_session_exposes_dispatch_seams() {
-        let provider = StdioProvider::new(Config::default());
-        let session = provider.get_or_create("<default>").await;
-
-        let _guard = session.session().lock().await;
-        assert_eq!(session.output().take(), "");
-    }
 
     #[test]
     fn registry_reads_bounds_from_config() {

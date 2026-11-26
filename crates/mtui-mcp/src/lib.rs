@@ -53,7 +53,7 @@ pub use document_tools::{dispatch_document_tool, document_tool_descriptors};
 #[cfg(feature = "mcp")]
 pub use profiles::{CORE, resolve_keep_set};
 #[cfg(feature = "mcp")]
-pub use provider::{LogLevelControl, SessionProvider, SessionRegistry, StdioProvider};
+pub use provider::{LogLevelControl, SessionRegistry};
 #[cfg(feature = "mcp")]
 pub use server::McpServer;
 #[cfg(feature = "mcp")]

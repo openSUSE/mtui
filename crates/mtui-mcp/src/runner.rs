@@ -5,7 +5,7 @@
 //! the REPL does, and serves the runtime-synthesised tool surface:
 //!
 //! * **stdio** (default) — one process == one client: a single [`McpSession`]
-//!   built via [`StdioProvider`] serves the [`McpServer`] over `(stdin, stdout)`
+//!   serves the [`McpServer`] over `(stdin, stdout)`
 //!   until the client disconnects.
 //! * **http** — one process serves many clients: a [`SessionRegistry`] mints a
 //!   fresh isolated [`McpServer`] per MCP session (rmcp's streamable-HTTP
@@ -29,7 +29,7 @@ use tracing_subscriber::reload;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::args::{McpArgs, Transport};
-use crate::provider::{LogLevelControl, SessionProvider, SessionRegistry, StdioProvider};
+use crate::provider::{LogLevelControl, SessionRegistry, install_log_level};
 use crate::server::McpServer;
 use crate::session::McpSession;
 
@@ -60,7 +60,7 @@ async fn serve_stdio(args: &McpArgs, log_level: Option<LogLevelControl>) -> anyh
     let config = args.resolve_config();
     probe_audit_sink(&config).await?;
     let otel = init_otel_exporter(&config).await;
-    let (server, session) = build_stdio_server(config, log_level).await;
+    let (server, session) = build_stdio_server(config, log_level);
 
     tracing::info!("mtui-mcp: serving on stdio");
 
@@ -460,7 +460,7 @@ fn default_directives(debug: bool) -> String {
 
 /// Build the runtime-synthesised stdio server from resolved args.
 ///
-/// Mints the single headless [`McpSession`] via [`StdioProvider`] from an
+/// Mints the single headless [`McpSession`] from an
 /// already-resolved [`Config`](mtui_config::Config) and wires it into an
 /// [`McpServer`]. Factored out of [`run`] so the wiring is testable without the
 /// blocking serve loop. Returns the session handle too, so the serve loop can
@@ -469,17 +469,15 @@ fn default_directives(debug: bool) -> String {
 /// The config is passed in rather than resolved here: [`serve_stdio`] already
 /// needs it for the probes above, and `Config::load` logs every malformed key
 /// it skips — resolving twice reports each of them twice.
-async fn build_stdio_server(
+fn build_stdio_server(
     config: mtui_config::Config,
     log_level: Option<LogLevelControl>,
 ) -> (McpServer, Arc<McpSession>) {
     let registry = Arc::new(register_all());
-    let provider = StdioProvider::new(config);
-    let provider = match log_level {
-        Some(control) => provider.with_log_level(control),
-        None => provider,
-    };
-    let session = provider.get_or_create("<default>").await;
+    let session = McpSession::new(config);
+    if let Some(control) = &log_level {
+        install_log_level(&session, control);
+    }
     (McpServer::new(registry, Arc::clone(&session)), session)
 }
 
@@ -615,7 +613,7 @@ mod tests {
     async fn build_stdio_server_wires_the_synthesised_surface() {
         // The tools capability is only advertised once the handler is wired.
         let (server, _session) =
-            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {}))).await;
+            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {})));
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
@@ -629,8 +627,7 @@ mod tests {
         let (_server, session) = build_stdio_server(
             args(&[]).resolve_config(),
             Some(Arc::new(move |level| recorder.lock().unwrap().push(level))),
-        )
-        .await;
+        );
 
         session
             .run_command(&register_all(), "set_log_level", &["warning".to_owned()])
@@ -641,7 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_stdio_server_without_a_control_refuses_set_log_level() {
-        let (_server, session) = build_stdio_server(args(&[]).resolve_config(), None).await;
+        let (_server, session) = build_stdio_server(args(&[]).resolve_config(), None);
 
         let err = session
             .run_command(&register_all(), "set_log_level", &["warning".to_owned()])
@@ -657,7 +654,7 @@ mod tests {
     async fn build_stdio_server_returns_a_closeable_session() {
         // `close()` with no loaded template is a harmless no-op.
         let (_server, session) =
-            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {}))).await;
+            build_stdio_server(args(&[]).resolve_config(), Some(Arc::new(|_| {})));
         session.close().await;
     }
 
