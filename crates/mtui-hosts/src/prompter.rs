@@ -1,32 +1,16 @@
 //! Serialised interactive prompter for concurrent host fan-outs.
 //!
-//! When many targets run a command in parallel, a worker that needs to ask
-//! the user something (e.g. the command-timeout "keep waiting?" prompt in
-//! [`SshConnection`](crate::connection::SshConnection)) must not race a sibling
-//! for `stdin`: with two workers reading at once the prompt text interleaves
-//! with other output and two workers can consume the same line.
+//! Concurrent workers that must ask the user something (e.g. the command-timeout
+//! "keep waiting?" prompt in [`SshConnection`](crate::connection::SshConnection))
+//! must not race for `stdin`. [`Prompter`] serialises reads behind one
+//! [`tokio::sync::Mutex`] (async, so it is held soundly across the reader's
+//! `.await`) and holds a `suspend_async` guard so a live TTY spinner stays quiet
+//! until the user answers.
 //!
-//! [`Prompter`] serialises those reads behind a single lock — only one worker
-//! reads `stdin` at a time; the others queue on the lock until the current
-//! prompt returns. During the read it holds a
-//! `suspend_async` guard so a live TTY spinner
-//! erases its frame and stops repainting over the prompt until the user answers.
-//!
-//! ## Async lock
-//!
-//! mtui fans out with `tokio` tasks, so the lock is a [`tokio::sync::Mutex`] and
-//! [`ask`](Prompter::ask) is async — held across the reader's `.await` soundly
-//! (unlike a `std::sync::Mutex`, which clippy's `await_holding_lock` rightly
-//! rejects and which would block the runtime).
-//!
-//! ## Injectable reader
-//!
-//! The reader is injected so the class is unit-testable without a real terminal
-//! or `stdin`. The production reader is a blocking `stdin().read_line` bridged
-//! onto the runtime with [`spawn_blocking`](tokio::task::spawn_blocking); the
-//! composition root (`mtui-cli`) supplies it. Under `mtui-mcp` (no TTY) no
-//! prompter is constructed at all — the timeout branch degrades to a silent
-//! abort instead.
+//! The reader is injected for testability; the production reader is a blocking
+//! `stdin().read_line` on [`spawn_blocking`](tokio::task::spawn_blocking), supplied
+//! by `mtui-cli`. Under `mtui-mcp` (no TTY) no prompter is constructed and a timeout
+//! silently aborts.
 
 use std::future::Future;
 use std::io;
@@ -56,8 +40,7 @@ pub struct Prompter {
 impl Prompter {
     /// Builds a prompter reading through `reader`.
     ///
-    /// `reader` is invoked with the prompt text and must return the user's
-    /// response. Injected so tests never touch a real terminal.
+    /// `reader` is invoked with the prompt text; injected so tests never touch a terminal.
     #[must_use]
     pub fn new(reader: Reader) -> Self {
         Self {
@@ -98,9 +81,8 @@ impl Prompter {
 
     /// Prompts the user with `text` and returns the typed response.
     ///
-    /// Acquires the prompter's lock for the whole read so sibling tasks cannot
-    /// race for `stdin`, and holds a `suspend_async` guard so a live spinner
-    /// erases its frame and stays quiet until the user answers.
+    /// Holds the prompter's lock for the whole read and a `suspend_async` guard, so a
+    /// live spinner stays quiet until the user answers.
     ///
     /// # Errors
     ///
@@ -113,15 +95,12 @@ impl Prompter {
 
     /// Asks a yes/no question, returning whether the user confirmed.
     ///
-    /// Reads a line via [`ask`](Prompter::ask), lowercases it, and returns
-    /// `true` for an empty response iff `default` is `true`, or for a
-    /// response in `{"yes", "y"}`; anything else (including an I/O error, e.g.
-    /// from Ctrl-C/Ctrl-D) is `false`.
+    /// Reads a line via [`ask`](Prompter::ask) and returns `true` for `yes`/`y` (or an
+    /// empty response iff `default` is `true`); anything else, including an I/O error
+    /// (Ctrl-C/Ctrl-D), is `false`.
     ///
-    /// Callers gate this behind an `interactive` check: a headless caller
-    /// must not call `confirm` at all and must instead return `false` itself
-    /// (so a defaulted destructive prompt never auto-confirms unattended) —
-    /// see the load-time stale-hash handling in `mtui-testreport`.
+    /// A headless caller must not call `confirm` at all and must return `false` itself,
+    /// so a defaulted destructive prompt never auto-confirms unattended.
     pub async fn confirm(&self, text: &str, default: bool) -> bool {
         match self.ask(text).await {
             Ok(response) => {
@@ -132,18 +111,15 @@ impl Prompter {
                     matches!(response.as_str(), "yes" | "y")
                 }
             }
-            // Ctrl-C / EOF is swallowed and returns False.
             Err(_) => false,
         }
     }
 
-    /// Builds a [`TimeoutPrompt`](crate::connection::TimeoutPrompt) that routes
-    /// the SSH command-timeout question through this prompter's serialised
-    /// [`ask`](Prompter::ask).
-    ///
-    /// The single place the boxed-closure shape lives, so the composition root
-    /// (`Session` → [`Target::set_timeout_prompt`]) wires the same serialised
-    /// prompt (spinner-suspend + cross-task lock) instead of a bare closure.
+    /// Builds a [`TimeoutPrompt`](crate::connection::TimeoutPrompt) that routes the SSH
+    /// command-timeout question through this prompter's serialised
+    /// [`ask`](Prompter::ask), so the composition root wires the spinner-suspending,
+    /// cross-task-locked prompt (via [`Target::set_timeout_prompt`]) rather than a bare
+    /// closure.
     ///
     /// [`Target::set_timeout_prompt`]: crate::Target::set_timeout_prompt
     #[must_use]

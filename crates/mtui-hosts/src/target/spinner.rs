@@ -1,33 +1,18 @@
 //! A tiny TTY spinner for long-running interactive fan-outs.
 //!
-//! Repaints a `|/-\` frame on **stderr** while work is in flight, but only
-//! when stderr is a TTY. Off a TTY
-//! (tests, redirected output, log files, the `mtui-mcp` transport) it is a
-//! strict no-op, so test output and log files stay clean and the MCP layer can
-//! surface progress through its own channel instead.
+//! Repaints a `|/-\` frame on **stderr** while work is in flight, but only when
+//! stderr is a TTY. Off a TTY (tests, redirected output, the `mtui-mcp` transport)
+//! it is a strict no-op.
 //!
-//! Frame painting is serialised through a process-wide paint lock so other
-//! writers on the same terminal can coordinate with a live spinner: wrap the
-//! write in [`suspend`] to erase the current frame, keep the spinner from
-//! repainting while the guard is held, and write from column 0. The
-//! serialised interactive prompter ([`crate::prompter::Prompter`]) holds a
-//! [`suspend`] guard for the whole read so a live spinner erases its frame and
-//! stops repainting over the prompt until the user has answered.
+//! Frame painting is serialised through a process-wide paint lock: wrap a write in
+//! [`suspend`] to erase the current frame, stop repainting while the guard is held,
+//! and write from column 0. The [`Prompter`](crate::prompter::Prompter) holds a
+//! [`suspend`] guard for the whole read.
 //!
-//! ## Async task, not a thread
-//!
-//! mtui fans out with `tokio` tasks, so [`TtySpinner`] paints from a
-//! spawned task on a `tokio::time` interval. The paint lock is a
-//! [`std::sync::Mutex`] guarding only the short erase/paint critical sections
-//! (never held across `.await`), so it is sound to acquire it from both the
-//! paint task and an async [`suspend`] guard.
-//!
-//! ## Testability
-//!
-//! The frame sink is injectable (`TtySpinner::with_sink`). Unit tests capture
-//! frames into an in-memory buffer instead of the real terminal, so the whole
-//! module runs offline and deterministically. The default constructor paints to
-//! stderr and is enabled only when `stderr` is a terminal.
+//! [`TtySpinner`] paints from a spawned `tokio` task. The paint lock is a
+//! [`std::sync::Mutex`] guarding only short critical sections (never held across
+//! `.await`). The frame sink is injectable (`TtySpinner::with_sink`) so tests capture
+//! frames offline.
 
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,9 +28,8 @@ const INTERVAL: Duration = Duration::from_millis(100);
 /// Erase-current-line escape: carriage return + clear-to-end-of-line.
 const ERASE: &str = "\r\x1b[K";
 
-/// A spinner registered with the [`PaintCoord`]: its id, frame sink, label, and
-/// a shared frame counter so a repaint (from the tick task *or* from a dropped
-/// [`suspend`] guard) can render the current `|/-\` frame consistently.
+/// A spinner registered with the [`PaintCoord`]: its id, frame sink, label, and a
+/// shared frame counter, so any repaint renders the current frame consistently.
 struct Registered {
     id: u64,
     sink: Sink,
@@ -54,12 +38,10 @@ struct Registered {
     frame: Arc<AtomicU64>,
 }
 
-/// Process-wide paint coordinator: the lock every frame erase/paint takes, and
-/// the registry of spinners currently painting, each carrying its own frame sink
-/// so [`suspend`] can erase through the *same* sink the spinner paints to (in
-/// production stderr; in tests an in-memory buffer) and immediately **repaint**
-/// through it when the guard drops. When the registry is empty [`suspend`] is a
-/// strict no-op — in particular off a TTY, where spinners never register.
+/// Process-wide paint coordinator: the lock every frame erase/paint takes, and the
+/// registry of spinners currently painting, each with its own sink so [`suspend`]
+/// erases through the sink the spinner paints to and repaints through it on drop.
+/// An empty registry makes [`suspend`] a strict no-op.
 struct PaintCoord {
     /// Serialises every erase/paint; also guards the active-spinner registry.
     lock: Mutex<Vec<Registered>>,
@@ -71,11 +53,8 @@ struct PaintCoord {
 
 /// Renders the current frame of every registered spinner through its own sink.
 ///
-/// Called under the paint lock both by the tick task and — the key to
-/// perceptibility — immediately when a [`Suspend`] guard drops after a log line,
-/// so the frame reappears on the fresh line at once instead of waiting up to a
-/// full tick interval. Skips painting while a read holds the terminal
-/// ([`SuspendAsync`]'s paused flag).
+/// Called under the paint lock by the tick task and when a [`Suspend`] guard drops,
+/// so the frame reappears at once. Skips painting while a read holds the terminal.
 fn repaint_all(reg: &[Registered]) {
     if coord().paused.load(Ordering::SeqCst) {
         return;

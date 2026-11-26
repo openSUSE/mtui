@@ -1,41 +1,13 @@
 //! The install/uninstall [`Operation`] template — `lock → run → check →
 //! reboot → unlock` in one place.
 //!
-//! ## Overview
-//!
-//! The shared skeleton lives behind a template method so it is not duplicated
-//! across install and uninstall. A concrete operation
-//! supplies two hooks — the *doer* (the installer/uninstaller command +
-//! transactional reboot templates) and the paired *check* callable — and the
-//! base drives:
-//!
-//! 1. `collect` the per-host command map + the
-//!    transactional-only reboot map (early-return on the configured
-//!    plan error),
-//! 2. `group.update_lock()`,
-//! 3. in a fallible section: `group.run(commands)` → `group.add_history(...)`
-//!    → per-host `check(...)` → `group.reboot(reboot)`,
-//! 4. **always** `group.unlock()` afterwards.
-//!
-//! ## Scope: template + seams
-//!
-//! This module owns the **template and its seams**. The template
-//! consumes machinery that is deliberately *not* owned by `mtui-hosts`:
-//!
-//! * the *doer*/*check* dispatch (each target's doer/check for a role)
-//!   is fed by the update-workflow registries that live in `mtui-testreport`;
-//!   taking a direct dependency on them here would make `mtui-hosts` depend on
-//!   `mtui-testreport` and **break the acyclic crate graph**,
-//! * the `reboot` / reconnect lifecycle on [`HostsGroup`](super::HostsGroup).
-//!
-//! So the template drives the four group operations and the two per-host hooks
-//! through the object-safe [`OperationGroup`] seam rather than calling
-//! `HostsGroup` directly. The concrete `impl OperationGroup for HostsGroup`
-//! binding — resolving each target's [`Doer`] / [`Check`] via the injected
-//! [`PlanProvider`] and delegating the reboot/reconnect lifecycle to the
-//! inherent [`HostsGroup`](super::HostsGroup) methods — lives in
-//! [`hostgroup`](super::hostgroup). The template is driven against fully mocked
-//! targets and a mocked group, so it is unit-testable offline.
+//! A concrete operation supplies the *doer* (installer/uninstaller command plus
+//! transactional reboot templates) and the paired *check*. The doer/check tables live
+//! in `mtui-testreport` and the reboot lifecycle on `HostsGroup`; depending on them
+//! would break the acyclic crate graph, so the template drives the group through the
+//! object-safe [`OperationGroup`] seam (bound for `HostsGroup` in
+//! [`hostgroup`](super::hostgroup), resolving doers via the injected
+//! [`PlanProvider`]) and runs offline against mocks.
 
 use std::collections::BTreeMap;
 
@@ -44,23 +16,14 @@ use mtui_types::shellquote::quote_args;
 use super::hostgroup::{LockOutcome, LostHold, RebootReport};
 use crate::error::HostError;
 
-/// A per-host command (or reboot) map as ordered `(hostname, command)` pairs.
-///
-/// An ordered `(hostname, command)` command/reboot map, kept as
-/// an ordered `Vec` so fan-out order is deterministic (sorted iteration).
+/// A per-host command (or reboot) map as `(hostname, command)` pairs, kept as a `Vec`
+/// so fan-out order is deterministic.
 pub type HostCommandMap = Vec<(String, String)>;
 
 /// A resolved *doer*: the command and (transactional) reboot templates for one
-/// target
-/// (`{"command": Template, "reboot": Template}`).
-///
-/// The templates store values interpolated via variable substitution. The
-/// only variable the install/uninstall command templates interpolate is
-/// `$packages`; the reboot template takes none. `Doer::command` performs that
-/// single substitution and `Doer::reboot` returns the reboot command verbatim.
-/// Full `string.Template` parity (`$$`, `${name}`) is unnecessary here; the
-/// real doers are constructed by the [`PlanProvider`] implementation in
-/// `mtui-testreport`.
+/// target. `Doer::command` substitutes the sole variable, `$packages`;
+/// `Doer::reboot` returns the reboot command verbatim. Real doers are built by the
+/// [`PlanProvider`] implementation in `mtui-testreport`.
 #[derive(Debug, Clone)]
 pub struct Doer {
     /// The command template, with `$packages` as the sole interpolated variable.
@@ -79,48 +42,33 @@ impl Doer {
         }
     }
 
-    /// Substitutes `$packages` in the command template.
-    ///
-    /// Substitutes the shell-quoted, space-joined package list into the
-    /// command template.
+    /// Substitutes the shell-quoted, space-joined package list into the command
+    /// template.
     #[must_use]
     fn command(&self, packages: &str) -> String {
         self.command_template.replace("$packages", packages)
     }
 
-    /// The reboot command for a transactional host.
-    ///
-    /// Takes no variables.
+    /// The reboot command for a transactional host (takes no variables).
     #[must_use]
     fn reboot(&self) -> String {
         self.reboot_template.clone()
     }
 }
 
-/// The post-run *check* callable for one target.
-///
-/// Invoked once per target with that host's post-run output, and returns
-/// `Err(failure)` when it recognises a failure. Boxed so it is object-safe and
-/// can be produced per target by the doer/check registry seam.
+/// The post-run *check* for one target: called once with that host's output and
+/// returning `Err(failure)` on a recognised failure. Boxed so it is object-safe.
 pub type Check = Box<dyn FnMut(CheckArgs<'_>) -> Result<(), CheckFailure> + Send>;
 
 /// Why a post-run [`Check`] failed.
 ///
-/// Mirrors [`RebootFailure`]'s `reason` + cause shape: a bare `String` made a
-/// cancellation unrepresentable across this seam, so `reports::update_flow`
-/// could not route a check that stopped at a cancellation checkpoint away from
-/// the rollback the way it does for every other cancel point. The
-/// producer side lives in `mtui-testreport`'s `WorkflowRegistry::check` adapter
-/// (`update_workflow/mod.rs`), which forwards `UpdateError::cancelled` here;
-/// nothing on this path sets it today (checks are pure verdicts over a
-/// captured transcript), so the flag exists for representability, not because
-/// a live check currently cancels.
+/// Mirrors [`RebootFailure`]'s `reason` + cause shape so a cancellation stays
+/// representable across this seam and `reports::update_flow` can route it away from
+/// the rollback. The producer is `mtui-testreport`'s `WorkflowRegistry::check`
+/// adapter, which forwards `UpdateError::cancelled`; no live check cancels today.
 ///
-/// Deliberately **not** produced by `checks::update`'s `probe_failed` case:
-/// only `checks::update` ever sets that flag, and the update role does not go
-/// through this seam (it drives its own template, not
-/// [`Operation`]/[`OperationGroup`]) — so `probe_failed` has nothing to cross
-/// here, and its omission is a decision, not an oversight.
+/// Deliberately not produced for `checks::update`'s `probe_failed`: the update role
+/// drives its own template, not [`Operation`]/[`OperationGroup`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckFailure {
     /// The failure reason, shown to the operator.
@@ -165,11 +113,9 @@ pub struct CheckArgs<'a> {
     pub exitcode: i32,
 }
 
-/// One host's post-run output snapshot, read back by
-/// [`OperationGroup::last_output`] for the [`Check`] call.
-///
-/// Owned (not borrowed) so the read does not hold the group borrowed across
-/// the check call sandwiched between it and the reboot fan-out.
+/// One host's post-run output snapshot for a [`Check`] call, read back by
+/// [`OperationGroup::last_output`]. Owned so the read does not hold the group
+/// borrowed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostOutput {
     /// The command's stdout.
@@ -182,13 +128,8 @@ pub struct HostOutput {
     pub exitcode: i32,
 }
 
-/// One host's contribution to an [`Operation`], resolved while it collects
-/// its per-host command maps.
-///
-/// Groups the fields the template reads per target so the [`OperationGroup`]
-/// seam can hand them over in one shot: the doer (for the command + reboot
-/// templates), whether the host is transactional (gates the reboot map), and
-/// the paired check callable.
+/// One host's contribution to an [`Operation`]: its doer, whether it is
+/// transactional (gates the reboot map), and the paired check.
 pub struct HostPlan {
     /// The host this plan applies to.
     pub(crate) hostname: String,
@@ -202,30 +143,18 @@ pub struct HostPlan {
 }
 
 /// The subset of [`HostsGroup`](super::HostsGroup) behaviour the [`Operation`]
-/// template drives.
-///
-/// This object-safe seam is what keeps `mtui-hosts` acyclic: the template calls
-/// `update_lock` / `run` / `reboot` / `unlock` and reads the per-host
-/// [`HostPlan`]s through this trait instead of touching `HostsGroup`,
-/// `Target::doer`, or the reboot lifecycle directly. The concrete binding lives
-/// in [`hostgroup`](super::hostgroup) (`impl OperationGroup for HostsGroup`).
+/// template drives. This object-safe seam keeps `mtui-hosts` acyclic; the binding is
+/// `impl OperationGroup for HostsGroup` in [`hostgroup`](super::hostgroup).
 #[async_trait::async_trait]
 pub trait OperationGroup: Send {
-    /// Resolves the per-host plans for `role`.
-    ///
-    /// `role` is `"installer"` or `"uninstaller"`. An implementation looks up
-    /// each target's doer/check for the role and returns one [`HostPlan`] per
-    /// host, in a deterministic order. Returning an `Err` (see [`HostError::missing_for`]) signals
-    /// that a doer is undefined for some host's product release — the template
-    /// logs and returns before any lock is taken.
+    /// Resolves the per-host plans for `role` (`"installer"` or `"uninstaller"`), one
+    /// per host in deterministic order. An `Err` (see [`HostError::missing_for`])
+    /// means a doer is undefined for some host's release; the template returns before
+    /// any lock is taken.
     fn plans(&mut self, role: &str) -> Result<Vec<HostPlan>, HostError>;
 
-    /// Acquires the shared operation lock across the group.
-    ///
-    /// On success every host is
-    /// locked for this process; on failure (some host is locked by another
-    /// owner) the group has already released the locks it took and returns
-    /// [`HostError::HostsLocked`], so the template aborts before running.
+    /// Acquires the shared operation lock across the group. On failure (a host is
+    /// locked by another owner) the group has already released the locks it took.
     ///
     /// # Errors
     ///
@@ -236,53 +165,34 @@ pub trait OperationGroup: Send {
     /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
-    /// Appends one colon-joined row to every enabled host's remote history
-    /// file.
+    /// Appends one colon-joined row to every enabled host's remote history file.
     ///
-    /// Called by [`Operation::run`] between the command fan-out and the reboot.
-    /// It is on the group seam rather than left to the caller because the
-    /// reboot happens inside the template: a caller writing the row after
-    /// `run` returns would lose it on exactly the transactional hosts that
-    /// never came back.
+    /// On the group seam because the reboot happens inside the template: a row written
+    /// after `run` returns would be lost on exactly the hosts that never came back.
     async fn add_history(&mut self, fields: &[String]);
 
     /// Reads back `hostname`'s post-run output, for the [`Check`] call.
     ///
-    /// A `None` here is a bug by construction: every caller only ever asks for
-    /// a hostname it just built a [`HostPlan`] for, so the host cannot be
-    /// outside the group. The template does not panic on it — it falls back to
-    /// [`HostOutput::default`], which is **exit 0**. Every [`Check`] reads exit
-    /// 0 as success, so a `None` here makes the host silently pass its check
-    /// and stay in the reboot map instead of failing loudly.
+    /// `None` is a bug by construction (the host just produced a [`HostPlan`]). The
+    /// template falls back to [`HostOutput::default`], which is **exit 0**; every
+    /// [`Check`] reads that as success, so the host silently passes.
     fn last_output(&self, hostname: &str) -> Option<HostOutput>;
 
-    /// Reboots the transactional hosts named in `reboot`.
-    ///
-    /// Returns the full [`RebootReport`]: one
-    /// [`RebootFailure`] per host whose reboot did not take effect, carrying
-    /// *why* — a transactional host whose snapshot never activated must fail
-    /// the operation, not report success, and the caller routes its recovery
-    /// on the cause — plus the holds the reboot wiped that could not be
-    /// re-taken, so the template surfaces them instead of losing them
-    /// silently.
+    /// Reboots the transactional hosts named in `reboot`, returning the full
+    /// [`RebootReport`]: a [`RebootFailure`] per host whose reboot did not take effect
+    /// (the cause routes recovery), plus the holds the reboot wiped that could not be
+    /// re-taken.
     async fn reboot(&mut self, reboot: HostCommandMap) -> RebootReport;
 
-    /// Releases the shared operation lock.
-    ///
-    /// Returns each host's [`LockOutcome`], keyed by hostname, so the caller
-    /// can tell a benign [`Contended`](LockOutcome::Contended) lock apart from
-    /// a real [`Failed`](LockOutcome::Failed) one — a stranded lock the
-    /// operator needs to know about — rather than losing the verdict.
+    /// Releases the shared operation lock, returning each host's [`LockOutcome`] so the
+    /// caller can tell a benign [`Contended`](LockOutcome::Contended) lock from a
+    /// stranded [`Failed`](LockOutcome::Failed) one.
     async fn unlock(&mut self) -> BTreeMap<String, LockOutcome>;
 }
 
-/// The outcome of a completed [`Operation::run`]: the run *started* (the
-/// template got past `plans()` and `update_lock()`), but a host's check can
-/// still fail and a transactional host's post-reboot reconnect can still fail.
-///
-/// `Err` from [`Operation::run`] keeps meaning "never started" (no plans, or a
-/// foreign lock); `Ok(report)` means it ran, and the two failure lists name any
-/// host that failed its check or whose reboot did not take effect.
+/// The outcome of a completed [`Operation::run`]. `Err` means "never started" (no
+/// plans, or a foreign lock); `Ok(report)` means it ran, and the failure lists name
+/// any host that failed its check or whose reboot did not take effect.
 #[must_use = "the report names the hosts that failed; dropping it silently \
               reports a failed operation as a clean one"]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -296,26 +206,21 @@ pub struct OperationReport {
     /// One entry per hold the reboot wiped that could not be re-taken. A lost
     /// hold never fails the run; the caller reports it as degradation.
     pub lost_holds: Vec<LostHold>,
-    /// `(hostname, reason)` for every host whose operation-lock release
-    /// failed with [`LockOutcome::Failed`] — a benign
-    /// [`Contended`](LockOutcome::Contended) release is excluded.
+    /// `(hostname, reason)` for every host whose operation-lock release failed with
+    /// [`LockOutcome::Failed`]; a benign [`Contended`](LockOutcome::Contended) release
+    /// is excluded.
     ///
-    /// A stranded lock does not turn a good install into a failed one, so
-    /// `Operation::run`'s verdict never depends on this field; it exists so
-    /// the caller can warn and name the host. `Operation::run` itself stays
-    /// silent about it — the per-host WARN already fires inside
-    /// `Target::unlock_reporting` — the aggregate warning belongs at the one
-    /// layer that knows the operation name (`perform_operation`, in
-    /// `mtui-testreport`).
+    /// A stranded lock does not fail a good install, so `Operation::run`'s verdict never
+    /// depends on this. The aggregate warning belongs to `perform_operation` in
+    /// `mtui-testreport`, which knows the operation name.
     pub unlock_failures: Vec<(String, String)>,
 }
 
 /// Why a transactional host's post-operation reboot did not take effect.
 ///
-/// The distinction is load-bearing rather than cosmetic: it decides whether the
-/// host can still be repaired. Two of the three leave it **up**, running the
-/// old snapshot while the rest of the group moved on — which is the
-/// split-brain a rollback exists to undo. The third leaves nothing to talk to.
+/// The distinction is load-bearing: it decides whether the host can still be
+/// repaired. Two causes leave it **up** on the old snapshot while the group moved on
+/// (the split-brain a rollback undoes); the third leaves nothing to talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebootFailureCause {
     /// The reboot was dispatched, the host went away and never came back.
@@ -356,10 +261,8 @@ pub struct RebootFailure {
 pub enum OperationKind {
     /// Install packages; doer role `"installer"`.
     Install,
-    /// Uninstall packages; doer role `"uninstaller"`. The uninstaller
-    /// deliberately consults the *install* checks; that role→check mapping
-    /// lives in the doer/check registry injected via [`PlanProvider`]
-    /// (implemented in `mtui-testreport`), not here.
+    /// Uninstall packages; doer role `"uninstaller"`, which deliberately consults the
+    /// *install* checks (the mapping lives in the registry behind [`PlanProvider`]).
     Uninstall,
 }
 
@@ -372,14 +275,10 @@ impl OperationKind {
         }
     }
 
-    /// The operation's label in the remote history file: `"install"` or
-    /// `"uninstall"`.
+    /// The operation's label in the remote history file: `"install"` or `"uninstall"`.
     ///
-    /// Deliberately **not** derived from [`role`](Self::role): that returns the
-    /// doer-table key (`"installer"`), and `/var/log/mtui.log` is a parsed
-    /// interop contract whose readers match the command verb. A substring
-    /// check for `"uninstall"` would also match `"uninstaller"`, so the wrong
-    /// value here is one a naive assertion cannot catch.
+    /// Deliberately not derived from [`role`](Self::role): `/var/log/mtui.log` is a parsed
+    /// interop contract whose readers match the command verb.
     const fn history_label(self) -> &'static str {
         match self {
             Self::Install => "install",
@@ -390,8 +289,6 @@ impl OperationKind {
 
 /// The install/uninstall template: `lock → run → check → reboot → unlock` over
 /// an [`OperationGroup`], for one [`OperationKind`] and package list.
-///
-/// [`run`](Self::run) reproduces the control flow behaviour-for-behaviour.
 #[derive(Debug, Clone)]
 pub struct Operation {
     kind: OperationKind,
@@ -417,13 +314,9 @@ impl Operation {
         Self::new(OperationKind::Uninstall, packages)
     }
 
-    /// Builds the per-host command map and the transactional-only reboot map.
-    ///
-    /// One command entry per host (with
-    /// `$packages` substituted by the shell-quoted, space-joined package list)
-    /// and a reboot entry only for transactional hosts. Consumes `plans` (each
-    /// carries a `FnMut` check) and returns them alongside the two maps so `run`
-    /// can drive the checks after the commands complete.
+    /// Builds the per-host command map (with `$packages` substituted) and the
+    /// transactional-only reboot map, returning the plans so `run` can drive their
+    /// `FnMut` checks afterwards.
     fn collect(&self, plans: Vec<HostPlan>) -> (HostCommandMap, HostCommandMap, Vec<HostPlan>) {
         // Package names are substituted into a root command template; quote each
         // so a malicious name is a single literal argument, not injected shell.
@@ -441,28 +334,16 @@ impl Operation {
 
     /// Executes the full `lock → run → check → reboot → unlock` skeleton.
     ///
-    /// * resolve per-host plans; on a plan error, return
-    ///   **without** taking any lock,
-    /// * `update_lock()`,
-    /// * run the commands, invoke each host's check over its post-run output,
-    ///   then reboot the transactional hosts whose check passed,
-    /// * `unlock()` unconditionally afterwards.
+    /// If plan resolution fails, returns without taking any lock. A host whose check
+    /// fails is excluded from the reboot map; healthy transactional hosts still reboot
+    /// and the inert one is named at WARN.
     ///
-    /// A host whose check fails is excluded from the reboot map for that host
-    /// only — a healthy transactional host still reboots so its snapshot
-    /// activates; a host left inert by a failed check is named at WARN.
+    /// The reboot re-takes even the comment-less operation lock, though `unlock()`
+    /// releases it right after, so a foreign claim in the gap is reported as a lost hold
+    /// instead of leaving a stale one.
     ///
-    /// The reboot re-takes even the comment-less operation lock this run
-    /// took, although `unlock()` releases it right after: the re-take
-    /// reconciles the in-memory record — a foreign claim in the gap is
-    /// reported as a lost hold and forgotten — instead of leaving a stale
-    /// hold behind.
-    ///
-    /// Returns the started run's [`OperationReport`], which names any host
-    /// that failed its check, any transactional host whose reboot did not
-    /// take effect, and any hold lost in the reboot gap — a caller that
-    /// discards it cannot tell any of those apart from a host that came
-    /// back healthy.
+    /// Returns the started run's [`OperationReport`]; a caller that discards it cannot
+    /// tell failures from a healthy host.
     ///
     /// # Errors
     ///
@@ -472,33 +353,22 @@ impl Operation {
     /// `update_lock` finds a host held by another owner. In both cases nothing
     /// ran on any host.
     ///
-    /// mtui reports both instead of logging and swallowing them: a caller that
-    /// cannot distinguish "installed"
-    /// from "could not even start" will print success for an update that never
-    /// touched a host — the same reasoning that makes
-    /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
+    /// Both are reported rather than logged and swallowed, so a caller cannot print
+    /// success for an update that never touched a host.
     pub async fn run(&self, group: &mut dyn OperationGroup) -> Result<OperationReport, HostError> {
         let plans = group.plans(self.kind.role())?;
 
         let (commands, reboot, mut plans) = self.collect(plans);
 
-        // `update_lock` runs *outside* the unlock-always section: when it fails
-        // (a host is locked by another owner) it has already released the locks
-        // it took, so `run` aborts here without entering the run/unlock section
-        // — no separate unlock is issued.
+        // `update_lock` releases whatever it took on failure, so a failure here skips the
+        // unlock section.
         group.update_lock().await?;
 
-        // Everything past the lock must reach `unlock()`, so this section stays
-        // free of `?`. It is infallible over the group seam today (run/reboot
-        // return `()`); a future fallible step must capture its error and fall
-        // through to the unlock rather than returning early.
+        // Everything past the lock must reach `unlock()`, so no `?` in this section.
         group.run(commands).await;
 
-        // The command has now dispatched on every host, whatever the verdict:
-        // record the history row here — after the run started, but *before* the
-        // reboot. A transactional host that never comes back cannot be written
-        // to afterwards, and the row would be lost on exactly the host whose
-        // state an operator most needs to reconstruct.
+        // Record history after the command dispatched but before the reboot: a host that
+        // never comes back cannot be written to afterwards.
         group
             .add_history(&[
                 self.kind.history_label().to_owned(),
@@ -509,9 +379,7 @@ impl Operation {
         let mut check_failures: Vec<(String, CheckFailure)> = Vec::new();
         for plan in &mut plans {
             let output = group.last_output(&plan.hostname).unwrap_or_else(|| {
-                // See `OperationGroup::last_output`: this host has a `HostPlan`,
-                // so it cannot really be missing from the group. Warn so the
-                // silent-pass is at least visible, rather than swallowing it.
+                // A planned host cannot be missing from the group; warn rather than pass silently.
                 tracing::warn!(
                     host = %plan.hostname,
                     "no post-run output for a planned host; treating as exit 0"
@@ -530,9 +398,8 @@ impl Operation {
             }
         }
 
-        // A failed check excludes its host from the reboot map: rebooting a
-        // host whose install/uninstall failed would activate a snapshot the
-        // operator has not yet seen the failure for.
+        // A failed check excludes its host from the reboot map, so a failed operation's
+        // snapshot is not activated unseen.
         let failed: std::collections::HashSet<&str> =
             check_failures.iter().map(|(h, _)| h.as_str()).collect();
         let reboot: HostCommandMap = reboot
@@ -569,26 +436,17 @@ impl Operation {
     }
 }
 
-/// The injectable seam that resolves one target's [`Doer`] + [`Check`] for a
-/// role, keyed on the target's `(release, transactional)` state.
+/// The injectable seam that resolves one target's [`Doer`] + [`Check`] for a role,
+/// keyed on `(release, transactional)`.
 ///
-/// This is the `mtui-hosts`-local half of the injection: it is defined here (in
-/// terms of `mtui-hosts` types only — [`Doer`] / [`Check`]) so
-/// [`HostsGroup`](super::HostsGroup) can hold it and drive
-/// [`OperationGroup::plans`] **without** depending on `mtui-testreport`. The
-/// concrete implementation lives in `mtui-testreport` (its `WorkflowRegistry`
-/// adapts its own `Role` / `ActionCommands` / `CheckFn` tables into a `Doer` and
-/// a `Check`) and is injected by that crate's `update_flow::perform_install` /
-/// `perform_uninstall`, immediately before the template runs.
-///
-/// Keys the
-/// registry lookup by `(self.system.get_release(), self.transactional)`.
+/// Defined here in `mtui-hosts` types only so [`HostsGroup`](super::HostsGroup) can
+/// drive [`OperationGroup::plans`] without depending on `mtui-testreport`, whose
+/// `WorkflowRegistry` implements it and is injected by
+/// `update_flow::perform_install` / `perform_uninstall` just before the template
+/// runs.
 pub trait PlanProvider: Send + Sync {
-    /// Resolves the [`Doer`] (command + reboot templates) for `role` at
-    /// `(release, transactional)`.
-    ///
-    /// `role` is the role string (`"installer"` / `"uninstaller"` /
-    /// `"updater"` / `"preparer"` / `"downgrader"`).
+    /// Resolves the [`Doer`] for `role` (`"installer"` / `"uninstaller"` / `"updater"` /
+    /// `"preparer"` / `"downgrader"`) at `(release, transactional)`.
     ///
     /// # Errors
     ///
@@ -596,10 +454,8 @@ pub trait PlanProvider: Send + Sync {
     /// registry has no entry for the key.
     fn doer(&self, role: &str, release: &str, transactional: bool) -> Result<Doer, HostError>;
 
-    /// Resolves the post-run [`Check`] for `role` at `(release, transactional)`.
-    ///
-    /// A registry with no entry yields a no-op check,
-    /// so this is infallible.
+    /// Resolves the post-run [`Check`] for `role` at `(release, transactional)`;
+    /// infallible, as a missing entry yields a no-op check.
     fn check(&self, role: &str, release: &str, transactional: bool) -> Check;
 }
 

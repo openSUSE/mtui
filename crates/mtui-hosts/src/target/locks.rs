@@ -1,54 +1,43 @@
 //! Remote lock management for target hosts.
 //!
-//! ## Overview
+//! Two remote locks share one wire format but differ in scope and ownership:
 //!
-//! There are **two remote
-//! locks** with the same wire format but different scope and ownership rules:
-//!
-//! * [`TargetLock`] — the *operation* lock at `/var/lock/mtui.lock`. It guards
-//!   serialized `zypper` transactions (`zypper` holds a system-wide lock, so
-//!   mtui must not run two updates against one host at once). Ownership is
+//! * [`TargetLock`] — the *operation* lock at `/var/lock/mtui.lock`, guarding
+//!   serialized `zypper` transactions (zypper holds a system-wide lock). Ownership is
 //!   **PID-based**: the lock is "mine" only when this exact process took it, so
-//!   one user running several `mtui` instances against the same host does not
-//!   collide with themselves.
-//! * the *pool claim* — a [`TargetLock`] over [`POOL_LOCK_PATH`],
-//!   `/var/lock/mtui-pool.lock`. It
-//!   marks a reference host as claimed by a particular template (RRID) during
-//!   host arbitration, so a different user/template does not connect to a host
-//!   already taken. Ownership is **RRID-based** and ignores the PID, because a
-//!   pool claim outlives the process that took it (a tester may reconnect from
-//!   a fresh `mtui` invocation and must still be recognised as the owner).
+//!   several `mtui` instances of one user do not collide with themselves.
+//! * the *pool claim* — a [`TargetLock`] over [`POOL_LOCK_PATH`]
+//!   (`/var/lock/mtui-pool.lock`), marking a reference host as claimed by a template
+//!   (RRID) during host arbitration. Ownership is **RRID-based** and ignores the PID,
+//!   because a claim outlives the process that took it.
 //!
 //! ## Wire format (contract)
 //!
-//! Both locks serialize one line, `timestamp:user:pid[:comment]`, into their
-//! respective `/var/lock/*.lock` file (see [`RemoteLock::to_lockfile`]). This
-//! is a **cross-process contract**: other tools on the fleet parse the same
-//! layout, including older `mtui` releases, so the bytes must not change. The
-//! `comment` field keeps any embedded colons (parsed with a 3-way split); a
-//! the pool claim stores `mtui pool <RRID> [<owner>]` there.
+//! Both locks serialize one line, `timestamp:user:pid[:comment]` (see
+//! [`RemoteLock::to_lockfile`]). This is a **cross-process contract**: other tools on
+//! the fleet, including older `mtui` releases, parse the same layout, so the bytes
+//! must not change. The `comment` keeps embedded colons (3-way split); a pool claim
+//! stores `mtui pool <RRID> [<owner>]` there.
 //!
-//! A missing file is a free host; a present file that is not such a line
-//! (empty, malformed, not UTF-8) is **invalid**, never free: claims refuse it
-//! with [`HostError::InvalidLockFile`], a forced unlock removes it, and the
-//! stale reap ages it by the file's modification time.
+//! A missing file is a free host; a present file that is not such a line (empty,
+//! malformed, not UTF-8) is **invalid**, never free: claims refuse it with
+//! [`HostError::InvalidLockFile`], a forced unlock removes it, and the stale reap
+//! ages it by the file's modification time.
 //!
 //! ## Atomicity
 //!
 //! [`TargetLock::lock`] first attempts an **atomic exclusive create**
-//! ([`Connection::sftp_write`] with `exclusive = true` →
-//! `O_CREAT | O_EXCL`): exactly one of two racing processes wins, and the loser
-//! reconciles (re-stamp if it's ours, reap if stale, wait if configured, else
-//! refuse). This closes the read-then-write TOCTOU the old "stat then write"
-//! sequence had.
+//! ([`Connection::sftp_write`] with `exclusive = true`, `O_CREAT | O_EXCL`), closing
+//! the read-then-write TOCTOU window: exactly one of two racing processes wins, and
+//! the loser reconciles (re-stamp if ours, reap if stale, wait if configured, else
+//! refuse).
 //!
 //! ## Design choices
 //!
-//! * All I/O is `async` (the connection layer is async-native).
-//! * The wait queue takes an injected [`Clock`] instead of a real timer,
-//!   so the polling loop is unit-testable without real sleeps.
-//! * A contended lock surfaces as [`HostError::TargetLocked`] rather than a
-//!   distinct error type.
+//! * The wait queue takes an injected [`Clock`], so the polling loop is testable
+//!   without real sleeps.
+//! * A contended lock surfaces as [`HostError::TargetLocked`] rather than a distinct
+//!   error type.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -61,11 +50,9 @@ use mtui_config::Config;
 use crate::connection::Connection;
 use crate::error::{HostError, Result};
 
-/// A source of wall-clock time and async sleeping, injected so the lock
-/// wait-queue is testable without real delays.
-///
-/// The default [`SystemClock`] uses `SystemTime` and `tokio::time::sleep`;
-/// tests substitute a fake clock that advances instantly.
+/// A source of wall-clock time and async sleeping, injected so the lock wait-queue
+/// is testable without real delays. [`SystemClock`] is the default; tests substitute
+/// a fake that advances instantly.
 #[async_trait::async_trait]
 pub trait Clock: Send + Sync {
     /// Current Unix time in seconds.
@@ -116,20 +103,16 @@ pub struct RemoteLock {
     pub timestamp: String,
     /// The PID of the process that took the lock.
     pub pid: u32,
-    /// Optional comment. A non-empty comment marks an *exclusive* lock; a
-    /// A pool claim stores `mtui pool <RRID> [<owner>]` here.
+    /// Optional comment. A non-empty comment marks an *exclusive* lock; a pool claim
+    /// stores `mtui pool <RRID> [<owner>]` here.
     pub comment: String,
 }
 
 /// A resolved snapshot of a host's lock ownership, produced by
 /// [`Target::lock_status`](crate::Target::lock_status) and forwarded by the
-/// `Reporter`/[`HostsGroup`](crate::HostsGroup) lock sinks to
-/// the display layer.
-///
-/// The lock accessors are async `&mut self`; the resolving code does
-/// that I/O once and hands these already-resolved (sync) values downstream so
-/// the display stays sync and snapshot-testable. Carries the fields the
-/// lock listing reads off the lock object.
+/// `Reporter`/[`HostsGroup`](crate::HostsGroup) lock sinks to the display layer. The
+/// async lock accessors do their I/O once so the display stays sync and
+/// snapshot-testable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct LockRow {
     /// Whether the host is currently locked/claimed.
@@ -189,9 +172,9 @@ impl LockKind {
 
 /// Who holds a contended lock, for reporting it.
 ///
-/// Read off the load the failed acquisition/release already performed, so
-/// naming the owner costs no extra remote round-trip (#521); an empty
-/// [`by`](Self::by) means the lock state was never read (unconnected host).
+/// Read off the load the failed acquisition/release already performed, so naming the
+/// owner costs no extra round-trip; an empty [`by`](Self::by) means the lock state
+/// was never read (unconnected host).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LockOwner {
     /// The user recorded in the lockfile.
@@ -219,10 +202,9 @@ pub fn sibling_holder_name(label: &str) -> String {
 ///
 /// Wire ownership is user + PID, so every `TargetLock` in one process (a second
 /// loaded template, a second MCP session) reads another's lock as its own; this
-/// registry, shared by those objects, is the only way to tell them apart. Keyed
-/// by [`Connection::hostname`], so two names for one host are not recognised as
-/// the same. A claim goes away with its `TargetLock`, even when the lockfile
-/// stays on the host.
+/// shared registry is the only way to tell them apart. Keyed by
+/// [`Connection::hostname`], so two names for one host are not recognised as the
+/// same. A claim goes away with its `TargetLock`, even when the lockfile stays.
 #[derive(Clone, Default)]
 pub struct OpLockHolders(Arc<Mutex<HashMap<String, Holder>>>);
 
@@ -273,11 +255,9 @@ static NEXT_LOCK_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Which driving surface a contended line renders for.
 ///
-/// Owns the paired `list_locks` steer and `--force` whole-group scope so a
-/// call site cannot transpose them: the REPL's plain steer with its `-t`-scoped
-/// caveat and the MCP abort path's markdown steer with its per-template fan-out
-/// travel as one value. The fan-out truths differ (`-t`-scoped vs per-template
-/// whole-group), hence two variants rather than one shared string.
+/// Owns the paired `list_locks` steer and `--force` whole-group scope so a call site
+/// cannot transpose them: the REPL's plain steer with its `-t`-scoped caveat, and the
+/// MCP abort path's markdown steer with its per-template fan-out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContendedSurface {
     /// REPL (`lock`/`run`/`unlock`): plain `list_locks`, `-t`-scoped caveat.
@@ -362,8 +342,7 @@ impl RemoteLock {
     /// is not a valid lock line.
     pub fn from_lockfile(line: &str) -> Result<Self> {
         let line = line.trim();
-        // splitn(4) mirrors Python's split(":", 3): at most 4 parts, so the
-        // 4th (comment) retains embedded colons.
+        // At most 4 parts, so the comment keeps embedded colons.
         let parts: Vec<&str> = line.splitn(4, ':').collect();
         if parts.len() < 3 {
             return Err(HostError::Sftp {
@@ -389,9 +368,9 @@ impl RemoteLock {
         })
     }
 
-    /// A formatted lock-creation time, or `"unknown"` when the stored timestamp
-    /// is missing/malformed. Shared by the one-read
-    /// snapshot path and [`TargetLock::loaded_owner`] so both render identically.
+    /// A formatted lock-creation time, or `"unknown"` when the stored timestamp is
+    /// missing/malformed. Shared with [`TargetLock::loaded_owner`] so both render
+    /// identically.
     #[must_use]
     pub(crate) fn display_time(&self) -> String {
         match self.timestamp.parse::<i64>() {
@@ -435,12 +414,9 @@ enum Ownership {
     },
 }
 
-/// Manages one remote lock for a single target: the operation lock
-/// (`/var/lock/mtui.lock`, PID-based ownership) or the pool claim
-/// (`/var/lock/mtui-pool.lock`, RRID-based ownership), per its ownership rule.
-///
-/// Drives the injected [`Connection`] for all remote I/O and an injected
-/// [`Clock`] for the wait queue.
+/// Manages one remote lock for a single target: the operation lock (PID-based
+/// ownership) or the pool claim (RRID-based), per its ownership rule, over an
+/// injected [`Connection`] and [`Clock`].
 pub struct TargetLock<C: Clock = SystemClock> {
     connection: Box<dyn Connection>,
     clock: C,
@@ -455,20 +431,15 @@ pub struct TargetLock<C: Clock = SystemClock> {
     /// empty or unparseable. [`lock`](Self::lock) is then the default, yet the
     /// host is not free.
     invalid: bool,
-    /// The comment **this instance** stamped when it took the lock, or `None`
-    /// when this instance is not holding it.
+    /// The comment **this instance** stamped when it took the lock, or `None` when it is
+    /// not holding it.
     ///
-    /// Deliberately *not* derived from the remote line: wire ownership is
-    /// per-process (user + PID), so every lock any part of this process took
-    /// reads back as "mine" — two loaded templates sharing a refhost, or two
-    /// MCP sessions in one server, cannot tell their holds apart that way.
-    /// This field is the only record of which `TargetLock` object actually
-    /// acquired the lock, and it is what
-    /// [`HostsGroup::unlock_held`](crate::HostsGroup::unlock_held) scopes on.
-    ///
-    /// Set by [`lock`](Self::lock), cleared by [`unlock`](Self::unlock) once
-    /// the lockfile is provably gone. [`load`](Self::load) never touches it —
-    /// reading a host's lock state is not taking it.
+    /// Deliberately not derived from the remote line: wire ownership is per-process
+    /// (user + PID), so two loaded templates sharing a refhost, or two MCP sessions in
+    /// one server, cannot tell their holds apart that way. Set by [`lock`](Self::lock),
+    /// cleared by [`unlock`](Self::unlock) once the lockfile is provably gone;
+    /// [`load`](Self::load) never touches it. Backs
+    /// [`HostsGroup::unlock_held`](crate::HostsGroup::unlock_held).
     held: Option<String>,
     /// The remote lockfile this instance manages: [`TARGET_LOCK_PATH`] or
     /// [`POOL_LOCK_PATH`].
@@ -634,10 +605,9 @@ impl<C: Clock> TargetLock<C> {
         self.claim();
     }
 
-    /// Drops this instance's in-memory hold record (and its hold-registry
-    /// entry). For a hold the remote side proved is gone or another owner's —
-    /// a reboot that wiped `/var/lock` and lost the re-take race, or a
-    /// lockfile that vanished — so a later `holds()` stops claiming it.
+    /// Drops this instance's in-memory hold record (and registry entry), for a hold the
+    /// remote side proved gone or another owner's, so a later `holds()` stops claiming
+    /// it.
     pub(crate) fn mark_released(&mut self) {
         self.held = None;
         self.release();
@@ -686,19 +656,13 @@ impl<C: Clock> TargetLock<C> {
         self.invalid
     }
 
-    /// Whether **this** instance is holding the lock and stamped it with no
-    /// comment.
+    /// Whether **this** instance is holding the lock and stamped it with no comment.
     ///
-    /// The two halves answer two different questions:
-    ///
-    /// * *this instance* — see [`held`](Self::held): PID-based wire ownership
-    ///   cannot separate two host groups inside one mtui process.
-    /// * *no comment* — a non-empty comment marks an **exclusive** hold
-    ///   ([`RemoteLock::comment`]): the PI assignment lock the session
-    ///   re-applies on every connect and after every reboot, or an operator's
-    ///   `lock <text>` reservation. The operation flows (`update_lock`, `run`'s
-    ///   `lock("", Some(..))`) all stamp an empty comment, so this separates a
-    ///   transient operation hold from a deliberate reservation.
+    /// *This instance*: PID-based wire ownership cannot separate two host groups in one
+    /// process (see [`held`](Self::held)). *No comment*: a non-empty comment marks an
+    /// **exclusive** hold ([`RemoteLock::comment`]) — the PI assignment lock re-applied on
+    /// every connect and reboot, or an operator's `lock <text>` reservation — whereas the
+    /// operation flows stamp an empty one.
     #[must_use]
     pub(crate) fn holds_unmarked(&self) -> bool {
         self.held.as_ref().is_some_and(String::is_empty)
@@ -706,11 +670,9 @@ impl<C: Clock> TargetLock<C> {
 
     /// Whether **this** instance is holding the lock, marked or not.
     ///
-    /// Unlike [`holds_unmarked`](Self::holds_unmarked), a comment-marked
-    /// (exclusive) hold counts too — so `lock -c "reservation"` stays
-    /// releasable by a plain `unlock` in the same session, while a sibling
-    /// `TargetLock` object (a second loaded template, a second MCP session)
-    /// sharing this refhost — whose `held` this instance never set — does not.
+    /// Unlike [`holds_unmarked`](Self::holds_unmarked), a comment-marked (exclusive) hold
+    /// counts, so `lock -c "reservation"` stays releasable by a plain `unlock`, while a
+    /// sibling `TargetLock` sharing this refhost does not.
     #[must_use]
     pub(crate) fn holds(&self) -> bool {
         self.held.is_some()
@@ -765,15 +727,11 @@ impl<C: Clock> TargetLock<C> {
     /// Loads the lock state from the remote host into [`Self::lock`].
     ///
     /// **Fails closed**: only a genuinely *missing* lockfile
-    /// ([`HostError::SftpNotFound`]) resets to the empty (unlocked) state.
-    /// Every other error — a
-    /// permission-denied read, a transport blip, a truncated/garbled read — is
-    /// propagated, because reporting "unlocked" for an *unknown* state would let
-    /// us claim a host another owner already holds.
-    ///
-    /// A lockfile that is present but not a valid lock line (empty, not UTF-8,
-    /// malformed) sets [`invalid`](Self::invalid) and leaves the lock default:
-    /// the host is neither free nor held by a known owner.
+    /// ([`HostError::SftpNotFound`]) resets to unlocked; every other error is
+    /// propagated, since reporting "unlocked" for an *unknown* state could claim a host
+    /// another owner holds. A present but invalid lockfile sets
+    /// [`invalid`](Self::invalid) and leaves the lock default: neither free nor held by a
+    /// known owner.
     async fn load(&mut self) -> Result<()> {
         self.lock = RemoteLock::default();
         self.invalid = false;
@@ -827,14 +785,13 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
-    /// Re-reads a just-loaded invalid lockfile that may still be being written.
+    /// Re-reads a just-loaded invalid lockfile that may still be being written (a
+    /// claimant creates the file and writes its line in two steps).
     ///
-    /// A claimant creates the file and writes its line in two steps, so a file
-    /// that reads empty may belong to a live claimant. One provably older than
-    /// [`INVALID_SETTLE_SECS`] is invalid at once; otherwise the file is re-read
-    /// every [`INVALID_SETTLE_POLL_SECS`] until it parses, vanishes, or the
-    /// window is spent. On return [`invalid`](Self::invalid) is true only if it
-    /// is still invalid.
+    /// One provably older than [`INVALID_SETTLE_SECS`] is invalid at once; otherwise it
+    /// is re-read every [`INVALID_SETTLE_POLL_SECS`] until it parses, vanishes, or the
+    /// window is spent. On return [`invalid`](Self::invalid) is true only if still
+    /// invalid.
     async fn settle(&mut self) -> Result<()> {
         if !self.invalid {
             return Ok(());
@@ -860,13 +817,12 @@ impl<C: Clock> TargetLock<C> {
         Ok(())
     }
 
-    /// The age of the current lock in seconds, or `None` when unlocked or the
-    /// stored timestamp is missing/malformed (callers treat such a lock as
-    /// "leave it alone").
+    /// The age of the current lock in seconds, or `None` when unlocked or the stored
+    /// timestamp is missing/malformed (callers leave such a lock alone).
     ///
-    /// An invalid lockfile has no stored timestamp, so its age is the time since
-    /// the remote file was last modified; `None` when the server reports no
-    /// modification time, or one in the future.
+    /// An invalid lockfile has no timestamp, so its age is the time since the remote
+    /// file was last modified (`None` when the server reports none, or one in the
+    /// future).
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load) or the mtime read.
@@ -884,15 +840,13 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
-    /// Force-removes the lock if it is older than the configured stale age.
-    ///
-    /// Controlled by `lock_reap_stale` (default on) and `lock_stale_age`
-    /// (default 86400s) — `pool_reap_stale` / `pool_stale_age` for a pool
-    /// claim, whose foreign owner's PID disappearing never frees it; an orphan
-    /// left by an uncatchable exit would otherwise block arbitration until a
-    /// manual `unlock -f -p`. A zero age disables reaping. Applies to any lock,
-    /// including exclusive (commented) ones and foreign locks, since a
-    /// sufficiently old lock is almost always abandoned.
+    /// Force-removes the lock if it is older than the configured stale age:
+    /// `lock_reap_stale` / `lock_stale_age` (default 86400s), or `pool_reap_stale` /
+    /// `pool_stale_age` for a pool claim, which a foreign owner's vanished PID never
+    /// frees (an orphan from an uncatchable exit would otherwise block arbitration until
+    /// a manual `unlock -f -p`). A zero age disables reaping. Applies to any lock,
+    /// including exclusive (commented) and foreign ones, since a sufficiently old lock is
+    /// almost always abandoned.
     ///
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
@@ -1033,20 +987,16 @@ impl<C: Clock> TargetLock<C> {
     /// claim reconciles by RRID instead: ours is adopted untouched, stale is
     /// reaped, and it never waits.
     ///
-    /// **Race-safe**: a foreign lock is never blind-overwritten. The only
-    /// non-exclusive (truncating) write is a re-stamp of a lock this process
-    /// *already owns*. Ownership on the wire is PID-based, so "already owns"
-    /// alone cannot separate this instance from a sibling `TargetLock` in the
-    /// same process (a second loaded template, a second MCP session) that
-    /// took a deliberate, comment-marked reservation under our identical
-    /// identity: the re-stamp additionally refuses when this instance never
-    /// took *this* lock (`held.is_none()`) and the loaded comment is a
-    /// reservation that differs from the one about to be written — a
-    /// same-comment re-apply (the PI autolock after a reconnect) still
-    /// succeeds. When wait/reap frees the host, the acquisition is a
-    /// **retried atomic exclusive create**, so a racer that took the lock in
-    /// the TOCTOU window between our last check and the write wins and we
-    /// reconcile again rather than stomping their line.
+    /// **Race-safe**: a foreign lock is never blind-overwritten. The only non-exclusive
+    /// (truncating) write is a re-stamp of a lock this process *already owns*. Wire
+    /// ownership is PID-based and cannot separate this instance from a sibling
+    /// `TargetLock` in the same process that took a comment-marked reservation under our
+    /// identity, so the re-stamp also refuses when this instance never took *this* lock
+    /// (`held.is_none()`) and the loaded comment is a reservation that differs from the
+    /// one being written; a same-comment re-apply (the PI autolock after a reconnect)
+    /// still succeeds. When wait/reap frees the host, acquisition is a **retried atomic
+    /// exclusive create**, so a racer in the TOCTOU window wins and we reconcile again
+    /// rather than stomping their line.
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is held by another
@@ -1074,10 +1024,9 @@ impl<C: Clock> TargetLock<C> {
                 Create::Occupied => {}
             }
             if matches!(self.ownership, Ownership::Pool { .. }) {
-                // A claim that is already ours is adopted byte-for-byte —
-                // without a truncating re-stamp or a refreshed timestamp; a
-                // stale foreign claim is reaped and the create retried; a fresh
-                // one is refused untouched. Pool acquisition never waits.
+                // A claim already ours is adopted byte-for-byte (no re-stamp or refreshed
+                // timestamp); a stale foreign one is reaped and the create retried; a fresh one is
+                // refused untouched. Pool acquisition never waits.
                 if self.is_mine()? {
                     self.mark_held(self.lock.comment.clone());
                     return Ok(());
@@ -1088,17 +1037,12 @@ impl<C: Clock> TargetLock<C> {
                 return Err(self.contention().await?);
             }
             if self.owned_here()? {
-                // The wire's ownership check is PID-based, so it cannot tell
-                // this instance apart from a sibling `TargetLock` in the same
-                // process (a second loaded template, a second MCP session)
-                // that stamped a deliberate reservation under our identical
-                // identity. Refuse the re-stamp rather than clobber it: this
-                // instance never took *this* lock (`held.is_none()`), the
-                // loaded comment is non-empty (a reservation — an operation
-                // lock stamps `""`, so this never blocks a plain re-lock), and
-                // it differs from the comment we are about to write (a
-                // same-comment re-apply, e.g. the PI autolock after a
-                // reconnect, is not a clobber).
+                // PID-based wire ownership cannot tell this instance from a sibling `TargetLock`
+                // in the same process that stamped a deliberate reservation under our identity.
+                // Refuse the re-stamp when this instance never took *this* lock
+                // (`held.is_none()`), the loaded comment is non-empty (an operation lock stamps
+                // `""`, so a plain re-lock is never blocked) and it differs from ours (a
+                // same-comment re-apply is not a clobber).
                 if self.held.is_none()
                     && !self.lock.comment.is_empty()
                     && self.lock.comment != rl.comment
@@ -1114,10 +1058,8 @@ impl<C: Clock> TargetLock<C> {
                     return Ok(());
                 }
                 if timeout_reconciled {
-                    // The line on the host is the one our timed-out create
-                    // just wrote: adopt it as-is rather than risking a second
-                    // timeout on a redundant re-stamp. The loaded `self.lock`
-                    // is authoritative.
+                    // Adopt the line our timed-out create just wrote rather than risking a second
+                    // timeout on a redundant re-stamp; the loaded `self.lock` is authoritative.
                     self.mark_held(self.lock.comment.clone());
                     return Ok(());
                 }
@@ -1141,14 +1083,12 @@ impl<C: Clock> TargetLock<C> {
         Err(self.contention().await?)
     }
 
-    /// One atomic exclusive create of `rl`, then — when the file already exists
-    /// — a fail-closed load of it.
+    /// One atomic exclusive create of `rl`, then, when the file already exists, a
+    /// fail-closed load of it.
     ///
-    /// A create whose reply timed out is reconciled at most once per `lock()`
-    /// call (`timeout_reconciled`): it may well have landed server-side, so the
-    /// next load is trusted as authoritative instead of assuming failure. A
-    /// *second* timeout is a real, propagating error, not another
-    /// [`RECONCILE_RETRIES`](Self::RECONCILE_RETRIES)-style budget.
+    /// A create whose reply timed out is reconciled at most once per `lock()` call
+    /// (`timeout_reconciled`): it may have landed server-side, so the next load is
+    /// trusted as authoritative. A *second* timeout is a real, propagating error.
     ///
     /// # Errors
     /// Propagates an SFTP error from the create or the load.
@@ -1215,10 +1155,9 @@ impl<C: Clock> TargetLock<C> {
     /// owner's lock is removed. A no-op on an unlocked host.
     ///
     /// **Fails closed on removal**: an already-missing lockfile
-    /// ([`HostError::SftpNotFound`]) counts as released, but
-    /// any other remove failure (permission, transport) propagates and leaves
-    /// the in-memory lock state intact — the caller must not believe it released
-    /// a lock it did not.
+    /// ([`HostError::SftpNotFound`]) counts as released, but any other remove failure
+    /// propagates and leaves the in-memory lock state intact, so the caller never
+    /// believes it released a lock it did not.
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the lock is foreign and not
@@ -1238,13 +1177,11 @@ impl<C: Clock> TargetLock<C> {
         match self.connection.sftp_remove(&path).await {
             Ok(()) => {}
             Err(HostError::SftpNotFound { .. }) => {
-                // Already gone — treat as released.
                 tracing::debug!(host = %self.hostname(), "lockfile already gone");
             }
             Err(e) => {
-                // A permission/transport failure did NOT remove the lock; do not
-                // pretend we released it (fail closed — leave self.lock and the
-                // `held` record intact).
+                // A permission/transport failure did NOT remove the lock: fail closed, leaving
+                // `self.lock` and `held` intact.
                 return Err(e);
             }
         }
@@ -1288,19 +1225,15 @@ impl<C: Clock> TargetLock<C> {
         &self.lock
     }
 
-    /// The owner from the most recent [`load`](Self::load), with **no** remote
-    /// read.
+    /// The owner from the most recent [`load`](Self::load), with **no** remote read.
     ///
-    /// Never stale, only ever empty: [`load`](Self::load) resets the cache
-    /// before reading, so an unread lock yields blank fields rather than a
-    /// previous owner. The invariant callers must maintain is that the
-    /// [`HostError::TargetLocked`] they report came off a path that loaded — the
-    /// acquire/release paths do, via
-    /// [`locked_by_msg`](Self::locked_by_msg), whereas
-    /// [`is_mine`](Self::is_mine)'s "not locked" error raises with no load and
-    /// stays out of these reports only because every caller guards it with
-    /// [`is_locked`](Self::is_locked) first. Re-reading per field instead would
-    /// put two more SFTP round-trips on the contended path (#482, #521).
+    /// Never stale, only ever empty: `load` resets the cache first, so an unread lock
+    /// yields blank fields. Callers must report a [`HostError::TargetLocked`] only off a
+    /// path that loaded (the acquire/release paths do, via
+    /// [`locked_by_msg`](Self::locked_by_msg)); [`is_mine`](Self::is_mine)'s "not
+    /// locked" error raises without a load, and stays out of these reports because every
+    /// caller guards it with [`is_locked`](Self::is_locked). Re-reading per field would
+    /// add two SFTP round-trips on the contended path.
     #[must_use]
     pub(crate) fn loaded_owner(&self) -> LockOwner {
         LockOwner {
@@ -1310,14 +1243,12 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
-    /// Resolves the lock's on-disk state and ownership into a [`LockRow`] with
-    /// a **single** remote read, for lock reporting
-    /// ([`Target::lock_status`](crate::Target::lock_status)).
-    ///
-    /// One [`load`](Self::load); `is_mine` is derived from the freshly-loaded
-    /// cache, and a pool claim's detail comment is its owning RRID, parsed from
-    /// the same cached line. Leaves the per-field async accessors for the
-    /// wait/claim/unlock callers, which intentionally re-read between retries.
+    /// Resolves the lock's on-disk state and ownership into a [`LockRow`] with a
+    /// **single** remote read, for
+    /// [`Target::lock_status`](crate::Target::lock_status): `is_mine` is derived from the
+    /// freshly-loaded cache, and a pool claim's detail comment is its owning RRID. The
+    /// per-field async accessors stay for the wait/claim/unlock callers, which re-read
+    /// between retries.
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).

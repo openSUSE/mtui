@@ -2,14 +2,9 @@
 //!
 //! Defines the trait, the russh-backed [`SshConnection`], and the scriptable
 //! [`MockConnection`] double. The [`Target`](crate) state machine drives one
-//! `Box<dyn Connection>` per host, so the trait is kept object-safe and the
-//! mock swaps in freely under test. Command results are
-//! [`mtui_types::hostlog::CommandLog`], whose exit code uses `-1` as the "no
-//! exit code / timed out" sentinel.
-//!
-//! `shell` (feature `shell`) returns the transport primitive only — the
-//! raw-`termios` local TTY bridge and the `shell` REPL command that consume it
-//! are a CLI concern (`mtui-cli`).
+//! `Box<dyn Connection>` per host, so the trait stays object-safe. Command results
+//! are [`mtui_types::hostlog::CommandLog`], whose exit code `-1` means "no exit
+//! code / timed out".
 
 mod mock;
 mod safe_upload;
@@ -57,13 +52,10 @@ pub trait Connection: Send + Sync {
     /// The hostname this connection targets.
     fn hostname(&self) -> &str;
 
-    /// Clones this connection into a fresh `Box<dyn Connection>` that shares the
-    /// same underlying transport channel.
-    ///
-    /// A [`Target`](crate::Target) and its [`TargetLock`](crate::TargetLock)
-    /// each own one, so the lock is built from a clone. The clone is cheap and
-    /// reaches the same host ([`MockConnection`] shares its scripted state via
-    /// `Arc`), preserving the single-connection-per-host contract.
+    /// Clones this connection into a fresh `Box<dyn Connection>` sharing the same
+    /// underlying transport, so a [`Target`](crate) and its
+    /// [`TargetLock`](crate::TargetLock) can each own one while keeping the
+    /// single-connection-per-host contract.
     fn clone_box(&self) -> Box<dyn Connection>;
 
     /// Runs a command over the channel, blocking until it terminates.
@@ -79,9 +71,8 @@ pub trait Connection: Send + Sync {
 
     /// Replaces the per-command no-output window on the live connection.
     ///
-    /// Lets [`Target::set_timeout`](crate::Target::set_timeout) reach a host
-    /// that is already dialled: without this the stored value would only take
-    /// effect at the next [`connect`](crate::Target::connect).
+    /// Lets [`Target::set_timeout`](crate::Target::set_timeout) reach a host that is
+    /// already dialled.
     fn set_command_timeout(&mut self, timeout: CommandTimeout);
 
     /// Reports whether the underlying transport is currently active.
@@ -97,11 +88,10 @@ pub trait Connection: Send + Sync {
 
     /// Re-establishes the transport if it has dropped.
     ///
-    /// `retry` is the number of probe attempts beyond the first; `backoff`
-    /// selects a growing per-probe sleep (`2*(base + 5*count)`) over a flat
-    /// one. Only callers recovering from a reboot pass a generous `retry` with
-    /// `backoff = true`; a dead link mid-command passes `(0, false)` to fail
-    /// fast.
+    /// `retry` is the number of probe attempts beyond the first; `backoff` selects a
+    /// growing per-probe sleep (`2*(base + 5*count)`) over a flat one. Reboot
+    /// recovery passes a generous `retry` with `backoff = true`; a dead link
+    /// mid-command passes `(0, false)` to fail fast.
     ///
     /// # Errors
     ///
@@ -134,9 +124,8 @@ pub trait Connection: Send + Sync {
     /// parent-directory creation and `0770` executable contract as
     /// [`sftp_put`](Self::sftp_put).
     ///
-    /// Lets a fan-out upload read an immutable local payload **once** and
-    /// dispatch the shared bytes to every host; [`sftp_put`](Self::sftp_put) is
-    /// the wrapper that reads `local` then calls this.
+    /// Lets a fan-out upload read an immutable local payload once and share the
+    /// bytes across hosts.
     ///
     /// # Errors
     ///
@@ -165,8 +154,7 @@ pub trait Connection: Send + Sync {
 
     /// Reads a remote file's full contents over SFTP.
     ///
-    /// Object safety means bytes rather than a live handle; that covers every
-    /// current caller (small config/metadata reads).
+    /// Returns bytes rather than a live handle, to stay object-safe.
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>>;
 
     /// Reads at most `max_bytes` of a remote file over SFTP, never retaining
@@ -180,13 +168,10 @@ pub trait Connection: Send + Sync {
 
     /// Writes `data` to a remote file over SFTP.
     ///
-    /// The write counterpart to [`sftp_open`](Self::sftp_open) and the
-    /// primitive the remote-lock protocol is built on. `exclusive = false` is a
-    /// truncating overwrite; `exclusive = true` is an **atomic create**
-    /// (`O_CREAT | O_EXCL`) closing the read-then-write TOCTOU window, whose
-    /// collision returns
-    /// [`HostError::AlreadyExists`](crate::HostError::AlreadyExists) so a racing
-    /// caller reconciles instead of clobbering the winner.
+    /// The write counterpart to [`sftp_open`](Self::sftp_open) and the primitive the
+    /// remote-lock protocol is built on. `exclusive = false` truncates and
+    /// overwrites; `exclusive = true` is an atomic create (`O_CREAT | O_EXCL`) whose
+    /// collision returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists).
     ///
     /// # Errors
     ///
@@ -197,11 +182,9 @@ pub trait Connection: Send + Sync {
 
     /// Atomically appends `data` to the end of a remote file over SFTP.
     ///
-    /// Opens with `O_APPEND | O_CREAT` and never truncates, so there is no
-    /// read-modify-write window: concurrent appenders each extend the file
-    /// without clobbering one another. That is what the shared
-    /// `/var/log/mtui.log` history contract needs when several mtui processes
-    /// (including older releases) write to the same host.
+    /// Opens with `O_APPEND | O_CREAT` and never truncates, so concurrent appenders
+    /// (including older mtui releases) cannot clobber one another on the shared
+    /// `/var/log/mtui.log` history.
     async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()>;
 
     /// Deletes a remote file over SFTP.
@@ -222,21 +205,17 @@ pub trait Connection: Send + Sync {
     /// Opens a batched SFTP session that reuses one channel+subsystem across
     /// several reads, returning an object-safe [`SftpSession`] handle.
     ///
-    /// A multi-read probe (e.g. [`parse_system`](crate::target::parse_system)
-    /// on a host with many product files) pays the SFTP handshake **once**
-    /// instead of per op. Purely an optimization boundary: no behavioural
-    /// contract beyond identical per-read semantics. The session reconnects a
-    /// dropped transport at entry like the per-op path, but **mid-session**
-    /// errors propagate without auto-retry.
+    /// A multi-read probe pays the SFTP handshake once instead of per op, with
+    /// identical per-read semantics. The session reconnects a dropped transport at
+    /// entry, but mid-session errors propagate without auto-retry.
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>>;
 
     /// Opens an interactive PTY shell on the host, returning an object-safe
     /// [`ShellChannel`] duplex.
     ///
-    /// Requests an `xterm` PTY sized `cols`×`rows` and invokes a login shell.
-    /// The handle carries the transport only — the raw-`termios` local-terminal
-    /// bridge (stdin↔channel↔stdout) is deliberately a CLI concern. Available
-    /// only with the `shell` feature.
+    /// Requests an `xterm` PTY sized `cols`×`rows` and invokes a login shell. The
+    /// raw-`termios` terminal bridge is a CLI concern. Available only with the
+    /// `shell` feature.
     #[cfg(feature = "shell")]
     async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>>;
 }

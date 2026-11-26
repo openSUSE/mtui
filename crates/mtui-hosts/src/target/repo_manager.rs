@@ -1,40 +1,21 @@
 //! Per-target zypper repository manager.
 //!
-//! ## Scope
+//! [`RepoManager`] owns the per-target zypper repository lifecycle, keeping [`Target`]
+//! focused on the connection/lock skeleton: `set` forwards into
+//! `testreport.set_repo(target, operation)`, and
+//! [`run_zypper`](RepoManager::run_zypper) runs the `ar`/`rr` loop over the target's
+//! flattened system and finishes with a `zypper ref` (via `transactional-update` on
+//! read-only-root hosts). An unknown command triggers the force-unlock safeguard.
 //!
-//! [`RepoManager`] collects the two repository-shape methods so [`Target`] can
-//! stay focused on the connection/lock skeleton:
+//! Unlike the read-only `Reporter`, `RepoManager` borrows `&mut Target`, because it
+//! issues commands and may force-unlock ([`Target::unlock`]). Obtain one via
+//! [`Target::repo_manager`].
 //!
-//! * `set` — the one-line forward into
-//!   `testreport.set_repo(target, operation)`; kept on the collaborator so
-//!   callers reach for `target.repo_manager().set(...)` instead of
-//!   `target.set_repo(...)`.
-//! * [`run_zypper`](RepoManager::run_zypper) — fans the zypper `ar`/`rr`
-//!   add/remove loop out across the target's flattened system and finishes with
-//!   a `zypper ref` (routed through `transactional-update` on read-only-root
-//!   hosts). The unknown-cmd safeguard (force-unlock followed by an error) is
-//!   preserved.
-//!
-//! ## `&mut Target` vs the immutable `Reporter`
-//!
-//! Unlike the sibling `Reporter`, which only
-//! *reads* the target and so borrows it immutably, `RepoManager` must **mutate**
-//! the target: it issues commands (`Target::run`) and, on the unknown-cmd
-//! safeguard path, force-unlocks it ([`Target::unlock`]). It therefore borrows
-//! `&mut Target`. Obtain one via [`Target::repo_manager`], which hands out a
-//! fresh binding over the live target each time.
-//!
-//! ## The [`SetRepo`] seam
-//!
-//! `set` forwards into `testreport.set_repo(...)`, but the concrete
-//! test-report types live in `mtui-testreport` — a *higher* crate. A direct
-//! dependency here would make `mtui-hosts` depend on `mtui-testreport` and
-//! **break the acyclic crate graph**. So `set` dispatches through the
-//! object-safe [`SetRepo`] trait defined here; the concrete
-//! `impl SetRepo for SlReport` (and the other report types) live in
-//! `mtui-testreport` and are driven via
-//! [`HostsGroup::fanout_set_repo`](super::HostsGroup) — mirroring exactly how
-//! [`operation`](super::operation) injects its doer/check registries through the
+//! The concrete test-report types live in `mtui-testreport`, a higher crate, so `set`
+//! dispatches through the object-safe [`SetRepo`] trait defined here to keep the crate
+//! graph acyclic. The `impl SetRepo for SlReport` (and the other report types) are
+//! driven via [`HostsGroup::fanout_set_repo`](super::HostsGroup), as
+//! [`operation`](super::operation) does with the
 //! [`OperationGroup`](super::operation::OperationGroup) seam.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -49,8 +30,7 @@ use super::Target;
 
 /// Which repository change a `set` forwards: add or remove.
 ///
-/// Modelling them as a two-variant enum keeps the seam
-/// typed; `as_str` renders the wire token for a
+/// A two-variant enum keeps the seam typed; `as_str` renders the wire token for a
 /// [`SetRepo`] implementer that wants it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoOp {
@@ -167,11 +147,10 @@ impl RepoOutcome {
 
 /// Why a [`RepoManager::run_zypper`] fan-out failed on one host.
 ///
-/// [`run_zypper`](RepoManager::run_zypper) drives several `zypper` commands per
-/// host and records the *first* one that fails as the run's verdict — see
-/// [`Target::last_repo`](super::Target::last_repo). The variant is what a
-/// consumer routes on; `Display` renders the exact wording `set_repo` has
-/// always printed, so a caller reading only the message sees no change.
+/// [`run_zypper`](RepoManager::run_zypper) drives several `zypper` commands per host
+/// and records the *first* failure as the run's verdict (see
+/// [`Target::last_repo`](super::Target::last_repo)). Consumers route on the variant;
+/// `Display` renders the wording `set_repo` prints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoFailure {
     /// `zypper ar` did not register the alias.
@@ -218,17 +197,14 @@ impl std::fmt::Display for RepoFailure {
     }
 }
 
-/// The report-side hook a `RepoManager::set` forwards into — the injection
-/// point for `testreport.set_repo(target, operation)`, and the seam the update
-/// flow reads the report's composition and repository map through.
+/// The report-side hook a `RepoManager::set` forwards into
+/// (`testreport.set_repo(target, operation)`), and the seam the update flow reads the
+/// report's composition and repository map through.
 ///
-/// Object-safe (`&dyn SetRepo`) and `async` (the report's `set_repo` ultimately
-/// drives async `zypper` fan-out through [`RepoManager::run_zypper`]), matching
-/// the `#[async_trait]` convention used by
+/// Object-safe and `async`, as with
 /// [`OperationGroup`](super::operation::OperationGroup). The concrete
-/// implementations (`SlReport`, `ObsReport`, …) live in `mtui-testreport` and
-/// are dispatched through this seam; keeping the trait here preserves the
-/// acyclic crate graph.
+/// implementations (`SlReport`, `ObsReport`, …) live in `mtui-testreport`, which keeps
+/// the crate graph acyclic.
 #[async_trait::async_trait]
 pub trait SetRepo: Send + Sync {
     /// Add or remove this report's repositories on `target`.
@@ -274,11 +250,8 @@ impl<'a> RepoManager<'a> {
         Self { target }
     }
 
-    /// Asks `report` to add or remove repos on the bound target.
-    ///
-    /// Logs at debug and forwards to
-    /// [`SetRepo::set_repo`], the report-side hook implemented in
-    /// `mtui-testreport`.
+    /// Asks `report` to add or remove repos on the bound target via
+    /// [`SetRepo::set_repo`], logging at debug.
     pub(crate) async fn set(&mut self, operation: RepoOp, report: &dyn SetRepo) {
         debug!(host = %self.target.hostname(), op = operation.as_str(), "changing repos");
         report.set_repo(self.target, operation).await;
@@ -286,52 +259,39 @@ impl<'a> RepoManager<'a> {
 
     /// Runs a fan-out `zypper` command across the target's repos.
     ///
-    /// Iterates the `repos` [`RepoOutcome::reach`] matches to the target's
-    /// flattened system; for each matching product/repo pair, `cmd` drives one
-    /// of:
+    /// For each product/repo pair [`RepoOutcome::reach`] matches to the target's
+    /// flattened system, `cmd` drives one of:
     ///
-    /// * **`ar`** (add-repo, `cmd` contains `"ar"`) →
-    ///   `zypper <cmd> <alias> <url> <alias>` with alias
-    ///   `issue-<name>:<version>:p=<maintenance_id>:<review_id>`. A non-zero
-    ///   exit does not by itself mean the repo is absent — zypper also exits
-    ///   non-zero on an already-registered alias — so it is verified with a
-    ///   `zypper -n lr <alias>` postcondition probe: a `0` probe means the
-    ///   repo is registered (a benign collision, WARNING only), a non-zero
-    ///   probe means it genuinely is not (recorded as a failure).
-    /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`. A
-    ///   non-zero exit is surfaced as a WARNING and recorded, same as `ar`:
-    ///   zypper exits 0 (not an error) when the repo being removed was never
-    ///   registered, so a non-zero exit here is always a genuine failure, not
-    ///   a benign no-op.
-    ///
-    /// The metadata-derived `alias` and `url` are shell-quoted at this exec
-    /// boundary (they run as root), so a crafted value cannot inject a command;
-    /// URLs are additionally validated at ingestion (see `repoparse`).
+    /// * **`ar`** (`cmd` contains `"ar"`) → `zypper <cmd> <alias> <url> <alias>` with
+    ///   alias `issue-<name>:<version>:p=<maintenance_id>:<review_id>`. A non-zero exit
+    ///   does not by itself mean the repo is absent (zypper also exits non-zero on an
+    ///   already-registered alias), so a `zypper -n lr <alias>` probe decides: `0` is a
+    ///   benign collision (WARNING only), non-zero a recorded failure.
+    /// * **`rr`** (`cmd` contains `"rr"`) → `zypper <cmd> <url>`. zypper exits 0 when the
+    ///   repo was never registered, so a non-zero exit is always a genuine failure:
+    ///   warned and recorded.
     /// * **anything else** → force-unlock the target ([`Target::unlock`] with
-    ///   `force = true`) and return [`false`] as a safeguard against an
-    ///   unrecognised command. (The typed error the caller
-    ///   sees is out of scope for the safeguard itself; the boolean signals
-    ///   "unknown command, bailed".)
+    ///   `force = true`) and return [`false`] as a safeguard against an unrecognised
+    ///   command.
     ///
-    /// When no repo product matches the host's flattened system (`matched == 0`)
-    /// a WARNING fires listing the update's products vs the host's, and an add
-    /// records the outcome [`RepoOutcome::reach`] gives for it, so the caller
-    /// can say why nothing was added — even when the refresh then fails, which
-    /// its own WARNING still reports.
+    /// The metadata-derived `alias` and `url` are shell-quoted at this exec boundary
+    /// (they run as root); URLs are additionally validated at ingestion (see
+    /// `repoparse`).
     ///
-    /// Every path but the two bails below finishes with a refresh so later
-    /// operations see the freshly (un)registered repos: `zypper -n ref`, or
-    /// `transactional-update --non-interactive run zypper
-    /// --gpg-auto-import-keys -n ref` on a transactional (read-only-root) host,
-    /// where a plain `zypper ref` of a not-yet-trusted signed repo would fail
-    /// importing the key into the read-only rpmdb. A failed refresh is also
-    /// surfaced as a WARNING.
+    /// When no repo product matches the host (`matched == 0`) a WARNING lists the
+    /// update's products vs the host's, and an add records the outcome
+    /// [`RepoOutcome::reach`] gives, even if the refresh then fails (its own WARNING still
+    /// fires).
     ///
-    /// Returns `true` on the normal path and `false` when it bails *without*
-    /// running the refresh: on the unknown-cmd safeguard (after force-unlocking
-    /// via [`Target::unlock`]), and on a host whose root mode is undecided
-    /// ([`Target::root_mode_undecided`]), where it runs no command at all and
-    /// records [`RepoFailure::RootModeUnknown`].
+    /// Every path but the two bails finishes with a refresh: `zypper -n ref`, or
+    /// `transactional-update --non-interactive run zypper --gpg-auto-import-keys -n ref`
+    /// on a read-only-root host, where a plain refresh of a not-yet-trusted signed repo
+    /// would fail importing the key into the read-only rpmdb.
+    ///
+    /// Returns `true` normally and `false` when it bails *without* refreshing: on the
+    /// unknown-cmd safeguard, and on a host whose root mode is undecided
+    /// ([`Target::root_mode_undecided`]), where it runs no command and records
+    /// [`RepoFailure::RootModeUnknown`].
     pub async fn run_zypper(
         &mut self,
         cmd: &str,
@@ -351,14 +311,13 @@ impl<'a> RepoManager<'a> {
             return false;
         }
 
-        // Aggregate the whole run's verdict for `Target::last_repo`: any non-zero
-        // zypper exit (a failed `ar`/`rr`, or the trailing `ref`) is a per-host
-        // failure, even though only the *last* command lands in the `HostLog` and
-        // so is visible via `lasterr()`/`lastexit()`. Recorded at every return.
+        // Aggregate the run's verdict for `Target::last_repo`: any non-zero zypper exit
+        // (a failed `ar`/`rr`, or the trailing `ref`) is a per-host failure, though only
+        // the last command lands in the `HostLog`.
         let mut failure: Option<RepoFailure> = None;
 
-        // Snapshot the flattened system once so the borrow of `self.target`
-        // does not overlap the mutable `run`/`unlock` calls below.
+        // Snapshot the flattened system so its borrow does not overlap the mutable calls
+        // below.
         let flattened = self.target.system().flatten();
         let hostname = self.target.hostname().to_owned();
 
@@ -368,11 +327,8 @@ impl<'a> RepoManager<'a> {
         let matched_repos = reach.as_deref().unwrap_or_default();
 
         if matched_repos.is_empty() {
-            // Unknown command still has to hit the force-unlock safeguard even
-            // when nothing matched, but the safeguard is a per-pair concern
-            // reached only inside the loop; with no matches, no per-pair
-            // branch is taken, so an unknown cmd is a silent no-op except for
-            // the matched==0 warning + refresh. We therefore only warn here.
+            // An unknown cmd with no matches takes no per-pair branch (the safeguard lives in
+            // the loop), so it is a silent no-op beyond this warning + refresh.
             let op = if is_ar {
                 "add"
             } else if is_rr {
@@ -407,8 +363,7 @@ impl<'a> RepoManager<'a> {
                 // break out of its argument into the root command line.
                 let args = quote_args(&[alias.as_str(), url.as_str(), alias.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
-                // Surface a failed add instead of returning silent success: a
-                // non-zero zypper exit here means the repo was NOT registered.
+                // Surface a failed add instead of returning silent success.
                 if self.target.lastexit() != Some(0) {
                     let err = last_error_line(self.target);
                     warn!(
@@ -416,13 +371,10 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
-                    // A bare non-zero `ar` cannot tell "not added" from
-                    // "already there": zypper's RepoAlreadyExistsException also
-                    // exits non-zero, and mtui's own documented
-                    // `update --noprepare` retry after a failed update
-                    // deliberately re-runs `ar` against a host where the repo
-                    // is already correctly registered. Probe the postcondition
-                    // with `zypper -n lr <alias>` before calling it a failure.
+                    // A bare non-zero `ar` cannot tell "not added" from "already there" (zypper's
+                    // RepoAlreadyExistsException also exits non-zero, and a `update --noprepare` retry
+                    // re-runs `ar` on a correctly registered host), so probe `zypper -n lr <alias>`
+                    // before calling it a failure.
                     let probe_args = quote_args(&[alias.as_str()]);
                     self.target.run(&format!("zypper -n lr {probe_args}")).await;
                     if self.target.lastexit() == Some(0) {
@@ -440,10 +392,8 @@ impl<'a> RepoManager<'a> {
                 info!("Removing repo {safe_url} on {hostname}");
                 let args = quote_args(&[url.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
-                // Unlike a bare `ar`, a non-zero `rr` here is never a benign
-                // "not registered" no-op: zypper exits 0 in that case (it only
-                // reports "not found" on stderr), so a non-zero exit is a real
-                // removal failure.
+                // Unlike `ar`, a non-zero `rr` is never benign: zypper exits 0 when the repo was
+                // not registered.
                 if self.target.lastexit() != Some(0) {
                     let err = last_error_line(self.target);
                     warn!(
@@ -454,10 +404,7 @@ impl<'a> RepoManager<'a> {
                     failure.get_or_insert(RepoFailure::Remove { url: safe_url });
                 }
             } else {
-                // Unknown sub-command: force-unlock the target and bail.
-                // The `Target` owns its `TargetLock` (built in
-                // `Target::connect`, or the test seam in `with_connection`), so
-                // we issue the force-unlock and bail with `false` as the
+                // Unknown sub-command: force-unlock the target and bail with `false` as the
                 // safeguard.
                 warn!(
                     host = %hostname, %cmd,
@@ -471,11 +418,11 @@ impl<'a> RepoManager<'a> {
             }
         }
 
-        // Refresh repo metadata. On a transactional (read-only root) host this
-        // must go through transactional-update so zypper gets a writable rpmdb
-        // in a snapshot (activated by the reboot the prepare/update flow already
-        // performs) and can import a not-yet-trusted repo key non-interactively.
-        // No `--continue`: it branches off the booted snapshot, dropping any staged leftover.
+        // Refresh repo metadata. A transactional host must go through
+        // transactional-update so zypper gets a writable rpmdb in a snapshot (activated by
+        // the reboot the prepare/update flow performs) and can import an untrusted repo
+        // key non-interactively. No `--continue`: it branches off the booted snapshot,
+        // dropping any staged leftover.
         let ref_cmd = if self.target.transactional() {
             "transactional-update --non-interactive run \
              zypper --gpg-auto-import-keys -n ref"
