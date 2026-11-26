@@ -1,25 +1,10 @@
 //! The batched SFTP session primitive.
 //!
-//! Opens **one** SFTP client and yields it for several reads against the same
-//! host, so a multi-step probe pays the SFTP channel+subsystem handshake
-//! **once** instead of per operation.
-//!
-//! ## Scope split
-//!
-//! The per-op `sftp_*` methods on [`Connection`](super::Connection) each open
-//! and close their own SFTP session. [`SftpSession`] is the object-safe
-//! batching counterpart: a caller that runs several reads in a row (e.g.
-//! [`parse_system`] on a host with many product files) opens one session via
-//! [`Connection::sftp_session`](super::Connection::sftp_session), issues its
-//! reads, then closes it — a single-handshake shape.
-//!
-//! Only the **read verbs the discovery parser uses** live here
-//! ([`open`](SftpSession::open) / [`listdir`](SftpSession::listdir) /
-//! [`readlink`](SftpSession::readlink)); the transfer and write family stay on
-//! [`Connection`](super::Connection) so the remote-lock protocol's
-//! exclusive-create semantics are untouched.
-//!
-//! [`parse_system`]: crate::target::parse_system
+//! Opens **one** SFTP client for several reads against a host, so a multi-step
+//! probe (e.g. [`parse_system`](crate::target::parse_system)) pays the
+//! channel+subsystem handshake once. Only the read verbs the discovery parser uses
+//! live here; transfer and write verbs stay on [`Connection`](super::Connection)
+//! so the remote-lock protocol's exclusive-create semantics are untouched.
 
 use std::path::Path;
 
@@ -31,21 +16,12 @@ use crate::error::Result;
 /// across several reads.
 ///
 /// Returned by [`Connection::sftp_session`](super::Connection::sftp_session).
-/// The session is opened once (reconnecting the transport first if it has
-/// dropped, like the per-op path) and closed once via [`close`](Self::close) or
-/// on drop. **Mid-session errors propagate** — this handle does not auto-retry;
-/// a caller that wants retry wraps the whole batch (as
-/// [`Target::connect`](crate::Target) does around `parse_system`).
-///
-/// Object-safe by construction (`Box<dyn SftpSession>`), so the russh-backed
-/// session and the test double are interchangeable.
+/// Mid-session errors propagate; there is no auto-retry, so a caller that wants
+/// retry wraps the whole batch (as [`Target::connect`](crate::Target) does).
+/// Object-safe, so the russh-backed session and the test double are interchangeable.
 #[async_trait]
 pub trait SftpSession: Send {
     /// Reads a remote file's full contents over the shared session.
-    ///
-    /// The object-safe counterpart to
-    /// [`Connection::sftp_open`](super::Connection::sftp_open): returns the
-    /// file's bytes.
     ///
     /// # Errors
     ///
@@ -56,7 +32,6 @@ pub trait SftpSession: Send {
 
     /// Lists the entries of a remote directory over the shared session.
     ///
-    ///
     /// # Errors
     ///
     /// Returns [`HostError::SftpNotFound`](crate::HostError::SftpNotFound) when
@@ -65,7 +40,6 @@ pub trait SftpSession: Send {
     async fn listdir(&mut self, path: &Path) -> Result<Vec<String>>;
 
     /// Returns the target of a remote symbolic link over the shared session.
-    ///
     ///
     /// # Errors
     ///

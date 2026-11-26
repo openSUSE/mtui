@@ -1,27 +1,16 @@
 //! Parallel fan-out primitives over a group of [`Target`]s.
 //!
-//! * `run_parallel` drives a set of caller-supplied futures to completion
-//!   concurrently.
-//! * `run_command` dispatches a command (one string for all hosts, or a
-//!   per-host map) to every host in parallel.
-//! * `sftp_put_all` / `sftp_get_all` fan the corresponding transfer out
-//!   across the group.
+//! `run_parallel` drives caller-supplied futures concurrently, `run_command` dispatches
+//! a command (one string, or a per-host map) to every host, and `sftp_put_all` /
+//! `sftp_get_all` fan transfers out.
 //!
-//! ### Why no output lock
+//! Each [`Target`] owns its own [`HostLog`](mtui_types::hostlog::HostLog) behind
+//! `&mut self`, so concurrent tasks hold disjoint mutable borrows and no output lock
+//! is needed.
 //!
-//! Each [`Target`]
-//! owns its own [`HostLog`](mtui_types::hostlog::HostLog) behind `&mut self`, so
-//! concurrent tasks hold **disjoint** mutable borrows — there is no shared
-//! output to guard and no lock is needed.
-//!
-//! ### The TTY spinner
-//!
-//! `run_parallel` starts a [`TtySpinner`](mod@super::spinner) for
-//! the duration of the fan-out when a `desc` is given; it is a strict no-op off
-//! a TTY (tests, redirected output, `mtui-mcp`), so behaviour with `desc=None`
-//! (or off a terminal) is identical to the plain `join_all`. The spinner erases
-//! its frame on stop, and the serialised prompter's `suspend` guard erases it
-//! during an interactive read.
+//! `run_parallel` runs a [`TtySpinner`](mod@super::spinner) for the fan-out when a
+//! `desc` is given (a strict no-op off a TTY), erased on stop and by the prompter's
+//! `suspend` guard during an interactive read.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -31,49 +20,37 @@ use futures::stream::{self, StreamExt};
 
 use super::Target;
 
-/// Fallback fan-out width when a caller passes `0` (unconfigured). Mirrors the
-/// `[connection] max_parallel` default in `mtui-config`; kept as a local
-/// constant so `mtui-hosts` needs no dependency on `mtui-config`.
+/// Fallback fan-out width when a caller passes `0`; mirrors the `[connection]
+/// max_parallel` default without a dependency on `mtui-config`.
 const DEFAULT_MAX_PARALLEL: usize = 50;
 
 /// Upper bound (bytes) for reading an upload payload once into a shared buffer.
 ///
-/// At or below this size the fan-out reads `local` a single time and dispatches
-/// the shared `Arc<[u8]>` to every host, so peak RSS is ~O(payload) rather than
-/// O(payload × hosts). Above it, each host streams the file from disk itself
-/// (per-host re-read) to keep memory bounded for very large uploads. mtui
+/// At or below it the fan-out shares one `Arc<[u8]>` across hosts (peak RSS
+/// ~O(payload)); above it each host streams the file itself to stay bounded. mtui
 /// uploads are small test scripts, so the shared path is the common case.
 const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 
-/// Drives every future in `futures` to completion concurrently.
+/// Drives every future in `futures` to completion concurrently; an empty input
+/// returns immediately.
 ///
-/// Drives futures concurrently. An empty
-/// input returns immediately. When `desc` is `Some`, a labelled
-/// [`TtySpinner`](super::spinner::TtySpinner) paints for the duration of the
-/// fan-out (a no-op off a TTY, so tests and `mtui-mcp` stay clean) and is
-/// stopped — erasing its frame — when the batch completes.
+/// When `desc` is `Some`, a labelled [`TtySpinner`](super::spinner::TtySpinner)
+/// paints for the fan-out (a no-op off a TTY) and is stopped when the batch
+/// completes.
 ///
-/// The per-target futures built by [`run_command`] and the `sftp_*_all`
-/// helpers never fail: [`Target::run`] and the SFTP methods swallow and log
-/// their own errors (the `-1`-sentinel / log-not-propagate contract),
-/// so one bad host can never abort the fan-out. `run_parallel` therefore has no
-/// error to propagate and returns `()`.
+/// The per-target futures never fail: [`Target::run`] and the SFTP methods swallow
+/// and log their own errors (the `-1`-sentinel / log-not-propagate contract), so one
+/// bad host never aborts the fan-out and this returns `()`.
 ///
-/// `max_parallel` bounds how many futures are polled at once (peak
-/// sockets/tasks/RSS and remote load); `0` falls back to
-/// [`DEFAULT_MAX_PARALLEL`]. Completion order is irrelevant to every caller (the
-/// group is a sorted `BTreeMap` and per-host results attach to disjoint `&mut
-/// Target` borrows), so a bounded, out-of-order scheduler
-/// (`buffer_unordered`) is observably equivalent to the previous unbounded
-/// `join_all`.
+/// `max_parallel` bounds how many futures are polled at once; `0` falls back to
+/// [`DEFAULT_MAX_PARALLEL`]. Completion order is irrelevant to every caller (results
+/// attach to disjoint `&mut Target` borrows), so `buffer_unordered` is observably
+/// equivalent to an unbounded `join_all`.
 ///
-/// **A fan-out is never cancelled part-way.** Cancellation is checked at
-/// explicit call-site boundaries (see `HostsGroup::cancel_requested`), never
-/// inside this primitive: a host silently skipped mid-batch is
-/// indistinguishable downstream from a host that ran and succeeded — its stale
-/// `last*` snapshot would sail through the post-run checks and report the
-/// update as applied. Whole-batch granularity keeps "ran" and "did not run"
-/// distinguishable.
+/// **A fan-out is never cancelled part-way.** Cancellation is checked at explicit
+/// call-site boundaries (see `HostsGroup::cancel_requested`), never here: a host
+/// skipped mid-batch is indistinguishable downstream from one that ran, so its stale
+/// `last*` snapshot would pass the post-run checks and report the update as applied.
 async fn run_parallel<I, F>(futures: I, desc: Option<&str>, max_parallel: usize)
 where
     I: IntoIterator<Item = F>,
@@ -88,16 +65,13 @@ where
     } else {
         max_parallel
     };
-    // Drive a labelled spinner for the batch; `TtySpinner` is a no-op off a TTY,
-    // so this stays silent in tests / MCP. Dropping it (or the explicit `stop`)
-    // erases the frame.
+    // A labelled spinner for the batch; a no-op off a TTY.
     let mut spinner = desc.map(|d| {
         let mut s = super::spinner::TtySpinner::new(d);
         s.start();
-        // Report the resolved paint state so `mtui -d` reveals *why* a spinner is
-        // (in)visible: `enabled=false` means stderr was not detected as a TTY
-        // (piped / tmux-detached / IDE terminal), the usual cause of a missing
-        // spinner even on an interactive-looking session.
+        // Report the resolved paint state so `mtui -d` shows why a spinner is
+        // (in)visible: `enabled=false` means stderr was not detected as a TTY (piped,
+        // tmux-detached, IDE terminal).
         tracing::debug!(
             action = d,
             count = futs.len(),
@@ -117,14 +91,10 @@ where
 
 /// A boxed per-target future, borrowing the target for `'a`.
 ///
-/// [`run_fanout`]'s `op` returns this so the "future borrows the `&mut Target`
-/// it was handed" relationship is expressible on stable Rust: a bare
-/// `Fn(&mut Target) -> impl Future` bound cannot tie the returned future's
-/// lifetime to the borrow (it would have to outlive it), and the `AsyncFn` /
-/// `CallRefFuture` machinery that could is still unstable. Boxing the future
-/// carries its own `'a` lifetime, so callers just wrap their async block in
-/// [`Box::pin`]. The per-call allocation is negligible next to the SSH round
-/// trip each op performs.
+/// [`run_fanout`]'s `op` returns this because a bare `Fn(&mut Target) -> impl Future`
+/// bound cannot tie the future's lifetime to the borrow on stable Rust (`AsyncFn` is
+/// unstable); callers wrap their async block in [`Box::pin`]. The allocation is
+/// negligible next to the SSH round trip each op performs.
 pub(crate) type BoxTargetFut<'a, T = ()> =
     std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
@@ -136,18 +106,14 @@ pub(crate) fn boxed<'a, T>(
     Box::pin(fut)
 }
 
-/// Drives a per-target async `op` across a group in parallel.
+/// Drives a per-target async `op` across a group in parallel: the single fan-out
+/// primitive every per-host I/O method on [`HostsGroup`](super::HostsGroup) routes
+/// through.
 ///
-/// This is the single fan-out primitive every per-host I/O method on
-/// [`HostsGroup`](super::HostsGroup) routes through. Every (non-skipped)
-/// target is driven concurrently via [`run_parallel`].
-///
-/// `desc` labels the optional TTY spinner (a no-op off a TTY). `op` is invoked
-/// once per (non-skipped) target with `&mut Target`; the disjoint mutable
-/// borrows make the parallel batch sound without a shared lock.
-///
-/// `should_run` lets a caller skip a target entirely (e.g. a
-/// [`Command::PerHost`] map that does not cover it); return `false` to omit it.
+/// `desc` labels the optional TTY spinner. `op` is invoked once per non-skipped
+/// target with `&mut Target`; the disjoint borrows make the batch sound without a
+/// lock. `should_run` lets a caller skip a target (e.g. one a [`Command::PerHost`]
+/// map does not cover).
 pub(crate) async fn run_fanout<'t, S, F>(
     targets: &'t mut BTreeMap<String, Target>,
     is_repl: bool,
@@ -164,9 +130,8 @@ pub(crate) async fn run_fanout<'t, S, F>(
         .filter(|target| should_run(target))
         .collect();
 
-    // Diagnostic (`mtui -d`): report the resolved fan-out shape so a missing
-    // spinner is explainable. `is_repl=false` or `parallel=0` both suppress the
-    // fan-out spinner even on a TTY / with `MTUI_FORCE_SPINNER`.
+    // Diagnostic (`mtui -d`): `is_repl=false` or `parallel=0` suppresses the fan-out
+    // spinner even on a TTY / with `MTUI_FORCE_SPINNER`.
     tracing::debug!(
         is_repl,
         desc = desc.unwrap_or("<none>"),
@@ -174,8 +139,7 @@ pub(crate) async fn run_fanout<'t, S, F>(
         "fan-out dispatch"
     );
 
-    // Each future borrows a distinct target mutably, so the borrows are
-    // disjoint and need no shared lock.
+    // Each future borrows a distinct target, so no shared lock is needed.
     let parallel_futs: Vec<_> = parallel.into_iter().map(&op).collect();
     run_parallel(
         parallel_futs,
@@ -185,13 +149,11 @@ pub(crate) async fn run_fanout<'t, S, F>(
     .await;
 }
 
-/// A command to run across a group: one string for every host, or a per-host
-/// map keyed by hostname.
+/// A command to run across a group: one string for every host, or a per-host map
+/// keyed by hostname.
 ///
-/// The
-/// [`PerHost`](Command::PerHost) form lets a caller build a command for only a
-/// subset of the group (e.g. a rollback that targets only hosts with a recorded
-/// previous version); hosts not present in the map are simply skipped.
+/// [`PerHost`](Command::PerHost) lets a caller target a subset (e.g. a rollback of
+/// only hosts with a recorded previous version).
 #[derive(Debug, Clone)]
 pub enum Command {
     /// The same command string is run on every (non-skipped) host.
@@ -270,11 +232,9 @@ pub(crate) async fn sftp_put_all(
 ) {
     let remote = remote.to_path_buf();
 
-    // Read the immutable payload once when it is size-bounded, and dispatch the
-    // shared bytes to every host — a fan-out of N hosts then performs one disk
-    // read, not N. A file larger than the cap (or one that can't be stat'd or
-    // read) falls back to per-host streaming from disk, which records each
-    // host's own failure for the `put` aggregation.
+    // Read a size-bounded payload once and share the bytes across hosts (one disk
+    // read, not N). A larger or unreadable file falls back to per-host streaming,
+    // which records each host's own failure for the `put` aggregation.
     let shared: Option<Arc<[u8]>> = match tokio::fs::metadata(local).await {
         Ok(meta) if meta.len() <= SHARED_UPLOAD_CAP => tokio::fs::read(local)
             .await

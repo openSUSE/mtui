@@ -1,17 +1,4 @@
 //! Command-timeout value type and SSH host-key policy mapping.
-//!
-//! Packages two small, connection-independent helpers next to the SSH
-//! wrapper:
-//!
-//! * The command-timeout failure is modelled by
-//!   [`HostError::Timeout`](crate::HostError::Timeout); the *value* used to arm
-//!   that timeout is captured here as [`CommandTimeout`].
-//! * `policy_from_config` — maps the `ssh_strict_host_key_checking` config
-//!   string onto the transport-agnostic [`HostKeyPolicy`] enum; the russh impl
-//!   translates it into a russh client handler.
-//!
-//! Keeping these here keeps the russh `Connection` impl focused on the
-//! SSH/SFTP wrapper proper.
 
 use std::fmt;
 use std::str::FromStr;
@@ -19,27 +6,16 @@ use std::time::Duration;
 
 use mtui_types::enums::ParseEnumError;
 
-/// A duration budget for either the per-command no-output window or the SSH
-/// connect handshake, as a typed [`Duration`].
-///
-/// Sourced from `mtui-config`'s `connection_timeout` (the per-command window,
-/// default `300`s) or `connect_timeout` (the TCP connect / banner / auth
-/// handshake, default `60`s) — two distinct budgets sharing this one type. The
-/// russh impl aborts a command whose channel produces no output within the
-/// `connection_timeout` window, and separately bounds the handshake by
-/// `connect_timeout`.
+/// A duration budget for either the per-command no-output window (`connection_timeout`,
+/// default 300s) or the SSH connect handshake (`connect_timeout`, default 60s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandTimeout(Duration);
 
 impl CommandTimeout {
-    /// The default timeout, matching `mtui-config`'s
-    /// `default_connection_timeout` (300 seconds).
+    /// The default timeout, 300 seconds.
     const DEFAULT_SECS: u64 = 300;
 
     /// Builds a timeout from a whole number of seconds.
-    ///
-    /// This is the shape `connection_timeout` takes in config, so it is the
-    /// primary constructor.
     #[must_use]
     pub const fn from_secs(secs: u64) -> Self {
         Self(Duration::from_secs(secs))
@@ -58,8 +34,7 @@ impl CommandTimeout {
         self.0
     }
 
-    /// Returns the timeout as a whole number of seconds (truncating any
-    /// sub-second remainder).
+    /// Returns the timeout as whole seconds (truncating any sub-second remainder).
     #[must_use]
     pub(crate) const fn as_secs(self) -> u64 {
         self.0.as_secs()
@@ -88,10 +63,8 @@ impl From<CommandTimeout> for Duration {
 /// How the SSH client reacts to a host key that is **not already in**
 /// `known_hosts`.
 ///
-/// The policy is only consulted for *unknown* hosts: the russh handler first
-/// looks the key up in `known_hosts` (see `ClientHandler::verify`), and a key
-/// that matches a recorded entry is always accepted while a key that *differs*
-/// from one is always rejected — no policy can auto-add over a changed key.
+/// The policy is only consulted for *unknown* hosts: a key matching a recorded
+/// entry is always accepted and one that *differs* is always rejected.
 ///
 /// For an unknown host:
 /// * [`AutoAdd`](Self::AutoAdd) accepts and persists the key (atomically).
@@ -99,10 +72,8 @@ impl From<CommandTimeout> for Duration {
 /// * [`Reject`](Self::Reject) refuses — this is the **strict/verified** mode:
 ///   only hosts already present in `known_hosts` connect.
 ///
-/// The wire tokens are the exact
-/// `ssh_strict_host_key_checking` config values (`auto_add` / `warn` /
-/// `reject`), so a config string round-trips through
-/// [`FromStr`]/[`Display`](std::fmt::Display).
+/// The wire tokens are the exact `ssh_strict_host_key_checking` config values
+/// (`auto_add` / `warn` / `reject`) and round-trip through [`FromStr`]/[`Display`](std::fmt::Display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HostKeyPolicy {
     /// Silently add an unknown host key and continue.
@@ -130,11 +101,8 @@ impl HostKeyPolicy {
     /// Maps an `ssh_strict_host_key_checking` config value to a policy, falling
     /// back to [`AutoAdd`](HostKeyPolicy::AutoAdd) on an unrecognised value.
     ///
-    /// This preserves the legacy auto-add behaviour for unknown values and
-    /// emits a warning so the misconfiguration stays visible. Because
-    /// `mtui-config` loads leniently (a bad value never hard-fails), this
-    /// lenient mapping is the right seam for turning the stored string into a
-    /// typed policy.
+    /// Unknown values keep the auto-add default and emit a warning, since
+    /// `mtui-config` loads leniently and never hard-fails on a bad value.
     #[must_use]
     pub(crate) fn from_config(name: &str) -> Self {
         name.parse().unwrap_or_else(|_| {

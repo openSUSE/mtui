@@ -1,22 +1,16 @@
 //! `mtui-hosts` — SSH/SFTP host layer (russh), host groups, locks, targets.
 //!
-//! The crate provides the [`Connection`] abstraction, the russh-backed
-//! [`SshConnection`] (connect / run-with-timeout / SFTP transfers), the
-//! scriptable [`MockConnection`] test double, the [`HostError`] hierarchy, the
-//! [`Target`] state machine (enabled/disabled command gating + connection-only
-//! `connect`), and the [`HostsGroup`] composite with its parallel/serial
-//! command + SFTP fan-out, the remote-lock protocol ([`TargetLock`] /
-//! [`RemoteLock`]), the in-process [`HostArbiter`], and the
-//! host-output parsers —
-//! [`parse_system`] / [`parse_product`](target::parsers::product::parse_product) / [`parse_os_release`](target::parsers::product::parse_os_release) plus the
-//! [`PackageQuerier`], and the install/uninstall [`Operation`] template
-//! (skeleton + trait) — the `lock → run → check → reboot → unlock`
-//! flow driven over the object-safe [`OperationGroup`] seam — and, behind the
-//! `shell` feature, the interactive PTY shell: `Connection::shell` /
-//! `Target::shell` returning an object-safe `ShellChannel` duplex over the
-//! remote PTY. Only the transport primitive lives here; the raw-`termios` local
-//! terminal bridge and the `shell` REPL command that consume it are a CLI
-//! concern.
+//! The crate provides the [`Connection`] abstraction with the russh-backed
+//! [`SshConnection`] and scriptable [`MockConnection`], the [`HostError`] hierarchy,
+//! the [`Target`] state machine, the [`HostsGroup`] parallel/serial fan-out, the
+//! remote-lock protocol ([`TargetLock`] / [`RemoteLock`]), the in-process
+//! [`HostArbiter`], host-output parsers ([`parse_system`],
+//! [`parse_product`](target::parsers::product::parse_product),
+//! [`parse_os_release`](target::parsers::product::parse_os_release)), the
+//! [`PackageQuerier`], and the install/uninstall [`Operation`] template over the
+//! [`OperationGroup`] seam. Behind the `shell` feature, `Connection::shell` /
+//! `Target::shell` return a `ShellChannel` PTY duplex; the local terminal bridge is
+//! a CLI concern.
 
 pub mod connection;
 pub mod error;

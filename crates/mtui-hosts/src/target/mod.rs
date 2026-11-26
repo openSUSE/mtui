@@ -1,40 +1,18 @@
 //! The [`Target`] state machine — one reference host driven over a
 //! [`Connection`].
 //!
-//! ## Scope
+//! Owns the per-host [`TargetState`] gate (enabled / disabled), command execution
+//! via `Target::run` (`-1` exit-code sentinel; errors never propagate), the `last*`
+//! output accessors, state-gated SFTP delegation, and [`Target::connect`] (transport,
+//! then [`parse_system`] and [`Target::query_versions`]).
 //!
-//! This module owns only the **state machine over `Connection`**:
-//!
-//! * the per-host execution [`TargetState`] gate (enabled / disabled),
-//! * command execution via `Target::run` with the `-1` exit-code
-//!   sentinel and never-propagate error handling,
-//! * the `last*` output accessors,
-//! * state-gated SFTP delegation (`Target::sftp_put` / [`Target::sftp_get`]),
-//! * and [`Target::connect`], which establishes the transport and then applies
-//!   the post-connect ordering: system/product parse
-//!   ([`parse_system`]) and package version query
-//!   ([`Target::query_versions`]).
-//!
-//! The remaining responsibilities that this module does *not* own are
-//! reached through object-safe seams, keeping `mtui-hosts` acyclic:
-//!
-//! * remote locks — the [`locks`] module provides the zypper op-lock
-//!   ([`TargetLock`]) and the pool-claim lock (a [`TargetLock`] over [`POOL_LOCK_PATH`]);
-//!   [`Target::connect`] builds both objects over the live connection and runs
-//!   the connect-time op-lock check + stale-reap
-//!   (`check_stale_lock`),
-//! * reboot / reconnect lifecycle and the install/uninstall
-//!   [`Operation`] template drive their group through the object-safe
-//!   [`OperationGroup`] seam; the concrete `impl OperationGroup for HostsGroup`
-//!   binding lives in [`hostgroup`] (resolving each target's doer/check via the
-//!   injected [`PlanProvider`]),
-//! * repo management — [`RepoManager`] forwards `set`/`unset` through the
-//!   object-safe [`SetRepo`] seam, whose concrete report impls live in
-//!   `mtui-testreport`.
-//!
-//! Routing this machinery through seams preserves the acyclic crate graph
-//! (`mtui-hosts` must not depend on `mtui-testreport`) and lets the whole
-//! state machine be unit-tested offline against a `MockConnection`.
+//! Everything else is reached through object-safe seams, keeping `mtui-hosts`
+//! acyclic and unit-testable offline against a `MockConnection`: remote locks
+//! ([`locks`], including the pool-claim lock over [`POOL_LOCK_PATH`]), the
+//! [`Operation`] template (driven over [`OperationGroup`], implemented for
+//! `HostsGroup` in [`hostgroup`] and resolved via [`PlanProvider`]), and repo
+//! management ([`RepoManager`] over the [`SetRepo`] seam, implemented in
+//! `mtui-testreport`).
 
 pub mod actions;
 pub mod arbiter;
@@ -83,23 +61,19 @@ use crate::error::{HostError, Result};
 
 /// A single reference host and its execution state.
 ///
-/// The `Target` owns at most one [`Connection`] (a `Box<dyn Connection>` so the
-/// russh [`SshConnection`] and the test [`MockConnection`] are
-/// interchangeable) plus an ordered [`HostLog`] of everything run against it.
-/// Commands are gated by [`TargetState`]:
-///
-/// * [`Enabled`](TargetState::Enabled) — run for real and record the outcome.
-/// * [`Disabled`](TargetState::Disabled) — record an empty entry, touch nothing.
+/// Owns at most one [`Connection`] (boxed, so [`SshConnection`] and the test
+/// [`MockConnection`] are interchangeable) plus an ordered [`HostLog`]. Commands are
+/// gated by [`TargetState`]: [`Enabled`](TargetState::Enabled) runs for real and
+/// records the outcome; [`Disabled`](TargetState::Disabled) records an empty entry and
+/// touches nothing.
 ///
 /// [`MockConnection`]: crate::MockConnection
 pub struct Target {
     /// The full `host[:port]` string as supplied by the caller.
     hostname: String,
-    /// The host part (everything before the first `:`), from
-    /// splitting on the first `:`.
+    /// The host part (everything before the first `:`).
     host: String,
-    /// The port part (everything after the first `:`), or empty when none was
-    /// given. Kept as a string with `""`-means-default semantics.
+    /// The port part (everything after the first `:`); empty means the default.
     port: String,
     /// Per-host execution state.
     state: TargetState,
@@ -109,92 +83,71 @@ pub struct Target {
     /// SSH connect handshake budget, defaulted from
     /// [`Config::connect_timeout`](mtui_config::Config).
     connect_timeout: CommandTimeout,
-    /// The host-key policy resolved from config, used when [`connect`] builds
-    /// the transport.
-    ///
-    /// [`connect`]: Target::connect
+    /// The host-key policy resolved from config, used by [`connect`](Target::connect).
     policy: HostKeyPolicy,
     /// The ordered command log for this host.
     out: HostLog,
     /// The live connection, or `None` until [`connect`](Target::connect) (or a
     /// test injection) supplies one.
     connection: Option<Box<dyn Connection>>,
-    /// The parsed host system (base product + addons). Defaults to an unknown
-    /// system until [`parse_system`] populates it via
-    /// [`set_system`](Target::set_system); [`PackageQuerier`] reads it to choose
-    /// the rpm-vs-dpkg query path.
+    /// The parsed host system; unknown until [`parse_system`] populates it via
+    /// [`set_system`](Target::set_system). [`PackageQuerier`] reads it to choose the
+    /// rpm-vs-dpkg query path.
     system: System,
     /// Whether the host is a transactional (read-only-root) system, set
     /// alongside [`system`](Self::system).
     transactional: Transactional,
-    /// The config this target was built from, retained so
-    /// [`connect`](Target::connect) can build the operation [`TargetLock`] with
-    /// the session identity / reap / wait settings.
+    /// The config this target was built from, so [`connect`](Target::connect) can build
+    /// the locks with the session identity / reap / wait settings.
     config: Config,
-    /// The operation lock (`/var/lock/mtui.lock`), built in
-    /// [`connect`](Target::connect) from a clone of this target's connection.
-    /// `None` until connected. Drives [`unlock`](Target::unlock) and the
-    /// [`RepoManager`] unknown-cmd force-unlock safeguard.
+    /// The operation lock (`/var/lock/mtui.lock`), built in [`connect`](Target::connect)
+    /// over a clone of this target's connection; `None` until connected. Drives
+    /// [`unlock`](Target::unlock) and the [`RepoManager`] force-unlock safeguard.
     lock: Option<TargetLock>,
     /// The registry [`connect`](Target::connect) hands the operation lock, so
     /// it can tell the process's other targets' holds from its own.
     op_lock_holders: OpLockHolders,
-    /// The pool-claim lock (`/var/lock/mtui-pool.lock`), built in
-    /// [`connect`](Target::connect) / [`with_connection`](Target::with_connection)
-    /// from a clone of this target's connection and seeded with [`rrid`](Self::rrid).
-    /// `None` until connected. Drives
+    /// The pool-claim lock (`/var/lock/mtui-pool.lock`), built like the operation lock
+    /// and seeded with [`rrid`](Self::rrid); `None` until connected. Drives
     /// [`pool_unlock`](Target::pool_unlock).
     pool_lock: Option<TargetLock>,
-    /// The owning template's RRID, used as the pool claim's ownership identity.
-    /// Empty for directly-constructed reports that
-    /// never use pool selection; the report layer pushes it down via
+    /// The owning template's RRID, the pool claim's ownership identity; empty for
+    /// reports that never use pool selection. Pushed down via
     /// [`set_rrid`](Self::set_rrid).
     rrid: String,
-    /// The per-host packages tracked across an update. Each entry carries the
-    /// metadata-`required` version and, once [`query_versions`](Target::query_versions)
-    /// runs, the installed `current` version; `perform_update`'s package check
-    /// records `before`/`after` here. Kept as an ordered `Vec` for deterministic
-    /// iteration; seeded via [`set_packages`](Target::set_packages).
+    /// The per-host packages tracked across an update (seeded via
+    /// [`set_packages`](Target::set_packages)): each carries the `required` version and,
+    /// after [`query_versions`](Target::query_versions), the installed `current` one;
+    /// `perform_update`'s package check records `before`/`after` here. An ordered `Vec`
+    /// for deterministic iteration.
     packages: Vec<Package>,
-    /// Optional interactive command-timeout prompt, applied to the transport in
-    /// [`connect`](Target::connect) via
-    /// [`SshConnection::with_timeout_prompt`](crate::connection::SshConnection::with_timeout_prompt).
-    /// `None` (the default, and always headless / under `mtui-mcp`) keeps a
-    /// no-output timeout an immediate abort; the composition root installs a
-    /// [`Prompter`](crate::prompter::Prompter)-backed prompt via
-    /// [`set_timeout_prompt`](Target::set_timeout_prompt) for the REPL.
+    /// Optional interactive command-timeout prompt applied in
+    /// [`connect`](Target::connect). `None` (the default, and always under `mtui-mcp`)
+    /// keeps a no-output timeout an immediate abort; the REPL installs a
+    /// [`Prompter`](crate::prompter::Prompter)-backed one via
+    /// [`set_timeout_prompt`](Target::set_timeout_prompt).
     timeout_prompt: Option<crate::connection::TimeoutPrompt>,
-    /// Outcome of the last SFTP upload attempted via
-    /// [`sftp_put`](Target::sftp_put) / [`sftp_put_bytes`](Target::sftp_put_bytes),
-    /// exposed through [`last_upload`](Target::last_upload) so the `put` command
-    /// can aggregate per-host success/failure. The error is kept as a `String`
-    /// (not [`HostError`]) so the field stays `Clone`/simple. `None` means "not
-    /// attempted": a fresh target, or a [`Disabled`](TargetState::Disabled) host
-    /// the fan-out treats as skipped.
+    /// Outcome of the last SFTP upload ([`sftp_put`](Target::sftp_put) /
+    /// [`sftp_put_bytes`](Target::sftp_put_bytes)), exposed through
+    /// [`last_upload`](Target::last_upload) for the `put` aggregation. The error is a
+    /// `String` so the field stays simple and `Clone`. `None` means not attempted: a
+    /// fresh target, or a [`Disabled`](TargetState::Disabled) host.
     last_upload: Option<std::result::Result<(), String>>,
-    /// Outcome of the last SFTP download attempted via
-    /// [`sftp_get`](Target::sftp_get), exposed through
-    /// [`last_download`](Target::last_download). Same encoding as
-    /// [`last_upload`](Self::last_upload): `Some(Ok)` on success/dry-run,
-    /// `Some(Err(reason))` on failure, `None` when skipped (disabled) or not yet
-    /// attempted.
+    /// Outcome of the last SFTP download ([`sftp_get`](Target::sftp_get)), exposed through
+    /// [`last_download`](Target::last_download); encoded like
+    /// [`last_upload`](Self::last_upload).
     last_download: Option<std::result::Result<(), String>>,
-    /// Outcome of the last repo change fanned out via
-    /// [`RepoManager::run_zypper`], exposed through
-    /// [`last_repo`](Target::last_repo). `run_zypper` runs several `zypper`
-    /// commands per host and only the *last* command's exit lands in the
-    /// [`HostLog`], so `lasterr()`/`lastexit()` cannot report an earlier
-    /// `ar`/`rr` failure that the trailing `ref` masks; this field aggregates the
-    /// whole run's verdict. `None` means "not attempted for this report" — a
-    /// report with no RRID yet, or one of the `SetRepo` stubs in the test tree
-    /// that never drives `run_zypper` — and every consumer must treat it as
-    /// benign, the same as [`last_upload`](Self::last_upload)'s `None`.
+    /// Outcome of the last repo change fanned out via [`RepoManager::run_zypper`],
+    /// exposed through [`last_repo`](Target::last_repo). Only the *last* zypper command's
+    /// exit lands in the [`HostLog`], so `lasterr()`/`lastexit()` cannot report an
+    /// earlier `ar`/`rr` failure masked by the trailing `ref`; this aggregates the whole
+    /// run's verdict. `None` means not attempted for this report, and every consumer
+    /// must treat it as benign, like [`last_upload`](Self::last_upload)'s `None`.
     last_repo: Option<std::result::Result<RepoOutcome, RepoFailure>>,
 }
 
-/// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
-/// before it has been parsed — an `unknown` base with no addons, the sentinel
-/// system value prior to a parse.
+/// The placeholder [`System`] a new [`Target`] carries before it is parsed: an
+/// `unknown` base with no addons.
 fn unknown_system() -> System {
     System::new(
         SystemProduct::new("unknown", "", ""),
@@ -204,12 +157,9 @@ fn unknown_system() -> System {
 }
 
 impl Target {
-    /// Builds an **unconnected** target from config, with default state.
-    ///
-    /// The `hostname` is split on the first `:` into `host`/`port`:
-    /// `"h.example:2222"` yields host `h.example`
-    /// and port `2222`; a bare `"h.example"` yields an empty port. The timeout
-    /// and host-key policy are taken from `config`. Call
+    /// Builds an **unconnected** target from config. `hostname` is split on the first
+    /// `:` into host/port (`"h.example:2222"` → `h.example`, `2222`; a bare name has an
+    /// empty port). Timeout and host-key policy come from `config`; call
     /// [`connect`](Target::connect) to establish the transport.
     #[must_use]
     pub fn new(config: &Config, hostname: impl Into<String>, state: TargetState) -> Self {
@@ -240,15 +190,11 @@ impl Target {
         }
     }
 
-    /// Builds a target around an already-established [`Connection`], with
-    /// [`Config::default`].
-    ///
-    /// This is the offline test seam: inject a
-    /// [`MockConnection`](crate::MockConnection) so the whole state machine can
-    /// be exercised without a live host. The timeout and policy carry defaults;
-    /// they are unused when a connection is pre-supplied. Use
-    /// [`with_connection_and_config`](Self::with_connection_and_config) when the
-    /// test needs a non-default config (e.g. `lock_reap_stale`).
+    /// Builds a target around an already-established [`Connection`] with
+    /// [`Config::default`]: the offline test seam for injecting a
+    /// [`MockConnection`](crate::MockConnection). Use
+    /// [`with_connection_and_config`](Self::with_connection_and_config) for a non-default
+    /// config.
     #[must_use]
     pub fn with_connection(
         hostname: impl Into<String>,
@@ -258,12 +204,9 @@ impl Target {
         Self::with_connection_and_config(&Config::default(), hostname, state, connection)
     }
 
-    /// Builds a target around an already-established [`Connection`], from an
-    /// explicit `config`.
-    ///
-    /// Same offline test seam as [`with_connection`](Self::with_connection), for
-    /// tests that need to exercise a non-default config value (e.g.
-    /// `lock_reap_stale`) without a live host.
+    /// Builds a target around an already-established [`Connection`] from an explicit
+    /// `config`; the same test seam as [`with_connection`](Self::with_connection), for
+    /// non-default config values (e.g. `lock_reap_stale`).
     #[must_use]
     pub fn with_connection_and_config(
         config: &Config,
@@ -315,9 +258,7 @@ impl Target {
         &self.out
     }
 
-    /// The parsed host system (base product + addons).
-    ///
-    /// Returns the `unknown` placeholder until
+    /// The parsed host system (base product + addons); the `unknown` placeholder until
     /// [`set_system`](Self::set_system) records a parsed one.
     #[must_use]
     pub fn system(&self) -> &System {
@@ -365,9 +306,6 @@ impl Target {
     }
 
     /// The connect/command timeout for this target, in whole seconds.
-    ///
-    /// The `Target` owns the timeout directly (defaulted from
-    /// [`Config::connection_timeout`](mtui_config::Config)).
     #[must_use]
     pub const fn timeout_secs(&self) -> u64 {
         self.timeout.as_secs()
@@ -397,39 +335,28 @@ impl Target {
         }
     }
 
-    /// Returns a [`RepoManager`] bound to this target for zypper-repo lifecycle.
-    ///
-    /// The repo manager borrows `self`
-    /// *mutably* — it issues commands and, on the unknown-cmd safeguard, force-
-    /// unlocks the target. It hands out a fresh binding over the live target
-    /// each call.
+    /// Returns a [`RepoManager`] bound to this target for the zypper-repo lifecycle. It
+    /// borrows `self` *mutably* (it issues commands and may force-unlock) and is a fresh
+    /// binding on each call.
     #[must_use]
     pub fn repo_manager(&mut self) -> RepoManager<'_> {
         RepoManager::new(self)
     }
 
-    /// Releases this target's operation lock, best-effort.
-    ///
-    /// Delegates to the operation
-    /// [`TargetLock::unlock`], swallowing a [`HostError::TargetLocked`] (the
-    /// lock is held by another owner and `force` was not set) so a cleanup path
-    /// never fails the caller. With `force = true` a foreign lock is
-    /// removed anyway (the [`RepoManager`] unknown-cmd safeguard uses this).
-    ///
-    /// A no-op when the target is not connected (no lock built yet).
+    /// Releases this target's operation lock, best-effort, via [`TargetLock::unlock`]: a
+    /// [`HostError::TargetLocked`] (held by another owner, `force` unset) is swallowed
+    /// so a cleanup path never fails the caller. With `force = true` a foreign lock is
+    /// removed anyway (the [`RepoManager`] safeguard uses this). A no-op when not
+    /// connected.
     pub async fn unlock(&mut self, force: bool) {
         let _ = self.unlock_reporting(LockKind::Op, force).await;
     }
 
-    /// Releases this target's `kind` lock, returning the raw outcome so the
-    /// group fan-outs can distinguish a benign contended lock
-    /// ([`HostError::TargetLocked`]) from a real transport failure. Unlike
-    /// [`unlock`](Self::unlock) — which swallows both — this still logs each
-    /// branch but hands the result back to the caller.
-    ///
-    /// `Ok(())` means released (or a no-op: not connected, or nothing to
-    /// release). `Err(HostError::TargetLocked(_))` means the lock is held by
-    /// another owner (benign contention). Any other `Err` is a real failure.
+    /// Releases this target's `kind` lock, returning the raw outcome so group fan-outs
+    /// can tell a benign contended lock ([`HostError::TargetLocked`]) from a real
+    /// transport failure; unlike [`unlock`](Self::unlock) it hands the result back (each
+    /// branch is still logged). `Ok(())` means released or a no-op (not connected,
+    /// nothing to release).
     ///
     /// # Errors
     ///
@@ -468,19 +395,13 @@ impl Target {
         }
     }
 
-    /// Whether **this** target object took the operation lock and stamped it
-    /// with no comment.
+    /// Whether **this** target object took the operation lock and stamped it with no
+    /// comment.
     ///
-    /// A non-empty comment marks an *exclusive* hold (see
-    /// [`RemoteLock::comment`]) — the PI assignment lock, an operator's
-    /// `lock -c <text>` — which this deliberately excludes; the operation flows
-    /// all stamp an empty comment.
-    ///
-    /// Purely in-memory (no remote I/O): it answers "did *this* host group
-    /// acquire this lock", which the remote line cannot, because wire ownership
-    /// is per-process. `false` for an unconnected target, one that never locked,
-    /// one that already released, and one holding a comment-marked (exclusive)
-    /// reservation.
+    /// A non-empty comment marks an *exclusive* hold (see [`RemoteLock::comment`]): the
+    /// PI assignment lock, an operator's `lock -c <text>`; this excludes those. Purely
+    /// in-memory: it answers "did *this* host group acquire this lock", which the
+    /// remote line cannot, because wire ownership is per-process.
     #[must_use]
     pub fn holds_unmarked_operation_lock(&self) -> bool {
         self.lock.as_ref().is_some_and(TargetLock::holds_unmarked)
@@ -488,11 +409,9 @@ impl Target {
 
     /// Whether **this** target object took the operation lock, marked or not.
     ///
-    /// Unlike
-    /// [`holds_unmarked_operation_lock`](Self::holds_unmarked_operation_lock),
-    /// a comment-marked hold counts too. Backs the `unlock` command's plain
-    /// (no `--force`) path, so `lock -c "reservation"` stays releasable by a
-    /// plain `unlock` in the same session.
+    /// Unlike [`holds_unmarked_operation_lock`](Self::holds_unmarked_operation_lock), a
+    /// comment-marked hold counts; backs the plain `unlock` path so `lock -c
+    /// "reservation"` stays releasable.
     #[must_use]
     pub fn holds_operation_lock(&self) -> bool {
         self.lock.as_ref().is_some_and(TargetLock::holds)
@@ -514,10 +433,10 @@ impl Target {
     }
 
     /// The label of the sibling target in this process that holds this host's
-    /// operation lock, if one does.
+    /// operation lock, if any.
     ///
-    /// Purely in-memory, so it can tell a hold that only another template or
-    /// session of this process can release from a foreign one.
+    /// In-memory, so it can tell a hold only another template or session of this
+    /// process can release from a foreign one.
     #[must_use]
     pub(crate) fn sibling_operation_holder(&self) -> Option<String> {
         self.lock.as_ref().and_then(TargetLock::sibling_label)
@@ -525,10 +444,8 @@ impl Target {
 
     /// Whether this target has built its `kind` lock, i.e. is connected.
     ///
-    /// No remote I/O: an unconnected target ([`Target::new`], never
-    /// [`connect`](Self::connect)ed) never built its locks, so a group fan-out
-    /// can tell "nothing to attempt" apart from "attempted and found unlocked"
-    /// before touching the wire.
+    /// No remote I/O: lets a group fan-out tell "nothing to attempt" from "attempted and
+    /// found unlocked".
     #[must_use]
     pub(crate) fn has_lock(&self, kind: LockKind) -> bool {
         self.slot(kind).is_some()
@@ -536,11 +453,9 @@ impl Target {
 
     /// Sets the owning template's RRID, the pool claim's ownership identity.
     ///
-    /// The report layer pushes the RRID down onto each target (see
-    /// `HostsGroup::set_rrid`) so a pool claim already built for a connected
-    /// target adopts the identity too. The RRID is pushed down after the fact
-    /// because the target is
-    /// built before the report that owns it is known.
+    /// The report layer pushes it down after the fact (see `HostsGroup::set_rrid`),
+    /// since the target is built before its report is known, so an already-built pool
+    /// claim adopts it too.
     pub fn set_rrid(&mut self, rrid: impl Into<String>) {
         self.rrid = rrid.into();
         if let Some(pool) = self.pool_lock.as_mut() {
@@ -560,35 +475,28 @@ impl Target {
         self.slot(kind)?.held_comment()
     }
 
-    /// Drops this session's in-memory record of its `kind` lock after the
-    /// remote lock proved to be another owner's — a hold lost across a reboot
-    /// that a re-take refused to overwrite. The remote file is untouched; a
-    /// later plain `unlock` then correctly reports the session holds nothing
-    /// instead of trying to release someone else's lock.
+    /// Drops this session's in-memory record of its `kind` lock after the remote lock
+    /// proved to be another owner's (a hold lost across a reboot that a re-take refused
+    /// to overwrite). The remote file is untouched; a later plain `unlock` then reports
+    /// the session holds nothing instead of releasing someone else's lock.
     pub(crate) fn forget_hold(&mut self, kind: LockKind) {
         if let Some(lock) = self.slot_mut(kind) {
             lock.mark_released();
         }
     }
 
-    /// Releases this target's pool claim, best-effort.
-    ///
-    /// Like [`unlock`](Self::unlock) with RRID-based ownership: a
-    /// [`HostError::TargetLocked`] (the claim is owned by another template and
-    /// `force` was not set) is swallowed so a cleanup path never fails. A no-op
-    /// when the target is not connected (no pool lock built yet).
+    /// Releases this target's pool claim, best-effort, like [`unlock`](Self::unlock) with
+    /// RRID-based ownership: a [`HostError::TargetLocked`] (owned by another template,
+    /// `force` unset) is swallowed. A no-op when not connected.
     pub async fn pool_unlock(&mut self, force: bool) {
         let _ = self.unlock_reporting(LockKind::Pool, force).await;
     }
 
-    /// Claims this target's remote pool lock with `comment` (the
-    /// `mtui pool <RRID> [<owner>]` stamp), returning whether the claim was won.
-    ///
-    /// Delegates to the pool claim's [`TargetLock::try_claim`]
-    /// (RRID-based ownership). `true` when this session now holds the remote
-    /// claim (freshly won or already ours); `false` when another process holds
-    /// it — the caller then drops the host so a sibling can be tried. A
-    /// not-connected target (no pool lock built) returns `false`.
+    /// Claims this target's remote pool lock with `comment` (the `mtui pool <RRID>
+    /// [<owner>]` stamp) via [`TargetLock::try_claim`], returning whether the claim was
+    /// won: `true` when this session now holds it (freshly won or already ours),
+    /// `false` when another process does (the caller drops the host so a sibling can be
+    /// tried) or the target is not connected.
     ///
     /// # Errors
     ///
@@ -601,11 +509,9 @@ impl Target {
         pool.try_claim(comment).await
     }
 
-    /// Acquires this target's operation lock with `comment`.
-    ///
-    /// Delegates to
-    /// [`TargetLock::lock`]. A no-op when the target is not connected (no lock
-    /// built yet), matching the group fan-out's tolerance of unconnected hosts.
+    /// Acquires this target's operation lock with `comment` via [`TargetLock::lock`]. A
+    /// no-op when not connected, matching the group fan-out's tolerance of unconnected
+    /// hosts.
     ///
     /// # Errors
     ///
@@ -620,11 +526,8 @@ impl Target {
         lock.lock(comment).await
     }
 
-    /// Reports whether this target's operation lock is currently held.
-    ///
-    /// Delegates to
-    /// [`TargetLock::is_locked`]. Returns `false` when the target is not
-    /// connected (no lock built yet).
+    /// Reports whether this target's operation lock is currently held (`false` when not
+    /// connected).
     ///
     /// # Errors
     ///
@@ -655,13 +558,9 @@ impl Target {
         }
     }
 
-    /// Reports the RRID claiming this target's pool lock, if any.
-    ///
-    /// `None` when the target is not connected (no pool lock built yet) or the
-    /// pool claim is unset; `Some(rrid)` when claimed, parsed from the
-    /// `mtui pool <RRID> [<owner>]` stamp — `Some(String::new())` when the
-    /// claim exists but its comment is not that shape (still claimed, just
-    /// unparseable).
+    /// Reports the RRID claiming this target's pool lock, parsed from the `mtui pool
+    /// <RRID> [<owner>]` stamp. `None` when not connected or unclaimed;
+    /// `Some(String::new())` when claimed but the comment is not that shape.
     ///
     /// # Errors
     ///
@@ -691,15 +590,10 @@ impl Target {
             .unwrap_or_default()
     }
 
-    /// Resolves this target's current lock ownership into a [`LockRow`].
-    ///
-    /// Loads the operation lock (or the pool-claim lock when `pool` is `true`)
-    /// and returns the already-resolved (sync) values so the display layer
-    /// stays sync. An unconnected target (no built lock) resolves to the empty,
-    /// unlocked row.
-    ///
-    /// Best-effort: a read error degrades to the unlocked row rather than
-    /// aborting the whole `list_locks` fan-out.
+    /// Resolves this target's current lock ownership into a [`LockRow`], loading the
+    /// operation lock (or the pool claim when `pool` is `true`) so the display stays
+    /// sync. An unconnected target resolves to the unlocked row, and a read error
+    /// degrades to it too rather than aborting the `list_locks` fan-out.
     pub async fn lock_status(&mut self, pool: bool) -> LockRow {
         self.try_lock_status(pool).await.unwrap_or_default()
     }
@@ -716,13 +610,9 @@ impl Target {
         }
     }
 
-    /// Reads the host's current boot id.
-    ///
-    /// Runs
-    /// `cat /proc/sys/kernel/random/boot_id` (regenerated on every boot) and
-    /// returns the trimmed stdout, or `""` if the value cannot be read (no
-    /// connection, command failure, or empty output). Used by the group reboot
-    /// lifecycle to confirm a host actually rebooted.
+    /// Reads the host's current boot id (`cat /proc/sys/kernel/random/boot_id`,
+    /// regenerated on every boot), trimmed, or `""` if it cannot be read. Used by the
+    /// reboot lifecycle to confirm a host actually rebooted.
     async fn boot_id(&mut self) -> String {
         let Some(conn) = self.connection.as_mut() else {
             tracing::debug!(host = %self.hostname, "boot_id: not connected");
@@ -737,26 +627,22 @@ impl Target {
         }
     }
 
-    /// Sends `command` without waiting for it to return.
+    /// Sends `command` without waiting for it to return, via
+    /// [`Connection::fire_and_forget`]; the command is expected to drop the connection,
+    /// so callers follow up with [`reconnect`](Self::reconnect).
     ///
-    /// Dispatches via
-    /// [`Connection::fire_and_forget`]. The command is expected to drop the SSH
-    /// connection, so callers follow up with [`reconnect`](Self::reconnect).
-    ///
-    /// A dispatch failure is logged **and returned**: the link is torn down
-    /// only after the dispatch succeeds, so a failure leaves the session live
-    /// and the reconnect that follows returns immediately — which is precisely
-    /// how a reboot that never happened used to read as one that did. An
-    /// unconnected target reports [`ReconnectFailed`](HostError::ReconnectFailed),
-    /// not [`RebootNotDispatched`](HostError::RebootNotDispatched), because the
-    /// latter asserts the host is still reachable.
+    /// A dispatch failure is logged **and returned**: the link is torn down only after a
+    /// successful dispatch, so a failure leaves the session live and the reconnect would
+    /// return immediately, reading a reboot that never happened as one that did. An
+    /// unconnected target reports [`ReconnectFailed`](HostError::ReconnectFailed), not
+    /// [`RebootNotDispatched`](HostError::RebootNotDispatched), because the latter
+    /// asserts the host is still reachable.
     async fn reboot(&mut self, command: &str) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
             tracing::error!(host = %self.hostname, "reboot on unconnected target");
-            // Deliberately *not* `RebootNotDispatched`: that variant asserts
-            // the host is still reachable, and a target with no connection at
-            // all is the least reachable state there is. Claiming otherwise
-            // would route a rollback at a host nothing can talk to.
+            // Deliberately not `RebootNotDispatched`, which asserts the host is still
+            // reachable: claiming that for an unconnected target would route a rollback at a
+            // host nothing can talk to.
             return Err(HostError::ReconnectFailed {
                 host: self.hostname.clone(),
             });
@@ -770,20 +656,14 @@ impl Target {
         })
     }
 
-    /// The post-reboot reconnect attempt budget (`[connection]
-    /// reboot_retries`) this target was built with, for callers driving the
-    /// reboot lifecycle (`HostsGroup::reboot`/`reboot_transactional`).
+    /// The post-reboot reconnect attempt budget (`[connection] reboot_retries`).
     #[must_use]
     fn reboot_retries(&self) -> usize {
         self.config.reboot_retries as usize
     }
 
-    /// Re-establishes the transport after a reboot dropped it.
-    ///
-    /// Delegates to
-    /// [`Connection::reconnect`], which encapsulates the bounded retry +
-    /// backoff loop. A no-op when the target is not
-    /// connected.
+    /// Re-establishes the transport after a reboot dropped it via
+    /// [`Connection::reconnect`] (bounded retry + backoff). A no-op when not connected.
     ///
     /// # Errors
     ///
@@ -832,11 +712,10 @@ impl Target {
             tracing::debug!(host = %self.hostname, "close: not connected");
         }
 
-        // Session teardown: the dispatch result is deliberately discarded here.
-        // `close` has already released the locks and there is no reconnect to
-        // follow, so there is nothing left to verify or to repair — unlike the
-        // operation paths, where a lost reboot silently invalidates the verdict.
-        // `reboot` logs the failure at ERROR either way.
+        // Teardown: the dispatch result is deliberately discarded. `close` has already
+        // released the locks and no reconnect follows, so there is nothing to verify or
+        // repair (unlike the operation paths); `reboot` logs the failure at ERROR either
+        // way.
         match action {
             Some("reboot") => {
                 tracing::info!(host = %self.hostname, "rebooting");
@@ -857,23 +736,16 @@ impl Target {
         Ok(())
     }
 
-    /// Records the parsed host system and its transactional flag.
-    ///
-    /// Called with the pair returned by
-    /// [`parse_system`] once a connection is live; the
-    /// two values always move together (they are set in the same parse step).
+    /// Records the parsed host system and its transactional flag; the two always move
+    /// together (set in the same parse step).
     pub fn set_system(&mut self, system: System, transactional: impl Into<Transactional>) {
         self.system = system;
         self.transactional = transactional.into();
     }
 
-    /// Re-parses the host's system/product over the live connection and records
-    /// the result.
-    ///
-    /// Driven by the `reload_products`
-    /// command: re-runs [`parse_system`] and stores the
-    /// `(System, transactional)` pair via [`set_system`](Self::set_system). On
-    /// failure the previously recorded system is left untouched.
+    /// Re-parses the host's system/product over the live connection (driven by
+    /// `reload_products`) and records it via [`set_system`](Self::set_system); on
+    /// failure the previous system is left untouched.
     ///
     /// # Errors
     ///
@@ -904,25 +776,18 @@ impl Target {
         &mut self.packages
     }
 
-    /// Seeds the tracked packages (each carrying its metadata-`required`
-    /// version).
-    ///
-    /// The report builds the tracked package list
-    /// from its metadata. Here the report supplies
-    /// the already-resolved [`Package`] list (name + `required`) at the start of
-    /// an update flow, keeping the metadata/product resolution in
-    /// `mtui-testreport` and off this crate.
+    /// Seeds the tracked packages (name + `required`) at the start of an update flow.
+    /// The report supplies the already-resolved list, keeping metadata/product
+    /// resolution in `mtui-testreport`.
     pub fn set_packages(&mut self, packages: Vec<Package>) {
         self.packages = packages;
     }
 
     /// Installs the interactive command-timeout prompt applied by the next
-    /// [`connect`](Target::connect).
-    ///
-    /// The composition root (`mtui-cli`) wires a
-    /// [`Prompter`](crate::prompter::Prompter)-backed prompt here for the REPL so
-    /// a stuck command asks the user whether to keep waiting; headless callers
-    /// (`mtui-mcp`) leave it unset and a timeout aborts immediately.
+    /// [`connect`](Target::connect): the REPL wires a
+    /// [`Prompter`](crate::prompter::Prompter)-backed one so a stuck command asks whether
+    /// to keep waiting; headless callers (`mtui-mcp`) leave it unset and a timeout aborts
+    /// immediately.
     pub fn set_timeout_prompt(&mut self, prompt: crate::connection::TimeoutPrompt) {
         self.timeout_prompt = Some(prompt);
     }
@@ -936,17 +801,12 @@ impl Target {
         self.timeout_prompt.is_some()
     }
 
-    /// Queries the installed versions of the tracked packages and records them
-    /// as each package's `current` check.
-    ///
-    /// Runs the
-    /// [`PackageQuerier`] over `self.packages` and sets `current` from the
-    /// result: [`VersionCheck::NotInstalled`] when the query ran and found the
-    /// package not installed, [`VersionCheck::NotChecked`] when the query
-    /// never answered for it at all (#437). A no-op when no
-    /// packages are tracked. Only meaningful for an
-    /// [`Enabled`](TargetState::Enabled) host; other states record nothing, as
-    /// their `run` does not touch a live connection.
+    /// Queries the installed versions of the tracked packages and records them as each
+    /// package's `current` check: [`VersionCheck::NotInstalled`] when the query ran and
+    /// found it missing, [`VersionCheck::NotChecked`] when it never answered for it. A
+    /// no-op when no packages are tracked; only meaningful for an
+    /// [`Enabled`](TargetState::Enabled) host, as other states never touch a live
+    /// connection.
     pub async fn query_versions(&mut self) {
         let names: Vec<String> = self.packages.iter().map(|p| p.name.clone()).collect();
         if names.is_empty() {
@@ -962,25 +822,18 @@ impl Target {
         }
     }
 
-    /// Appends a history entry to the remote `/var/log/mtui.log`.
+    /// Appends a history entry to the remote `/var/log/mtui.log`, on **enabled** hosts
+    /// only: one `timestamp:user:field1:field2…\n` line (Unix-epoch seconds,
+    /// `config.session_user`, then the colon-joined `fields`). The wire format is shared
+    /// with every other mtui on the fleet, including older releases, and read back by
+    /// `list_history`, so it is preserved byte-for-byte.
     ///
-    /// On **enabled** hosts only, writes one
-    /// `timestamp:user:field1:field2…\n` line (Unix-epoch-seconds timestamp,
-    /// `config.session_user`, then the colon-joined `fields`). The wire format is
-    /// shared with every other mtui on the fleet (including older releases) and
-    /// read back by `list_history`, so it is preserved byte-for-byte.
+    /// Only the new line is sent, via [`sftp_append`](Connection::sftp_append) (append at
+    /// end-of-file, create if missing): O(1) per entry, and concurrent writers do not
+    /// clobber one another's entries.
     ///
-    /// This sends only the
-    /// new line via [`sftp_append`](Connection::sftp_append), which appends at
-    /// end-of-file and creates the file if it is missing. Unlike the former
-    /// read-concatenate-rewrite emulation, the cost per entry is now O(1) in the
-    /// line size (not O(history)), and concurrent writers (several mtui
-    /// processes, including older releases, sharing the host) no longer clobber
-    /// one another's entries.
-    ///
-    /// Best-effort: a write failure (read-only or full remote
-    /// fs, unconnected host) is logged and swallowed so a bookkeeping write never
-    /// aborts the operation it records.
+    /// Best-effort: a write failure (read-only or full remote fs, unconnected host) is
+    /// logged and swallowed so a bookkeeping write never aborts the operation it records.
     pub async fn add_history(&mut self, fields: &[String]) {
         if self.state != TargetState::Enabled {
             return;
@@ -1002,17 +855,12 @@ impl Target {
         }
     }
 
-    /// Runs the connect-time lock check + stale-reap on the operation
-    /// lock.
+    /// Runs the connect-time check on the operation lock: if a prior session holds it,
+    /// reap it when old enough ([`TargetLock::reap_if_stale`]), otherwise warn who holds
+    /// it. Independent of the session RRID (the pool lock's concern).
     ///
-    /// If the host is locked by a prior session, reap it
-    /// when it is old enough ([`TargetLock::reap_if_stale`]), otherwise warn who
-    /// holds it. Operates on the operation lock only, so it is independent of the
-    /// session RRID (that is the pool lock's concern).
-    ///
-    /// Best-effort: a transport error
-    /// while reading the remote lock is logged and swallowed rather than failing
-    /// the connect — an unreadable lock must not block the host.
+    /// Best-effort: a transport error is logged and swallowed, since an unreadable lock
+    /// must not block the host.
     async fn check_stale_lock(&mut self) {
         let Some(lock) = self.lock.as_mut() else {
             return;
@@ -1042,28 +890,18 @@ impl Target {
 
     /// Establishes the SSH transport for this target and parses its system.
     ///
-    /// Builds an [`SshConnection`] from the
-    /// host/port/timeout/policy resolved at construction, builds the two
-    /// remote locks over it, runs the connect-time lock check + stale-reap
-    /// (`check_stale_lock`), then — in
-    /// post-dial ordering — parses the system/product
-    /// ([`parse_system`]) and queries installed package
-    /// versions ([`Target::query_versions`]). If a connection is already
-    /// attached (e.g. a test-injected
-    /// [`MockConnection`](crate::MockConnection)), the dial + lock-building
-    /// step is skipped, but the check/parse/query steps still run — this is what
-    /// lets the whole flow be unit-tested against a scripted `MockConnection`
-    /// without a live socket.
+    /// Builds an [`SshConnection`] from the host/port/timeout/policy resolved at
+    /// construction, builds the two remote locks over it, runs the connect-time lock check
+    /// (`check_stale_lock`), then parses the system/product ([`parse_system`]) and
+    /// queries installed package versions ([`Target::query_versions`]). If a connection
+    /// is already attached (e.g. a test-injected
+    /// [`MockConnection`](crate::MockConnection)), only the dial and lock building are
+    /// skipped, so the whole flow is testable offline.
     ///
-    /// System parsing is retried a few times on a transient SFTP failure (a
-    /// connect-time timeout that would otherwise strand the host at the
-    /// `unknown` sentinel); if it still fails after the retry budget, `connect()`
-    /// returns the error so the caller drops the host — a `parse_system` failure
-    /// is not swallowed. (This differs from
-    /// [`reload_system`](Target::reload_system), which degrades to the sentinel
-    /// because the host is already a live group member there.) The
-    /// reboot/reconnect/operation lifecycle is bound in
-    /// `hostgroup` — see the module docs.
+    /// A transient SFTP failure in `parse_system` is retried a few times; if it still
+    /// fails, `connect()` returns the error so the caller drops the host (unlike
+    /// [`reload_system`](Target::reload_system), which degrades to the sentinel because
+    /// the host is already a live group member).
     ///
     /// # Errors
     ///
@@ -1087,9 +925,8 @@ impl Target {
             .inspect_err(|e| {
                 tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
             })?;
-            // Wire the interactive command-timeout prompt when the composition
-            // root supplied one (REPL); headless targets leave it unset
-            // (immediate abort).
+            // Wire the interactive command-timeout prompt when supplied (REPL); headless
+            // targets leave it unset.
             let conn = match &self.timeout_prompt {
                 Some(prompt) => conn.with_timeout_prompt(prompt.clone()),
                 None => conn,
@@ -1101,30 +938,19 @@ impl Target {
             tracing::debug!(host = %self.hostname, "already connected; skipping re-dial");
         }
 
-        // Check the operation lock and
-        // reap it if stale, otherwise warn who holds it. Runs whether the
-        // connection was just dialed or already attached, matching the
-        // parse/query steps below.
+        // Check the operation lock and reap it if stale, otherwise warn who holds it;
+        // runs whether the connection was just dialed or already attached.
         self.check_stale_lock().await;
 
-        // Post-dial ordering: parse the system/product then
-        // query versions. Runs whether the connection was just dialed
-        // or already attached, so a short-circuited re-`connect()` still picks
-        // up the real system instead of leaving the `unknown` sentinel.
-        //
-        // `parse_system` already resolves the non-SUSE branch internally
-        // (`SftpNotFound` on `/etc/products.d` → `/etc/os-release` fallback), so
-        // a propagated `Err` here is an *unexpected* failure — in practice a
-        // transient SFTP timeout on a freshly-dialed session. A single such
-        // timeout used to leave the host permanently `unknown--` for the rest of
-        // the session (never seeded, `list_packages` shows blanks, refhosts
-        // drift spuriously warns), even though SSH itself is fine. Retry a few
-        // times with a short backoff so a transient stall self-heals.
-        //
-        // A parse failure propagates out of `connect()` and the caller drops the
-        // host: a host we cannot parse (after retries) is unusable
-        // (no system ⇒ no seed, no doer/repo resolution), so surface the error
-        // rather than keep an `unknown--` zombie in the group.
+        // Post-dial: parse the system/product, then query versions, whether the
+        // connection was just dialed or already attached (a re-`connect()` still picks up
+        // the real system rather than the `unknown` sentinel).
+        // //
+        // `parse_system` already resolves the non-SUSE branch internally, so an `Err` here
+        // is unexpected: in practice a transient SFTP timeout on a fresh session, which
+        // would otherwise leave the host `unknown--` for the whole session. Retry a few
+        // times with a short backoff. A persistent failure propagates and the caller drops
+        // the host: with no system there is no seed and no doer/repo resolution.
         if let Some(conn) = self.connection.as_mut() {
             const PARSE_RETRIES: u32 = 3;
             let mut attempt = 0;
@@ -1159,14 +985,11 @@ impl Target {
 
     /// Runs `command` on the host, gated by [`TargetState`].
     ///
-    /// * [`Enabled`](TargetState::Enabled): delegates to
-    ///   [`Connection::run`] and records the resulting [`CommandLog`]. A
-    ///   [`HostError::Timeout`] is caught and recorded with the `-1`
-    ///   exit-code sentinel; **any** other connection error is logged and
-    ///   likewise recorded as `-1` — never propagated, a
-    ///   catch-all so one bad host never aborts a group fan-out.
-    /// * [`Disabled`](TargetState::Disabled): records an empty entry and does
-    ///   nothing else.
+    /// [`Enabled`](TargetState::Enabled) delegates to [`Connection::run`] and records the
+    /// [`CommandLog`]; a [`HostError::Timeout`] and **any** other connection error is
+    /// logged and recorded with the `-1` exit-code sentinel, never propagated, so one bad
+    /// host never aborts a group fan-out. [`Disabled`](TargetState::Disabled) records an
+    /// empty entry and does nothing else.
     async fn run(&mut self, command: &str) {
         match self.state {
             TargetState::Enabled => {
@@ -1227,31 +1050,23 @@ impl Target {
     }
 
     /// The last command's exit code, or `None` when the log is empty.
-    ///
-    /// Modelling the empty case as `None` keeps the type honest — no serialized
-    /// contract depends on the empty-string form.
     #[must_use]
     pub fn lastexit(&self) -> Option<i16> {
         self.out.last().map(|e| e.exitcode)
     }
 
-    /// The outcome of the last SFTP upload, or `None` when none was attempted.
-    ///
-    /// `Some(Ok(()))` is a successful transfer; `Some(Err(reason))`
-    /// carries the per-host failure message. `None` means the host was skipped
-    /// ([`Disabled`](TargetState::Disabled)) or nothing has been uploaded yet.
-    /// The `put` command aggregates these across the group.
+    /// The outcome of the last SFTP upload: `Some(Ok(()))` on success,
+    /// `Some(Err(reason))` for a per-host failure, `None` when skipped
+    /// ([`Disabled`](TargetState::Disabled)) or not yet attempted. The `put` command
+    /// aggregates these across the group.
     #[must_use]
     pub fn last_upload(&self) -> Option<&std::result::Result<(), String>> {
         self.last_upload.as_ref()
     }
 
-    /// The outcome of the last SFTP download, or `None` when none was attempted.
-    ///
-    /// Same encoding as [`last_upload`](Self::last_upload): `Some(Ok(()))` is a
-    /// successful transfer, `Some(Err(reason))` a per-host failure,
-    /// `None` a skipped ([`Disabled`](TargetState::Disabled)) or not-yet-attempted
-    /// host. The `get` command aggregates these across the group.
+    /// The outcome of the last SFTP download, encoded like
+    /// [`last_upload`](Self::last_upload); the `get` command aggregates these across the
+    /// group.
     #[must_use]
     pub fn last_download(&self) -> Option<&std::result::Result<(), String>> {
         self.last_download.as_ref()
@@ -1272,20 +1087,15 @@ impl Target {
         self.last_repo.as_ref()
     }
 
-    /// Records the outcome of a repo change run for the `set_repo` aggregation.
-    ///
-    /// Called by [`RepoManager::run_zypper`] once per host after its multi-command
-    /// zypper run, so [`last_repo`](Self::last_repo) reflects the whole run rather
-    /// than only the trailing `ref`.
+    /// Records the outcome of a repo change run, called by [`RepoManager::run_zypper`]
+    /// once per host so [`last_repo`](Self::last_repo) reflects the whole run rather than
+    /// the trailing `ref`.
     fn set_last_repo(&mut self, outcome: std::result::Result<RepoOutcome, RepoFailure>) {
         self.last_repo = Some(outcome);
     }
 
-    /// Uploads a local file to the host over SFTP, gated by [`TargetState`].
-    ///
-    /// [`Enabled`](TargetState::Enabled) delegates to
-    /// [`Connection::sftp_put`]; a transfer error is logged, not propagated.
-    /// [`Disabled`](TargetState::Disabled) does nothing.
+    /// Uploads a local file over SFTP, gated by [`TargetState`]; a transfer error is
+    /// logged, not propagated, and [`Disabled`](TargetState::Disabled) does nothing.
     async fn sftp_put(&mut self, local: &Path, remote: &Path) {
         let outcome = match self.upload_target() {
             Ok(conn) => conn.sftp_put(local, remote).await,
@@ -1294,17 +1104,13 @@ impl Target {
         self.record_upload(local, outcome);
     }
 
-    /// Uploads already-read bytes to `remote` over SFTP, gated by
-    /// [`TargetState`].
+    /// Uploads already-read bytes to `remote` over SFTP, gated by [`TargetState`].
     ///
-    /// The read-once counterpart of [`sftp_put`](Self::sftp_put): a fan-out
-    /// reads the local payload a single time and dispatches the shared bytes to
-    /// every host. Same failure semantics (logged, not propagated), and the
-    /// outcome is still recorded into [`last_upload`](Self::last_upload) for
-    /// the REPL `put` aggregation. The outcome is *also* returned so
-    /// map-returning fan-outs ([`HostsGroup::sftp_put_bytes`]) can attribute
-    /// per host without reading the stale-prone `last_*` state: `None` means
-    /// not attempted (disabled), `Some(Err)` unconnected or a transfer error.
+    /// The read-once counterpart of [`sftp_put`](Self::sftp_put) with the same failure
+    /// semantics. The outcome is recorded into [`last_upload`](Self::last_upload) and also
+    /// *returned*, so map-returning fan-outs ([`HostsGroup::sftp_put_bytes`]) can
+    /// attribute per host without the stale-prone `last_*` state: `None` means not
+    /// attempted (disabled), `Some(Err)` unconnected or a transfer error.
     ///
     /// [`HostsGroup::sftp_put_bytes`]: super::HostsGroup::sftp_put_bytes
     pub(crate) async fn sftp_put_bytes(
@@ -1319,10 +1125,10 @@ impl Target {
         self.record_upload(remote, outcome)
     }
 
-    /// The live connection an upload may use, or — when none may — the outcome
-    /// to report: `None` for a [`Disabled`](TargetState::Disabled) host (so the
-    /// `put` aggregation treats it as skipped rather than replaying an earlier
-    /// outcome), `Some(Err)` for an unconnected one.
+    /// The live connection an upload may use, or the outcome to report when none may:
+    /// `None` for a [`Disabled`](TargetState::Disabled) host (so `put` treats it as
+    /// skipped rather than replaying an earlier outcome), `Some(Err)` for an unconnected
+    /// one.
     fn upload_target(
         &mut self,
     ) -> std::result::Result<&mut Box<dyn Connection>, Option<std::result::Result<(), String>>>
@@ -1361,15 +1167,13 @@ impl Target {
         self.last_upload.clone()
     }
 
-    /// Downloads a file (or folder) from the host over SFTP, gated by
-    /// [`TargetState`].
+    /// Downloads a file (or folder) from the host over SFTP, gated by [`TargetState`].
     ///
-    /// The file-vs-folder branch: a `remote` path with
-    /// a trailing `/` fetches a folder via [`Connection::sftp_get_folder`] into
-    /// `local/`; otherwise a single file is fetched via
-    /// [`Connection::sftp_get`] into `local.{hostname}` — the per-host suffix is
-    /// a workflow contract so a parallel fan-out never clobbers one local dir.
-    /// A transfer error is logged, not propagated.
+    /// A `remote` with a trailing `/` fetches a folder via
+    /// [`Connection::sftp_get_folder`] into `local/`; otherwise a single file via
+    /// [`Connection::sftp_get`] into `local.{hostname}` (the per-host suffix is a
+    /// workflow contract so a parallel fan-out never clobbers one local dir). A transfer
+    /// error is logged, not propagated.
     pub async fn sftp_get(&mut self, remote: &str, local: &Path) {
         let is_folder = remote.ends_with('/');
         let remote_path = PathBuf::from(remote);
@@ -1408,17 +1212,13 @@ impl Target {
         }
     }
 
-    /// Reads `remote` into memory over SFTP, gated by [`TargetState`],
-    /// retaining at most `max_bytes` (`0` = unlimited) and reporting the file
-    /// size and whether it was cut.
+    /// Reads `remote` into memory over SFTP, gated by [`TargetState`], retaining at most
+    /// `max_bytes` (`0` = unlimited) and reporting the file size and whether it was cut.
     ///
-    /// The in-band counterpart of [`sftp_get`](Self::sftp_get) (#434): the
-    /// bytes are returned to the caller instead of landing in a local file, so
-    /// an MCP client on another machine can receive the content directly.
-    /// `None` means not attempted ([`Disabled`](TargetState::Disabled));
-    /// `Some(Err)` an unconnected target or a transfer failure — the same
-    /// encoding [`last_download`](Self::last_download) uses, but *returned*:
-    /// this method deliberately does **not** record into `last_download`, whose
+    /// The in-band counterpart of [`sftp_get`](Self::sftp_get): bytes are returned
+    /// instead of landing in a local file. `None` means not attempted
+    /// ([`Disabled`](TargetState::Disabled)); `Some(Err)` an unconnected target or a
+    /// transfer failure. Deliberately does **not** record into `last_download`, whose
     /// never-cleared entries misattribute stale outcomes across commands.
     pub async fn sftp_read_capped(
         &mut self,
@@ -1448,17 +1248,11 @@ impl Target {
 
     /// Opens an interactive PTY shell on the host, gated by [`TargetState`].
     ///
-    /// On an [`Enabled`](TargetState::Enabled)
-    /// target it delegates to [`Connection::shell`] and returns the
-    /// [`ShellChannel`]; a spawn failure is logged and swallowed as `None`,
-    /// so one bad
-    /// host never aborts a sequential fan-out. [`Disabled`](TargetState::Disabled)
-    /// does nothing and returns `None`.
-    ///
-    /// The returned handle is a transport duplex only; the raw-`termios` local
-    /// terminal bridge that consumes it is a CLI concern.
-    ///
-    /// Available only with the `shell` feature.
+    /// An [`Enabled`](TargetState::Enabled) target delegates to [`Connection::shell`] and
+    /// returns the [`ShellChannel`] (a transport duplex; the local terminal bridge is a
+    /// CLI concern); a spawn failure is logged and swallowed as `None`, so one bad host
+    /// never aborts a sequential fan-out. [`Disabled`](TargetState::Disabled) returns
+    /// `None`. Available only with the `shell` feature.
     #[cfg(feature = "shell")]
     pub async fn shell(&mut self, cols: u32, rows: u32) -> Option<Box<dyn ShellChannel>> {
         match self.state {

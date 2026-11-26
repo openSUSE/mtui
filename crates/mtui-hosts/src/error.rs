@@ -1,13 +1,9 @@
 //! The host-layer error hierarchy.
 //!
-//! Lives in `mtui-hosts` (not `mtui-types`) so the foundation crate stays
-//! I/O-free. The variants cover the SSH connection, command-timeout and SFTP
-//! transfer layers; authentication is public-key only, so **no** variant
-//! describes a password fallback because there is none.
-//!
-//! `#[non_exhaustive]`, so adding variants is not a breaking change. Like
-//! `mtui-datasources`'s enums it deliberately stays standalone rather than
-//! folding into `mtui-types::Error` via `#[from]`.
+//! Lives in `mtui-hosts` so the foundation crate stays I/O-free. Authentication is
+//! public-key only, so **no** variant describes a password fallback. The enum is
+//! `#[non_exhaustive]` and deliberately standalone, like `mtui-datasources`'s enums,
+//! rather than folded into `mtui-types::Error` via `#[from]`.
 
 use thiserror::Error;
 
@@ -18,9 +14,8 @@ pub type Result<T> = std::result::Result<T, HostError>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum HostError {
-    /// The TCP connect / SSH handshake to a host failed (host unreachable,
-    /// banner/auth timeout, or a general SSH-level failure), after logging a
-    /// single user-facing line.
+    /// The TCP connect / SSH handshake failed (unreachable host, banner/auth timeout, or
+    /// a general SSH-level failure).
     #[error("no valid connection to {host}: {reason}")]
     Connect {
         /// The host that could not be reached.
@@ -58,11 +53,10 @@ pub enum HostError {
 
     /// A reboot command could not be handed to the host at all.
     ///
-    /// Distinct from [`ReconnectFailed`](Self::ReconnectFailed) because the
-    /// host is still **reachable**: `fire_and_forget` drops the local link only
-    /// after channel open *and* `exec` succeed, so a failed dispatch leaves a
-    /// live session and the follow-up reconnect succeeds trivially — a reboot
-    /// that never left the client would read as a successful one.
+    /// Distinct from [`ReconnectFailed`](Self::ReconnectFailed): the host is still
+    /// **reachable**, since `fire_and_forget` drops the local link only after channel
+    /// open *and* `exec` succeed, so the follow-up reconnect would succeed trivially and
+    /// a reboot that never left the client would read as successful.
     #[error("failed to dispatch the reboot to {host}: {reason}")]
     RebootNotDispatched {
         /// The host the reboot never reached.
@@ -73,10 +67,10 @@ pub enum HostError {
 
     /// The host answered after its reboot with an unchanged boot id.
     ///
-    /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an
-    /// unchanged value means the reboot was accepted and silently did nothing
-    /// (a masked `rebootmgr`, a systemd inhibitor, a polkit denial). On a
-    /// transactional host that leaves the new snapshot **un-activated**.
+    /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an unchanged
+    /// value means the reboot was silently ignored (a masked `rebootmgr`, a systemd
+    /// inhibitor, a polkit denial), leaving a transactional host's new snapshot
+    /// **un-activated**.
     #[error("{host} did not reboot: its boot id is unchanged")]
     RebootDidNotHappen {
         /// The host that never went down.
@@ -102,15 +96,13 @@ pub enum HostError {
         reason: String,
     },
 
-    /// An SFTP request exceeded its per-request timeout (russh-sftp's
-    /// `Error::Timeout`, derived from `connect_timeout` — see
+    /// An SFTP request exceeded its per-request timeout (russh-sftp's `Error::Timeout`,
+    /// derived from `connect_timeout`; see
     /// [`SshConnection`](crate::connection::SshConnection)).
     ///
-    /// Distinct from the catch-all [`Sftp`](Self::Sftp)/[`Transport`](Self::Transport)
-    /// because a timed-out exclusive create may have landed server-side even
-    /// though the client never saw the reply: the lock protocol matches on this
-    /// variant to re-read and adopt the file rather than calling the group
-    /// unowned.
+    /// Distinct from [`Sftp`](Self::Sftp)/[`Transport`](Self::Transport) because a
+    /// timed-out exclusive create may have landed server-side: the lock protocol matches
+    /// on this variant to re-read and adopt the file.
     #[error("sftp request timed out on {host}: {path}")]
     SftpTimeout {
         /// The host the request timed out against.
@@ -226,16 +218,13 @@ pub enum HostError {
         release: String,
     },
 
-    /// No update-workflow [`PlanProvider`](crate::PlanProvider) has been wired
-    /// into the [`HostsGroup`](crate::HostsGroup).
+    /// No update-workflow [`PlanProvider`](crate::PlanProvider) has been wired into the
+    /// [`HostsGroup`](crate::HostsGroup) (it is injected by `mtui-testreport`'s
+    /// `perform_install` / `perform_uninstall`).
     ///
-    /// The doer/check resolver is injected by `mtui-testreport`'s
-    /// `update_flow::perform_install` / `perform_uninstall` (keeping the crate
-    /// graph acyclic), so reaching this means an [`Operation`](crate::Operation)
-    /// was driven against an un-injected group.
-    /// [`Operation::run`](crate::Operation::run) must *return* it, never log
-    /// and carry on: swallowing it is how the whole install/uninstall path came
-    /// to run nothing while reporting success.
+    /// [`Operation::run`](crate::Operation::run) must *return* it, never log and carry
+    /// on: swallowing it would make install/uninstall run nothing while reporting
+    /// success.
     #[error("no update-workflow provider wired into the host group")]
     NoPlanProvider,
 
