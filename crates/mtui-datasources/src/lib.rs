@@ -18,6 +18,10 @@ pub mod slack;
 pub mod sshsig;
 pub mod teregen;
 
+#[cfg(test)]
+#[path = "../tests/log_capture.rs"]
+mod log_capture;
+
 pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, QemDashboardError, RefhostError, Result,
     SlackError, TeReGenError,
