@@ -99,16 +99,15 @@ impl Write for SharedBuf {
     }
 }
 
-/// Builds a headless [`Session`] whose display is captured into a [`SharedBuf`]
-/// bounded to `config.mcp_max_output_bytes`.
+/// Builds a headless [`Session`] whose display discards.
 ///
-/// `is_repl` is `false` and color is disabled, so the captured text is the plain
-/// string an LLM client renders.
+/// `is_repl` is `false` and color is disabled. A command's output is captured on
+/// the per-call display each dispatch installs; the canonical session's own
+/// display only has to keep stdout (the JSON-RPC transport under stdio) clean.
 #[must_use]
-pub(crate) fn session(config: Config) -> (Session, SharedBuf) {
-    let buf = SharedBuf::with_limit(config.mcp_max_output_bytes);
-    let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-    (Session::with_display(config, false, display), buf)
+pub(crate) fn session(config: Config) -> Session {
+    let display = CommandPromptDisplay::with_sink(Box::new(std::io::sink()), ColorMode::Never);
+    Session::with_display(config, false, display)
 }
 
 #[cfg(test)]

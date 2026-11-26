@@ -51,7 +51,11 @@ async fn load_two(session: &McpSession) {
 /// outcome asynchronously). Fails the test if it does not settle promptly.
 async fn await_terminal(session: &McpSession, job_id: &str) -> JobState {
     for _ in 0..500 {
-        let state = session.job_status(job_id).expect("job exists").state;
+        let state = session
+            .job_status_wait(job_id, Duration::ZERO)
+            .await
+            .expect("job exists")
+            .state;
         if state != JobState::Running {
             return state;
         }
@@ -103,10 +107,16 @@ async fn start_job_runs_and_result_returns_stdout() {
     let state = await_terminal(&sess, &job_id).await;
     assert_eq!(state, JobState::Done);
 
-    let status = sess.job_status(&job_id).expect("status");
+    let status = sess
+        .job_status_wait(&job_id, Duration::ZERO)
+        .await
+        .expect("status");
     assert_eq!(status.command, "whoami");
 
-    let result = sess.job_result(&job_id).expect("done job yields stdout");
+    let result = sess
+        .job_result_wait(&job_id, Duration::ZERO)
+        .await
+        .expect("done job yields stdout");
     assert!(
         result.starts_with("User: testuser, app pid: "),
         "got: {result:?}"
@@ -129,7 +139,10 @@ async fn job_result_failed_surfaces_error_envelope() {
     let state = await_terminal(&sess, &job_id).await;
     assert_eq!(state, JobState::Failed);
 
-    let err = sess.job_result(&job_id).expect_err("failed job raises");
+    let err = sess
+        .job_result_wait(&job_id, Duration::ZERO)
+        .await
+        .expect_err("failed job raises");
     // A parse failure is argparse-exit-2.
     assert_eq!(err.exit_code, 2, "got: {err:?}");
 }
@@ -176,7 +189,8 @@ async fn job_result_running_points_at_wait_seconds() {
     started.notified().await;
 
     let err = sess
-        .job_result(&job_id)
+        .job_result_wait(&job_id, Duration::ZERO)
+        .await
         .expect_err("running job raises on job_result");
     assert_still_running(&err, &job_id);
 
@@ -186,10 +200,13 @@ async fn job_result_running_points_at_wait_seconds() {
 }
 
 /// Querying an unknown job id raises a clean error.
-#[test]
-fn job_status_unknown_id_raises() {
+#[tokio::test]
+async fn job_status_unknown_id_raises() {
     let sess = session();
-    let err = sess.job_status("nope-1").expect_err("unknown id raises");
+    let err = sess
+        .job_status_wait("nope-1", Duration::ZERO)
+        .await
+        .expect_err("unknown id raises");
     assert!(err.stderr.contains("no such job"), "got: {err:?}");
 }
 
@@ -275,10 +292,14 @@ async fn start_jobs_fans_out_one_job_per_template() {
     assert_eq!(listed.len(), 2);
     assert!(listed.iter().all(|j| j.state == JobState::Done));
 
-    let mut outputs: Vec<String> = ids
-        .iter()
-        .map(|id| sess.job_result(id).expect("done").trim().to_owned())
-        .collect();
+    let mut outputs: Vec<String> = Vec::new();
+    for id in &ids {
+        let out = sess
+            .job_result_wait(id, Duration::ZERO)
+            .await
+            .expect("done");
+        outputs.push(out.trim().to_owned());
+    }
     outputs.sort();
     assert_eq!(outputs, vec![RRID_A.to_owned(), RRID_B.to_owned()]);
 }
@@ -300,7 +321,13 @@ async fn start_jobs_explicit_template_yields_single_job() {
         .expect("start_jobs succeeds");
     assert_eq!(ids.len(), 1);
     await_terminal(&sess, &ids[0]).await;
-    assert_eq!(sess.job_result(&ids[0]).expect("done").trim(), RRID_B);
+    assert_eq!(
+        sess.job_result_wait(&ids[0], Duration::ZERO)
+            .await
+            .expect("done")
+            .trim(),
+        RRID_B
+    );
 }
 
 /// Cancelling one per-template job does not abort the sibling jobs.
@@ -350,12 +377,21 @@ async fn cancel_one_template_job_leaves_others() {
     release.notify_waiters();
 
     assert_eq!(
-        sess.job_status(&first).expect("first exists").state,
+        sess.job_status_wait(&first, Duration::ZERO)
+            .await
+            .expect("first exists")
+            .state,
         JobState::Cancelled
     );
     let second_state = await_terminal(&sess, &second).await;
     assert_eq!(second_state, JobState::Done);
-    assert_eq!(sess.job_result(&second).expect("done").trim(), RRID_B);
+    assert_eq!(
+        sess.job_result_wait(&second, Duration::ZERO)
+            .await
+            .expect("done")
+            .trim(),
+        RRID_B
+    );
 }
 
 // --------------------------------------------------------------------------- //
@@ -474,7 +510,10 @@ async fn completed_jobs_are_fifo_evicted_to_the_cap() {
 
     // The three oldest were evicted and now report cleanly as unknown.
     for old in &ids[..3] {
-        let err = sess.job_status(old).expect_err("evicted id is unknown");
+        let err = sess
+            .job_status_wait(old, Duration::ZERO)
+            .await
+            .expect_err("evicted id is unknown");
         assert!(err.stderr.contains("no such job"), "got: {err:?}");
     }
 }
