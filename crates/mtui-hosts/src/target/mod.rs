@@ -270,46 +270,25 @@ impl Target {
         state: TargetState,
         connection: Box<dyn Connection>,
     ) -> Self {
-        let hostname = hostname.into();
-        let (host, port) = split_host_port(&hostname);
-        let config = config.clone();
-        // Build the operation lock from a clone of the injected connection so
-        // the test seam mirrors the connected state: `unlock` / the RepoManager
-        // force-unlock safeguard have a live lock without a `connect()` call.
-        // The clone shares the mock's scripted state (`Arc`), so a lock SFTP op
-        // is observable through the original handle.
-        let lock = Some(TargetLock::new(connection.clone_box(), &config));
-        // Build the pool-claim lock from a clone of the injected connection too,
-        // so the test seam mirrors the connected state (a fresh target has no
-        // RRID yet — the report layer pushes it down via `set_rrid`).
-        let pool_lock = Some(TargetLock::pool(
-            connection.clone_box(),
-            &config,
-            String::new(),
+        let mut target = Self::new(config, hostname, state);
+        target.attach(connection);
+        target
+    }
+
+    /// Adopts `conn` as the live transport and builds both remote locks over
+    /// clones of it, joined to this target's holder registry and labelled with
+    /// its RRID.
+    fn attach(&mut self, conn: Box<dyn Connection>) {
+        let mut lock = TargetLock::new(conn.clone_box(), &self.config);
+        lock.set_holders(self.op_lock_holders.clone());
+        lock.set_label(self.rrid.clone());
+        self.lock = Some(lock);
+        self.pool_lock = Some(TargetLock::pool(
+            conn.clone_box(),
+            &self.config,
+            self.rrid.clone(),
         ));
-        Self {
-            hostname,
-            host,
-            port,
-            state,
-            timeout: CommandTimeout::default(),
-            connect_timeout: CommandTimeout::from_secs(60),
-            policy: HostKeyPolicy::default(),
-            out: HostLog::new(),
-            connection: Some(connection),
-            system: unknown_system(),
-            transactional: Transactional::No,
-            config,
-            lock,
-            op_lock_holders: OpLockHolders::default(),
-            pool_lock,
-            rrid: String::new(),
-            packages: Vec::new(),
-            timeout_prompt: None,
-            last_upload: None,
-            last_download: None,
-            last_repo: None,
-        }
+        self.connection = Some(conn);
     }
 
     /// The full `host[:port]` string this target was constructed with.
@@ -1116,21 +1095,7 @@ impl Target {
             };
             let conn =
                 conn.with_reboot_budget(std::time::Duration::from_secs(self.config.reboot_timeout));
-            let conn: Box<dyn Connection> = Box::new(conn);
-            // Build the operation lock over a clone of the live connection.
-            // The lock uses this handle for its SFTP-based lock
-            // protocol and force-unlock.
-            let mut lock = TargetLock::new(conn.clone_box(), &self.config);
-            lock.set_holders(self.op_lock_holders.clone());
-            lock.set_label(self.rrid.clone());
-            self.lock = Some(lock);
-            // Pool claims use a separate remote file + RRID-based ownership.
-            self.pool_lock = Some(TargetLock::pool(
-                conn.clone_box(),
-                &self.config,
-                self.rrid.clone(),
-            ));
-            self.connection = Some(conn);
+            self.attach(Box::new(conn));
         } else {
             tracing::debug!(host = %self.hostname, "already connected; skipping re-dial");
         }
