@@ -1262,11 +1262,11 @@ pub(crate) fn kwarg_otlp_attrs(
         };
         match (*key, value) {
             ("template", serde_json::Value::String(s)) => {
-                let capped: String = canonical_template_name(s).chars().take(1024).collect();
+                let capped = crate::audit::cap_str(&canonical_template_name(s));
                 out.push(str_attr("mtui.template", &capped));
             }
             ("job_id", serde_json::Value::String(s)) => {
-                let capped: String = s.chars().take(1024).collect();
+                let capped = crate::audit::cap_str(s);
                 out.push(str_attr("mtui.job_id", &capped));
             }
             ("background", serde_json::Value::Bool(b))
@@ -1780,6 +1780,20 @@ mod tests {
             !blob.windows(6).any(|w| w == b"S:M:1:"),
             "short form leaked"
         );
+    }
+
+    #[test]
+    fn kwarg_attrs_are_capped_at_1024_chars() {
+        let long = "z".repeat(2000);
+        for (key, kwargs) in [
+            ("job_id", serde_json::json!({"job_id": long})),
+            ("template", serde_json::json!({"template": long})),
+        ] {
+            let kwargs = kwargs.as_object().expect("object").clone();
+            let blob: Vec<u8> = kwarg_otlp_attrs("run", &kwargs).concat();
+            let count = blob.iter().filter(|&&b| b == b'z').count();
+            assert_eq!(count, 1024, "{key} attr value is capped");
+        }
     }
 
     #[test]

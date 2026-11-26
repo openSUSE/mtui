@@ -373,27 +373,18 @@ impl AuditLog {
     ///
     /// Opens the sink exactly as an append does, so a sink already at the cap
     /// rotates here too — [`rotate`](Self::rotate) cannot fail, so that adds
-    /// nothing to the errors below.
-    ///
-    /// Blocking; the start-up probe calls
-    /// [`check_writable_async`](Self::check_writable_async) instead, so the
-    /// open runs on the blocking pool.
+    /// nothing to the errors below. The open runs on the blocking pool, so a
+    /// down/slow disk never stalls the start-up probe's runtime. The probe in
+    /// `runner` is its only caller: dispatch proves the sink by writing an
+    /// `intent` record, which leaves the evidence behind.
     ///
     /// # Errors
     ///
     /// The underlying I/O error (missing parent, a directory as path,
     /// permission denied).
-    pub(crate) fn check_writable(&self) -> io::Result<()> {
-        self.open_sink().map(|_| ())
-    }
-
-    /// [`check_writable`](Self::check_writable) on the blocking pool, so a
-    /// down/slow disk never stalls the start-up probe's runtime. The probe in
-    /// `runner` is its only caller: dispatch proves the sink by writing an
-    /// `intent` record, which leaves the evidence behind.
     pub(crate) async fn check_writable_async(&self) -> io::Result<()> {
         let owned = self.clone();
-        tokio::task::spawn_blocking(move || owned.check_writable())
+        tokio::task::spawn_blocking(move || owned.open_sink().map(|_| ()))
             .await
             .map_err(io::Error::other)?
     }
@@ -1066,7 +1057,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let sink = AuditLog::new(dir.path().to_path_buf(), 0);
         assert!(
-            sink.check_writable().is_err(),
+            sink.open_sink().is_err(),
             "the probe must fail on a directory"
         );
         assert!(
