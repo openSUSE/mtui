@@ -837,11 +837,12 @@ fn error_detail(bytes: &[u8]) -> String {
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
-    if detail.len() > MAX_DETAIL_LEN {
-        detail[..detail.floor_char_boundary(MAX_DETAIL_LEN)].to_owned()
-    } else {
-        detail
-    }
+    cap_detail(&detail)
+}
+
+/// `text` cut to [`MAX_DETAIL_LEN`] on a char boundary.
+pub(crate) fn cap_detail(text: &str) -> String {
+    text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned()
 }
 
 #[cfg(test)]

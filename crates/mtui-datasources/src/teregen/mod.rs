@@ -39,7 +39,7 @@ pub mod auth;
 pub mod document;
 pub mod tokens;
 
-use document::MAX_DETAIL_LEN;
+use document::cap_detail;
 
 pub use auth::{AuthHint, AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
@@ -251,47 +251,9 @@ impl TeReGen {
     /// GET `path` and return the decoded JSON body, or `None` on any transport
     /// failure, non-2xx status, or invalid JSON — callers never see an error.
     async fn get(&self, path: &str, query: &[(&str, String)]) -> Option<Value> {
-        let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
-        // Encode the query ourselves: reqwest's `.query()` needs the `query`
-        // feature, which pulls in default features this workspace disables (see
-        // `openqa::client`).
-        let qs = build_query_string(query);
-        if !qs.is_empty() {
-            url.push('?');
-            url.push_str(&qs);
-        }
-        let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
-        // Both arms convert before logging: `error_for_status`'s raw error
-        // renders the *redirect-followed* URL, which can hold credentials a
-        // `Location` header put back (#431).
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!("TeReGen GET {path} failed: {}", HttpError::from(e));
-                return None;
-            }
-        };
-        let response = match response.error_for_status() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!("TeReGen GET {path} failed: {}", HttpError::from(e));
-                return None;
-            }
-        };
-        let bytes = match read_body_capped(response, MAX_API_BODY).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::debug!("TeReGen GET {path} failed: {e}");
-                return None;
-            }
-        };
-        match serde_json::from_slice::<Value>(&bytes) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::debug!("TeReGen GET {path} returned invalid JSON: {e}");
-                None
-            }
-        }
+        self.fetch(self.http.inner(), HTTP_TIMEOUT.1, path, query)
+            .await
+            .ok()
     }
 
     /// GET `path`, surfacing failures as `Err`.
@@ -304,17 +266,27 @@ impl TeReGen {
     /// for an error status names the status alone, never the body. Waits up to
     /// [`SMELT_BACKED_TIMEOUT`], on a client whose read timeout allows it.
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
+        let client = self
+            .http
+            .patient()
+            .map_err(|e| TeReGenError::Fetch(e.to_string()))?;
+        self.fetch(client, SMELT_BACKED_TIMEOUT, path, query).await
+    }
+
+    async fn fetch(
+        &self,
+        client: &reqwest::Client,
+        timeout: Duration,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<Value, TeReGenError> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let qs = build_query_string(query);
         if !qs.is_empty() {
             url.push('?');
             url.push_str(&qs);
         }
-        let client = self
-            .http
-            .patient()
-            .map_err(|e| TeReGenError::Fetch(e.to_string()))?;
-        let request = client.get(&url).timeout(SMELT_BACKED_TIMEOUT);
+        let request = client.get(&url).timeout(timeout);
         let response = request.send().await.map_err(|e| {
             let e = HttpError::from(e);
             tracing::debug!("TeReGen GET {path} failed: {e}");
@@ -608,32 +580,32 @@ impl TeReGen {
     }
 }
 
-/// The string `error` of a JSON-object body, cut to [`MAX_DETAIL_LEN`] on a
+/// The string `error` of a JSON-object body, cut to [`MAX_DETAIL_LEN`](document::MAX_DETAIL_LEN) on a
 /// char boundary. Anything else (HTML, empty, no string `error`) is `None`.
 fn error_text(bytes: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(bytes).ok()?;
-    let text = value.get("error")?.as_str().filter(|t| !t.is_empty())?;
-    Some(text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned())
+    error_field(&serde_json::from_slice::<Value>(bytes).ok()?)
+}
+
+fn error_field(body: &Value) -> Option<String> {
+    let text = body.get("error")?.as_str().filter(|t| !t.is_empty())?;
+    Some(cap_detail(text))
 }
 
 /// TeReGen's explanation of a failed request, from a JSON body: its string
 /// `error`, else the `message`s of a validator's `errors` array joined with
-/// `; `. Cut to [`MAX_DETAIL_LEN`] on a char boundary.
+/// `; `. Cut to [`MAX_DETAIL_LEN`](document::MAX_DETAIL_LEN) on a char boundary.
 fn failure_text(body: &Value) -> Option<String> {
-    let text = match body.get("error").and_then(Value::as_str) {
-        Some(error) => error.to_owned(),
-        None => body
-            .get("errors")?
-            .as_array()?
-            .iter()
-            .filter_map(|e| e.get("message").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("; "),
-    };
-    if text.is_empty() {
-        return None;
+    if body.get("error").is_some_and(Value::is_string) {
+        return error_field(body);
     }
-    Some(text[..text.floor_char_boundary(MAX_DETAIL_LEN)].to_owned())
+    let text = body
+        .get("errors")?
+        .as_array()?
+        .iter()
+        .filter_map(|e| e.get("message").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (!text.is_empty()).then(|| cap_detail(&text))
 }
 
 /// The comma-joined top-level key names of a JSON object, for a schema-drift
@@ -699,6 +671,7 @@ pub struct UpdatesQuery<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::document::MAX_DETAIL_LEN;
     use super::*;
     use crate::http::VerifyPolicy;
     use wiremock::matchers::{body_json, method, path, query_param};
