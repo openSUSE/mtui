@@ -444,8 +444,9 @@ and nothing is written there.
   resolved/connected`) with one line per test-target slot or testplatform it
   left without a host and why: no matching refhost, an arch of the testplatform
   no reference host covers, every candidate claimed by another RRID, every
-  candidate already serving another slot of the update, no candidate connected (unreachable, claimed remotely, `operation lock held by
-  <user> since <time>` for another owner's live operation lock, or refused
+  candidate already serving another slot of the update, or a mix of the two,
+  no candidate connected (unreachable, claimed remotely, `operation lock held
+  by <user> since <time>` for another owner's live operation lock, or refused
   because the update workflow cannot drive it: `no command set for <Product
   version>, <root mode>` with the root mode as detected, such as `transactional` or
   `transactional-update.conf but root mode unknown`, an

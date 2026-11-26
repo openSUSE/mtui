@@ -103,9 +103,10 @@ command out across all of them.
   spreading load across interchangeable refhosts.
 - Each slot gets a host of its own. A host can match two slots, as an `SLE_HPC`
   host carrying the `SLES-LTSS` addon matches both an `SLE_HPC` and a
-  `SLES-LTSS` slot; it serves only one, a candidate no other slot needs is
-  drawn first, and a slot whose every candidate already serves another slot
-  is named in `add_host`'s result.
+  `SLES-LTSS` slot; it serves only the slot it was drawn for, on later
+  `add_host` calls too, a candidate no other slot needs is drawn first, and a
+  slot whose every candidate already serves another slot is named in
+  `add_host`'s result.
 - If the chosen host fails to connect, mtui automatically **tries another
   candidate** from the same slot; only when *every* candidate for a slot is
   unreachable, claimed or locked does `add_host` name the slot and why in its result and

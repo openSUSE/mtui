@@ -361,10 +361,12 @@ pub(crate) enum Unserved {
         arch: String,
     },
     InventoryUnavailable,
-    /// Every candidate is claimed in-process; `(host, claiming RRID)`.
+    /// Every candidate is claimed in-process by another RRID,
+    /// `(host, claiming RRID)`, or already serves another slot (`shared`).
     Busy {
         slot: String,
         holders: Vec<(String, String)>,
+        shared: Vec<String>,
     },
     /// Every candidate already serves another slot of this update.
     Shared {
@@ -405,16 +407,25 @@ impl Unserved {
             Self::InventoryUnavailable => {
                 "refhosts inventory unavailable; no testplatform host resolved".to_owned()
             }
-            Self::Busy { slot, holders } => {
+            Self::Busy {
+                slot,
+                holders,
+                shared,
+            } => {
                 let by = holders
                     .iter()
                     .map(|(h, r)| format!("{h} by {r}"))
                     .collect::<Vec<_>>()
                     .join(", ");
+                let also = if shared.is_empty() {
+                    String::new()
+                } else {
+                    format!(" or already serving another slot ({})", shared.join(", "))
+                };
                 format!(
-                    "unserved slot {}: all {} candidates claimed ({by})",
+                    "unserved slot {}: all {} candidates claimed ({by}){also}",
                     slot_label(slot),
-                    holders.len()
+                    holders.len() + shared.len()
                 )
             }
             Self::Shared { slot, hosts } => format!(
@@ -1725,11 +1736,13 @@ impl Session {
     /// (`attempted_initial` ∩ `pool_claims`) and that has no candidate attached
     /// is retried: drop the dead claim(s), then sequentially `acquire_any` the
     /// next free sibling and connect it until one succeeds or the candidates are
-    /// exhausted. A slot with any attached host, or that nobody claimed in this
-    /// call, is left alone. Any host that connects joins the active group and
-    /// returns its drift entry. A no-op when pool selection is inactive or no
-    /// slots are recorded; a connect failure releases the in-process claim and
-    /// moves on.
+    /// exhausted. A slot with any attached host is served, and a slot nobody
+    /// claimed in this call is left alone. A candidate
+    /// [`pool_slots`](mtui_testreport::TestReportBase::pool_slots) records for
+    /// another slot counts for that slot only. Any host that connects joins the
+    /// active group and returns its drift entry. A no-op when pool selection is
+    /// inactive or no slots are recorded; a connect failure releases the
+    /// in-process claim and moves on.
     ///
     /// The whole phase shares one wall-clock budget (`4 * connect_timeout`), not
     /// a per-slot one, which would multiply by slot count and siblings. Once
@@ -1756,12 +1769,13 @@ impl Session {
         Vec<Unserved>,
         Vec<(String, HostFailure)>,
     ) {
-        let (arbiter, owner, slot_candidates, lock_comment, package_meta, named) = {
+        let (arbiter, owner, slot_candidates, mut slot_of, lock_comment, package_meta, named) = {
             let base = self.metadata().base();
             (
                 base.arbiter,
                 base.owner.clone(),
                 base.slot_candidates.clone(),
+                base.pool_slots.clone(),
                 base.lock_comment.clone(),
                 PackageMeta::of(base),
                 base.hostnames.clone(),
@@ -1799,6 +1813,7 @@ impl Session {
             let base = self.metadata_mut().base_mut();
             for h in &failed {
                 base.pool_claims.remove(h);
+                base.pool_slots.remove(h);
                 arbiter.release(h, &owner);
             }
         }
@@ -1815,8 +1830,12 @@ impl Session {
         let mut slots: Vec<_> = slot_candidates.into_iter().collect();
         slots.sort();
         for (slot, candidates) in slots {
-            if candidates.iter().any(|c| attached.contains(c))
-                || !candidates.iter().any(|c| failed.contains(c))
+            // A candidate drawn for another slot neither serves nor fails this one.
+            let own: Vec<&String> = candidates
+                .iter()
+                .filter(|c| slot_of.get(*c).is_none_or(|s| *s == slot))
+                .collect();
+            if own.iter().any(|c| attached.contains(*c)) || !own.iter().any(|c| failed.contains(*c))
             {
                 continue;
             }
@@ -1835,8 +1854,8 @@ impl Session {
                 });
                 continue;
             }
-            let mut remaining: Vec<String> = candidates
-                .iter()
+            let mut remaining: Vec<String> = own
+                .into_iter()
                 .filter(|c| !attempted.contains(*c))
                 .cloned()
                 .collect();
@@ -1883,6 +1902,11 @@ impl Session {
                 {
                     Ok((target, drift_entry)) => {
                         attached.insert(chosen.clone());
+                        slot_of.insert(chosen.clone(), slot.clone());
+                        self.metadata_mut()
+                            .base_mut()
+                            .pool_slots
+                            .insert(chosen.clone(), slot.clone());
                         self.targets_mut().add(target);
                         new_drift.push(drift_entry);
                         connected = true;
@@ -2197,22 +2221,29 @@ impl Session {
     /// Each slot's candidates are shuffled (the [`ShuffleFn`] seam) and recorded
     /// for sibling fallback, a host fewer other slots match ahead of one they
     /// also need. Each host serves at most one slot per call, and each slot key
-    /// is drawn once: a slot this owner already holds a host for, not already
-    /// serving an earlier slot, is skipped; otherwise one free host no earlier
-    /// slot took is claimed, waiting up to `[lock] wait` seconds when all are
-    /// busy, and a slot whose every candidate serves an earlier slot is reported
-    /// as [`Unserved::Shared`].
+    /// is drawn once: a slot this owner already holds a host for, not serving
+    /// another slot, is skipped; otherwise one free host no other slot took is
+    /// claimed, waiting up to `[lock] wait` seconds when all are busy, and a
+    /// slot whose every candidate serves another slot is reported as
+    /// [`Unserved::Shared`].
+    ///
+    /// `served` maps each host to the slot key it was drawn for, as
+    /// [`TestReportBase::pool_slots`](mtui_testreport::TestReportBase::pool_slots):
+    /// a held host recorded for another slot serves that one, whatever order
+    /// the slots come in, and each host this call draws or keeps is recorded.
     ///
     /// Returns `(chosen_hosts, slot_candidates, unserved)`, keyed as
     /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates),
     /// for the caller to write onto the active report before connecting.
     ///
     /// Static, so the caller's future stays `Send`.
+    #[allow(clippy::too_many_arguments)]
     async fn pool_select(
         store: &Refhosts,
         testplatforms: &[String],
         arbiter: &'static HostArbiter,
         owner: &Owner,
+        served: &mut std::collections::HashMap<String, String>,
         wait: i64,
         poll: i64,
         shuffle: ShuffleFn,
@@ -2283,29 +2314,29 @@ impl Session {
                 candidates.sort_by_key(|c| demand.get(c).copied().unwrap_or(0));
                 slot_candidates.insert(slot.clone(), candidates.clone());
 
-                if let Some(held) = candidates
-                    .iter()
-                    .find(|c| !used.contains(*c) && arbiter.owner_of(c).as_ref() == Some(owner))
-                {
+                let ours = |c: &String| arbiter.owner_of(c).as_ref() == Some(owner);
+                let (shared, free): (Vec<String>, Vec<String>) =
+                    candidates.iter().cloned().partition(|c| {
+                        used.contains(c) || ours(c) && served.get(c).is_some_and(|s| *s != slot)
+                    });
+                let held = free.iter().find(|c| ours(c)).cloned();
+                if let Some(held) = held {
                     used.insert(held.clone());
+                    served.insert(held, slot);
                     continue;
                 }
-                let free: Vec<String> = candidates
-                    .iter()
-                    .filter(|c| !used.contains(*c))
-                    .cloned()
-                    .collect();
                 if free.is_empty() {
                     warn!(slot = %slot, "every pool candidate already serves another slot");
                     unserved.push(Unserved::Shared {
                         slot,
-                        hosts: candidates,
+                        hosts: shared,
                     });
                     continue;
                 }
                 match arbiter.acquire_any(&free, owner, wait, poll).await {
                     Some(host) => {
                         used.insert(host.clone());
+                        served.insert(host.clone(), slot);
                         chosen.push(host);
                     }
                     None => {
@@ -2314,11 +2345,15 @@ impl Session {
                             candidates = candidates.len(),
                             "no free pool host for slot (all candidates busy)"
                         );
-                        let holders = candidates
+                        let holders = free
                             .iter()
                             .filter_map(|c| arbiter.owner_of(c).map(|o| (c.clone(), o.1)))
                             .collect();
-                        unserved.push(Unserved::Busy { slot, holders });
+                        unserved.push(Unserved::Busy {
+                            slot,
+                            holders,
+                            shared,
+                        });
                     }
                 }
             }
@@ -2352,11 +2387,13 @@ impl Session {
             (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
                 if let Some(store) = Self::build_refhosts_store(config).await {
                     let (wait, poll) = lock_wait_secs(config);
+                    let mut served = self.metadata().base().pool_slots.clone();
                     let (chosen, slot_candidates, not_served) = Self::pool_select(
                         &store,
                         &testplatforms,
                         arbiter,
                         &owner,
+                        &mut served,
                         wait,
                         poll,
                         shuffle,
@@ -2368,6 +2405,7 @@ impl Session {
                         base.pool_claims.insert(host.clone());
                     }
                     base.slot_candidates.extend(slot_candidates);
+                    base.pool_slots = served;
                     unserved = not_served;
                     chosen
                 } else {
@@ -3821,8 +3859,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,ppc64le]".to_owned()];
 
-        let (chosen, slot_candidates, unserved) =
-            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+        let (chosen, slot_candidates, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(
             chosen.len(),
@@ -3856,8 +3903,17 @@ mod tests {
         assert!(arbiter.try_acquire("x86-a", &owner));
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
 
-        let (chosen, _, _) =
-            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, _) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert!(
             chosen.is_empty(),
@@ -3878,8 +3934,17 @@ mod tests {
         assert!(arbiter.try_acquire("x86-b", &other));
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
 
-        let (chosen, slot_candidates, unserved) =
-            Session::pool_select(&store, &tps, arbiter, &mine, 0, 0, no_shuffle).await;
+        let (chosen, slot_candidates, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &mine,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert!(chosen.is_empty(), "all candidates busy → no claim");
         // Candidates are still recorded (for backup once one frees up).
@@ -3893,6 +3958,7 @@ mod tests {
                     ("x86-a".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
                     ("x86-b".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
                 ],
+                shared: Vec::new(),
             }]
         );
     }
@@ -3904,8 +3970,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=12,minor=5);arch=[x86_64]".to_owned()];
 
-        let (chosen, slot_candidates, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, slot_candidates, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert!(chosen.is_empty() && slot_candidates.is_empty());
         assert_eq!(unserved, vec![Unserved::NoRefhost { tp: tps[0].clone() }]);
@@ -3918,8 +3993,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,s390x]".to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["x86-a".to_owned()]);
         assert_eq!(
@@ -3938,8 +4022,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,s390x,s390x]".to_owned()];
 
-        let (_, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (_, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(
             unserved,
@@ -3957,8 +4050,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[]".to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["x86-a".to_owned()]);
         assert_eq!(unserved, Vec::new());
@@ -3978,8 +4080,17 @@ mod tests {
             "base=sles(major=12,minor=5);arch=[x86_64]".to_owned(),
         ];
 
-        let (_, slot_candidates, unserved) =
-            Session::pool_select(&store, &tps, arbiter, &mine, 0, 0, no_shuffle).await;
+        let (_, slot_candidates, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &mine,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         let slot = slot_candidates.keys().next().unwrap().clone();
         assert_eq!(
@@ -3996,6 +4107,7 @@ mod tests {
                 Unserved::Busy {
                     slot,
                     holders: vec![("x86-a".to_owned(), "SUSE:Maintenance:2:2".to_owned())],
+                    shared: Vec::new(),
                 },
                 Unserved::NoRefhost { tp: tps[1].clone() },
             ]
@@ -4019,8 +4131,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec!["base=sles(major=15,minor=5);arch=[ppc64le,x86_64]".to_owned()];
 
-        let (chosen, slot_candidates, _) =
-            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+        let (chosen, slot_candidates, _) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(
             chosen,
@@ -4056,6 +4177,8 @@ mod tests {
 
     const HPC_TP: &str = "base=SLE_HPC(major=15,minor=SP5);arch=[x86_64]";
     const LTSS_TP: &str = "base=SLES-LTSS(major=15,minor=SP5);arch=[x86_64]";
+    const HPC_SLOT: &str = "SLE_HPC|15-SP5|x86_64|";
+    const LTSS_SLOT: &str = "SLES-LTSS|15-SP5|x86_64|";
 
     /// A host drawn for one slot does not also serve a later slot it matches:
     /// that slot draws its own free candidate.
@@ -4065,8 +4188,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["h1.example.com", "h2.example.com"]);
         assert_eq!(unserved, Vec::new());
@@ -4080,8 +4212,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["h1.example.com", "h2.example.com"]);
         assert_eq!(unserved, Vec::new());
@@ -4095,8 +4236,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["h2.example.com", "h1.example.com"]);
         assert_eq!(unserved, Vec::new());
@@ -4109,8 +4259,17 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["h1.example.com"]);
         assert_eq!(
@@ -4136,20 +4295,96 @@ mod tests {
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         assert!(arbiter.try_acquire("h1.example.com", &owner));
         let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+        let mut served = std::collections::HashMap::new();
 
         let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
         assert_eq!(
             chosen,
             vec!["h2.example.com"],
             "h1 serves only the HPC slot"
         );
         assert_eq!(unserved, Vec::new());
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([
+                ("h1.example.com".to_owned(), HPC_SLOT.to_owned()),
+                ("h2.example.com".to_owned(), LTSS_SLOT.to_owned()),
+            ])
+        );
 
         let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
         assert_eq!(chosen, Vec::<String>::new());
         assert_eq!(unserved, Vec::new());
+    }
+
+    /// A held host stays with the slot it was drawn for when a rerun meets the
+    /// slots in the other order.
+    #[tokio::test]
+    async fn pool_select_rerun_in_other_order_keeps_held_host_with_its_slot() {
+        let store = hpc_ltss_store(&["h1.example.com"], &[]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let mut served = std::collections::HashMap::new();
+        let shared = vec![Unserved::Shared {
+            slot: LTSS_SLOT.to_owned(),
+            hosts: vec!["h1.example.com".to_owned()],
+        }];
+
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+        assert_eq!(chosen, vec!["h1.example.com"]);
+        assert_eq!(unserved, shared);
+
+        let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned()];
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+        assert_eq!(chosen, Vec::<String>::new());
+        assert_eq!(unserved, shared);
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([("h1.example.com".to_owned(), HPC_SLOT.to_owned())])
+        );
+    }
+
+    /// A slot whose free candidates are all claimed elsewhere names only those
+    /// holders, and the host it lost to an earlier slot as serving that slot.
+    #[tokio::test]
+    async fn pool_select_busy_slot_does_not_name_a_host_drawn_this_call() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("h2.example.com", &other));
+        let tps = vec![HPC_TP.to_owned(), LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
+
+        assert_eq!(chosen, vec!["h1.example.com"]);
+        assert_eq!(
+            unserved.iter().map(Unserved::render).collect::<Vec<_>>(),
+            vec![
+                "unserved slot SLES-LTSS 15-SP5 x86_64: all 2 candidates claimed \
+                 (h2.example.com by SUSE:Maintenance:2:2) or already serving another \
+                 slot (h1.example.com)"
+            ]
+        );
     }
 
     /// Two testplatforms naming the same slot draw one host for it.
@@ -4160,8 +4395,17 @@ mod tests {
         let tp = "base=sles(major=15,minor=5);arch=[x86_64]".to_owned();
         let tps = vec![tp.clone(), tp];
 
-        let (chosen, _, unserved) =
-            Session::pool_select(&store, &tps, test_arbiter(), &owner, 0, 0, no_shuffle).await;
+        let (chosen, _, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            test_arbiter(),
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
 
         assert_eq!(chosen, vec!["x86-a"]);
         assert_eq!(unserved, Vec::new());
@@ -4241,6 +4485,12 @@ mod tests {
                     ("h1".to_owned(), "SUSE:Maintenance:2:2".to_owned()),
                     ("h2".to_owned(), "SUSE:Maintenance:3:3".to_owned()),
                 ],
+                shared: Vec::new(),
+            },
+            Unserved::Busy {
+                slot: slot.clone(),
+                holders: vec![("h11".to_owned(), "SUSE:Maintenance:2:2".to_owned())],
+                shared: vec!["h12".to_owned()],
             },
             Unserved::Unconnectable {
                 slot: slot.clone(),
@@ -4694,6 +4944,55 @@ mod tests {
         assert!(!holds_a_lock(&ro_backup_conn));
     }
 
+    /// A slot whose own draw failed is backed up even though another slot's
+    /// attached host is one of its candidates.
+    #[tokio::test]
+    async fn backup_retries_slot_whose_candidate_serves_another_slot() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (shared, backup) = ("h1.example.com", "h3.example.com");
+        let dead = closed_addr();
+        s.inject_mock_connection(shared, product_host(shared, "SLES", "15", "6", false));
+        s.inject_mock_connection(backup, product_host(backup, "SLES", "15", "6", false));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[
+                ("hpc", &[shared.to_owned()]),
+                (
+                    "ltss",
+                    &[shared.to_owned(), dead.clone(), backup.to_owned()],
+                ),
+            ],
+            &[shared, &dead],
+        );
+        let base = s.metadata_mut().base_mut();
+        base.pool_slots.insert(shared.to_owned(), "hpc".to_owned());
+        base.pool_slots.insert(dead.clone(), "ltss".to_owned());
+
+        let (unserved, _) = s
+            .connect_and_add_hosts(
+                vec![shared.to_owned(), dead.clone()],
+                rrid,
+                &std::collections::HashSet::from([shared.to_owned(), dead.clone()]),
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        let mut names = s.targets().names();
+        names.sort();
+        assert_eq!(names, vec![shared.to_owned(), backup.to_owned()]);
+        assert_eq!(
+            s.metadata().base().pool_slots,
+            std::collections::HashMap::from([
+                (shared.to_owned(), "hpc".to_owned()),
+                (backup.to_owned(), "ltss".to_owned()),
+            ])
+        );
+    }
+
     /// With no sibling that has a command set, the slot is unserved and the
     /// reason names each host's key.
     #[tokio::test]
@@ -5127,6 +5426,7 @@ mod tests {
             &[tp.to_owned()],
             test_arbiter(),
             &("probe".to_owned(), "SUSE:Maintenance:9:9".to_owned()),
+            &mut Default::default(),
             0,
             0,
             no_shuffle,
@@ -5172,6 +5472,43 @@ mod tests {
         );
         let out = buf.contents();
         assert!(!out.contains("skipped"), "{out:?}");
+    }
+
+    /// `add_host` records the slot each host was drawn for on the report.
+    #[tokio::test]
+    async fn add_testplatform_hosts_records_the_slot_each_host_serves() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, config) = config_with_path_refhosts();
+        let tp = "base=sles(major=15,minor=5);arch=[x86_64]";
+        let store = Session::build_refhosts_store(&config)
+            .await
+            .expect("fixture inventory");
+        let (_, slots, _) = Session::pool_select(
+            &store,
+            &[tp.to_owned()],
+            test_arbiter(),
+            &("probe".to_owned(), "SUSE:Maintenance:9:9".to_owned()),
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
+        let (slot, candidates) = slots.into_iter().next().expect("a slot");
+        let (mut s, _buf) = locking_session(config, &[], &[tp]);
+        s.shuffle = no_shuffle;
+        for h in &candidates {
+            s.inject_mock_connection(h, product_host(h, "SLES", "15", "5", false));
+        }
+
+        s.add_testplatform_hosts().await;
+
+        assert_eq!(s.targets().names(), vec![candidates[0].clone()]);
+        assert_eq!(
+            s.metadata().base().pool_slots,
+            std::collections::HashMap::from([(candidates[0].clone(), slot)])
+        );
     }
 
     /// A template's named host offered as a backup sibling (bare `add_host`
@@ -5225,6 +5562,7 @@ mod tests {
             &[tp.to_owned()],
             test_arbiter(),
             &("probe".to_owned(), "SUSE:Maintenance:9:9".to_owned()),
+            &mut Default::default(),
             0,
             0,
             no_shuffle,
