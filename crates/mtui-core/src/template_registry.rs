@@ -429,21 +429,31 @@ mod tests {
     #[tokio::test]
     async fn remove_bounds_a_pool_claim_release_that_hangs() {
         let _guard = CLOSE_TIMEOUT_LOCK.lock().await;
-        CLOSE_TIMEOUT_MS.store(50, Ordering::SeqCst);
+        CLOSE_TIMEOUT_MS.store(500, Ordering::SeqCst);
 
-        let good = MockConnection::new("good");
+        let rrid = "SUSE:Maintenance:1:1";
+        let me = Config::default().session_user;
+        let claim = format!("1700000000:{me}:1:mtui pool {rrid} [{rrid}]");
+        // A delay under the budget, so a zero budget leaves this release unfinished.
+        let good = MockConnection::new("good")
+            .with_file(mtui_hosts::POOL_LOCK_PATH, claim)
+            .with_sftp_session_delay(Duration::from_millis(50));
+        let mut good_target =
+            Target::with_connection("good", TargetState::Enabled, Box::new(good.clone()));
+        good_target.set_rrid(rrid);
         let mut base = mtui_testreport::TestReportBase::new(Config::default());
-        base.rrid = "SUSE:Maintenance:1:1".parse().ok();
+        base.rrid = rrid.parse().ok();
         base.targets = mtui_hosts::HostsGroup::new(
             vec![
                 target_with("hung", |c| {
                     c.with_sftp_session_delay(Duration::from_secs(3600))
                 }),
-                Target::with_connection("good", TargetState::Enabled, Box::new(good.clone())),
+                good_target,
             ],
             false,
         );
         base.pool_claims.insert("hung".to_owned());
+        base.pool_claims.insert("good".to_owned());
         let mut reg = registry();
         reg.add(fake_report_from_base(base));
 
@@ -453,6 +463,7 @@ mod tests {
                 .await
                 .expect("remove must return despite the hung release");
         assert!(!reg.contains("SUSE:Maintenance:1:1"), "removal completes");
+        // Catches a zero budget: the healthy release is then named unfinished too.
         assert_eq!(removed.release_unfinished, vec!["hung".to_owned()]);
         assert!(good.is_closed(), "good: still closed");
         CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);

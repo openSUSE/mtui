@@ -2392,14 +2392,16 @@ mod tests {
             good.is_closed(),
             "healthy host closed despite the hung release"
         );
-        // Catches a release given no budget: the healthy host is named too.
+        // Catches a release given no budget (the healthy host is named too) and
+        // a figure other than the release's own half of the just-under-2 s remainder.
         let unfinished: Vec<&str> = logs
             .lines()
             .filter(|l| l.starts_with("pool-claim release"))
             .collect();
-        assert!(
-            matches!(&unfinished[..], [line] if line.starts_with("pool-claim release on hung-host ")),
-            "only the hung host is named: {unfinished:?}"
+        assert_eq!(
+            unfinished,
+            vec!["pool-claim release on hung-host unfinished after 0 seconds"],
+            "only the hung host is named"
         );
     }
 

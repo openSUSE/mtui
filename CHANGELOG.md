@@ -36,13 +36,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   releasing the pool claims the same 45-second budget that closing the hosts
   gets. The budget covers all hosts at once, and each host whose release has
   not finished when it ends is named. The other hosts' claims are released
-  and every host is still closed. The close retries a hung release, so each
-  loaded template can take up to 90 seconds, one after another. Before, one
-  host that stopped answering during the release held the teardown forever,
-  and after a hangup nothing could end it but `SIGKILL`, leaving every lock
-  and claim not yet released. `unload` bounds the release the same way and
-  counts those hosts in its summary line. The `mtui-mcp` session close gives
-  a hung release half of its budget, so the hosts are still closed (#858).
+  and the close still runs on every host. The close retries a hung release,
+  so each loaded template can take up to 90 seconds, one after another.
+  Before, one host that stopped answering during the release held the
+  teardown forever, and after a hangup nothing could end it but `SIGKILL`,
+  leaving every lock and claim not yet released. `unload` bounds the release
+  the same way and counts those hosts in its summary line. The `mtui-mcp`
+  session close gives a hung release half of its budget, so the close still
+  runs on every host (#858).
 - The `downgrade` row that `downgrade`, and `update`'s automatic rollback,
   append to `/var/log/mtui.log` now names only the packages a downgrade
   command was sent for on that host. A host a cancel stopped between packages,
