@@ -168,6 +168,44 @@ Each connected host has a state, set with
 Commands designed to run in parallel (like [`run`](cli.md#run)) always fan out
 concurrently across enabled hosts.
 
+## Removal guard
+
+`install`, `uninstall`, `prepare` and `downgrade` let the package solver decide
+what else a transaction takes with it, and `-n` accepts the result. Before
+committing, each host first resolves the same transaction with a dry run
+(`zypper -x … --dry-run`) and reads the packages it would remove. The host is
+refused — it runs nothing further, is not rebooted, gets no history row, and
+fails the command by name while the other hosts carry on — when that set holds
+a protected package the command did not name, or when the dry run fails or
+its output cannot be read. Every other removal is allowed and reported as
+`<host>: the transaction also removes …`.
+
+Protected, by exact name: the base system (`aaa_base`, `bash`, `bash-sh`,
+`coreutils`, `filesystem`, `glibc`, `pam`, `systemd`, `udev`, `util-linux`),
+`dracut`, the kernels (`kernel-default`, `kernel-default-base`, `kernel-64kb`,
+`kernel-azure`, `kernel-kvmsmall`, `kernel-preempt`, `kernel-rt`,
+`kernel-zfcpdump`), the package stack (`libzypp`, `rpm`, `rpm-ndb`,
+`transactional-update`, `zypper`), and what keeps the host reachable
+(`NetworkManager`, `wicked`, `openssh`, `openssh-common`, `openssh-server`);
+and `grub2` with every `grub2-*` package. The list is built in.
+
+Pass `--allow-removal` (the `allow_removal` property of the MCP tools) to
+commit the transaction anyway; it skips the dry run.
+
+Limits:
+
+- `downgrade` judges a host by one dry run of all its packages, also where it
+  then downgrades them one transaction per package.
+- On transactional hosts (SL Micro, transactional SLES 16) the dry run runs
+  plain `zypper` against the booted root, while the transaction runs in a new
+  snapshot. mtui reboots into the snapshot after each transactional operation,
+  so the booted root is the base of the next one; a snapshot staged by
+  something else and not yet booted is not what the dry run sees.
+- `YUM` hosts are not checked: yum/dnf have no machine-readable transaction
+  summary. A warning in mtui's log (not in the command output) names each
+  such host.
+- `run` is not checked, nor are the prepare and rollback inside `update`.
+
 ## Locking
 
 Two independent locks coordinate concurrent testers on a shared fleet. Both use

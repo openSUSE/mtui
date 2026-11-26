@@ -529,6 +529,17 @@ pub(crate) mod testkit {
     }
 
     impl FakeReport {
+        /// Echoes a set `--allow-removal` as a diagnostic, so a test can see
+        /// that the flag reached the report.
+        fn note_allow_removal(
+            allow_removal: bool,
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
+        ) {
+            if allow_removal {
+                diagnostics.push(mtui_testreport::Diagnostic::plain("allow_removal was set"));
+            }
+        }
+
         /// The shared verdict for the `perform_install`-family overrides.
         fn perform_verdict(&self) -> Result<(), mtui_testreport::UpdateError> {
             if self.cancel_perform {
@@ -626,8 +637,10 @@ pub(crate) mod testkit {
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
+            allow_removal: bool,
             diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            Self::note_allow_removal(allow_removal, diagnostics);
             if self.install_degradation {
                 diagnostics.push(mtui_testreport::Diagnostic::degradation(
                     "install lost a hold in the reboot gap (h1)",
@@ -639,8 +652,10 @@ pub(crate) mod testkit {
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
-            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
+            allow_removal: bool,
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            Self::note_allow_removal(allow_removal, diagnostics);
             self.perform_verdict()
         }
         async fn perform_prepare(
@@ -650,16 +665,20 @@ pub(crate) mod testkit {
             _force: bool,
             _testing: bool,
             _installed_only: bool,
-            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
+            allow_removal: bool,
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            Self::note_allow_removal(allow_removal, diagnostics);
             self.perform_verdict()
         }
         async fn perform_downgrade(
             &self,
             _targets: &mut HostsGroup,
             _packages: &[String],
-            _diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
+            allow_removal: bool,
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            Self::note_allow_removal(allow_removal, diagnostics);
             self.perform_verdict()
         }
         fn as_set_repo(&self) -> Option<&dyn SetRepo> {

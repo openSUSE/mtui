@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
-use super::perform::{PerformOp, drive};
+use super::perform::{PerformOp, add_allow_removal_arg, drive};
 use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
@@ -50,7 +50,7 @@ impl Command for Install {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(add_package_arg(cmd, "package to install"))
+        add_allow_removal_arg(add_hosts_arg(add_package_arg(cmd, "package to install")))
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
@@ -89,7 +89,7 @@ impl Command for Uninstall {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(add_package_arg(cmd, "package to remove"))
+        add_allow_removal_arg(add_hosts_arg(add_package_arg(cmd, "package to remove")))
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {

@@ -16,6 +16,8 @@ extend-exclude = [
   "crates/*/tests/fixtures/**/*.json",
   "crates/*/tests/fixtures/**/*.log",
   "crates/*/tests/fixtures/**/log",
+  # zypper dry-run captures; libzypp's own package description says "commiting".
+  "crates/*/tests/fixtures/**/*.xml",
   # Insta goldens projecting those captured fixtures verbatim (the same CVE title).
   "crates/*/tests/snapshots/it__ingest__ingest_golden_*.snap",
 ]

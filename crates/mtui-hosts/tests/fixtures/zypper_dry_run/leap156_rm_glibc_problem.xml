@@ -1,0 +1,19 @@
+<?xml version='1.0'?>
+<stream>
+<message type="info">Reading installed packages...</message>
+<message type="info">Resolving package dependencies...</message>
+<prompt id="1">
+<description>Problem: 1: This request will break your system!
+conflicting requests
+
+
+ Solution 1: keep glibc-2.38-150600.14.46.1.aarch64
+ Solution 2: ignore the warning of a broken system (requires:glibc)
+</description>
+<text>Choose from above solutions by number or cancel</text>
+<option value="1" desc="Choose solution 1"/>
+<option value="2" desc="Choose solution 2"/>
+<option default="1" value="c" desc="Choose no solution and cancel."/>
+<option value="d" desc="Toggle show detailed conflict information."/>
+</prompt>
+</stream>

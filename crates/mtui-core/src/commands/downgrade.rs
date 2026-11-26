@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::perform::{PerformOp, drive};
+use super::perform::{PerformOp, add_allow_removal_arg, drive};
 use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
@@ -43,7 +43,7 @@ impl Command for Downgrade {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(cmd)
+        add_allow_removal_arg(add_hosts_arg(cmd))
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {

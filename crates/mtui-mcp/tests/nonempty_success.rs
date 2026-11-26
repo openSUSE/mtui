@@ -97,14 +97,15 @@ async fn await_terminal(session: &McpSession, job_id: &str) -> JobState {
 }
 
 /// The five workflow fan-outs and the argv that drives each to a clean success.
+/// The mock hosts answer no dry run, so the guarded ones skip the removal guard.
 fn cases() -> Vec<(&'static str, Vec<String>)> {
     let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     vec![
         ("update", argv(&[])),
-        ("prepare", argv(&["-u"])),
-        ("install", argv(&["pkg-a"])),
-        ("uninstall", argv(&["pkg-a"])),
-        ("downgrade", argv(&[])),
+        ("prepare", argv(&["-u", "--allow-removal"])),
+        ("install", argv(&["--allow-removal", "pkg-a"])),
+        ("uninstall", argv(&["--allow-removal", "pkg-a"])),
+        ("downgrade", argv(&["--allow-removal"])),
     ]
 }
 

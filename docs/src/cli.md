@@ -6,7 +6,7 @@ Every command below is available in the `mtui` REPL (see [Invocation](invocation
 
 ## `run`
 
-Runs a command on a specified host or on all enabled targets.
+Runs a command on a specified host or on all enabled targets. Package transactions belong in install/uninstall, where the removal check applies.
 
 ```text
 Usage: run [OPTIONS] [COMMAND]...
@@ -59,6 +59,9 @@ Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
+      --allow-removal
+          commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read
+
   -h, --help
           Print help
 ```
@@ -78,6 +81,9 @@ Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
+      --allow-removal
+          commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read
+
   -h, --help
           Print help
 ```
@@ -92,6 +98,9 @@ Usage: prepare [OPTIONS]
 Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
+
+      --allow-removal
+          commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read
 
   -f, --force
           force package installation
@@ -116,6 +125,9 @@ Usage: downgrade [OPTIONS]
 Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
+
+      --allow-removal
+          commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read
 
   -h, --help
           Print help

@@ -1,0 +1,45 @@
+<?xml version='1.0'?>
+<stream>
+<message type="info">Loading repository data...</message>
+<message type="warning">Repository &apos;Update repository of openSUSE Backports&apos; metadata expired since 2026-07-10 11:19:15 UTC.</message>
+<message type="warning">Repository &apos;Main Update Repository&apos; metadata expired since 2026-10-13 22:33:04 UTC.</message>
+<message type="info">    Warning: Repository metadata expired: Check if &apos;autorefresh&apos; is turned on (zypper lr), otherwise
+    manually refresh the repository (zypper ref). If this does not solve the issue, it could be that
+    you are using a broken mirror or the server has actually discontinued to support the repository.</message>
+<message type="info">Reading installed packages...</message>
+<message type="info">Resolving package dependencies...</message>
+<install-summary download-size="11452" space-usage-diff="-535717" space-usage-installed="0" space-usage-removed="535717" packages-to-change="2" need-restart="0" need-reboot="0">
+<to-install>
+<solvable type="package" name="busybox-less" edition="1.37.0-150500.7.11.1" arch="noarch" repository="repo-sle-update" summary="Busybox applets replacing less">
+<description>This package contains the symlinks to replace less with busybox.</description></solvable>
+</to-install>
+<to-remove>
+<solvable type="package" name="less" edition="643-150600.3.3.1" arch="aarch64" repository="@System" summary="Text File Browser and Pager Similar to more">
+<description>less is a text file browser and pager similar to more. It allows
+backward as well as forward movement within a file. Also, less does not
+have to read the entire input file before starting. It is possible to
+start an editor at any time from within less.</description></solvable>
+</to-remove>
+</install-summary>
+<prompt id="0">
+<text>Backend:  classic_rpmtrans --dry-run
+Continue?</text>
+<option default="1" value="y" desc="Yes, accept the summary and proceed with installation/removal of packages."/>
+<option value="n" desc="No, cancel the operation."/>
+<option value="p" desc="Restart solver in no-force-resolution mode in order to show dependency problems."/>
+<option value="v" desc="Toggle display of package versions."/>
+<option value="a" desc="Toggle display of package architectures."/>
+<option value="r" desc="Toggle display of repositories from which the packages will be installed."/>
+<option value="m" desc="Toggle display of package vendor names."/>
+<option value="d" desc="Toggle between showing all details and as few details as possible."/>
+<option value="g" desc="View the summary in pager."/>
+</prompt>
+<progress id="fileconflict-check" name="Checking for file conflicts:"/>
+<progress id="fileconflict-check" name="Checking for file conflicts:" value="0"/>
+<progress id="fileconflict-check" name="Checking for file conflicts: (1 skipped)" value="0"/>
+<progress id="fileconflict-check" name="Checking for file conflicts: (1 skipped)" done="1"/>
+<fileconflict-summary><message type="warning">1 package had to be excluded from file conflicts check because it is not yet download.</message>
+<message type="info">    Note: Checking for file conflicts requires not installed packages to be downloaded in advance in
+    order to access their file lists. See option &apos;--download-in-advance / --dry-run --download-only&apos;
+    in the zypper manual page for details.</message>
+</fileconflict-summary></stream>

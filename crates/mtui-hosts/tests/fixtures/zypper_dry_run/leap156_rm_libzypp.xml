@@ -1,0 +1,44 @@
+<?xml version='1.0'?>
+<stream>
+<message type="info">Reading installed packages...</message>
+<message type="info">Resolving package dependencies...</message>
+<install-summary download-size="0" space-usage-diff="-19601179" space-usage-installed="0" space-usage-removed="19601179" packages-to-change="2" need-restart="0" need-reboot="0">
+<to-remove>
+<solvable type="package" name="libzypp" edition="17.37.18-150600.3.82.1" arch="aarch64" repository="@System" summary="Library for package, patch, pattern and product management">
+<description>libzypp is the package management library that powers applications
+like YaST, zypper and the openSUSE/SLE implementation of PackageKit.
+
+libzypp provides functionality for a package manager:
+
+  * An API for package repository management, supporting most common
+    repository metadata formats and signed repositories.
+  * An API for solving packages, products, patterns and patches
+    (installation, removal, update and distribution upgrade
+    operations) dependencies, with additional features like locking.
+  * An API for commiting the transaction to the system over a rpm
+    target. Supporting deltarpm calculation, media changing and
+    installation order calculation.
+  * An API for browsing available and installed software, with some
+    facilities for programs with an user interface.</description></solvable>
+<solvable type="package" name="zypper" edition="1.14.94-150600.10.52.1" arch="aarch64" repository="@System" summary="Command line software manager using libzypp">
+<description>Zypper is a command line tool for managing software. It can be used to add
+package repositories, search for packages, install, remove, or update packages,
+install patches, hardware drivers, verify dependencies, and more.
+
+Zypper can be used interactively or non-interactively by user, from scripts,
+or front-ends.</description></solvable>
+</to-remove>
+</install-summary>
+<prompt id="0">
+<text>Backend:  classic_rpmtrans --dry-run
+Continue?</text>
+<option default="1" value="y" desc="Yes, accept the summary and proceed with installation/removal of packages."/>
+<option value="n" desc="No, cancel the operation."/>
+<option value="v" desc="Toggle display of package versions."/>
+<option value="a" desc="Toggle display of package architectures."/>
+<option value="r" desc="Toggle display of repositories from which the packages will be installed."/>
+<option value="m" desc="Toggle display of package vendor names."/>
+<option value="d" desc="Toggle between showing all details and as few details as possible."/>
+<option value="g" desc="View the summary in pager."/>
+</prompt>
+</stream>

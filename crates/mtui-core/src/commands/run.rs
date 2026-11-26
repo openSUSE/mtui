@@ -20,6 +20,9 @@ static FLAGS: LazyLock<CompletionFlags> =
 
 /// Runs a command on a specified host or on all enabled targets.
 ///
+/// Not guarded by the removal check `install`/`uninstall` run, which its help
+/// points package transactions to.
+///
 /// Dispatched in parallel across every selected target; each host's input line,
 /// exit code, stdout and any stderr are then paged to the display.
 ///
@@ -35,7 +38,10 @@ impl Command for Run {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Runs a command on a specified host or on all enabled targets.")
+        Some(
+            "Runs a command on a specified host or on all enabled targets. Package \
+             transactions belong in install/uninstall, where the removal check applies.",
+        )
     }
 
     fn scope(&self) -> Scope {

@@ -12,7 +12,7 @@
 //! so a `-t` subset never drops the unselected hosts. The op is an enum rather
 //! than a borrowing async closure to keep the future `Send`.
 
-use clap::ArgMatches;
+use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::HostsGroup;
 use mtui_testreport::Diagnostic;
 
@@ -50,6 +50,23 @@ fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
         clean.extend(line.split('\n').map(str::to_owned));
     }
     flush(session, &mut clean);
+}
+
+/// The id of `--allow-removal`, which every guarded op's command carries.
+const ALLOW_REMOVAL: &str = "allow_removal";
+
+/// Adds `--allow-removal` to a command whose package transaction the removal
+/// guard checks.
+pub(super) fn add_allow_removal_arg(cmd: clap::Command) -> clap::Command {
+    cmd.arg(
+        Arg::new(ALLOW_REMOVAL)
+            .long("allow-removal")
+            .action(ArgAction::SetTrue)
+            .help(
+                "commit the transaction even when its dry run would remove a protected package \
+                 (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read",
+            ),
+    )
 }
 
 /// One of the report's `perform_*` workflow flows plus its parsed parameters.
@@ -167,6 +184,8 @@ pub(super) async fn drive(
     super::support::require_update(session)?;
 
     let hosts = super::support::hosts_arg(args);
+    // Like `-t`, shared by the ops' commands; `update` has no such flag.
+    let allow_removal = matches!(args.try_get_one::<bool>(ALLOW_REMOVAL), Ok(Some(true)));
     let names = match &hosts {
         Some(names) if !names.is_empty() && !names.iter().any(|h| h == "all") => {
             Some(names.as_slice())
@@ -196,13 +215,13 @@ pub(super) async fn drive(
         PerformOp::Install(pkgs) => (
             "install",
             report
-                .perform_install(&mut selected, pkgs, &mut diagnostics)
+                .perform_install(&mut selected, pkgs, allow_removal, &mut diagnostics)
                 .await,
         ),
         PerformOp::Uninstall(pkgs) => (
             "uninstall",
             report
-                .perform_uninstall(&mut selected, pkgs, &mut diagnostics)
+                .perform_uninstall(&mut selected, pkgs, allow_removal, &mut diagnostics)
                 .await,
         ),
         PerformOp::Prepare {
@@ -219,6 +238,7 @@ pub(super) async fn drive(
                     *force,
                     *testing,
                     *installed_only,
+                    allow_removal,
                     &mut diagnostics,
                 )
                 .await,
@@ -226,7 +246,7 @@ pub(super) async fn drive(
         PerformOp::Downgrade(pkgs) => (
             "downgrade",
             report
-                .perform_downgrade(&mut selected, pkgs, &mut diagnostics)
+                .perform_downgrade(&mut selected, pkgs, allow_removal, &mut diagnostics)
                 .await,
         ),
         PerformOp::Update {
@@ -730,6 +750,59 @@ mod tests {
             );
             assert!(!out.contains("h2"), "{verb} never claims h2: {out:?}");
             assert_eq!(out.matches("completed").count(), 1, "{out:?}");
+        }
+    }
+
+    /// `--allow-removal` reaches the report for each guarded op, and only
+    /// when it is passed.
+    #[tokio::test]
+    async fn allow_removal_reaches_the_report_only_when_passed() {
+        use crate::commands::downgrade::Downgrade;
+        use crate::commands::prepare::Prepare;
+        use crate::commands::zypper::{Install, Uninstall};
+
+        let pkg = || vec!["pkg".to_owned()];
+        let prepare = || PerformOp::Prepare {
+            packages: pkg(),
+            force: false,
+            testing: false,
+            installed_only: false,
+        };
+        for flag in [true, false] {
+            let with = |argv: &[&'static str]| {
+                let mut v = argv.to_vec();
+                if flag {
+                    v.insert(0, "--allow-removal");
+                }
+                v
+            };
+            for (verb, args, op) in [
+                (
+                    "install",
+                    matches(&Install, &with(&["pkg"])),
+                    PerformOp::Install(pkg()),
+                ),
+                (
+                    "uninstall",
+                    matches(&Uninstall, &with(&["pkg"])),
+                    PerformOp::Uninstall(pkg()),
+                ),
+                ("prepare", matches(&Prepare, &with(&[])), prepare()),
+                (
+                    "downgrade",
+                    matches(&Downgrade, &with(&[])),
+                    PerformOp::Downgrade(pkg()),
+                ),
+            ] {
+                let (mut session, buf) = session_with_hosts(RRID, &["h1"], "ok");
+                drive(&mut session, &args, op).await.unwrap();
+                assert_eq!(
+                    buf.contents().contains("allow_removal was set"),
+                    flag,
+                    "{verb} --allow-removal={flag}: {:?}",
+                    buf.contents()
+                );
+            }
         }
     }
 }

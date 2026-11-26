@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
-use super::perform::{PerformOp, drive};
+use super::perform::{PerformOp, add_allow_removal_arg, drive};
 use super::support::{
     CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, require_packages,
 };
@@ -21,6 +21,7 @@ static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
             "installed",
             "force",
             "update",
+            "allow_removal",
             "template",
             "all_templates",
         ],
@@ -53,7 +54,7 @@ impl Command for Prepare {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(cmd)
+        add_allow_removal_arg(add_hosts_arg(cmd))
             .arg(
                 Arg::new("force")
                     .short('f')
@@ -133,6 +134,7 @@ mod tests {
                 "--force",
                 "-u",
                 "--update",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates",
@@ -148,6 +150,7 @@ mod tests {
                 "--installed",
                 "--force",
                 "--update",
+                "--allow-removal",
                 "--template",
                 "--all-templates"
             ]
@@ -163,6 +166,7 @@ mod tests {
                 "--target",
                 "-u",
                 "--update",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates"
@@ -175,6 +179,7 @@ mod tests {
                 "--target",
                 "-f",
                 "--force",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates"
@@ -193,6 +198,7 @@ mod tests {
                 "--force",
                 "-u",
                 "--update",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates"

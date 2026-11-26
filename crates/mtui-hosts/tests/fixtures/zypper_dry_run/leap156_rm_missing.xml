@@ -1,0 +1,10 @@
+<?xml version='1.0'?>
+<stream>
+<message type="info">Reading installed packages...</message>
+<message type="info">&apos;nonexistent-pkg-xyz&apos; not found in package names. Trying capabilities.</message>
+<message type="error">No provider of &apos;nonexistent-pkg-xyz&apos; found.</message>
+<message type="info">Resolving package dependencies...</message>
+<install-summary download-size="0" space-usage-diff="0" space-usage-installed="0" space-usage-removed="0" packages-to-change="0" need-restart="0" need-reboot="0">
+</install-summary>
+<message type="info">Nothing to do.</message>
+</stream>
