@@ -1,24 +1,18 @@
 //! Process-level command-line arguments (`Args`).
 //!
 //! The *top-level* parser for the `mtui` process, distinct from the per-command
-//! `clap::Command`s the [`engine`](crate::engine) builds from the registry. It
-//! declares the global session flags (config/template overrides, SUT hosts,
-//! colour mode, Gitea token) and the mutually-exclusive update selector.
+//! `clap::Command`s the [`engine`](crate::engine) builds from the registry.
 //!
 //! * **`-V/--version`** prints `mtui <version> (<sha>[-dirty], <profile>,
-//!   <target>)`: a static binary has no runtime dependency drift, so build
-//!   provenance is what varies between out-of-tree builds.
-//!   [`build.rs`](../../build.rs) captures it into `MTUI_LONG_VERSION`. Outside
-//!   a git checkout the sha is omitted; profile and target always show.
+//!   <target>)`, captured by [`build.rs`](../../build.rs) into
+//!   `MTUI_LONG_VERSION`. Outside a git checkout the sha is omitted.
 //! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** both parse into
 //!   [`UpdateID`], paired with the [`Workflow`] the flag selects and surfaced as
 //!   [`Args::update`].
 //!
-//! Config merging lives here as `Args::apply_to` / [`Args::resolve_config`] —
-//! the highest-precedence config layer, overlaid on the loaded file chain. It is
-//! in `mtui-core` rather than `mtui-config` because it needs [`Args`], and
-//! `mtui-config` must not depend on `mtui-core`. Resolving [`ColorArg`]'s `auto`
-//! against the TTY/`NO_COLOR` is the consumer's job, not this parser's.
+//! Config merging (`Args::apply_to` / [`Args::resolve_config`]) lives here
+//! rather than in `mtui-config` because it needs [`Args`], and `mtui-config`
+//! must not depend on `mtui-core`.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -40,8 +34,7 @@ pub const LONG_VERSION: &str = env!("MTUI_LONG_VERSION");
 #[derive(Debug, Parser)]
 #[command(
     name = "mtui",
-    // Both `-V` and `--version` carry the full provenance block: clap uses
-    // `version` for `-V` and `long_version` for `--version`, so set both.
+    // clap uses `version` for `-V` and `long_version` for `--version`.
     version = LONG_VERSION,
     long_version = LONG_VERSION,
     about = "Maintenance Test Update Installer",
@@ -59,8 +52,7 @@ pub struct Args {
     pub sut: Vec<Sut>,
 
     /// Override config `connection.connection_timeout` (seconds).
-    // Range-rejected at 0: the file loader guards this key with
-    // `validated_positive!`, so the CLI must not express a 0 the file refuses.
+    // Range-rejected at 0, matching the file loader's `validated_positive!`.
     #[arg(
         short = 'w',
         long = "connection-timeout",
@@ -152,19 +144,12 @@ impl Args {
         }
     }
 
-    /// Overlay the process-level CLI overrides onto an already-loaded [`Config`].
+    /// Overlay the CLI overrides onto an already-loaded [`Config`]: the
+    /// highest-precedence config layer, so a flag wins over every file.
     ///
-    /// The highest-precedence config layer: it runs *after* [`Config::load`] has
-    /// merged the file chain (`/etc` → `~/.mtui.toml` → XDG, or the single
-    /// `--config`/`$MTUI_CONF` file), so a command-line flag wins over every
-    /// file. Only flags mapping to a config key are applied, and only when
-    /// actually passed; `--ssl-verify` goes through [`SslVerify::parse`], the
-    /// same coercion the file uses, so the CLI cannot express a value the file
-    /// could not.
-    ///
-    /// `--config`, `--debug`, `--color`, `--sut` and `-a`/`-k` are *not* config
-    /// keys — they steer path resolution, logging, host seeding and workflow
-    /// selection — so they are deliberately not merged here.
+    /// Only flags mapping to a config key, and only when passed, are applied;
+    /// `--ssl-verify` goes through [`SslVerify::parse`], the file's own coercion.
+    /// `--config`, `--debug`, `--color`, `--sut` and `-a`/`-k` are not config keys.
     fn apply_to(&self, config: &mut Config) {
         if let Some(dir) = &self.template_dir {
             config.template_dir = dir.clone();
@@ -186,9 +171,8 @@ impl Args {
         }
     }
 
-    /// Load the config from the file chain (keyed on `--config`) and overlay the
-    /// CLI overrides, returning the fully-resolved [`Config`]. The one-call
-    /// composition both binaries use.
+    /// Loads the config file chain (keyed on `--config`) and overlays the CLI
+    /// overrides; the one call both binaries use.
     #[must_use]
     pub fn resolve_config(&self) -> Config {
         let mut config = Config::load(self.config.clone());
@@ -209,9 +193,8 @@ pub struct Update {
 
 /// The `--color` choice, before it is resolved against the terminal.
 ///
-/// Turning [`Auto`](Self::Auto) into a concrete
-/// [`ColorMode`](crate::display::ColorMode) (TTY + `NO_COLOR` detection) is the
-/// consumer's job, not the parser's.
+/// Resolving [`Auto`](Self::Auto) into a concrete
+/// [`ColorMode`](crate::display::ColorMode) is the consumer's job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum ColorArg {
@@ -225,13 +208,9 @@ pub enum ColorArg {
 }
 
 impl From<ColorArg> for crate::display::ColorMode {
-    /// Resolves the parsed `--color` choice into the display/logging
-    /// [`ColorMode`](crate::display::ColorMode).
-    ///
-    /// Arm-for-arm: the `auto` → TTY/`NO_COLOR` decision is deferred to
-    /// [`ColorMode::resolve`](crate::display::ColorMode::resolve) at render time,
-    /// so the command display and the tracing subscriber share one source of
-    /// truth for whether escapes are emitted.
+    /// Arm-for-arm; the `auto` → TTY/`NO_COLOR` decision is deferred to
+    /// [`ColorMode::resolve`](crate::display::ColorMode::resolve), shared by the
+    /// display and the tracing subscriber.
     fn from(arg: ColorArg) -> Self {
         match arg {
             ColorArg::Auto => Self::Auto,

@@ -1,19 +1,15 @@
 //! The `request_review` command — ask for review of the loaded update in Slack.
 //!
 //! Posts a request naming the update's RRID into the configured channel, records
-//! the resulting message on the report document so the request is traceable
-//! afterwards, and optionally watches it for reviewer reactions. Three
-//! deliberate departures:
+//! the resulting message on the report document, and optionally watches it for
+//! reviewer reactions. Three deliberate choices:
 //!
 //! * **The watch is opt-in (`--watch`).** It runs for up to an hour, and over
-//!   MCP a blocking call outliving the client's timeout is indistinguishable
-//!   from a hang; posting is fast and total, watching belongs in a job.
+//!   MCP a blocking call outliving the client's timeout looks like a hang.
 //! * **The marker is uploaded, not just recorded.** `approve` gates on it and
-//!   the approver is often someone else, so it must be visible from another
-//!   machine rather than waiting for a later `commit`.
+//!   the approver is often someone else.
 //! * **Rate limiting is not failure.** A `429` leaves the watch running;
-//!   counting it would end a busy channel's watch early and report "no
-//!   reaction" when the truth is "we were not allowed to look".
+//!   counting it would end the watch early and report "no reaction".
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -41,14 +37,10 @@ const DEFAULT_BACKOFF: Duration = Duration::from_secs(30);
 /// cannot park the watch for hours.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-/// Lower bound on any single back-off: a `Retry-After: 0` would otherwise be a
-/// tight loop hammering the endpoint that just asked us to slow down, and
-/// sub-second is never what a 429 means.
+/// Lower bound on any single back-off, so `Retry-After: 0` is not a tight loop.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Consecutive hard failures tolerated before the watch gives up: a persistent
-/// error (deleted message, revoked token) must end it rather than spin until
-/// timeout.
+/// Consecutive hard failures tolerated before the watch gives up.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
 /// How a watch ended, so the summary can say something true.
@@ -66,9 +58,8 @@ enum WatchOutcome {
     Failed(String),
 }
 
-/// Spread a poll interval by ±15% so several mtui instances watching one
-/// channel do not converge on the same request times. Uses clock noise rather
-/// than a RNG dependency: the goal is decorrelation, not unpredictability.
+/// Spreads a poll interval by ±15% so instances watching one channel do not
+/// converge; clock noise suffices (decorrelation, not unpredictability).
 fn jittered(base: Duration) -> Duration {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,8 +70,7 @@ fn jittered(base: Duration) -> Duration {
 }
 
 /// The message posted to Slack. The RRID appears verbatim so the request traces
-/// back to the update from Slack alone, and later verification binds to this
-/// exact message.
+/// back to the update, and later verification binds to this message.
 fn review_message(rrid: &str, category: &str, note: Option<&str>) -> String {
     let mut msg = format!("Please review {rrid}");
     if !category.is_empty() {
@@ -97,7 +87,6 @@ fn review_message(rrid: &str, category: &str, note: Option<&str>) -> String {
 /// to command errors that say what to do about them.
 fn slack_client(session: &Session) -> Result<Slack, CommandError> {
     Slack::new(&session.config).map_err(|e| match e {
-        // The common case for anyone not using the integration; not a failure.
         SlackError::Disabled => CommandError::Other(
             "Slack integration is disabled; enable it with `config set slack_enabled true` \
              or the `[slack] enabled` config key"

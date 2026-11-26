@@ -1,12 +1,10 @@
 //! The single "which one template does this invocation address" rule.
 //!
 //! Three surfaces need the same answer to "one template, or refuse": the core
-//! fan-out driver's `Scope::Explicit`/`Scope::Active` headless path, and the two
-//! hand-written MCP tool families (`transfer_tools::resolve_rrid` and the
-//! document tools that reuse it) that bypass the fan-out driver entirely.
-//! Before this module the rule was hand-copied twice and had already diverged
-//! in wording; [`Session::resolve_single_template`] and
-//! [`ambiguous_template_message`] are the one implementation all three consume.
+//! fan-out driver's headless path, and the two hand-written MCP tool families
+//! (transfer and document tools) that bypass it.
+//! [`Session::resolve_single_template`] and [`ambiguous_template_message`] are
+//! the one implementation all three consume.
 
 use mtui_types::RequestReviewID;
 
@@ -22,8 +20,7 @@ pub enum SingleTemplate {
     /// The template to act on: named, the sole one loaded, or the addressable
     /// active one.
     One(String),
-    /// Nothing is loaded. Not itself an error: the core dispatcher answers off
-    /// the null report, while the MCP tools refuse — the caller's own verdict.
+    /// Nothing is loaded; the caller decides whether that is an error.
     NothingLoaded,
     /// Several templates are loaded, none was named, and no active pointer is
     /// addressable (headless).
@@ -54,8 +51,7 @@ impl Session {
             0 => SingleTemplate::NothingLoaded,
             1 => SingleTemplate::One(rrids.into_iter().next().expect("len checked above")),
             _ if use_active => {
-                // A registry with more than one entry always has an active
-                // one (`TemplateRegistry::add` sets it on the first insert).
+                // More than one entry implies an active one.
                 SingleTemplate::One(self.templates.active_rrid().unwrap_or_default().to_owned())
             }
             _ => SingleTemplate::Ambiguous(rrids),
@@ -66,8 +62,8 @@ impl Session {
 /// The canonical RRID `raw` names, or `raw` unchanged when it is not an RRID.
 ///
 /// Every place that reads an RRID from the user calls this first and uses only
-/// the result: the short spelling (`S:M:…`) is a typing convenience and must
-/// never reach output, the registry, an API call or a path.
+/// the result: the short spelling (`S:M:…`) must never reach output, the
+/// registry, an API call or a path.
 #[must_use]
 pub fn canonical_template_name(raw: &str) -> String {
     RequestReviewID::parse(raw).map_or_else(|_| raw.to_owned(), |r| r.to_string())
@@ -75,11 +71,9 @@ pub fn canonical_template_name(raw: &str) -> String {
 
 /// The single wording for "several loaded, none named".
 ///
-/// `remedy` is the surface's own escape hatch appended after the loaded list —
-/// the escapes genuinely differ (`-T`/`--all-templates` for the core dispatcher,
-/// `template=<rrid>` for the MCP tools) so it is not folded in here. `loaded` is
-/// capped at a fixed number of entries plus a total count, so a session with
-/// dozens of templates loaded does not spell every rrid out.
+/// `remedy` is the surface's own escape hatch (`-T`/`--all-templates` for the
+/// core dispatcher, `template=<rrid>` for the MCP tools). `loaded` is capped at
+/// a fixed number of entries plus a total count.
 #[must_use]
 pub fn ambiguous_template_message(loaded: &[String], remedy: &str) -> String {
     let list = if loaded.len() > AMBIGUOUS_TEMPLATE_DISPLAY_CAP {

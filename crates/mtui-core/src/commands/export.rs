@@ -27,37 +27,34 @@ use crate::session::Session;
 ///
 /// ## openQA enrichment
 ///
-/// `Manual` folds openQA results in via the report's holder (`metadata.openqa`):
-/// an absent "auto" result is lazily built and run from the QEM Dashboard, then
-/// the connected-host results go into [`ManualExport`]. `Auto`/`Kernel` author
-/// from their own openQA results.
+/// `Manual` folds openQA results in via the report's holder: an absent "auto"
+/// result is lazily built from the QEM Dashboard, then the connected-host
+/// results go into [`ManualExport`]. `Auto`/`Kernel` author from their own
+/// openQA results.
 ///
-/// Every workflow also writes the `openqa_overview` result (single incidents,
-/// aggregated updates, build checks) to `testing.openqa.extra`. It uses the
-/// result saved by the last `openqa_overview` run and fetches one with that
-/// command's defaults when none is saved. A failed fetch prints a warning and
-/// the export continues without those rows.
+/// Every workflow also writes the `openqa_overview` result to
+/// `testing.openqa.extra`, using the last saved one or fetching with that
+/// command's defaults. A failed fetch warns and the export continues without
+/// those rows.
 ///
-/// A `Manual` export with no connected host (and no `-t`) writes only what
-/// needs no host — `testing.openqa` from the cached install results and the
-/// overview — and leaves `testing.install` and the install logs for a later
-/// export once hosts are added (#644). With no openQA data either, it skips
-/// and says so.
+/// A `Manual` export with no connected host (and no `-t`) writes only what needs
+/// no host (`testing.openqa` and the overview) and leaves `testing.install` and
+/// the install logs for a later export. With no openQA data either, it skips and
+/// says so.
 ///
-/// A `Manual` export refuses to write at all when *no* selected host has
-/// recorded package versions — because this session never ran `update`
-/// (#526), or because no package of the update is tracked for the host;
-/// `--allow-unverified` writes the scaffold anyway.
+/// A `Manual` export refuses to write when *no* selected host has recorded
+/// package versions (this session never ran `update`, or no package of the
+/// update is tracked for the host); `--allow-unverified` writes the scaffold
+/// anyway.
 ///
-/// A `-t` selection rewrites the selected hosts' `testing.install.checks`
-/// rows and keeps every other row; without one the rows are rewritten from
-/// the connected hosts. The answer names the rows it did not rewrite.
+/// A `-t` selection rewrites the selected hosts' `testing.install.checks` rows
+/// and keeps every other row; without one the rows are rewritten from the
+/// connected hosts. The answer names the rows it did not rewrite.
 ///
-/// Also refuses on a template that loaded with a stale Gitea hash
-/// (`load_template --force-continue`) unless `--allow-stale` is given —
-/// `stale_hash_gate`. Three independent guards on this command: `--force`
-/// only overrides [`DenyOverwrite`]; `--allow-unverified` and `--allow-stale`
-/// each waive one of the two refusals above.
+/// Also refuses on a template that loaded with a stale Gitea hash unless
+/// `--allow-stale` is given (`stale_hash_gate`). The guards are independent:
+/// `--force` only overrides [`DenyOverwrite`]; `--allow-unverified` and
+/// `--allow-stale` each waive one refusal.
 pub struct Export;
 
 #[async_trait]
@@ -74,9 +71,8 @@ impl Command for Export {
         Scope::Fanout
     }
 
-    /// Opts out of the driver's host-less skip: every workflow has openQA data
-    /// to write at zero hosts, so `export --all-templates` must still reach
-    /// them. The host-less `Manual` rule (openQA sections only) lives in
+    /// Opts out of the driver's host-less skip: every workflow has openQA data to
+    /// write at zero hosts. The host-less `Manual` rule lives in
     /// [`call`](Self::call).
     fn skip_hostless_templates(&self) -> bool {
         false
@@ -119,9 +115,8 @@ impl Command for Export {
         let force = args.get_flag("force");
         let allow_unverified = args.get_flag("allow_unverified");
 
-        // #644: a Manual template with no connected host still has openQA data
-        // to write; only the per-host parts need a host. A typo'd `-t` is not
-        // host-less and still fails loudly below via `select_hosts`.
+        // A Manual template with no connected host still has openQA data to
+        // write. A typo'd `-t` is not host-less and fails below via `select_hosts`.
         let hostless =
             workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty();
 
@@ -130,8 +125,7 @@ impl Command for Export {
                 let ctx = OpenqaCtx::snapshot(session, rrid.clone())?;
                 let incident = ctx.incident().await;
                 let mut auto = ctx.auto(&incident);
-                // A failed fetch folds to "no results" so the export still
-                // renders the rest of the report rather than aborting.
+                // A failed fetch folds to "no results"; the export continues.
                 if let Err(e) = auto.run().await {
                     tracing::warn!(error = %e, "QEM Dashboard fetch failed during export; continuing without auto results");
                 }
@@ -165,7 +159,7 @@ impl Command for Export {
 }
 
 /// The selected hosts' [`ManualHost`] views and whether `-t` selected them,
-/// refusing (#526) when not one of them has recorded package versions unless
+/// refusing when not one of them has recorded package versions unless
 /// `allow_unverified`.
 fn verified_manual_hosts(
     session: &mut Session,
@@ -178,17 +172,13 @@ fn verified_manual_hosts(
         .iter()
         .filter_map(|h| why_unverified(h).map(|why| (h, why)))
         .collect();
-    // #526: *every* selected host unverified leaves no verdict to write —
-    // refuse before any write, since a plausible-but-verdictless testreport
-    // is worse than none. A partially verified fleet (a host added after the
-    // update) still writes with the per-host warning below.
+    // *Every* selected host unverified leaves no verdict to write: refuse before
+    // any write. A partially verified fleet still writes with the warning below.
     if !unverified.is_empty() && unverified.len() == results.len() && !allow_unverified {
         return Err(CommandError::Other(unverified_refusal(&unverified)));
     }
-    // #396/#437: a host with no recorded package data — or seeded
-    // packages the version query never answered for — keeps the
-    // scaffold's unverified lines. Say so where the operator/MCP client
-    // sees it, not only in the log.
+    // A host with no recorded package data keeps the scaffold's unverified
+    // lines; say so where the operator/MCP client sees it, not only in the log.
     for (host, why) in &unverified {
         let name = &host.hostname;
         let line = match why {
@@ -212,8 +202,7 @@ fn verified_manual_hosts(
 }
 
 /// The refusal for a selection with no verifiable host. Only a host whose
-/// tracked packages went unchecked is sent back to `update`: one tracking no
-/// package of the update has nothing `update` could record.
+/// tracked packages went unchecked is sent back to `update`.
 fn unverified_refusal(unverified: &[(&ManualHost, Unverified)]) -> String {
     const OPT_OUT: &str = "pass --allow-unverified to write the unverified scaffold";
     let names = |kind: Unverified| -> Vec<&str> {
@@ -418,11 +407,10 @@ enum Unverified {
     Unchecked,
 }
 
-/// Why `host` is unverified, or `None` when one tracked package was checked
-/// on either side (#396/#437). Either side alone carries the verdict: a
-/// standalone `downgrade` rotates a checked `after` in with `before` still
-/// `NotChecked`. `current` is not consulted — `add_host` fills it on connect,
-/// so it would make a session that never ran `update` look verified.
+/// Why `host` is unverified, or `None` when one tracked package was checked on
+/// either side (a standalone `downgrade` leaves `before` unchecked). `current`
+/// is not consulted: `add_host` fills it on connect, which would make a session
+/// that never ran `update` look verified.
 fn why_unverified(host: &ManualHost) -> Option<Unverified> {
     if host.packages.is_empty() {
         return Some(Unverified::Untracked);
@@ -436,14 +424,10 @@ fn why_unverified(host: &ManualHost) -> Option<Unverified> {
         .then_some(Unverified::Unchecked)
 }
 
-/// Delegates to [`mtui_testreport::author_export`] (the pure authoring
-/// functions, composed): in memory only, nothing uploads here.
+/// Delegates to [`mtui_testreport::author_export`]: in memory only, nothing
+/// uploads here. A cheap no-op when no document is loaded.
 ///
-/// A cheap no-op when no document is loaded: the guard below skips the oscrc
-/// read entirely in that case.
-///
-/// Returns the top-level document pointers touched, so the caller can report
-/// what changed.
+/// Returns the top-level document pointers touched.
 fn author_onto_document(
     session: &mut Session,
     auto: Option<&mtui_datasources::qem_dashboard::DashboardAutoOpenQA>,
@@ -471,10 +455,9 @@ fn document_line(touched: &[&str]) -> Option<String> {
     Some(format!("document: {} updated", touched.join(", ")))
 }
 
-/// The `people.testers` entry for this export: identity comes from the same
-/// principal the teregen auth layer uses (the oscrc user), never a
-/// second config key. `None` (and a warning) when oscrc has no usable
-/// credentials — a missing identity must not block the export.
+/// The `people.testers` entry for this export: the oscrc user, as the teregen
+/// auth layer uses. `None` (and a warning) when oscrc has no usable credentials;
+/// a missing identity must not block the export.
 fn build_tester_entry(session: &Session) -> Option<mtui_types::report_document::TesterEntry> {
     let creds = match mtui_datasources::obs::oscrc::read_credentials(&session.config.obs_api_url) {
         Ok(creds) => creds,

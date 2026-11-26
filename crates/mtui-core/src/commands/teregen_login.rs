@@ -14,18 +14,16 @@ use crate::session::Session;
 /// Checks the teregen v2 login by forcing a fresh mint, writing nothing
 /// except the token cache.
 ///
-/// REPL-only (on the MCP deny-list): each call spends one of ~20
-/// challenges/60s for the principal, so a looping client would lock the
-/// tester out of `commit`/`approve`.
+/// REPL-only (on the MCP deny-list): each call spends one of ~20 challenges/60s
+/// for the principal, so a looping client would lock the tester out of
+/// `commit`/`approve`.
 ///
-/// Every teregen v2 read is anonymous, so only a mint exercises the login;
-/// `commit`, `approve` and `request_review` upload through it and fail at the
-/// end of a validation when it is broken. This runs the same challenge +
-/// verify as those paths (the oscrc principal only — no `--user`, so one
-/// call cannot spend another principal's challenge budget) and prints the
-/// principal, the key fingerprint, the base, the mint verdict and the age of
-/// the previously cached token. The token itself is never printed.
-/// Session-level: runs once ([`Scope::Single`]) and takes no template flag.
+/// Every teregen v2 read is anonymous, so only a mint exercises the login. This
+/// runs the same challenge + verify as `commit`/`approve`/`request_review` (the
+/// oscrc principal only, so one call cannot spend another principal's challenge
+/// budget) and prints the principal, key fingerprint, base, mint verdict and the
+/// age of the previously cached token, never the token itself.
+/// Session-level: [`Scope::Single`], no template flag.
 pub struct TeregenLogin;
 
 #[async_trait]

@@ -1,19 +1,14 @@
 //! The `list_refhosts` command: query/search the refhost inventory offline.
 //!
-//! Reads the refhost inventory — the same source `add_host` resolves through
-//! [`RefhostsFactory`] — and prints matching hosts **without connecting**: no
-//! SSH, no lock, no loaded template, so refhosts can be found through mtui
-//! instead of by parsing `refhosts.yml`. Results are de-duplicated by name.
+//! Reads the refhost inventory (the source `add_host` resolves through
+//! [`RefhostsFactory`]) and prints matching hosts **without connecting**: no
+//! SSH, no lock, no loaded template. Results are de-duplicated by name.
 //! `--free` additionally connects to report live operation-lock and pool-claim
-//! state — the only part that goes on the wire — without reaping: it is a
-//! survey, not a session connect, so a matched host's stale operation lock is
-//! left alone.
+//! state, without reaping: it is a survey, so a stale operation lock is left
+//! alone.
 //!
-//! # Testability seam
 //! [`gather`], [`render_table`] and [`render_json`] are pure over an in-memory
-//! [`Refhosts`] store; only [`call`](ListRefhosts::call) touches the network,
-//! and its `--free` probe builds real [`Target`]s, so that half is exercised by
-//! the gated sshd integration path.
+//! [`Refhosts`] store; only [`call`](ListRefhosts::call) touches the network.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
@@ -544,9 +539,9 @@ impl Command for ListRefhosts {
     }
 }
 
-/// A `Config` that provably cannot reap: the only constructor clears both
-/// reap flags, so a `--free` survey cannot force-remove another tester's
-/// operation lock or pool claim just for listing the host (#573).
+/// A `Config` that provably cannot reap: the only constructor clears both reap
+/// flags, so a `--free` survey cannot force-remove another tester's operation
+/// lock or pool claim just for listing the host.
 mod probe_config {
     pub(super) struct ProbeConfig(mtui_config::Config);
 

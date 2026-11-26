@@ -111,19 +111,15 @@ fn degradation_count(diagnostics: &[Diagnostic]) -> usize {
 /// [`Diagnostic::degradation`].
 ///
 /// `perform_update` returns `Ok` for a run whose patch applied but whose
-/// `--newpackage` prepare or test-repo cleanup degraded; those arrive as
-/// diagnostics rather than `tracing` alone, but the verdict is printed *above*
-/// them (the head is what survives `mcp_max_output_bytes`), so an unqualified
-/// "update completed on …" would still be the only line a truncated or
-/// skim-read result carries.
+/// `--newpackage` prepare or test-repo cleanup degraded. The verdict is printed
+/// *above* the diagnostics (the head is what survives `mcp_max_output_bytes`),
+/// so an unqualified "update completed on …" would be the only line a truncated
+/// result carries.
 ///
-/// Only degradations are counted. The check's own recognised sections ride in
-/// the same vec and are **routine** — mtui patches from a test update repo
-/// whose vendor differs from the official one, so zypper's "not supported by
-/// its vendor" notice fires on ordinary healthy updates. Counting those would
-/// make the qualified line the common case and the bare one the exception, and
-/// would be false besides: the thing it points at *is* the patch's own check
-/// output, and the patch's checks are exactly what passed (#534 review).
+/// Only degradations are counted: the check's own recognised sections ride in
+/// the same vec and are **routine** (mtui patches from a test repo whose vendor
+/// differs from the official one, so zypper's "not supported by its vendor"
+/// notice fires on healthy updates).
 fn confirm_update(session: &mut Session, hosts_label: &str, diagnostics: &[Diagnostic]) {
     let n = degradation_count(diagnostics);
     if n == 0 {

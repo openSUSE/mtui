@@ -24,18 +24,16 @@ use crate::template_scope::canonical_template_name;
 /// `--ignore-inconsistent` regenerates despite inconsistent metadata, `--no-wait`
 /// enqueues and returns.
 ///
-/// The optional `RRID` positional is regenerated *without* being loaded first,
-/// breaking the load/regenerate catch-22 for a never-generated report (a missing
-/// SLFO template cannot be loaded, and TeReGen is what creates it); omitted,
-/// the active template is used.
+/// The optional `RRID` positional is regenerated *without* being loaded first
+/// (a missing SLFO template cannot be loaded, and TeReGen is what creates it);
+/// omitted, the active template is used.
 ///
-/// After a successful wait the freshly built template is loaded in place via
+/// After a successful wait the new template is loaded in place via
 /// [`Session::load_update`] without autoconnect. The kind is inferred from the
 /// loaded report when one exists; for a standalone RRID it is
 /// [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`. The
-/// regenerated RRID becomes the active template afterwards unconditionally —
-/// even one already loaded but inactive, or with a different template
-/// active — announced in the command's output when it moves the pointer.
+/// regenerated RRID then becomes the active template unconditionally,
+/// announced in the output when it moves the pointer.
 ///
 /// It names its own target and never fans out ([`Scope::Single`]).
 pub struct Regenerate;

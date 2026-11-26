@@ -20,22 +20,15 @@ use crate::session::Session;
 /// it, leaving siblings untouched.
 ///
 /// It names its own target RRID and connects only that template's reference
-/// hosts, so it runs once ([`Scope::Single`]) however many are loaded —
-/// otherwise it would fan out under MCP and re-run the autoconnect, grabbing
-/// pool hosts, on every one. `-a` autoconnects; `-k` starts the kernel workflow
-/// and does not ([`Session::load_update`] honours that intent).
+/// hosts, so it runs once ([`Scope::Single`]); fanning out under MCP would
+/// re-run the autoconnect and grab pool hosts per template. `-a` autoconnects;
+/// `-k` starts the kernel workflow and does not.
 ///
-/// `--force-continue` is the non-interactive escape hatch for a stale
-/// template hash (openSUSE/mtui#517): the interactive REPL already offers
-/// this as its "Force continue loading template ?" fallback prompt, but that
-/// prompt is unreachable for any non-interactive caller (every `mtui-mcp`
-/// session), so a template TeReGen also refuses to regenerate (already
-/// hand-edited) was permanently unloadable outside the REPL. The flag reaches
-/// exactly the same outcome the REPL's own "y" answer does — load the
-/// existing checked-out report as-is — and nothing else; it does not affect
-/// the earlier "Regenerate via TeReGen?" question, which stays
-/// interactive-only (`regenerate` is the dedicated non-interactive tool for
-/// that).
+/// `--force-continue` is the non-interactive escape hatch for a stale template
+/// hash: it reaches the same outcome as the REPL's "Force continue loading
+/// template ?" "y" answer (load the existing checked-out report as-is) and does
+/// not affect the "Regenerate via TeReGen?" question (`regenerate` is the
+/// non-interactive tool for that).
 ///
 /// Re-loading an RRID whose document holds edits no `commit` has uploaded
 /// would silently replace them, so it is refused before any I/O unless

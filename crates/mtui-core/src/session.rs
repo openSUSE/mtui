@@ -2,11 +2,9 @@
 //!
 //! Commands receive `&mut Session` and mutate it through methods — no hidden
 //! globals. It owns the [`Config`], the [`TemplateRegistry`], the
-//! [`CommandPromptDisplay`] sink, and the `interactive` flag distinguishing the
-//! REPL from headless callers such as `mtui-mcp`.
-//! [`metadata`](Session::metadata) / [`targets`](Session::targets) delegate to
-//! the active report, so command bodies keep a scalar surface as the registry
-//! grows past one entry.
+//! [`CommandPromptDisplay`] sink, and the flag distinguishing the REPL from
+//! headless callers such as `mtui-mcp`. [`metadata`](Session::metadata) /
+//! [`targets`](Session::targets) delegate to the active report.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -38,10 +36,9 @@ use crate::template_registry::{ReportEntry, TemplateRegistry, TemplateRow};
 
 /// Wall-clock budget for a host-close fan-out.
 ///
-/// A wedged teardown (a dead peer with no RST whose close never returns) must
-/// not block the REPL `quit`, template replacement/removal, or the MCP
-/// idle-sweep's `close`: each bounds its fan-out with this budget and abandons
-/// the straggler.
+/// A wedged teardown (a dead peer whose close never returns) must not block the
+/// REPL `quit`, template replacement/removal, or the MCP idle-sweep: each bounds
+/// its fan-out with this budget and abandons the straggler.
 pub const HOST_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// The `[lock]` wait and poll budgets as the signed seconds the arbiter takes.
@@ -76,127 +73,96 @@ pub struct Session {
     /// this dispatch is acting on.
     ///
     /// [`metadata`](Self::metadata) / [`targets`](Self::targets) read through it
-    /// when present and through [`null`](Self::null) otherwise, keeping a sync
-    /// surface for command bodies. [`Command::run`](crate::Command::run)
-    /// installs it per resolved template, dropping any prior guard *first* so
-    /// one [`Session`] never self-deadlocks on an entry.
+    /// when present and through [`null`](Self::null) otherwise.
+    /// [`Command::run`](crate::Command::run) installs it per resolved template,
+    /// dropping any prior guard *first* so one [`Session`] never self-deadlocks.
     active_guard: Option<OwnedMutexGuard<Box<dyn TestReport + Send + Sync>>>,
     /// The null-object fallback [`metadata`](Self::metadata) hands out when
-    /// nothing is loaded (no [`active_guard`](Self::active_guard) installed).
-    ///
-    /// Never registered (its RRID is empty), so hosts attached while nothing is
+    /// nothing is loaded. Never registered, so hosts attached while nothing is
     /// loaded are reachable only via
     /// [`take_teardown_units`](Self::take_teardown_units).
     null: Box<dyn TestReport + Send + Sync>,
     /// Formatted-output sink.
     pub display: CommandPromptDisplay,
-    /// `true` for the interactive REPL, `false` for headless callers (MCP).
-    ///
-    /// Drives the fan-out default: headlessly there is no `switch` to pick an
-    /// active template, so an unscoped command fans out over all of them.
+    /// `true` for the interactive REPL, `false` for headless callers (MCP),
+    /// where there is no `switch` and an unscoped command fans out.
     pub is_repl: bool,
-    /// Set by `quit` to ask the interactive REPL loop to exit after the current
-    /// dispatch returns.
-    ///
-    /// A flag plus `Ok(())` rather than routing process-exit through the command
-    /// error channel; the REPL checks [`should_exit`](Self::should_exit) after
-    /// each line and MCP ignores it.
+    /// Set by `quit` to ask the REPL loop to exit after the current dispatch;
+    /// MCP ignores it. See [`should_exit`](Self::should_exit).
     should_exit: bool,
-    /// Optional sink for runtime log-level changes: a
-    /// `tracing_subscriber::reload` handle under the REPL and `mtui-mcp`, `None`
-    /// in tests, where `set_log_level` fails rather than claim a change.
+    /// Optional sink for runtime log-level changes (a `tracing_subscriber::reload`
+    /// handle); `None` in tests, where `set_log_level` fails rather than claim a
+    /// change.
     log_level_sink: Option<LogLevelSink>,
-    /// Optional sink for best-effort desktop notifications, backed by
-    /// `mtui-cli`'s `notification::notify_user` under the REPL and `None`
-    /// elsewhere — keeping notifications a REPL-only courtesy and `mtui-core`
-    /// free of the CLI notification backend.
+    /// Optional sink for best-effort desktop notifications, set by the REPL
+    /// only, which keeps `mtui-core` free of the CLI notification backend.
     notify_sink: Option<NotifySink>,
     /// The session-level serialised interactive [`Prompter`], or `None`
     /// headlessly, where a command timeout aborts immediately.
     ///
-    /// The composition root (`mtui-cli`'s `run()`) installs a
-    /// [`Prompter::stdin`]-backed one via [`set_prompter`](Self::set_prompter).
-    /// It reaches two places: the command-timeout prompt on each freshly-built
-    /// [`Target`] in [`connect_and_add_hosts`](Self::connect_and_add_hosts), and
-    /// the active report's [`HostsGroup`] via [`HostsGroup::set_prompter`].
+    /// Installed via [`set_prompter`](Self::set_prompter); it reaches each
+    /// freshly-built [`Target`] in
+    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts) and the active
+    /// report's [`HostsGroup`].
     prompter: Option<Prompter>,
-    /// Test-only count of how many times [`http_client`](Self::http_client)
-    /// actually *built* a client, as opposed to handing back a cached clone.
-    /// Shared (`Arc`) with every fork so a regression to per-fork caching shows
-    /// up as extra builds on the parent's counter.
+    /// Test-only count of [`http_client`](Self::http_client) *builds* (not cached
+    /// clones), shared with every fork so per-fork caching shows up.
     #[cfg(test)]
     http_builds: Arc<std::sync::atomic::AtomicUsize>,
-    /// Test-only count of how many times
-    /// [`openqa_transport`](Self::openqa_transport) actually *built* a
-    /// transport, mirroring [`http_builds`](Self::http_builds).
+    /// Test-only build count for [`openqa_transport`](Self::openqa_transport).
     #[cfg(test)]
     openqa_builds: Arc<std::sync::atomic::AtomicUsize>,
-    /// Test-only home of the teregen token cache, so a test run never touches
-    /// the operator's real one. Shared (`Arc`) with every fork.
+    /// Test-only home of the teregen token cache. Shared with every fork.
     #[cfg(test)]
     teregen_token_dir: Arc<tempfile::TempDir>,
-    /// Test-only dial replacement: a hostname mapped here is connected through
-    /// its mock instead of SSH (see [`inject_mock_connection`](Self::inject_mock_connection)).
+    /// Test-only dial replacement (see [`inject_mock_connection`](Self::inject_mock_connection)).
     #[cfg(test)]
     mock_conns: std::collections::HashMap<String, MockConnection>,
     /// Per-slot candidate shuffle, so pool selection spreads load across
-    /// interchangeable refhosts instead of always taking the first in
-    /// `refhosts.yml` order. Tests override it with the identity.
+    /// interchangeable refhosts. Tests override it with the identity.
     shuffle: ShuffleFn,
     /// The cancellation seam: cooperative cancel signal for the dispatch this
     /// session is driving (MCP `job_cancel`).
     ///
-    /// Freshly minted for a REPL/canonical session;
-    /// [`fork_for_call`](Self::fork_for_call) *clones* it so a fork shares the
-    /// parent's state, and `mtui-mcp` installs a per-job token via
-    /// [`set_cancel_token`](Self::set_cancel_token).
+    /// [`fork_for_call`](Self::fork_for_call) *clones* it, and `mtui-mcp`
+    /// installs a per-job token via [`set_cancel_token`](Self::set_cancel_token).
     /// [`Command::run`](crate::Command::run) checks it before dispatch and
-    /// between fan-out templates; a long-running body may also observe it. Purely
-    /// cooperative: a body that never checks is hard-aborted by the MCP job
-    /// layer after its grace period.
+    /// between fan-out templates. Purely cooperative: a body that never checks is
+    /// hard-aborted by the MCP job layer after its grace period.
     cancel: CancellationToken,
     /// Lazily-built, session-scoped outbound [`HttpClient`], cached with the
     /// [`VerifyPolicy`] it was built under.
     ///
-    /// `reqwest` fixes TLS and owns its connection pool at build time, so a
-    /// per-command client means a cold pool per command; this one is built once
-    /// and cloned, rebuilding only when the posture changes. Interior mutability
-    /// lets the `&Session` call sites (`export::build_http`) populate it lazily.
-    /// The `Arc` is **shared** with every [`fork_for_call`](Self::fork_for_call)
-    /// descendant of this session, not just this instance: on the MCP
-    /// single-RRID path the canonical session never dispatches directly, so a
-    /// per-fork slot would never warm. Contention is possible but near-zero —
-    /// `run_command` awaits its own fork's join handle immediately, so it needs
-    /// concurrent distinct-RRID tool calls to overlap at all — and the guard is
-    /// held across the build deliberately, so concurrent cold forks convoy on
-    /// one build instead of doing N.
+    /// Built once and cloned (a per-command client means a cold pool per
+    /// command), rebuilding only when the posture changes. Interior mutability
+    /// lets `&Session` call sites populate it lazily. The `Arc` is **shared**
+    /// with every [`fork_for_call`](Self::fork_for_call) descendant: the MCP
+    /// canonical session never dispatches directly, so a per-fork slot would
+    /// never warm. The guard is held across the build deliberately, so
+    /// concurrent cold forks convoy on one build instead of doing N.
     http_client: HttpClientCache,
-    /// Lazily-built, session-scoped openQA transport: a redirect-less,
-    /// no-reqwest-retry `reqwest::Client` for
-    /// `ruoqa::ClientBuilder::http_client`, cached and shared across forks like
-    /// [`http_client`](Self::http_client) so back-to-back openQA connectors
-    /// (`reload_openqa`'s primary + baremetal instances) share one pool.
+    /// Lazily-built, session-scoped openQA transport (a redirect-less,
+    /// no-reqwest-retry `reqwest::Client`), cached and shared across forks like
+    /// [`http_client`](Self::http_client) so back-to-back connectors share a pool.
     openqa_transport: OpenqaTransportCache,
     /// Command logs kept after their host was removed, keyed by
     /// `(rrid, hostname)`, so `show_log` still answers until `unload`.
     ///
-    /// A `Target` owns the only verbatim record of what ran on it; dropping
-    /// the target (via `remove_host`) must not destroy the session's copy.
-    /// Shared with every [`fork_for_call`](Self::fork_for_call) like the
-    /// transports, so headless reads see removals made on the canonical
-    /// session. Entries are short-lived (bounded by hosts × commands) and
-    /// dropped with their template by [`forget_detached_logs`](Self::forget_detached_logs).
+    /// A `Target` owns the only verbatim record of what ran on it, so dropping it
+    /// (via `remove_host`) must not destroy the session's copy. Shared with every
+    /// [`fork_for_call`](Self::fork_for_call), and dropped with its template by
+    /// [`forget_detached_logs`](Self::forget_detached_logs).
     detached_logs: Arc<Mutex<DetachedLogs>>,
     /// The registry through which every target in this process sees the
     /// operation locks its siblings hold.
     ///
-    /// Wire ownership is per user + PID, so two loaded templates (or two MCP
-    /// sessions) sharing a refhost would otherwise read each other's lock as
-    /// their own. Shared with every [`fork_for_call`](Self::fork_for_call); the
-    /// MCP registry hands one instance to all its sessions via
-    /// [`set_op_lock_holders`](Self::set_op_lock_holders). Pushed onto the
-    /// active group on every [`activate`](Self::activate) and onto each target
-    /// before it connects.
+    /// Wire ownership is per user + PID, so two templates (or MCP sessions)
+    /// sharing a refhost would otherwise read each other's lock as their own.
+    /// Shared with every [`fork_for_call`](Self::fork_for_call); the MCP registry
+    /// hands one instance to all its sessions via
+    /// [`set_op_lock_holders`](Self::set_op_lock_holders). Pushed onto the active
+    /// group on every [`activate`](Self::activate) and onto each target before it
+    /// connects.
     op_lock_holders: OpLockHolders,
 }
 
@@ -210,11 +176,10 @@ fn random_shuffle(candidates: &mut [String]) {
     candidates.shuffle(&mut rand::rng());
 }
 
-/// Render a refhosts [`Slot`](mtui_datasources::refhost::Slot) as the stable
+/// Renders a refhosts [`Slot`](mtui_datasources::refhost::Slot) as the
 /// `product|version|arch|addon,addon` key
 /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates)
-/// groups a slot's backup candidates under. The tuple already sorts its addons,
-/// so the encoding is a deterministic 1:1.
+/// groups backup candidates under.
 fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     let (product, version, arch, addons) = slot;
     format!("{product}|{version}|{arch}|{}", addons.join(","))
@@ -229,8 +194,7 @@ impl PackageMeta {
         Self(Arc::clone(&base.host_packages))
     }
 
-    /// Whether the report carries no package metadata at all, as with no
-    /// report loaded.
+    /// Whether the report carries no package metadata at all.
     pub(crate) fn is_empty(&self) -> bool {
         match &*self.0 {
             mtui_testreport::HostPackages::Shared(set) => set.is_empty(),
@@ -292,9 +256,7 @@ impl PackageMeta {
         packages.extend(checked);
         packages.sort_by(|a, b| a.name.cmp(&b.name));
         if packages.is_empty() {
-            // #396: tracking nothing means before/after version checks
-            // cannot run and export has nothing to verify — say so
-            // rather than skipping silently.
+            // Tracking nothing means version checks cannot run: say so.
             warn!(
                 host = %target.hostname(), system = %target.system(),
                 "report metadata names no packages for this host's products; \
@@ -371,9 +333,8 @@ impl HostFailure {
     }
 }
 
-/// Each host attach refused ([`HostFailure::is_refusal`]), once and sorted by host,
-/// whether it failed as a primary or named host (`failures`) or as a backup
-/// sibling (`unserved`): a primary appears in both.
+/// Each host attach refused ([`HostFailure::is_refusal`]), once and sorted by
+/// host, whether as a primary (`failures`) or a backup sibling (`unserved`).
 fn refused_hosts<'a>(
     failures: &'a [(String, HostFailure)],
     unserved: &'a [Unserved],
@@ -420,7 +381,6 @@ impl Unserved {
     fn host_failures(&self) -> &[(String, HostFailure)] {
         match self {
             Self::Unconnectable { failures, .. } => failures,
-            // `BudgetSpent` names its hosts without a reason.
             Self::NoRefhost { .. }
             | Self::NoArchRefhost { .. }
             | Self::InventoryUnavailable
@@ -490,9 +450,9 @@ fn slot_label(key: &str) -> String {
 /// The outcome of [`Session::activate`].
 ///
 /// Only [`Active`](Self::Active) installs the per-call guard; the other three
-/// leave `metadata()` on the null sentinel and are *not* interchangeable —
-/// [`Empty`](Self::Empty) is the legitimate nothing-loaded session, the other
-/// two are the #524 race a caller must refuse on rather than answer from the
+/// leave `metadata()` on the null sentinel and are *not* interchangeable:
+/// [`Empty`](Self::Empty) is the legitimate nothing-loaded session, while the
+/// other two are races a caller must refuse on rather than answer from the
 /// sentinel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
@@ -570,9 +530,8 @@ pub type LogLevelSink = Box<dyn FnMut(LogLevel) + Send>;
 pub type NotifySink = Box<dyn FnMut(&str, bool) + Send>;
 
 impl Session {
-    /// Builds a session for `config`, defaulting the display to stdout.
-    ///
-    /// `interactive` is `true` for the REPL, `false` for MCP.
+    /// Builds a session for `config` on stdout; `is_repl` is `true` for the
+    /// REPL, `false` for MCP.
     #[must_use]
     pub fn new(config: Config, is_repl: bool) -> Self {
         Self::with_display(config, is_repl, CommandPromptDisplay::stdout())
@@ -614,38 +573,32 @@ impl Session {
     /// Builds a cheap per-call [`Session`] that **shares** this session's loaded
     /// reports and carries its own display sink.
     ///
-    /// The headless MCP concurrency seam: a single-RRID tool call needs a
-    /// `&mut Session`, but holding the canonical one behind a mutex across
-    /// dispatch serialises *all* calls. A fork's `TemplateRegistry::snapshot`
-    /// shares the per-entry report locks, so a command on RRID `X` locks only
-    /// `X`'s entry and its mutations stay visible to the canonical session.
+    /// The headless MCP concurrency seam: holding the canonical session behind a
+    /// mutex across dispatch would serialise *all* calls. A fork's
+    /// `TemplateRegistry::snapshot` shares the per-entry report locks, so a
+    /// command on RRID `X` locks only `X`'s entry and its mutations stay visible
+    /// to the canonical session.
     ///
     /// `config`/`is_repl`/`shuffle` are copied **by value**, so a fork's writes to
     /// them die with it; a command that mutates any of them must declare
-    /// [`Command::requires_canonical_session`](crate::Command::requires_canonical_session),
-    /// which is what routes it to the MCP exclusive gate instead of here.
+    /// [`Command::requires_canonical_session`](crate::Command::requires_canonical_session).
     /// The `http_client`/`openqa_transport` caches are **shared** with the
-    /// parent — like the report entry locks and the cancel token — rather than
-    /// starting cold: on the MCP path the canonical session never dispatches
-    /// directly, so a per-fork slot would never warm and every call would pay a
-    /// fresh TLS/CA-root build. Sharing is sound because a posture change lands
-    /// only through the MCP exclusive arm, which drains every live fork first,
-    /// and the `VerifyPolicy` cache key turns any residual mismatch into a
-    /// rebuild rather than a stale hand-out. Only the prompter/sinks start
-    /// empty. Only a **single-real-template** command that mutates nothing
-    /// beyond shared report content is therefore sound to dispatch through a
-    /// fork.
+    /// parent, like the report entry locks and the cancel token, so every call
+    /// need not pay a fresh TLS build. That is sound because a posture change
+    /// lands only through the MCP exclusive arm, which drains every live fork
+    /// first, and the `VerifyPolicy` cache key turns a residual mismatch into a
+    /// rebuild. Only the prompter/sinks start empty. Only a
+    /// **single-real-template** command that mutates nothing beyond shared report
+    /// content is sound to dispatch through a fork.
     #[must_use]
     pub fn fork_for_call(&self, display: CommandPromptDisplay) -> Self {
         // A host added on a fork while nothing is loaded would land in this
-        // private `null` and be discarded with the fork, reachable by no
-        // teardown. Two load-bearing mechanisms keep that unreachable (#478):
-        // nothing loaded never forks (`resolve_command_rrids` returns `None`,
-        // which `command_lock` maps to the exclusive arm on the canonical
-        // session), and that exclusive path releases the canonical active guard
-        // on the way out so a later fork's `activate` can re-lock the entry
-        // rather than fall through to its own null. The second half is enforced
-        // in `mtui-mcp`, a higher crate.
+        // private `null` and be lost with the fork. Two mechanisms keep that
+        // unreachable: nothing loaded never forks (`resolve_command_rrids`
+        // returns `None`, which `command_lock` maps to the exclusive arm), and
+        // that exclusive path releases the canonical active guard on the way out
+        // so a later fork's `activate` can re-lock the entry. The second half is
+        // enforced in `mtui-mcp`.
         let null: Box<dyn TestReport + Send + Sync> =
             Box::new(NullReport::new(self.config.clone()));
         Self {
@@ -660,10 +613,8 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: self.shuffle,
-            // Cancelling either side — the canonical session or the per-job
-            // token MCP installs on this fork — must be observable on both.
+            // Cancelling either side must be observable on both.
             cancel: self.cancel.clone(),
-            // Shared with the parent, not reset — see the doc comment above.
             http_client: Arc::clone(&self.http_client),
             openqa_transport: Arc::clone(&self.openqa_transport),
             detached_logs: Arc::clone(&self.detached_logs),
@@ -712,18 +663,15 @@ impl Session {
 
     /// `true` once cancellation has been requested for this dispatch.
     ///
-    /// The cheap poll form of the seam, for a body checking at its own
-    /// host/step boundaries. [`check_cancelled`](Self::check_cancelled) is the
-    /// `?`-friendly form, [`cancel_token`](Self::cancel_token) the awaitable one.
+    /// The poll form, for a body checking at its own boundaries;
+    /// [`check_cancelled`](Self::check_cancelled) is the `?`-friendly form and
+    /// [`cancel_token`](Self::cancel_token) the awaitable one.
     #[must_use]
     pub fn cancel_requested(&self) -> bool {
         self.cancel.is_cancelled()
     }
 
     /// Bail with [`CommandError::Cancelled`] if cancellation has been requested.
-    ///
-    /// The `?`-friendly checkpoint the [`Command::run`](crate::Command::run)
-    /// driver calls before dispatch and between fan-out templates.
     ///
     /// # Errors
     ///
@@ -744,20 +692,18 @@ impl Session {
 
     /// Install `token` as this session's cancellation token.
     ///
-    /// The MCP job layer wires one freshly minted token per background job in,
-    /// so `job_cancel` cancels exactly that job. Installing *replaces* rather
-    /// than chains, so a caller whose session outlives the call (the exclusive
-    /// dispatch path) must restore the prior token afterwards.
+    /// The MCP job layer installs one token per background job, so `job_cancel`
+    /// cancels exactly that job. It *replaces* rather than chains, so a caller
+    /// whose session outlives the call must restore the prior token.
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.cancel = token;
     }
 
     /// The session-scoped outbound [`HttpClient`], built lazily and reused.
     ///
-    /// The effective [`VerifyPolicy`] comes from `config.ssl_verify`, and the
-    /// cache is keyed on it, so a mid-session `config set ssl_verify` rebuilds
-    /// rather than leaving TLS behaviour stale. Otherwise later calls return a
-    /// cheap `Arc`-backed clone sharing one `reqwest` connection pool.
+    /// The [`VerifyPolicy`] comes from `config.ssl_verify` and keys the cache, so
+    /// a mid-session `config set ssl_verify` rebuilds. Later calls return a cheap
+    /// clone sharing one `reqwest` connection pool.
     ///
     /// # Errors
     ///
@@ -811,14 +757,13 @@ impl Session {
         ))
     }
 
-    /// Test-only count of clients actually built by
-    /// [`http_client`](Self::http_client).
+    /// Test-only count of clients built by [`http_client`](Self::http_client).
     #[cfg(test)]
     pub(crate) fn http_builds(&self) -> usize {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Test-only count of transports actually built by
+    /// Test-only count of transports built by
     /// [`openqa_transport`](Self::openqa_transport).
     #[cfg(test)]
     fn openqa_builds(&self) -> usize {
@@ -852,10 +797,9 @@ impl Session {
     /// The session-scoped openQA transport, built lazily and reused.
     ///
     /// Caches by [`VerifyPolicy`] like [`http_client`](Self::http_client), but
-    /// hands out a bare `reqwest::Client` rather than the [`HttpClient`]
-    /// wrapper: `ruoqa` re-signs and redirects every request itself, so the
-    /// transport it owns must not follow redirects or retry at the reqwest level
-    /// (see [`HttpClient::openqa_transport`]).
+    /// hands out a bare `reqwest::Client`: `ruoqa` re-signs and redirects every
+    /// request itself, so the transport must not follow redirects or retry (see
+    /// [`HttpClient::openqa_transport`]).
     ///
     /// # Errors
     ///
@@ -874,16 +818,13 @@ impl Session {
     /// Makes `rrid` the active template *and* installs its per-call active
     /// handle (`active_guard`).
     ///
-    /// The unified activation seam. Any prior guard is dropped first, so
-    /// re-activating the same entry never self-deadlocks — and `try_lock_owned`
-    /// then suffices, the outer session mutex having serialised dispatch.
-    /// An empty `rrid` clears pointer and guard so `metadata()` falls back to
-    /// the null object.
+    /// Any prior guard is dropped first, so re-activating the same entry never
+    /// self-deadlocks. An empty `rrid` clears pointer and guard so `metadata()`
+    /// falls back to the null object.
     ///
-    /// Dropping the outcome is how a lost race silently redirected a whole
-    /// dispatch onto the sentinel (#524), hence `#[must_use]`; the three
-    /// non-[`Active`](Activation::Active) outcomes are distinguished because
-    /// only [`Empty`](Activation::Empty) is legitimate.
+    /// `#[must_use]`: ignoring a lost race silently redirects the dispatch onto
+    /// the sentinel; only [`Empty`](Activation::Empty) is a legitimate
+    /// non-[`Active`](Activation::Active) outcome.
     #[must_use = "a non-Active activation leaves the dispatch on the null report"]
     pub fn activate(&mut self, rrid: &str) -> Activation {
         self.active_guard = None;
@@ -891,8 +832,7 @@ impl Session {
             .base_mut()
             .targets
             .set_op_lock_holders(self.op_lock_holders.clone());
-        // Hosts added with no template loaded live here, and their commands
-        // check the same seam.
+        // Hosts added with no template loaded live here.
         self.null
             .base_mut()
             .targets
@@ -908,10 +848,8 @@ impl Session {
             .templates
             .active_handle()
             .and_then(|h| h.try_lock_owned().ok());
-        // Pushing the token down here — the one place every dispatch passes
-        // through to reach a report — gives every command the host-boundary seam
-        // without opting in, and refreshes it per activation so a group never
-        // carries a stale cancelled token from an earlier job.
+        // Every dispatch passes through here, so every command gets the
+        // host-boundary seam, refreshed so a group never keeps a stale token.
         let cancel = self.cancel.clone();
         let holders = self.op_lock_holders.clone();
         if let Some(guard) = self.active_guard.as_mut() {
@@ -928,10 +866,9 @@ impl Session {
 
     /// Drops the per-call active handle *without* changing the active pointer.
     ///
-    /// Teardown/probe paths that lock entries directly (`quit`/`unload`/`load`
-    /// replace, MCP `close`, the fan-out `is_hostless` probe) would self-deadlock
-    /// on an entry this session's guard still holds. Unlike `activate("")` the
-    /// registry's active RRID is left intact, so a survivor can still be promoted.
+    /// Teardown/probe paths that lock entries directly would self-deadlock on an
+    /// entry this session's guard still holds. Unlike `activate("")` the
+    /// registry's active RRID is left intact.
     pub fn release_active_guard(&mut self) {
         self.active_guard = None;
     }
@@ -942,25 +879,21 @@ impl Session {
     ///
     /// The single enumeration teardown walks (`quit`, `McpSession::close`, the
     /// MCP idle sweep). The registry alone is *not* the set of connected hosts:
-    /// `add_host` with nothing loaded writes into the private sentinel, whose
-    /// empty RRID no `rrids()` walk can return. A non-empty sentinel group is
-    /// **moved out** — swapped for a fresh [`NullReport`] — so it can outlive
-    /// the caller's borrow (`McpSession::close` cannot hold the session mutex
-    /// across its teardown awaits) and cannot be handed out twice. The per-call
-    /// active handle is released first, since teardown locks *every* entry; the
-    /// registry's active pointer is left intact.
+    /// `add_host` with nothing loaded writes into the private sentinel. A
+    /// non-empty sentinel group is **moved out** (swapped for a fresh
+    /// [`NullReport`]) so it can outlive the caller's borrow and cannot be handed
+    /// out twice. The per-call active handle is released first, since teardown
+    /// locks *every* entry.
     ///
     /// # Warning
     ///
-    /// Dropping the returned `Vec` instead of tearing down every unit strands
-    /// the sentinel's hosts with their remote `/var/lock/mtui.lock` held — this
-    /// call is the only `Arc` created for them.
+    /// Dropping the returned `Vec` instead of tearing down every unit strands the
+    /// sentinel's hosts with their remote `/var/lock/mtui.lock` held.
     #[must_use]
     pub fn take_teardown_units(&mut self) -> Vec<ReportEntry> {
         self.release_active_guard();
-        // The sentinel goes first: under a shared deadline (see
-        // `McpSession::close_with_timeout`) it is the only unrecoverable unit,
-        // and typically the smallest group, so it is cheap insurance.
+        // The sentinel goes first: under a shared deadline it is the only
+        // unrecoverable unit.
         let mut units: Vec<ReportEntry> = Vec::new();
         if !self.null.base().targets.is_empty() {
             let stranded = std::mem::replace(
@@ -980,12 +913,11 @@ impl Session {
 
     /// Whether the null sentinel's host group currently holds any hosts.
     ///
-    /// The sentinel is the only connected-host set the registry walk
-    /// ([`TemplateRegistry::rrids`]) cannot see: hosts attached while nothing
-    /// is loaded land here. Callers that enumerate "every group that could hold
-    /// a lock" (teardown via [`take_teardown_units`](Self::take_teardown_units),
-    /// the MCP post-abort unlock via [`unlock_null_group_held`](Self::unlock_null_group_held))
-    /// use this to include it.
+    /// The sentinel is the only host set the registry walk
+    /// ([`TemplateRegistry::rrids`]) cannot see; callers enumerating every group
+    /// that could hold a lock (see
+    /// [`take_teardown_units`](Self::take_teardown_units),
+    /// [`unlock_null_group_held`](Self::unlock_null_group_held)) must include it.
     #[must_use]
     pub fn null_group_has_hosts(&self) -> bool {
         !self.null.base().targets.is_empty()
@@ -1000,27 +932,22 @@ impl Session {
 
     /// Releases the operation locks the null sentinel's own targets took.
     ///
-    /// The mid-session analogue of [`take_teardown_units`](Self::take_teardown_units)
-    /// for the sentinel (#485): teardown moves the sentinel out (the session is
-    /// ending); a post-abort unlock must not — the session continues — so this
-    /// drives the sentinel's [`HostsGroup::unlock_held`] in place. `unlock_held`
-    /// scopes to locks this group's own targets actually took, so a foreign or
-    /// comment-marked hold on a shared refhost is left untouched.
+    /// The mid-session analogue of [`take_teardown_units`](Self::take_teardown_units):
+    /// the session continues, so this drives the sentinel's
+    /// [`HostsGroup::unlock_held`] in place. That scopes to locks this group's own
+    /// targets took, leaving a foreign or comment-marked hold untouched.
     ///
-    /// The caller holds the session mutex across this call (the sentinel is a
-    /// private field, not an `Arc<Mutex<..>>` like a registry entry), so it is
-    /// bounded by the caller's budget; the fan-out's per-host timeouts bound it
-    /// independently.
+    /// The caller holds the session mutex across this call; the fan-out's
+    /// per-host timeouts bound it.
     pub async fn unlock_null_group_held(&mut self) -> BTreeMap<String, LockOutcome> {
         self.null.base_mut().targets.unlock_held().await
     }
 
     /// Re-installs the active handle for the registry's current active pointer.
     ///
-    /// Used after a registry mutation (load) repoints `active` without going
-    /// through [`activate`](Self::activate) — it drops any stale guard and locks
-    /// the (possibly new) active entry, falling back to the null object when
-    /// nothing is loaded.
+    /// Used after a registry mutation repoints `active` without going through
+    /// [`activate`](Self::activate): drops any stale guard and locks the
+    /// (possibly new) active entry.
     pub(crate) fn refresh_active_guard(&mut self) {
         self.active_guard = None;
         self.active_guard = self
@@ -1032,18 +959,17 @@ impl Session {
     /// Whether `rrid` is the active template *and* this session currently holds
     /// its per-call handle.
     ///
-    /// Lets guard-unaware callers (the hand-written MCP `report_*` tools) choose
-    /// between [`metadata`](Self::metadata) and locking the entry handle.
+    /// Lets guard-unaware callers (the MCP `report_*` tools) choose between
+    /// [`metadata`](Self::metadata) and locking the entry handle.
     #[must_use]
     pub fn active_report_is_guarded(&self, rrid: &str) -> bool {
         self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid)
     }
 
     /// Reads `f` off the report under `rrid` for the fan-out probes: `absent`
-    /// when it is not loaded (nothing to act on, nothing to lose), `None` when
-    /// another holder has it. A contended entry must never read as absent, or
-    /// a fan-out would skip a template racing another dispatch instead of
-    /// refusing it (#524).
+    /// when it is not loaded, `None` when another holder has it. A contended
+    /// entry must never read as absent, or a fan-out would skip a template racing
+    /// another dispatch instead of refusing it.
     fn probe_report<R>(
         &self,
         rrid: &str,
@@ -1060,22 +986,16 @@ impl Session {
     /// Whether the report loaded under `rrid` has no connected hosts, or `None`
     /// when the entry is held elsewhere.
     ///
-    /// The guard-aware counterpart of
-    /// [`TemplateRegistry::is_hostless`](crate::TemplateRegistry::is_hostless):
-    /// the active entry is already locked by this session's
-    /// [`active_guard`](Self::active_guard), so it must be read through the
-    /// guard rather than a `try_lock` that would fail. That covers only *this*
-    /// session's hold; a foreign holder still yields `None`.
+    /// The active entry is read through this session's
+    /// [`active_guard`](Self::active_guard); a foreign holder still yields `None`.
     #[must_use]
     pub(crate) fn is_hostless(&self, rrid: &str) -> Option<bool> {
         self.probe_report(rrid, true, |r| r.base().targets.is_empty())
     }
 
-    /// Whether the report loaded under `rrid` holds uncommitted document
-    /// edits, or `None` when the entry is held elsewhere. The guard-aware
-    /// counterpart of
-    /// [`TemplateRegistry::document_dirty`](crate::TemplateRegistry::document_dirty),
-    /// exactly like [`is_hostless`](Self::is_hostless) above.
+    /// Whether the report loaded under `rrid` holds uncommitted document edits,
+    /// or `None` when the entry is held elsewhere (guard-aware, like
+    /// [`is_hostless`](Self::is_hostless)).
     #[must_use]
     pub(crate) fn document_dirty(&self, rrid: &str) -> Option<bool> {
         self.probe_report(rrid, false, |r| r.base().document_dirty)
@@ -1083,8 +1003,8 @@ impl Session {
 
     /// Runs `f` on the report loaded under `rrid`.
     ///
-    /// Guard-aware: this session's active entry is read through its held
-    /// guard, any other entry through a `try_lock`.
+    /// Guard-aware: the active entry is read through its held guard, any other
+    /// through a `try_lock`.
     ///
     /// # Errors
     ///
@@ -1103,9 +1023,8 @@ impl Session {
         Ok(f(&**report))
     }
 
-    /// The mutable counterpart of [`with_report`](Self::with_report), with the
-    /// same guard handling and errors. A contended entry is
-    /// [`ReportAccess::Busy`], never the null sentinel.
+    /// The mutable counterpart of [`with_report`](Self::with_report). A contended
+    /// entry is [`ReportAccess::Busy`], never the null sentinel.
     pub fn with_report_mut<R>(
         &mut self,
         rrid: &str,
@@ -1119,16 +1038,13 @@ impl Session {
         Ok(f(&mut **report))
     }
 
-    /// Whether none of `named` belong to `rrid`'s host group, or `None` when
-    /// the entry is held elsewhere. The guard-aware counterpart of
-    /// [`TemplateRegistry::owns_none_of`](crate::TemplateRegistry::owns_none_of),
-    /// exactly like [`is_hostless`](Self::is_hostless) above.
+    /// Whether none of `named` belong to `rrid`'s host group, or `None` when the
+    /// entry is held elsewhere (guard-aware, like
+    /// [`is_hostless`](Self::is_hostless)).
     ///
-    /// Live hosts only: a removed host is gone even while its log is retained
-    /// for [`show_log`](crate::commands::ShowLog). Commands reading detached
-    /// logs consult [`detached_snapshot`](Self::detached_snapshot) through
-    /// their [`Command::includes_detached_hosts`](crate::Command::includes_detached_hosts)
-    /// opt-in instead, so the fan-out skip stays a live-membership test.
+    /// Live hosts only: commands reading detached logs consult
+    /// [`detached_snapshot`](Self::detached_snapshot) through
+    /// [`Command::includes_detached_hosts`](crate::Command::includes_detached_hosts).
     #[must_use]
     pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
         self.probe_report(rrid, true, |r| {
@@ -1138,9 +1054,8 @@ impl Session {
 
     /// Retained-log hosts per RRID in `rrids`, under a single lock.
     ///
-    /// The fan-out driver's one-shot ownership snapshot for commands that read
-    /// detached logs: taken before the template loop so a `-t` fan-out pays
-    /// one lock, not one per host.
+    /// The fan-out driver's one-shot snapshot, taken before the template loop so
+    /// a `-t` fan-out pays one lock, not one per host.
     #[must_use]
     pub(crate) fn detached_snapshot(&self, rrids: &[String]) -> BTreeMap<String, BTreeSet<String>> {
         let logs = self.logs_or_recovered();
@@ -1158,9 +1073,8 @@ impl Session {
 
     /// A `list_templates` row for `rrid`, or `None` if it is not loaded.
     ///
-    /// Guard-aware, like [`is_hostless`](Self::is_hostless) — but a foreign
-    /// holder yields [`TemplateRow::Busy`], not `None`: unlike `is_hostless`'s
-    /// caller, this one would drop the template from the listing entirely.
+    /// Guard-aware, but a foreign holder yields [`TemplateRow::Busy`], not
+    /// `None`, which would drop the template from the listing.
     #[must_use]
     pub(crate) fn template_row(&self, rrid: &str) -> Option<TemplateRow> {
         match self.with_report(rrid, |r| {
@@ -1182,11 +1096,7 @@ impl Session {
         }
     }
 
-    /// Mutably borrows the active report.
-    ///
-    /// The mutable counterpart of [`metadata`](Self::metadata), through which
-    /// `reload_openqa` / `set_workflow` populate the report's openQA holder
-    /// ([`TestReport::openqa_mut`]). Never `None`.
+    /// The mutable counterpart of [`metadata`](Self::metadata). Never `None`.
     pub(crate) fn metadata_mut(&mut self) -> &mut (dyn TestReport + Send + Sync) {
         match &mut self.active_guard {
             Some(g) => (**g).as_mut(),
@@ -1196,19 +1106,14 @@ impl Session {
 
     /// Sets the active report's [`Workflow`] mode.
     ///
-    /// The one mutable window onto it — `add_host` uses it to move an automatic
-    /// session to manual. Refreshing the REPL prompt string is a separate REPL
-    /// concern.
-    ///
     /// Applies only while this session holds the active guard; otherwise a no-op
     /// returning `false`. That is wider than "no report loaded":
-    /// [`release_active_guard`](Self::release_active_guard) (the all-templates
-    /// fan-out, `unload`, the MCP transfer handoff),
+    /// [`release_active_guard`](Self::release_active_guard),
     /// [`take_teardown_units`](Self::take_teardown_units) and
     /// [`fork_for_call`](Self::fork_for_call) drop the guard with reports still
     /// registered, so a caller not behind `require_update` must honour the
     /// return value. Guardless, the write would land on the long-lived
-    /// [`NullReport`] sentinel and outlive the load (#484).
+    /// [`NullReport`] sentinel and outlive the load.
     pub(crate) fn set_workflow(&mut self, workflow: Workflow) -> bool {
         if self.active_guard.is_none() {
             tracing::debug!(
@@ -1227,10 +1132,7 @@ impl Session {
         &self.metadata().base().targets
     }
 
-    /// Mutably borrows the active report's connected targets.
-    ///
-    /// The mutable counterpart of [`targets`](Self::targets), for bodies that
-    /// fan out across hosts (`run`, `reboot`, `set_repo`).
+    /// The mutable counterpart of [`targets`](Self::targets).
     pub fn targets_mut(&mut self) -> &mut HostsGroup {
         &mut self.metadata_mut().base_mut().targets
     }
@@ -1238,9 +1140,8 @@ impl Session {
     /// Moves the active report's targets out, leaving an empty group in place.
     ///
     /// The report's `perform_*` methods take `&self` **and** `&mut HostsGroup`,
-    /// which one `&mut Box<dyn TestReport>` cannot hand out at once because the
-    /// targets live inside the report. Taking the group out by value breaks the
-    /// tie; [`restore_targets`](Self::restore_targets) puts it back.
+    /// which one `&mut Box<dyn TestReport>` cannot hand out at once;
+    /// [`restore_targets`](Self::restore_targets) puts the group back.
     #[must_use]
     fn take_targets(&mut self) -> HostsGroup {
         let is_repl = self.is_repl;
@@ -1258,16 +1159,13 @@ impl Session {
     /// Takes the active report's targets and splits them into the `-t` selection
     /// and the unselected remainder.
     ///
-    /// A `-t` subset operation must run over only the selected hosts, yet the
-    /// unselected ones must survive in the live report — and a `Target` owns its
-    /// connection, so a child group cannot borrow references into the parent's.
-    /// Both halves come back, and
+    /// A `Target` owns its connection, so a child group cannot borrow into the
+    /// parent's; both halves come back and
     /// [`restore_split_targets`](Self::restore_split_targets) merges the
     /// remainder in afterwards.
     ///
-    /// `hosts` is the parsed `-t` value: `None` (also how callers pass `-t all`)
-    /// selects every enabled host with an empty remainder; `Some` names exactly
-    /// those and keeps the rest. `enabled` gates selection as for
+    /// `hosts` is the parsed `-t` value: `None` (also `-t all`) selects every
+    /// enabled host; `Some` names exactly those. `enabled` gates selection as for
     /// [`HostsGroup::select_split`](mtui_hosts::HostsGroup::select_split): a
     /// named-but-disabled host lands in the remainder, never dropped.
     ///
@@ -1275,8 +1173,7 @@ impl Session {
     ///
     /// [`mtui_hosts::HostError::NotConnected`] when a named `-t` host is not a
     /// member of the active report's group. The failed split consumes the taken
-    /// group, leaving the report's empty; callers surface the error immediately,
-    /// so no host is observable in that window.
+    /// group, leaving the report's empty.
     pub(crate) fn split_targets(
         &mut self,
         hosts: Option<&[String]>,
@@ -1288,8 +1185,7 @@ impl Session {
     /// Merges the untouched `remainder` back into the operated `selected` group
     /// and restores it as the active report's targets.
     ///
-    /// The counterpart to [`split_targets`](Self::split_targets): recombining
-    /// preserves the hosts a `-t` subset operation did not touch.
+    /// The counterpart to [`split_targets`](Self::split_targets).
     pub(crate) fn restore_split_targets(
         &mut self,
         mut selected: HostsGroup,
@@ -1302,12 +1198,9 @@ impl Session {
     /// Keeps the command logs of `group`'s hosts under `rrid` after the group
     /// is dropped, so `show_log` still answers for removed hosts.
     ///
-    /// Called with the doomed group before it drops; entries live until
-    /// [`forget_detached_logs`](Self::forget_detached_logs) drops their
-    /// template's. An empty log drops its key instead of retaining, so a
-    /// remove → re-add → remove cycle cannot resurrect a prior generation's
-    /// protocol; a non-empty second removal overwrites (the newest generation
-    /// wins). Snapshots are built before taking the lock; the lock is
+    /// Called with the doomed group before it drops. An empty log drops its key
+    /// instead of retaining, so a remove → re-add → remove cycle cannot resurrect
+    /// a prior generation's protocol; a non-empty one overwrites. The lock is
     /// never held across an await.
     pub(crate) fn retain_detached_logs(&self, rrid: &str, group: &HostsGroup) {
         let mut keep = Vec::new();
@@ -1329,8 +1222,7 @@ impl Session {
         }
     }
 
-    /// Names of removed hosts with a retained log under `rrid`, in map order
-    /// (already sorted and unique by key).
+    /// Names of removed hosts with a retained log under `rrid`, sorted.
     #[must_use]
     pub(crate) fn detached_hosts(&self, rrid: &str) -> Vec<String> {
         self.logs_or_recovered()
@@ -1341,10 +1233,8 @@ impl Session {
     }
 
     /// The retained log of removed host `host` under `rrid`, windowed to
-    /// `[start, end)` with the pre-window total — so `--limit 0` clones no
-    /// entries, like the live path. An inverted window reads as empty.
-    /// Only the shared `Arc` crosses the lock; slicing and mapping happen
-    /// outside it.
+    /// `[start, end)` with the pre-window total, so `--limit 0` clones no
+    /// entries. An inverted window reads as empty.
     #[must_use]
     pub(crate) fn detached_window(
         &self,
@@ -1374,14 +1264,12 @@ impl Session {
         Some((total, entries))
     }
 
-    /// Drops every retained log under `rrid` (after `unload`, or when the
-    /// same RRID reloads and starts a fresh generation).
+    /// Drops every retained log under `rrid` (after `unload` or a reload).
     pub(crate) fn forget_detached_logs(&self, rrid: &str) {
         self.logs_or_recovered().retain(|(r, _), _| r != rrid);
     }
 
-    /// The detached-log map, recovering (like the adjacent session caches)
-    /// instead of panicking on a poisoned mutex.
+    /// The detached-log map, recovering from a poisoned mutex.
     fn logs_or_recovered(&self) -> std::sync::MutexGuard<'_, DetachedLogs> {
         self.detached_logs
             .lock()
@@ -1392,26 +1280,21 @@ impl Session {
     /// reference hosts.
     ///
     /// 1. [`make_testreport`] loads the report from its teregen document (or
-    ///    returns a null report on failure, which [`TemplateRegistry::add`] silently ignores).
-    /// 2. The report is registered and, with a real RRID, made active.
-    ///    Re-loading an already-loaded RRID replaces its stored report;
-    ///    siblings are untouched.
+    ///    returns a null report on failure, which [`TemplateRegistry::add`]
+    ///    ignores).
+    /// 2. The report is registered and, with a real RRID, made active;
+    ///    re-loading an RRID replaces its stored report, siblings untouched.
     /// 3. If it asked for autoconnect
     ///    ([`TestReportBase::autoconnect_pending`](mtui_testreport::TestReportBase::autoconnect_pending)),
-    ///    its reference hosts are connected — driven **here**, the composition
-    ///    root, so `mtui-testreport` never depends on
-    ///    `mtui-hosts`/`mtui-datasources`. Best-effort: an unreachable host is
+    ///    its reference hosts are connected here, so `mtui-testreport` never
+    ///    depends on `mtui-hosts`/`mtui-datasources`. An unreachable host is
     ///    logged and skipped, never aborting the load.
     ///
     /// Returns the loaded report's RRID, empty when the load failed and the null
-    /// report was substituted. A thin wrapper over `load_update_reported` that
-    /// discards the failure reason.
+    /// report was substituted.
     ///
-    /// `force_continue` is forwarded to [`make_testreport`]'s argument of the
-    /// same name — the non-interactive escape hatch for a stale template
-    /// hash. REPL startup and `regenerate`'s post-job reload pass `false`:
-    /// the former has a REPL prompter to answer the question interactively,
-    /// the latter reloads a template TeReGen just regenerated, not refused.
+    /// `force_continue` is forwarded to [`make_testreport`]: the non-interactive
+    /// escape hatch for a stale template hash.
     pub async fn load_update(
         &mut self,
         update: &UpdateID,
@@ -1427,9 +1310,7 @@ impl Session {
     /// [`load_update`](Self::load_update) that also returns *why* a load failed.
     ///
     /// Returns `(rrid, load_error)`: on failure an empty RRID plus the
-    /// diagnostic [`make_testreport`] stashed on the substituted null report
-    /// (document fetch / gitea / hash failure), so `load_template` can
-    /// surface the real cause instead of a bare "could not load".
+    /// diagnostic [`make_testreport`] stashed on the substituted null report.
     pub(crate) async fn load_update_reported(
         &mut self,
         update: &UpdateID,
@@ -1449,17 +1330,14 @@ impl Session {
         .await;
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
-        // Capture the reason before `add_or_replace` moves (and, for the null
-        // sentinel, drops) the report.
         let load_error = if rrid.is_empty() {
             report.base().load_error.clone()
         } else {
             None
         };
 
-        // `add_or_replace` tears the old report down by locking its entry, which
-        // would self-deadlock against a guard this session still holds (e.g.
-        // `regenerate` reloading the active template). Re-installed below.
+        // `add_or_replace` locks the old entry, which would self-deadlock against
+        // a guard still held here (e.g. `regenerate`). Re-installed below.
         self.active_guard = None;
 
         let removed = self.templates.add_or_replace(report).await;
@@ -1470,20 +1348,17 @@ impl Session {
             tracing::warn!("still disconnecting from {host} while reloading");
         }
         if !rrid.is_empty() {
-            // A reload starts a fresh generation: its retained logs would
-            // resurface as detached for the new live group.
+            // A reload starts a fresh generation.
             self.forget_detached_logs(&rrid);
             self.templates.set_active(&rrid);
         }
-        // Restores the guard released above, onto the freshly-loaded template or
-        // (on a failed load, where the pointer never moved) the prior active, so
-        // the autoconnect below and the caller both read through `metadata()`.
+        // Restores the guard released above, onto the new template or (on a
+        // failed load) the prior active.
         self.refresh_active_guard();
 
-        // A Product Increment under `[lock] pi_autolock` is locked for the life
-        // of the loaded report, not bracketed around the review workflow, and
-        // `lock_connected_target` locks each host as it arrives — so seeding the
-        // comment before any host connects is all the acquire side needs.
+        // A PI under `[lock] pi_autolock` is locked for the life of the report;
+        // `lock_connected_target` locks each host as it arrives, so seeding the
+        // comment before any host connects is all that is needed.
         if self.config.lock_pi_autolock
             && let Some(loaded_rrid) = self.metadata().rrid()
             && loaded_rrid.kind == mtui_types::RequestKind::Pi
@@ -1501,14 +1376,12 @@ impl Session {
     /// Connects the active report's reference hosts (the deferred half of
     /// [`load_update`](Self::load_update)).
     ///
-    /// Resolves the wanted hosts — the template's parsed `reference host:` names
-    /// plus one host per matching slot from each testplatform — then connects a
-    /// [`Target`] for each, stamping the report's RRID as the pool-claim
-    /// ownership identity.
+    /// Resolves the wanted hosts (the template's `reference host:` names plus one
+    /// host per matching testplatform slot), then connects a [`Target`] for each,
+    /// stamping the report's RRID as the pool-claim owner.
     async fn autoconnect_active(&mut self, rrid: &str) {
-        // Snapshot synchronously: `Session` is not `Sync`, so a borrow held
-        // across the resolver await would make this future non-`Send`, which the
-        // `Command::call` trait requires.
+        // Snapshot synchronously: a `Session` borrow held across the await
+        // would make this future non-`Send`.
         let config = self.config.clone();
         let shuffle = self.shuffle;
         let (mut ref_hosts, already, testplatforms, arbiter, owner) = {
@@ -1521,12 +1394,10 @@ impl Session {
                 base.owner.clone(),
             )
         };
-        // Deterministic ref-host order (`hostnames` is a HashSet).
         ref_hosts.sort();
         ref_hosts.dedup();
 
-        // Testplatform hosts go through pool selection (one host per requested
-        // slot) when the arbiter + owner are wired — the default.
+        // Testplatform hosts go through pool selection (one host per slot).
         let (wanted, _unserved) = self
             .resolve_and_record_pool(&config, ref_hosts, testplatforms, arbiter, owner, shuffle)
             .await;
@@ -1539,8 +1410,7 @@ impl Session {
         let (unserved, failures) = self
             .connect_and_add_hosts(wanted, rrid, &pool_primaries)
             .await;
-        // `load_template` prints no unserved-slot lines, so a refusal is named
-        // here, or under `mtui-mcp` it would only reach the log.
+        // `load_template` prints no unserved-slot lines; name a refusal here.
         self.show_refused(&failures, &unserved);
     }
 
@@ -1561,18 +1431,15 @@ impl Session {
     ///
     /// The shared connect loop behind
     /// [`autoconnect_active`](Self::autoconnect_active) and `add_host`. Each
-    /// target is stamped with `rrid` as its pool-claim ownership identity;
-    /// [`Target::connect`] short-circuits for a caller that pre-builds connected
-    /// targets (tests over a mock connection).
+    /// target is stamped with `rrid` as its pool-claim owner.
     ///
     /// A freshly connected host is autolocked with the active report's
     /// `lock_comment` when a PI assignment is in progress; one already locked by
     /// another owner is left as-is ([`HostError::TargetLocked`] suppressed), and
     /// a failed autolock never drops an otherwise-good host. It is also checked
     /// for product drift against its `refhosts.yml` row
-    /// ([`verify_target_products`](Self::verify_target_products)) — surfaced,
-    /// recorded in `product_warnings` and WARN-logged, but never dropping the
-    /// host, and skipped entirely if the inventory is unavailable.
+    /// ([`verify_target_products`](Self::verify_target_products)); drift is
+    /// recorded in `product_warnings` and never drops the host.
     ///
     /// Returns the slots the backup step tried and could not serve, plus one
     /// `(host, reason)` per attempted host that never attached.
@@ -1583,34 +1450,23 @@ impl Session {
         pool_primaries: &std::collections::HashSet<String>,
     ) -> (Vec<Unserved>, Vec<(String, HostFailure)>) {
         let config = self.config.clone();
-        // Everything below is snapshotted before the connect loop: a `base()` or
-        // `&Prompter` borrow held across the connect `.await` would make this
-        // future non-`Send`, which the `Command::call` bound requires.
-        // Empty when no PI assignment is active.
+        // Everything below is snapshotted before the connect loop so no borrow
+        // is held across the `.await` (the future must stay `Send`).
         let lock_comment = self.metadata().base().lock_comment.clone();
-        // Seeds each host's tracked packages right after connect(); empty maps
-        // make the seeding a no-op.
         let package_meta = PackageMeta::of(self.metadata().base());
-        // `None` (headless / `mtui-mcp`) leaves the timeout an immediate abort.
+        // `None` (headless) leaves the timeout an immediate abort.
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
         let holders = self.op_lock_holders.clone();
         let injected = self.injected_connections();
         // A host the update workflow cannot drive is refused only while an
-        // update is loaded: with none, run/get/put still serve it.
+        // update is loaded.
         let require_command_set = !self.metadata().id().is_empty();
-        // One inventory for the whole batch, built before the `targets_mut()`
-        // borrow so this await does not straddle it. `None` disables the drift
-        // check for every host — best-effort, never fatal.
+        // One inventory for the batch; `None` disables the drift check.
         let store = Self::build_refhosts_store(&config).await;
-        // Each host's connect + autolock + package-seed + drift-verify is an
-        // independent future driven with the rest of the batch, so attaching N
-        // hosts costs one slow handshake rather than the sum.
-        // Whether a host takes the remote pool lock or the normal autolock;
-        // empty on the legacy `add_host --target` path.
+        // Whether a host takes the remote pool lock or the normal autolock.
         let pool_claims = self.metadata().base().pool_claims.clone();
-        // A host the template names is never a pool draw, even when a draw
-        // also selected it; `-t` hosts come with no `pool_primaries`.
+        // A host the template names is never a pool draw.
         let named = self.metadata().base().hostnames.clone();
         let store_ref = store.as_ref();
         let package_meta = &package_meta;
@@ -1645,8 +1501,7 @@ impl Session {
 
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         let targets = self.targets_mut();
-        // A group built by a later `load_update` would otherwise start without a
-        // prompter, so its command-timeout prompt would never fire.
+        // A group built by a later `load_update` would start without a prompter.
         if let Some(prompter) = prompter {
             targets.set_prompter(prompter);
         }
@@ -1679,11 +1534,9 @@ impl Session {
             .await;
         drift.extend(backup_drift);
 
-        // Only now is the `targets_mut()` borrow released.
         self.apply_product_warnings(drift);
         // Failures for hosts that never attached (a backup sibling may have
-        // served the slot instead); named hosts have no backup, so all of
-        // theirs come back, as do refused backup siblings.
+        // served the slot instead), plus refused backup siblings.
         let attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
         let mut connect_failures: Vec<(String, HostFailure)> = failures
@@ -1692,8 +1545,7 @@ impl Session {
             .chain(refused_backups)
             .collect();
         connect_failures.sort_by(|a, b| a.0.cmp(&b.0));
-        // A refused host's product drift is shown, not recorded: the host is
-        // not part of the report.
+        // A refused host's drift is shown, not recorded.
         for (host, failure) in refused_hosts(&connect_failures, &unserved) {
             if let HostFailure::Unusable {
                 drift: Some(lines), ..
@@ -1705,13 +1557,12 @@ impl Session {
         (unserved, connect_failures)
     }
 
-    /// Drives `futs` with at most `bound` in flight (a `[connection]
-    /// max_parallel` cap on concurrent SSH handshakes/sockets), refilling a slot
-    /// as soon as any host finishes. Outputs come back in input order, because
-    /// callers fold them order-sensitively (a later duplicate host wins).
+    /// Drives `futs` with at most `bound` in flight (the `[connection]
+    /// max_parallel` cap), refilling a slot as soon as any finishes. Outputs come
+    /// back in input order, since callers fold them order-sensitively.
     ///
-    /// Takes a `Vec`, not an iterator: a lazy borrowing iterator held inside
-    /// this future defeats the `Send` check of `Command::call`.
+    /// Takes a `Vec`: a lazy borrowing iterator in this future defeats the `Send`
+    /// check of `Command::call`.
     async fn connect_bounded<F: Future>(futs: Vec<F>, bound: usize) -> Vec<F::Output> {
         use futures::StreamExt;
 
@@ -1729,13 +1580,9 @@ impl Session {
     /// `target`. Fails when a pool claim was required but lost the remote race,
     /// meaning the caller should drop the host.
     ///
-    /// The two branches are sequential, not mutually exclusive: a non-empty
-    /// `lock_comment` (a loaded Product Increment) takes the operation lock
-    /// regardless of `is_pool_claim`, so a pool-selected host is PI-locked too.
-    /// Split out of [`connect_one`](Self::connect_one) — where it was an
-    /// `if/else` that left a pool host never PI-locked — so it is exercisable
-    /// against a mock connection without a live
-    /// SSH connect.
+    /// The two branches are sequential, not exclusive: a non-empty `lock_comment`
+    /// (a loaded Product Increment) takes the operation lock regardless of
+    /// `is_pool_claim`, so a pool-selected host is PI-locked too.
     async fn lock_connected_target(
         target: &mut Target,
         host: &str,
@@ -1744,9 +1591,8 @@ impl Session {
         is_pool_claim: bool,
     ) -> Result<(), HostFailure> {
         if is_pool_claim {
-            // Losing the remote race means another process holds this host —
-            // drop it so a sibling in the slot can be tried (the in-process
-            // claim is released by `connect_pool_backups`).
+            // Losing the remote race drops the host so a sibling can be tried
+            // (`connect_pool_backups` releases the in-process claim).
             let comment = format!("mtui pool {rrid} [{rrid}]");
             match target.pool_claim(&comment).await {
                 Ok(true) => {}
@@ -1775,11 +1621,10 @@ impl Session {
     /// and returns the live [`Target`] plus its drift entry, or the host with
     /// the reason it was dropped.
     ///
-    /// One path shared by the concurrent initial batch and the sequential
-    /// backup-refhost fallback
-    /// ([`connect_pool_backups`](Self::connect_pool_backups)). All inputs are
-    /// plain data, so the returned future stays `Send`. A `from_pool` host is
-    /// refused under another owner's live operation lock.
+    /// Shared by the concurrent initial batch and the sequential backup fallback
+    /// ([`connect_pool_backups`](Self::connect_pool_backups)); all inputs are
+    /// plain data so the future stays `Send`. A `from_pool` host is refused under
+    /// another owner's live operation lock.
     #[allow(clippy::too_many_arguments)]
     async fn connect_one(
         config: &Config,
@@ -1795,25 +1640,22 @@ impl Session {
         holders: &OpLockHolders,
         injected: Option<Box<dyn Connection>>,
     ) -> Result<(Target, (String, Option<Vec<String>>)), (String, HostFailure)> {
-        // Test seam: a registered mock skips the SSH dial (see
-        // `inject_mock_connection`); the claim/seed/drift steps below still run.
+        // Test seam: a registered mock skips the SSH dial.
         let mut target = if let Some(conn) = injected {
             Target::with_connection_and_config(config, host.clone(), TargetState::Enabled, conn)
         } else {
             Target::new(config, host.clone(), TargetState::Enabled)
         };
         target.set_rrid(rrid.to_owned());
-        // Before connecting, so the load-time autolock is registered too.
         target.set_op_lock_holders(holders.clone());
-        // Before connecting, so `Target::connect` applies it to the transport.
+        // Before connecting: `Target::connect` applies it to the transport.
         if let Some(tp) = timeout_prompt.as_ref() {
             target.set_timeout_prompt(tp.clone());
         }
         match target.connect().await {
             Ok(()) => {
-                // Before any claim or lock is written: a host mtui cannot
-                // prepare or update would otherwise fail only at the first
-                // `update`, and a pool slot would never reach a sibling.
+                // Before any claim or lock is written, so a pool slot can still
+                // reach a sibling.
                 if require_command_set
                     && let Some(gap) = mtui_testreport::reports::missing_command_set(&target)
                 {
@@ -1851,8 +1693,6 @@ impl Session {
                 {
                     return Err((host, failure));
                 }
-                // `connect()` already parsed the system, so its products are
-                // authoritative here.
                 package_meta.reseed(&mut target);
                 target.query_versions().await;
                 let drift = Self::verify_target_products(store, &target);
@@ -1865,31 +1705,26 @@ impl Session {
         }
     }
 
-    /// Retries failed pool slots against their remaining free candidates
-    /// (RFC §5.7 backup-refhost).
+    /// Retries failed pool slots against their remaining free candidates.
     ///
     /// Only a slot whose pool-claimed primary failed to connect in *this* call
     /// (`attempted_initial` ∩ `pool_claims`) and that has no candidate attached
     /// is retried: drop the dead claim(s), then sequentially `acquire_any` the
     /// next free sibling and connect it until one succeeds or the candidates are
-    /// exhausted. A slot with any attached host is served, and a slot nobody
-    /// claimed in this call (`add_host -t`, a slot found all-busy) is left
-    /// alone. Any host that connects joins the active group and returns its
-    /// drift entry. A no-op when pool selection is inactive (`arbiter`/`owner`
-    /// unset) or no slots are recorded; best-effort, so a connect failure
-    /// releases the in-process claim and moves on.
+    /// exhausted. A slot with any attached host, or that nobody claimed in this
+    /// call, is left alone. Any host that connects joins the active group and
+    /// returns its drift entry. A no-op when pool selection is inactive or no
+    /// slots are recorded; a connect failure releases the in-process claim and
+    /// moves on.
     ///
     /// The whole phase shares one wall-clock budget (`4 * connect_timeout`), not
-    /// a per-slot one: a per-slot budget still multiplies by slot count, so a
-    /// report with many dead slots could wedge a caller for
-    /// `slots * siblings * connect_timeout`. Once spent, remaining slots and
-    /// siblings are abandoned with a `warn!`.
+    /// a per-slot one, which would multiply by slot count and siblings. Once
+    /// spent, remaining slots and siblings are abandoned with a `warn!`.
     ///
     /// `primary_failures` carries why each of `attempted_initial` was dropped.
     /// Every retried slot that ends without a host is returned as [`Unserved`],
-    /// and every sibling attach refused ([`HostFailure::is_refusal`]) is returned with
-    /// its reason, whatever became of its slot. `injected` and
-    /// `require_command_set` are as for
+    /// and every sibling attach refused ([`HostFailure::is_refusal`]) is returned
+    /// with its reason. `injected` and `require_command_set` are as for
     /// [`connect_one`](Self::connect_one).
     #[allow(clippy::too_many_arguments)]
     async fn connect_pool_backups(
@@ -1907,7 +1742,6 @@ impl Session {
         Vec<Unserved>,
         Vec<(String, HostFailure)>,
     ) {
-        // Snapshot pool state + selection identity before any await.
         let (arbiter, owner, slot_candidates, lock_comment, package_meta, named) = {
             let base = self.metadata().base();
             (
@@ -1932,12 +1766,9 @@ impl Session {
 
         let mut attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
-        // Pool-claimed primaries this call tried and lost. Explicitly the
-        // pool selection's primaries — never a claim taken outside it (an
-        // explicitly-named host claims too, but a slot nobody asked about
-        // must not be backed up). Set membership cannot tell them apart:
-        // `slot_candidates` is cumulative history, so the caller threads the
-        // set through.
+        // Pool-claimed primaries this call tried and lost: only the pool
+        // selection's, never a claim taken outside it (a named host claims too).
+        // `slot_candidates` is cumulative history, so the caller threads the set.
         let failed: std::collections::HashSet<String> = {
             let claims = &self.metadata().base().pool_claims;
             attempted_initial
@@ -1948,8 +1779,8 @@ impl Session {
                 .cloned()
                 .collect()
         };
-        // A dead claim must not outlive this call, whether or not its slot is
-        // retried: a held host is skipped by every later pool selection.
+        // A dead claim must not outlive this call: a held host is skipped by
+        // every later pool selection.
         {
             let base = self.metadata_mut().base_mut();
             for h in &failed {
@@ -1963,9 +1794,7 @@ impl Session {
         let mut unserved: Vec<Unserved> = Vec::new();
         let mut refused: Vec<(String, HostFailure)> = Vec::new();
 
-        // Bounds the phase regardless of report size, at the cost of a late slot
-        // being starved when earlier slots burn the budget — logged per slot,
-        // and strictly better than wedging.
+        // Bounds the phase regardless of report size; a late slot may starve.
         let started = Instant::now();
         let budget = Duration::from_secs(4 * config.connect_timeout);
 
@@ -2046,13 +1875,12 @@ impl Session {
                         break;
                     }
                     Err((host, failure)) => {
-                        // A served or budget-cut slot drops its failures, so
-                        // a refusal is kept apart to still be named.
+                        // A served or budget-cut slot drops its failures; keep
+                        // a refusal apart so it is still named.
                         if failure.is_refusal() {
                             refused.push((host.clone(), failure.clone()));
                         }
                         slot_failures.push((host, failure));
-                        // Free the claim for the next candidate.
                         let base = self.metadata_mut().base_mut();
                         base.pool_claims.remove(&chosen);
                         arbiter.release(&chosen, &owner);
@@ -2084,12 +1912,9 @@ impl Session {
     /// Compares a freshly connected `target`'s detected products against its
     /// `refhosts.yml` row, returning the per-host warning lines to record.
     ///
-    /// `Some(lines)` when [`compare`] against the host's
-    /// [`Host`](mtui_types::Product) row reports drift
-    /// (base/arch/addon/dangling-symlink; the `qa` addon is always ignored,
-    /// inside `compare`). `None` means "no drift, clear any stale entry": the
-    /// store is unavailable, the host is absent from `refhosts.yml`, or the
-    /// products match. Best-effort — the host is kept regardless.
+    /// `Some(lines)` when [`compare`] reports drift. `None` means "no drift,
+    /// clear any stale entry": the store is unavailable, the host is absent from
+    /// `refhosts.yml`, or the products match. The host is kept regardless.
     fn verify_target_products(store: Option<&Refhosts>, target: &Target) -> Option<Vec<String>> {
         let store = store?;
         let Some(meta) = store.host_by_name(target.hostname()) else {
@@ -2151,11 +1976,10 @@ impl Session {
 
     /// Autolocks a freshly connected `target` with the PI `lock_comment`.
     ///
-    /// A no-op when `lock_comment` is empty (no PI assignment active). A host
-    /// already locked by another owner is left as-is
-    /// ([`HostError::TargetLocked`] suppressed, logged at debug, mirroring
-    /// `Target::unlock`); any other lock error is logged at `warn` but never
-    /// propagated, so a failed autolock never drops an otherwise-good host.
+    /// A no-op when `lock_comment` is empty. A host already locked by another
+    /// owner is left as-is ([`HostError::TargetLocked`] suppressed); any other
+    /// lock error is logged but never propagated, so a failed autolock never
+    /// drops an otherwise-good host.
     async fn autolock_target(target: &mut Target, lock_comment: &str) {
         if lock_comment.is_empty() {
             return;
@@ -2175,9 +1999,8 @@ impl Session {
     /// and connects+adds them to the active group.
     ///
     /// The `add_host`-without-`-t` path: one candidate per matching slot per
-    /// testplatform, deduplicated against the group, then connected.
-    ///
-    /// Returns every slot or testplatform that ended without a host.
+    /// testplatform, deduplicated against the group. Returns every slot or
+    /// testplatform that ended without a host.
     pub(crate) async fn add_testplatform_hosts(&mut self) -> Vec<Unserved> {
         let config = self.config.clone();
         let shuffle = self.shuffle;
@@ -2190,8 +2013,7 @@ impl Session {
                 base.owner.clone(),
             )
         };
-        // Same pool-selection path as autoconnect. `ref_hosts` is empty here:
-        // `add_host` without `-t` draws purely from the testplatforms.
+        // `ref_hosts` is empty: this path draws purely from the testplatforms.
         let (mut wanted, mut unserved) = self
             .resolve_and_record_pool(&config, Vec::new(), testplatforms, arbiter, owner, shuffle)
             .await;
@@ -2220,12 +2042,11 @@ impl Session {
         unserved
     }
 
-    /// Claim explicitly-named `hosts` in-process and record them as pool
-    /// claims, refusing hosts another template holds with their holder
-    /// named. Returns `(claiming, refused)`.
+    /// Claims explicitly-named `hosts` in-process and records them as pool
+    /// claims, refusing hosts another template holds with their holder named.
+    /// Returns `(claiming, refused)`.
     ///
-    /// Pure sync seam around [`HostArbiter::try_acquire`], so the refusal and
-    /// recording rules are unit-testable without a connect.
+    /// A sync seam around [`HostArbiter::try_acquire`], testable without a connect.
     fn claim_named(
         arbiter: &HostArbiter,
         owner: &Owner,
@@ -2239,9 +2060,8 @@ impl Session {
                 pool_claims.insert(host.clone());
                 claiming.push(host);
             } else {
-                // Separate lock from the refusal above: the holder may have
-                // changed in between, degrading to `None` ("claimed
-                // remotely") rather than a wrong RRID.
+                // A separate lock: the holder may have changed, degrading to
+                // `None` ("claimed remotely") rather than a wrong RRID.
                 let holder = arbiter.owner_of(&host).map(|(_, rrid)| rrid);
                 warn!(host = %host, "held by another template, skipping");
                 refused.push((host, HostFailure::ClaimedBy(holder)));
@@ -2254,16 +2074,12 @@ impl Session {
     ///
     /// The `add_host`-with-`-t` path: each host is stamped with the active
     /// report's RRID and connected. One already in the group is warned about and
-    /// skipped, matching the silent dedup
-    /// [`add_testplatform_hosts`](Self::add_testplatform_hosts) does. The
-    /// membership snapshot precedes any `.await`, keeping the future `Send`.
+    /// skipped.
     ///
-    /// Named hosts take the in-process pool claim like pool-selected ones, so
-    /// a later pool selection cannot hand them out again — and a host claimed
-    /// by another template is refused with its holder named instead of being
-    /// attached silently. Returns one `(host, reason)` per named host that
-    /// never attached, whether refused in-process or failed to connect
-    /// (a fresh remote claim names its holder the same way).
+    /// Named hosts take the in-process pool claim like pool-selected ones, so a
+    /// later pool selection cannot hand them out again, and a host claimed by
+    /// another template is refused with its holder named. Returns one
+    /// `(host, reason)` per named host that never attached.
     pub(crate) async fn add_named_hosts(
         &mut self,
         hosts: Vec<String>,
@@ -2276,16 +2092,15 @@ impl Session {
                 wanted.push(host);
             }
         }
-        // Snapshot the arbitration state before any `.await` (see
-        // `connect_and_add_hosts`): without an arbiter/owner pair there is no
-        // pool selection to coordinate with, and named hosts attach as before.
+        // Snapshotted before any `.await`; without an arbiter/owner pair named
+        // hosts attach unclaimed.
         let arbitration = self
             .metadata()
             .base()
             .arbiter
             .zip(self.metadata().base().owner.clone());
-        // Claims this owner held before the call: a failed connect drops only
-        // what `claim_named` took below, never an earlier pool selection's.
+        // A failed connect drops only what `claim_named` took below, never an
+        // earlier pool selection's claims.
         let mut pre_claims = std::collections::HashSet::new();
         let mut pre_owned = std::collections::HashSet::new();
         let mut refused = Vec::new();
@@ -2301,17 +2116,15 @@ impl Session {
             (wanted, refused) = Self::claim_named(arbiter, owner, &mut base.pool_claims, wanted);
         }
         let rrid = self.metadata().id();
-        // Named hosts are not pool primaries: their failures must not back
-        // up slots nobody asked about (their claims are released below).
+        // Named hosts are not pool primaries: their failures must not back up
+        // slots nobody asked about.
         let no_primaries = std::collections::HashSet::new();
         let (_, connect_failures) = self
             .connect_and_add_hosts(wanted.clone(), &rrid, &no_primaries)
             .await;
         refused.extend(connect_failures);
-        // Hosts that never attached hold no remote claim (claiming happens
-        // after connect) and must not keep the in-process one either: the
-        // backup phase only releases claims for recorded slots, which named
-        // hosts have none of.
+        // Hosts that never attached hold no remote claim and must not keep the
+        // in-process one: the backup phase only releases recorded slots.
         if let Some((arbiter, owner)) = arbitration {
             let attached: std::collections::HashSet<String> =
                 self.targets().names().into_iter().collect();
@@ -2331,13 +2144,9 @@ impl Session {
     }
 
     /// Builds the refhosts inventory on demand from `config`, or `None` on any
-    /// resolver/resolve failure.
-    ///
-    /// Shared by host selection and
-    /// [`verify_target_products`](Self::verify_target_products); no cached
-    /// Session state, and a `None` result degrades both callers to a no-op.
-    /// Takes `&Config` (not `&Session`) so the caller's connect future stays
-    /// `Send` across this await.
+    /// resolver failure, which degrades both callers (host selection and
+    /// [`verify_target_products`](Self::verify_target_products)) to a no-op.
+    /// Takes `&Config` so the caller's future stays `Send`.
     async fn build_refhosts_store(config: &Config) -> Option<Refhosts> {
         let factory = match RefhostsFactory::production(
             config.refhosts_path.clone(),
@@ -2366,26 +2175,21 @@ impl Session {
         }
     }
 
-    /// Pick one distinct free host per test-target slot via the arbiter, run
-    /// per testplatform.
+    /// Picks one distinct free host per test-target slot via the arbiter, per
+    /// testplatform.
     ///
-    /// [`search_pool_by_query`](Refhosts::search_pool_by_query) groups
-    /// candidates by their *requested* slot (product+version+arch+requested
-    /// addons), so hosts interchangeable for the update collapse to one slot.
+    /// [`search_pool_by_query`](Refhosts::search_pool_by_query) groups candidates
+    /// by their *requested* slot, so interchangeable hosts collapse to one slot.
     /// Each slot's candidates are shuffled (the [`ShuffleFn`] seam) and recorded
-    /// so a failed connect can fall back to a sibling; a slot this owner already
-    /// holds a host for is skipped; otherwise one free host is claimed through
-    /// the arbiter, waiting up to `[lock] wait` seconds when all are busy.
+    /// for sibling fallback; a slot this owner already holds a host for is
+    /// skipped; otherwise one free host is claimed, waiting up to `[lock] wait`
+    /// seconds when all are busy.
     ///
-    /// Returns `(chosen_hosts, slot_candidates, unserved)` — this batch's
-    /// `pool_claims`, the per-slot ordered candidate lists, keyed as
+    /// Returns `(chosen_hosts, slot_candidates, unserved)`, keyed as
     /// [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates),
-    /// and the testplatforms, testplatform arches and slots that yielded no host
-    /// (per testplatform: uncovered arches, then busy slots) — for the caller
-    /// to write onto the active report before connecting.
+    /// for the caller to write onto the active report before connecting.
     ///
-    /// Static (plain data, `&'static` arbiter) so the caller's connect future
-    /// stays `Send`.
+    /// Static, so the caller's future stays `Send`.
     async fn pool_select(
         store: &Refhosts,
         testplatforms: &[String],
@@ -2412,7 +2216,7 @@ impl Session {
                 unserved.push(Unserved::NoRefhost { tp: tp.clone() });
                 continue;
             }
-            // A pair exists only for an arch some host matched; the rest would vanish silently.
+            // A pair exists only for an arch some host matched; name the rest.
             let covered: std::collections::HashSet<&str> =
                 pairs.iter().map(|(_, slot)| slot.2.as_str()).collect();
             let mut uncovered: Vec<&str> = Vec::new();
@@ -2425,16 +2229,14 @@ impl Session {
                     });
                 }
             }
-            // IndexMap keeps insertion order, so grouping is O(pairs) and
-            // iteration follows first-seen slot order.
+            // IndexMap iterates in first-seen slot order.
             let mut by_slot: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
             for (host, slot) in pairs {
                 by_slot.entry(slot_key(&slot)).or_default().push(host.name);
             }
 
             for (slot, mut candidates) in by_slot {
-                // Spread load across interchangeable hosts, then remember the
-                // order for backup-refhost fallback.
+                // Spread load, then remember the order for backup fallback.
                 shuffle(&mut candidates);
                 slot_candidates.insert(slot.clone(), candidates.clone());
 
@@ -2465,19 +2267,15 @@ impl Session {
     }
 
     /// Combines `ref_hosts` with pool-selected testplatform hosts, records the
-    /// pool claims + slot candidates on the active report, and returns the
-    /// deduplicated host list to connect plus what pool selection left unserved.
+    /// pool claims and slot candidates on the active report, and returns the
+    /// deduplicated hosts to connect plus what pool selection left unserved.
     ///
     /// Shared by [`autoconnect_active`](Self::autoconnect_active) and
-    /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). Each
-    /// testplatform contributes one arbiter-chosen host per requested slot (via
-    /// [`pool_select`](Self::pool_select)), recorded as `pool_claims` so
-    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts) connects only them
-    /// (with sibling backup fallback).
+    /// [`add_testplatform_hosts`](Self::add_testplatform_hosts); each testplatform
+    /// contributes one host per slot (via [`pool_select`](Self::pool_select)).
     /// [`TemplateRegistry::add`](crate::template_registry::TemplateRegistry::add)
-    /// wires the arbiter/owner unconditionally, so an unwired call is
-    /// unsupported: it resolves no testplatform hosts and warns, rather than
-    /// silently connecting every `search()` match.
+    /// always wires the arbiter/owner, so an unwired call resolves no testplatform
+    /// hosts and warns rather than connecting every `search()` match.
     async fn resolve_and_record_pool(
         &mut self,
         config: &Config,
@@ -2504,8 +2302,7 @@ impl Session {
                         shuffle,
                     )
                     .await;
-                    // On the active report so `connect_and_add_hosts` connects
-                    // only the claims and `quit` can release them.
+                    // On the report so `quit` can release them.
                     let base = self.metadata_mut().base_mut();
                     for host in &chosen {
                         base.pool_claims.insert(host.clone());
@@ -2533,9 +2330,8 @@ impl Session {
         (wanted, unserved)
     }
 
-    /// Requests that the interactive REPL loop exit after the current dispatch.
-    ///
-    /// Set by `quit`; read by the REPL via [`should_exit`](Self::should_exit).
+    /// Requests that the REPL loop exit after the current dispatch; read via
+    /// [`should_exit`](Self::should_exit).
     pub fn request_exit(&mut self) {
         self.should_exit = true;
     }
@@ -2546,17 +2342,14 @@ impl Session {
         self.should_exit
     }
 
-    /// Installs the callback `set_log_level` uses to apply a runtime level
-    /// change. Both entrypoints wire it to a `tracing_subscriber::reload` handle
-    /// so the change takes effect immediately.
+    /// Installs the callback `set_log_level` uses to apply a runtime level change.
     pub fn set_log_level_sink(&mut self, sink: LogLevelSink) {
         self.log_level_sink = Some(sink);
     }
 
     /// Applies `level` through the installed sink, if any.
     ///
-    /// Returns `true` when a sink was present and invoked; `false` when none is
-    /// installed, so the caller does not report a change that never happened.
+    /// Returns `true` when a sink was invoked; `false` when none is installed.
     pub(crate) fn apply_log_level(&mut self, level: LogLevel) -> bool {
         if let Some(sink) = self.log_level_sink.as_mut() {
             sink(level);
@@ -2567,18 +2360,14 @@ impl Session {
     }
 
     /// Installs the callback `notify_user` uses to surface a desktop
-    /// notification. The REPL wires it to `mtui-cli`'s
-    /// `notification::notify_user`; `mtui-mcp` and tests leave it unset, making
-    /// notifications a silent no-op.
+    /// notification; unset, notifications are a silent no-op.
     pub fn set_notify_sink(&mut self, sink: NotifySink) {
         self.notify_sink = Some(sink);
     }
 
-    /// Surfaces a best-effort desktop notification through the installed sink, if
-    /// any.
-    ///
+    /// Surfaces a best-effort desktop notification through the installed sink;
     /// `error` selects the error-class toast. Returns `true` when a sink was
-    /// present and invoked, `false` when none is installed (headless/tests).
+    /// invoked.
     pub(crate) fn notify_user(&mut self, msg: &str, error: bool) -> bool {
         if let Some(sink) = self.notify_sink.as_mut() {
             sink(msg, error);
@@ -2590,12 +2379,10 @@ impl Session {
 
     /// Installs the session-level serialised interactive [`Prompter`].
     ///
-    /// The composition root (`mtui-cli`'s `run()`) wires a
-    /// [`Prompter::stdin`](mtui_hosts::Prompter::stdin)-backed prompter here;
-    /// `mtui-mcp` leaves it unset. It also reaches the active report's
-    /// [`HostsGroup`], so already-connected hosts pick up the derived
-    /// command-timeout prompt immediately; later connects inherit it via
-    /// `connect_and_add_hosts`.
+    /// The REPL wires a [`Prompter::stdin`](mtui_hosts::Prompter::stdin)-backed
+    /// one here; `mtui-mcp` leaves it unset. It also reaches the active report's
+    /// [`HostsGroup`], so connected hosts pick up the command-timeout prompt
+    /// immediately; later connects inherit it via `connect_and_add_hosts`.
     pub fn set_prompter(&mut self, prompter: Prompter) {
         self.targets_mut().set_prompter(prompter.clone());
         self.prompter = Some(prompter);

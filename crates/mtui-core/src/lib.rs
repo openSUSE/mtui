@@ -8,18 +8,12 @@
 //! * [`CommandError`] / [`CommandResult`] — the command-layer error hierarchy.
 //! * [`Session`] — the explicitly-passed command state, holding the
 //!   [`TemplateRegistry`] and [`CommandPromptDisplay`].
-//! * The explicit command [`Registry`] and the line-dispatch [`engine`], the
-//!   single machinery both the REPL and MCP dispatch through.
-//! * [`args`] — the top-level process argument parser (`clap`), distinct from
-//!   the per-command parsers the engine synthesises.
-//! * [`log_filter`] — the `tracing` filter policy (the HTTP-transport carve-out
-//!   and how it composes with `RUST_LOG`), shared by both entrypoints because
-//!   neither can see the other.
+//! * The command [`Registry`] and the line-dispatch [`engine`].
+//! * [`args`] — the top-level process argument parser.
+//! * [`log_filter`] — the `tracing` filter policy shared by both entrypoints.
 //! * The [`display`] surface: the `list_*` family, `show_log`, the three-way
 //!   [`ColorMode`], and the `page` pager.
-//! * [`entrypoint`] — the process [`ExitStatus`] contract. Both `mtui`'s REPL
-//!   and `mtui-mcp` exit through it; neither has a headless single-command CLI
-//!   mode.
+//! * [`entrypoint`] — the process [`ExitStatus`] contract.
 
 pub mod args;
 pub mod command;

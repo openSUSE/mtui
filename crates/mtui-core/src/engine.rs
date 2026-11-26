@@ -1,20 +1,13 @@
 //! Line → dispatch engine.
 //!
-//! Splits a raw input line into argv, resolves the command by name (or
-//! alias) against the [`Registry`], parses its arguments, and awaits
-//! [`Command::run`] (which drives the template fan-out).
+//! Splits a raw input line into argv, resolves the command by name (or alias)
+//! against the [`Registry`], parses its arguments, and awaits [`Command::run`].
 //!
-//! Two entry points share one core, so MCP dispatches through the *same engine*
-//! as the REPL:
+//! * [`dispatch_line`] — the REPL path: `shlex`-splits a raw line.
+//! * [`dispatch_argv`] — the MCP path: an already-structured name and argv.
 //!
-//! * [`dispatch_line`] — the REPL path: `shlex`-splits a raw line and treats the
-//!   first token as the command name.
-//! * [`dispatch_argv`] — the MCP path: an already-structured name and argv, so a
-//!   client holding parsed kwargs need not serialise them just to re-split them.
-//!
-//! Errors never abort the process: the engine uses clap's non-exiting parse
-//! API and returns a typed [`EngineError`], which the REPL renders and the MCP
-//! surface maps to a tool error.
+//! Errors never abort the process: clap's non-exiting parse API yields a typed
+//! [`EngineError`].
 
 use clap::ArgMatches;
 
@@ -36,12 +29,8 @@ pub enum EngineError {
 
     /// The command's arguments failed to parse, or `--help`/`--version` was
     /// requested; carries clap's rendered message for the caller to present
-    /// verbatim.
-    ///
-    /// `help_or_version` distinguishes clap emitting `--help`/`--version` text
-    /// (a success, exit 0) from a genuine usage error (exit 2).
-    /// `mtui-cli::repl::render_error` just renders the message;
-    /// `mtui-mcp::session::run_command` reads the flag to pick the exit code.
+    /// verbatim. `help_or_version` distinguishes help text (success, exit 0)
+    /// from a usage error (exit 2).
     #[error("{message}")]
     Parse {
         /// clap's already-rendered help/usage text.
@@ -50,8 +39,7 @@ pub enum EngineError {
         help_or_version: bool,
     },
 
-    /// The command ran but failed. Bridges the command-layer error hierarchy so
-    /// a single `EngineError` covers the whole dispatch path.
+    /// The command ran but failed.
     #[error(transparent)]
     Command(#[from] CommandError),
 }
@@ -90,9 +78,8 @@ pub async fn dispatch_argv(
     name: &str,
     argv: &[String],
 ) -> Result<(), EngineError> {
-    // Intercepted before lookup: listing commands and rendering a target's
-    // `--help` both need the `Registry`, which `Command::call` never sees. The
-    // registered `Help` still exists for listing/completion/deny-list purposes.
+    // Intercepted before lookup: `help` needs the `Registry`, which
+    // `Command::call` never sees.
     if name == "help" {
         return render_help(registry, session, argv);
     }
@@ -105,13 +92,10 @@ pub async fn dispatch_argv(
 
 /// Dispatches an already-resolved `command` against `session` for `argv`.
 ///
-/// The registry-free tail of [`dispatch_argv`]: parse `argv` through the
-/// command's own clap parser (no-exit-on-error), then drive [`Command::run`].
-/// Exposed so the headless MCP concurrent path can `tokio::spawn` a dispatch
-/// over an owned `Arc<dyn Command>` + forked [`Session`] — neither borrows the
-/// [`Registry`], so the spawned future is `'static`. `help` is *not* intercepted
-/// here; it is REPL-only (MCP deny-list), so reaching this path defers to the
-/// REPL via [`Help`](crate::commands::Help)'s body instead of rendering.
+/// The registry-free tail of [`dispatch_argv`], so the headless MCP path can
+/// `tokio::spawn` a dispatch over an owned `Arc<dyn Command>` and a forked
+/// [`Session`] without borrowing the [`Registry`]. `help` is *not* intercepted
+/// here; it is REPL-only.
 ///
 /// # Errors
 ///
@@ -133,16 +117,14 @@ const HELP_COLUMNS_PER_ROW: usize = 4;
 
 /// Implements the `help` command against the live [`Registry`].
 ///
-/// With no argument, lists the commands in fixed-width columns, split into
-/// documented ([`Command::about`] is `Some`) and undocumented. With a name,
-/// prints that command's `--help`, its [`Command::about`] one-liner fed in as
-/// the parser description so it heads the output.
+/// With no argument, lists the commands in columns, split into documented
+/// ([`Command::about`] is `Some`) and undocumented. With a name, prints that
+/// command's `--help`.
 fn render_help(
     registry: &Registry,
     session: &mut Session,
     argv: &[String],
 ) -> Result<(), EngineError> {
-    // At most one positional (the topic), tolerating a lone `-h/--help`.
     let topic = argv.iter().find(|a| !a.starts_with('-'));
 
     let Some(topic) = topic else {
@@ -154,8 +136,7 @@ fn render_help(
         message: format!("No help available: '{topic}' is not a known command"),
         help_or_version: false,
     })?;
-    // Same base and `configure` as dispatch, so the flags shown are the flags
-    // accepted; `configure` may override the trait's `about`.
+    // Same base and `configure` as dispatch, so shown flags are accepted flags.
     let mut base = base_subcommand(command.as_ref());
     if let Some(about) = command.about() {
         base = base.about(about);
@@ -209,10 +190,8 @@ fn print_help_columns(session: &mut Session, names: &[&str]) {
 /// `no_binary_name`) plus the command's own [`configure`](Command::configure)
 /// arguments.
 ///
-/// The exact parser [`dispatch_argv`] re-parses argv through, exposed so an
-/// out-of-crate consumer introspecting a command's arg surface builds the *same*
-/// one. The MCP tool synthesiser derives a tool's JSON input schema and
-/// reconstructs argv from it, locking schema/argv fidelity to real dispatch.
+/// The exact parser dispatch parses argv through, exposed so the MCP tool
+/// synthesiser derives schemas from the same arg surface.
 #[must_use]
 pub fn command_parser(command: &dyn Command) -> clap::Command {
     command.configure(base_subcommand(command))
@@ -234,18 +213,14 @@ fn parse_command(command: &dyn Command, argv: &[String]) -> Result<ArgMatches, E
     })
 }
 
-/// The base clap parser shared by every command: `no_binary_name(true)` (argv is
-/// the command's own arguments, with no leading binary to strip) plus the
-/// template-selection flags [`Command::run`]'s fan-out resolver honours, so
-/// [`configure`](Command::configure) need only add the command's own arguments.
-/// A command that addresses no template ([`addresses_template`]) gets neither
-/// flag, and a [`Scope::Single`] one never gets `--all-templates`: the resolver
-/// returns before reading it, so declaring it would promise a fan-out that
-/// cannot happen (#597).
+/// The base clap parser shared by every command: `no_binary_name(true)` plus the
+/// template-selection flags [`Command::run`]'s fan-out resolver honours. A
+/// command that addresses no template ([`addresses_template`]) gets neither
+/// flag, and a [`Scope::Single`] one never gets `--all-templates`, which the
+/// resolver would ignore.
 ///
-/// The scope picks the `--all-templates` help text truthfully per command
-/// (#575): the LLM-facing half of the fan-out fix, since the tool schema
-/// description is what an MCP client actually reads.
+/// The scope picks the `--all-templates` help text, which is what an MCP client
+/// reads in the tool schema.
 fn base_subcommand(command: &dyn Command) -> clap::Command {
     let mut cmd = clap::Command::new(command.name()).no_binary_name(true);
     if addresses_template(command) {
@@ -279,8 +254,7 @@ fn base_subcommand(command: &dyn Command) -> clap::Command {
             .action(clap::ArgAction::Set)
             .value_parser(clap::value_parser!(bool))
             .num_args(0..=1)
-            // Mandatory, not style: without it `--all-templates uname -a`
-            // parses `uname` as the flag's own value.
+            // Without it `--all-templates uname -a` parses `uname` as the value.
             .require_equals(true)
             .default_missing_value("true")
             .conflicts_with("template")

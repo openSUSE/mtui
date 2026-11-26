@@ -12,18 +12,16 @@ use crate::session::{PackageMeta, Reseed, Session};
 ///
 /// Re-runs the parse over each selected host's live connection via
 /// [`Target::reload_system`](mtui_hosts::Target::reload_system). A host whose
-/// products changed then has its tracked packages re-seeded from the active
-/// report the way connect seeds them, and the output says what changed; an
-/// unchanged host, or any host when the report carries no package metadata,
-/// keeps them as they are. Best-effort: a host whose parse fails, or which
-/// exhausts its own
+/// products changed has its tracked packages re-seeded from the active report as
+/// connect does, and the output says what changed; an unchanged host, or any
+/// host when the report carries no package metadata, keeps them. A host whose
+/// parse fails, or which exhausts its own
 /// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget, keeps its
-/// previous system and the pass continues — but the command then fails naming
-/// those hosts. A cancel stops the pass at the next host boundary, never mid-host:
-/// the command is then [`CommandError::Cancelled`], naming the hosts it reloaded
-/// and those it did not reach, unless a host failure collected first outranks it.
-/// `-t/--target`-only, hence [`Scope::Active`]: the active template's host set,
-/// not once per loaded template.
+/// previous system and the pass continues, but the command then fails naming
+/// those hosts. A cancel stops the pass at the next host boundary, never
+/// mid-host: the command is then [`CommandError::Cancelled`], naming the hosts it
+/// reloaded and those it did not reach, unless a collected host failure outranks
+/// it. [`Scope::Active`]: the active template's host set.
 pub struct ReloadProducts;
 
 #[async_trait]

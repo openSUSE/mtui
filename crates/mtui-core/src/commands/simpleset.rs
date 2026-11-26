@@ -46,7 +46,7 @@ impl Command for SetLogLevel {
     }
 
     fn requires_canonical_session(&self, _argv: &[String]) -> bool {
-        // Mutates the session's log sink, which a fork drops (#613).
+        // Mutates the session's log sink, which a fork drops.
         true
     }
 

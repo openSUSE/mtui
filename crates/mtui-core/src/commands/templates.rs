@@ -14,9 +14,9 @@ use crate::template_registry::TemplateRow;
 /// REPL the active one — what plain action commands act on — is marked with a
 /// leading `*`; under MCP there is no client-addressable active pointer
 /// (`switch` being REPL-only), so the marker is omitted. A template held by
-/// another dispatch is listed `busy` rather than omitted — a missing row reads
-/// as "not loaded" (#524). Reads the whole registry rather than one template,
-/// so it runs once ([`Scope::Single`]).
+/// another dispatch is listed `busy` rather than omitted, since a missing row
+/// reads as "not loaded". Reads the whole registry, so it runs once
+/// ([`Scope::Single`]).
 pub struct ListTemplates;
 
 #[async_trait]
@@ -66,8 +66,7 @@ impl Command for ListTemplates {
             };
             let detail = match row {
                 TemplateRow::Read(hosts, mode) => format!("hosts: {hosts}  mode: {mode}"),
-                // Never drop the row: absent from the listing reads as "not
-                // loaded", which is the #524 collapse in another costume.
+                // Never drop the row: absent reads as "not loaded".
                 TemplateRow::Busy => "busy (in use by another command)".to_owned(),
             };
             session

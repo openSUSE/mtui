@@ -36,7 +36,7 @@ const ROW_LIMIT: usize = 200;
 /// The vocabulary is the one [`CheckerRun`]'s `*_count` fields enumerate, but
 /// the classification is deliberately **open**: anything else is
 /// [`Verdict::Other`] and prints verbatim, so a status the server adds degrades
-/// to visible text instead of the `?` this command used to emit (#522).
+/// to visible text.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     /// `pass`/`skip` — green, and the only verdict whose output is suppressed.

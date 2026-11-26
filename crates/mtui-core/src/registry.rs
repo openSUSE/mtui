@@ -1,9 +1,8 @@
 //! The explicit command registry.
 //!
-//! Every command is wired through the **explicit** [`register_all`] composition
-//! point. The REPL dispatch, tab-completion and the MCP tool synthesiser all
-//! iterate this one [`Registry`] — it is the single source of the command
-//! surface.
+//! Every command is wired through the explicit [`register_all`] composition
+//! point; the REPL, tab-completion and the MCP tool synthesiser all iterate this
+//! one [`Registry`].
 //!
 //! A command answers to its [`name`](crate::Command::name) and any
 //! [`aliases`](crate::Command::aliases), each mapping to the same instance. Two
@@ -20,12 +19,10 @@ use crate::command::Command;
 /// MCP a deterministic command listing.
 #[derive(Default)]
 pub struct Registry {
-    /// name-or-alias → command; both key the same [`Arc<dyn Command>`], so
-    /// lookup is uniform. Insertion-ordered, and a command registers its name
+    /// name-or-alias → command, insertion-ordered; a command registers its name
     /// before its aliases.
     by_key: IndexMap<&'static str, Arc<dyn Command>>,
-    /// Canonical names in registration order, so [`names`](Registry::names)
-    /// never lists aliases.
+    /// Canonical names in registration order.
     canonical: Vec<&'static str>,
 }
 
@@ -40,9 +37,7 @@ impl Registry {
     ///
     /// # Panics
     ///
-    /// Panics if the name or any alias is already claimed: a duplicate is a
-    /// static programming error, and failing fast at boot beats silently
-    /// shadowing a command.
+    /// Panics if the name or any alias is already claimed.
     pub fn register(&mut self, command: Arc<dyn Command>) {
         let name = command.name();
         assert!(
@@ -79,8 +74,7 @@ impl Registry {
 
     /// Every command key — canonical names **and** aliases — in insertion order.
     ///
-    /// For alias-aware first-token completion; [`names`](Registry::names) is the
-    /// canonical-only listing.
+    /// For alias-aware first-token completion.
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.by_key.keys().copied()
     }
@@ -88,30 +82,20 @@ impl Registry {
 
 /// Commands that must not be synthesised into MCP tools.
 ///
-/// MCP exposes only what a headless model needs to operate an already-scoped
-/// session; permanently denied is anything that (a) needs a TTY or exits the
-/// process, (b) retargets trust — endpoints, credentials, identity, timeouts —
-/// with no operator-visible artifact, or (c) exchanges server-local paths a
-/// remote client cannot reach (re-served in-band instead). Everything else
-/// side-effecting stays callable but default-narrow via profile/tools_deny;
-/// read-only stays. Concretely, the entries below either need a controlling
-/// terminal or exit the process, retarget trust with no operator-visible
-/// artifact, or are replaced by richer hand-written tools: `edit` → the
-/// `report_*` document tools, and `get`/`put` → the in-band transfer tools
-/// (#434), because their synthesised forms exchange server-local paths a
-/// remote `--transport http` client cannot reach. Neither local process
-/// execution nor terminal launching is a category here: `lrun` and `terms`
-/// were removed outright rather than denied.
+/// Permanently denied is anything that (a) needs a TTY or exits the process,
+/// (b) retargets trust — endpoints, credentials, identity, timeouts — with no
+/// operator-visible artifact, or (c) exchanges server-local paths a remote
+/// client cannot reach. `edit` is re-served as the `report_*` document tools and
+/// `get`/`put` as the in-band transfer tools. Local process execution and
+/// terminal launching are not categories: `lrun` and `terms` were removed, not
+/// denied.
 ///
-/// `config_set` is denied as a fanned-out tool name (#410): it writes operator
-/// config — endpoints, credentials, identity, timeouts — retargeting the
-/// infrastructure the session trusts, with no operator-visible artifact.
-/// `config_show` stays exposed for verification.
+/// `config_set` writes operator config, so it is denied; `config_show` stays
+/// exposed.
 ///
-/// The synthesiser skips every registry command whose name or alias appears
-/// here and warns at boot if an entry no longer resolves; the
-/// `mcp_denylist_is_consistent` test pins the exact expected set. Kept beside
-/// [`register_all`] so the list and the surface it filters live in one place.
+/// The synthesiser skips every command whose name or alias appears here and
+/// warns at boot if an entry no longer resolves; `mcp_denylist_is_consistent`
+/// pins the exact set.
 pub const MCP_DENYLIST: &[&str] = &[
     "quit",
     "exit",
@@ -128,12 +112,8 @@ pub const MCP_DENYLIST: &[&str] = &[
     "teregen_login",
 ];
 
-/// Builds the process-wide command registry — the single, explicit place every
-/// command is wired.
-///
-/// Both the REPL (`mtui`) and MCP (`mtui-mcp`) build their command surface from
-/// the [`Registry`] this returns, so a command added here becomes a REPL command
-/// **and** an MCP tool automatically.
+/// Builds the process-wide command registry, the one place every command is
+/// wired: a command added here becomes a REPL command **and** an MCP tool.
 #[must_use]
 pub fn register_all() -> Registry {
     use crate::commands;

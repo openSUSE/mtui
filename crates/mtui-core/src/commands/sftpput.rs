@@ -17,10 +17,8 @@ use crate::session::Session;
 /// hosts are contacted.
 ///
 /// The path is taken **literally — shell-style globs are deliberately not
-/// expanded** (#399): `put` pushes to every enabled host, which is exactly where
-/// an over-broad pattern does damage, so its blast radius stays the caller's
-/// problem. A path matching nothing errors (`File … not found`) rather than
-/// succeeding vacuously.
+/// expanded**: `put` pushes to every enabled host, where an over-broad pattern
+/// does damage. A path matching nothing errors (`File … not found`).
 pub struct SftpPut;
 
 /// Recursively collects the regular files under `path` (a single file returns

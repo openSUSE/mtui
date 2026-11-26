@@ -1,21 +1,17 @@
 //! The command-layer error hierarchy.
 //!
-//! The `Display` strings are **frozen** — the REPL and MCP surfaces both render
-//! them, operators grep for them, and the tests below pin each one, so reword a
-//! variant only deliberately and update its test with it. Usage mistakes and
-//! program errors share one type: the distinction drives logging tone, not
-//! control flow.
+//! The `Display` strings are **frozen**: both surfaces render them, operators
+//! grep for them, and the tests below pin each one. Usage mistakes and program
+//! errors share one type; the distinction drives logging tone, not control flow.
 
 use thiserror::Error;
 
 /// The result type every [`Command`](crate::Command) returns.
 pub type CommandResult = Result<(), CommandError>;
 
-/// An error raised while resolving or running a command.
-/// Groups identical per-template errors by rendered text (`to_string()`
-/// equality) in first-seen order, so unrelated variants with identical text
-/// merge into one group and the detail can reorder RRIDs (`a, c: boom;
-/// b: other`) while the header keeps fan-out order.
+/// Groups identical per-template errors by rendered text in first-seen order,
+/// so the detail can reorder RRIDs (`a, c: boom; b: other`) while the header
+/// keeps fan-out order.
 fn fanout_detail(failures: &[(String, CommandError)]) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (rrid, err) in failures {
@@ -32,32 +28,28 @@ fn fanout_detail(failures: &[(String, CommandError)]) -> String {
         .join("; ")
 }
 
+/// An error raised while resolving or running a command.
 #[derive(Debug, Error)]
 pub enum CommandError {
     /// A `-T/--template RRID` named a template that is not loaded.
     #[error("Template not loaded: {0}")]
     TemplateNotLoaded(String),
 
-    /// A dispatch could not claim the template's report entry: someone else
-    /// holds it — an asynchronously-aborted job's dispatch task still
-    /// unwinding, a gate-free teardown, or the resolve-then-acquire window.
-    /// (Not the document tools: they take the same gate-shared + per-RRID
-    /// pair `command_lock` does, so a same-RRID dispatch serialises behind them
-    /// instead of racing.) Refusing *is* the fix — before #524 the dispatch ran
-    /// on the null sentinel instead and answered about nothing.
+    /// A dispatch could not claim the template's report entry because someone
+    /// else holds it (an aborted job's dispatch still unwinding, a gate-free
+    /// teardown, or the resolve-then-acquire window). Refusing beats running on
+    /// the null sentinel and answering about nothing.
     ///
-    /// Lower-case to match the same refusal from
-    /// `mtui-mcp`'s document tools, which operators already
-    /// grep for.
+    /// Lower-case to match `mtui-mcp`'s document tools' identical refusal.
     #[error("template busy: {0}")]
     TemplateBusy(String),
 
     /// A [`Scope::Explicit`](crate::Scope::Explicit) (or headless
     /// [`Scope::Active`](crate::Scope::Active)/[`Scope::Fanout`](crate::Scope::Fanout))
     /// command named no template with several loaded and no addressable active
-    /// pointer — see [`Session::resolve_single_template`](crate::Session::resolve_single_template).
-    /// `Display` is the shared [`ambiguous_template_message`](crate::ambiguous_template_message)
-    /// wording, so this refusal reads identically to the MCP tools' own.
+    /// pointer; see [`Session::resolve_single_template`](crate::Session::resolve_single_template).
+    /// `Display` shares [`ambiguous_template_message`](crate::ambiguous_template_message)
+    /// with the MCP tools.
     #[error(
         "{}",
         crate::ambiguous_template_message(
@@ -91,14 +83,12 @@ pub enum CommandError {
     MissingPackages,
 
     /// Aggregate raised after a fan-out command failed on one or more templates.
-    /// The per-template failures are collected in `failures`, keyed by RRID.
     ///
-    /// Every template got its turn unless `stop` is set: the fan-out's own stop
-    /// summary (`stopped after N of M templates`, plus the interrupted flow's
-    /// detail), carried when a cancel landed but a real failure outranked it.
-    /// The cancel is deliberately not a `failures` entry — it is not a broken
-    /// template — but it may not vanish either, or the caller reads the
-    /// templates the stop never reached as having run clean.
+    /// Every template got its turn unless `stop` is set: the stop summary
+    /// (`stopped after N of M templates`, plus the interrupted flow's detail),
+    /// carried when a cancel landed but a real failure outranked it. It is not a
+    /// `failures` entry, but must not vanish or the unreached templates read as
+    /// clean.
     #[error(
         "fan-out failed on {} ({}){}",
         .failures.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", "),
@@ -115,22 +105,17 @@ pub enum CommandError {
     /// The dispatch was cancelled mid-flight (MCP `job_cancel`).
     ///
     /// Raised by [`Session::check_cancelled`](crate::Session::check_cancelled)
-    /// at a checkpoint (pre-dispatch, and between templates in the
-    /// [`Command::run`](crate::Command::run) driver) and by a flow stopping at
-    /// one of its own. The payload carries what the flow managed before
-    /// stopping — which packages were applied, how many templates ran — so a
-    /// cancel is never a verdict the operator cannot act on; it is empty only
-    /// pre-dispatch, where nothing had run. A genuine failure always outranks a
-    /// cancellation: a broken host is never buried behind "cancelled".
+    /// at a checkpoint (pre-dispatch, between templates in
+    /// [`Command::run`](crate::Command::run)) and by a flow stopping at one of its
+    /// own. The payload says what the flow managed before stopping; it is empty
+    /// only pre-dispatch. A genuine failure always outranks a cancellation.
     ///
-    /// **Fan-out contract:** coming *out of a command body* this variant
-    /// terminates the fan-out independent of the session token — the driver
-    /// breaks at that template boundary, keeping the payload as its own verdict
-    /// (or as the [`FanOut`](Self::FanOut) aggregate's `stop` note). Every
-    /// producer derives from a genuine session-level cancel, so that is what the
-    /// break means; a per-template condition that is *not* a session-level stop
-    /// would silently abandon the templates after it and wants
-    /// [`Other`](Self::Other) instead, which is collected and continues.
+    /// **Fan-out contract:** coming out of a command body this variant
+    /// terminates the fan-out regardless of the session token: the driver breaks
+    /// at that template boundary, keeping the payload as its verdict (or as the
+    /// [`FanOut`](Self::FanOut) aggregate's `stop` note). A per-template condition
+    /// that is *not* a session-level stop wants [`Other`](Self::Other), which is
+    /// collected and continues.
     #[error("cancelled{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     Cancelled(String),
 
@@ -138,8 +123,7 @@ pub enum CommandError {
     #[error("no report document loaded — run load_template or regenerate")]
     NoDocument,
 
-    /// A command-specific failure whose message the command supplies directly:
-    /// the catch-all until a condition warrants its own variant.
+    /// A command-specific failure whose message the command supplies directly.
     #[error("{0}")]
     Other(String),
 }
