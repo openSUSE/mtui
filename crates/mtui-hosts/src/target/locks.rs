@@ -165,27 +165,26 @@ impl LockRow {
     }
 }
 
-/// A single-read view of a lock's on-disk state plus derived ownership.
-///
-/// Produced by `TargetLock::snapshot` with **exactly
-/// one** remote read, so [`Target::lock_status`](crate::Target::lock_status) can
-/// derive every displayed field without re-reading the lockfile per field.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LockSnapshot {
-    /// The parsed on-disk lock (empty [`user`](RemoteLock::user) ⇒ unlocked).
-    pub(crate) lock: RemoteLock,
-    /// Whether the lock belongs to the current owner. `false` when unlocked
-    /// (the accessor's "not locked" error is not propagated here).
-    pub(crate) is_mine: bool,
-    /// The owning template's RRID, for a pool claim only; empty for an
-    /// operation-lock snapshot or a non-pool comment.
-    pub(crate) rrid: String,
-    /// The sibling in this process that holds the lock, as in
-    /// [`LockRow::sibling`].
-    pub(crate) sibling: Option<String>,
-    /// The lock file exists but is empty or unparseable, as in
-    /// [`LockRow::invalid`]; [`lock`](Self::lock) is then the default.
-    pub(crate) invalid: bool,
+/// Which of a host's two remote locks an operation addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockKind {
+    /// The operation lock, `/var/lock/mtui.lock`.
+    Op,
+    /// The pool claim, `/var/lock/mtui-pool.lock`.
+    Pool,
+}
+
+impl LockKind {
+    pub(crate) fn from_pool(pool: bool) -> Self {
+        if pool { Self::Pool } else { Self::Op }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Op => "operation lock",
+            Self::Pool => "pool claim",
+        }
+    }
 }
 
 /// Who holds a contended lock, for reporting it.
@@ -1311,29 +1310,37 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
-    /// Resolves the lock's on-disk state and ownership with a **single** remote
-    /// read, for lock reporting ([`Target::lock_status`](crate::Target::lock_status)).
+    /// Resolves the lock's on-disk state and ownership into a [`LockRow`] with
+    /// a **single** remote read, for lock reporting
+    /// ([`Target::lock_status`](crate::Target::lock_status)).
     ///
     /// One [`load`](Self::load); `is_mine` is derived from the freshly-loaded
-    /// cache (an unlocked lock is not "mine" and does not raise), and the
-    /// owning RRID of a pool claim is parsed from the same cached comment.
-    /// Leaves the per-field async accessors for the wait/claim/unlock callers,
-    /// which intentionally re-read between retries.
+    /// cache, and a pool claim's detail comment is its owning RRID, parsed from
+    /// the same cached line. Leaves the per-field async accessors for the
+    /// wait/claim/unlock callers, which intentionally re-read between retries.
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub(crate) async fn snapshot(&mut self) -> Result<LockSnapshot> {
+    pub(crate) async fn snapshot(&mut self) -> Result<LockRow> {
         self.load().await?;
-        let (rrid, sibling) = match self.ownership {
-            Ownership::Pid => (String::new(), self.loaded_sibling()),
+        if self.invalid {
+            return Ok(LockRow::invalid());
+        }
+        if self.lock.user.is_empty() {
+            return Ok(LockRow::default());
+        }
+        let (comment, sibling) = match self.ownership {
+            Ownership::Pid => (self.lock.comment.clone(), self.loaded_sibling()),
             Ownership::Pool { .. } => (pool_rrid_of(&self.lock.comment), None),
         };
-        Ok(LockSnapshot {
-            lock: self.lock.clone(),
+        Ok(LockRow {
+            is_locked: true,
             is_mine: self.is_mine().unwrap_or(false),
-            rrid,
+            locked_by: self.lock.user.clone(),
+            time: self.lock.display_time(),
+            comment,
             sibling,
-            invalid: self.invalid,
+            invalid: false,
         })
     }
 
@@ -3294,7 +3301,7 @@ mod tests {
             let snap = lock.snapshot().await.unwrap();
             assert!(snap.invalid, "{content:?}");
             assert!(!snap.is_mine, "{content:?}");
-            assert!(snap.lock.user.is_empty(), "{content:?}");
+            assert!(snap.locked_by.is_empty(), "{content:?}");
         }
     }
 

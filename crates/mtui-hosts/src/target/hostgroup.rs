@@ -53,7 +53,7 @@ use super::operation::{
     HostCommandMap, HostPlan, OperationGroup, PlanProvider, RebootFailure, RebootFailureCause,
 };
 use super::repo_manager::{RepoOp, SetRepo};
-use super::{LockOwner, LockRow, OpLockHolders, Target};
+use super::{LockKind, LockOwner, LockRow, OpLockHolders, Target};
 
 /// Which hosts a group fan-out covers: `None` is the whole group, `Some` only
 /// the named ones. A name not in the group is silently skipped.
@@ -120,6 +120,15 @@ impl LostHoldKind {
         match self {
             Self::OperationLock => "operation lock",
             Self::PoolClaim => "pool claim",
+        }
+    }
+}
+
+impl From<LostHoldKind> for LockKind {
+    fn from(kind: LostHoldKind) -> Self {
+        match kind {
+            LostHoldKind::OperationLock => Self::Op,
+            LostHoldKind::PoolClaim => Self::Pool,
         }
     }
 }
@@ -226,10 +235,7 @@ fn record_hold_loss(
     };
     if proof == LostHoldProof::Proven {
         tracing::warn!(loss = %loss.describe(), "hold lost across the reboot");
-        match kind {
-            LostHoldKind::OperationLock => target.forget_operation_hold(),
-            LostHoldKind::PoolClaim => target.forget_pool_hold(),
-        }
+        target.forget_hold(kind.into());
     } else {
         tracing::warn!(loss = %loss.describe(), "hold may be lost across the reboot");
     }
@@ -865,14 +871,14 @@ impl HostsGroup {
         self.collect_fanout("lock", in_scope(scope), |t| {
             let comment = comment.to_owned();
             boxed(async move {
-                Some(if !t.has_operation_lock() {
+                Some(if !t.has_lock(LockKind::Op) {
                     LockOutcome::Skipped("not connected".to_owned())
                 } else {
                     match t.lock(&comment).await {
                         Ok(()) => LockOutcome::Acquired,
                         Err(HostError::TargetLocked(msg)) => {
                             tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
-                            LockOutcome::Contended(t.loaded_lock_owner())
+                            LockOutcome::Contended(t.loaded_owner(LockKind::Op))
                         }
                         Err(e) => {
                             tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
@@ -981,7 +987,7 @@ impl HostsGroup {
             |t| names.contains(t.hostname()),
             |t| {
                 boxed(async move {
-                    Some(if !t.has_operation_lock() {
+                    Some(if !t.has_lock(LockKind::Op) {
                         LockOutcome::Skipped("not connected".to_owned())
                     } else if !t.holds_operation_lock() {
                         LockOutcome::Skipped(match t.sibling_operation_holder() {
@@ -995,7 +1001,9 @@ impl HostsGroup {
                             }
                         })
                     } else {
-                        release_outcome(t.unlock_reporting(false).await, || t.loaded_lock_owner())
+                        release_outcome(t.unlock_reporting(LockKind::Op, false).await, || {
+                            t.loaded_owner(LockKind::Op)
+                        })
                     })
                 })
             },
@@ -1032,12 +1040,14 @@ impl HostsGroup {
     {
         self.collect_fanout_into("unlock", select, collected, |t| {
             boxed(async move {
-                Some(if !t.has_operation_lock() {
+                Some(if !t.has_lock(LockKind::Op) {
                     LockOutcome::Skipped("not connected".to_owned())
                 } else if !force && t.holds_operation_lock() && !t.holds_unmarked_operation_lock() {
                     LockOutcome::Skipped("reservation kept".to_owned())
                 } else {
-                    release_outcome(t.unlock_reporting(force).await, || t.loaded_lock_owner())
+                    release_outcome(t.unlock_reporting(LockKind::Op, force).await, || {
+                        t.loaded_owner(LockKind::Op)
+                    })
                 })
             })
         })
@@ -1064,11 +1074,11 @@ impl HostsGroup {
             collected,
             |t| {
                 boxed(async move {
-                    Some(if !t.has_pool_lock() {
+                    Some(if !t.has_lock(LockKind::Pool) {
                         LockOutcome::Skipped("not connected".to_owned())
                     } else {
-                        release_outcome(t.pool_unlock_reporting(force).await, || {
-                            t.loaded_pool_owner()
+                        release_outcome(t.unlock_reporting(LockKind::Pool, force).await, || {
+                            t.loaded_owner(LockKind::Pool)
                         })
                     })
                 })
@@ -1481,8 +1491,8 @@ impl HostsGroup {
                 (
                     t.hostname().to_owned(),
                     HeldHolds {
-                        op: t.held_lock_comment(),
-                        pool: t.held_pool_comment(),
+                        op: t.held_comment(LockKind::Op),
+                        pool: t.held_comment(LockKind::Pool),
                     },
                 )
             })
@@ -1552,7 +1562,7 @@ impl HostsGroup {
                     match t.pool_claim(comment).await {
                         Ok(true) => {}
                         Ok(false) => {
-                            let owner = t.loaded_pool_owner();
+                            let owner = t.loaded_owner(LockKind::Pool);
                             record_hold_loss(
                                 t,
                                 lost,
@@ -2999,7 +3009,7 @@ mod tests {
         );
         // The confirmed loss drops the in-memory record: a plain `unlock`
         // then skips instead of trying to release someone else's lock.
-        assert_eq!(g.get("h1").unwrap().held_lock_comment(), None);
+        assert_eq!(g.get("h1").unwrap().held_comment(LockKind::Op), None);
         let unlock = g.unlock_taken(&all).await;
         assert!(
             matches!(unlock["h1"], LockOutcome::Skipped(_)),
@@ -3135,7 +3145,7 @@ mod tests {
             "never overwrite another owner's claim: {contents:?}"
         );
         // The confirmed loss drops the in-memory record.
-        assert_eq!(g.get("h1").unwrap().held_pool_comment(), None);
+        assert_eq!(g.get("h1").unwrap().held_comment(LockKind::Pool), None);
     }
 
     /// A corrupt pool line is reported like a transport failure, keeping its
@@ -3217,7 +3227,7 @@ mod tests {
             loss.describe()
         );
         assert_eq!(
-            g.get("h1").unwrap().held_pool_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Pool).as_deref(),
             Some(comment.as_str()),
             "the unproven claim stays recorded"
         );
@@ -3302,7 +3312,7 @@ mod tests {
             loss.describe()
         );
         assert_eq!(
-            g.get("h1").unwrap().held_pool_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Pool).as_deref(),
             Some(comment.as_str()),
             "the unproven claim stays recorded"
         );
@@ -3439,7 +3449,7 @@ mod tests {
             "no re-take without a reconnect"
         );
         assert_eq!(
-            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Op).as_deref(),
             Some("operator hold"),
             "the untouched hold stays recorded"
         );
@@ -3546,7 +3556,7 @@ mod tests {
             "the reservation wins over the PI relock: {contents:?}"
         );
         assert_eq!(
-            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Op).as_deref(),
             Some("operator hold"),
             "the record still names the reservation"
         );
@@ -3628,7 +3638,7 @@ mod tests {
             loss.describe()
         );
         assert_eq!(
-            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Op).as_deref(),
             Some("operator hold"),
             "the unproven hold stays recorded"
         );
@@ -3708,7 +3718,7 @@ mod tests {
             loss.describe()
         );
         assert_eq!(
-            g.get("h1").unwrap().held_lock_comment().as_deref(),
+            g.get("h1").unwrap().held_comment(LockKind::Op).as_deref(),
             Some("operator hold"),
             "the unproven hold stays recorded"
         );
