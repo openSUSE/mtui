@@ -52,6 +52,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `list_refhosts --testplatform` refuses a query that requests no slot — no
+  `arch=[…]` segment, one that does not parse, or an empty arch in it
+  (`arch=[]`, `arch=[x86_64,]`, which matched every arch) — with the reason,
+  instead of printing `no refhosts match` or hosts of arches nobody asked for.
+  **MCP note:** the `list_refhosts` tool returns that refusal as an error; its
+  schema is unchanged.
 - mtui now names what it ignores in its config: each key or table of an
   `mtui.toml` that no option reads (by file, table and key, never its value;
   at most 20 per file, the rest counted), and an existing `~/.mtuirc` when no

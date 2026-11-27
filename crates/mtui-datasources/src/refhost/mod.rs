@@ -19,7 +19,7 @@ pub mod resolvers;
 pub mod store;
 pub mod verify;
 
-pub use models::Attributes;
+pub use models::{Attributes, TestplatformError};
 pub use resolvers::{RefhostsFactory, ResolveConfig};
 pub use store::{Refhosts, Slot};
 pub use verify::{ProductDiff, compare};
