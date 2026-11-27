@@ -5,6 +5,7 @@ use std::fmt;
 
 use mtui_types::RequestReviewID;
 use mtui_types::report_document::Verdict;
+use mtui_types::sanitize::sanitize_external;
 use thiserror::Error;
 
 use super::document::{DocumentFetch, TeregenV2};
@@ -54,7 +55,8 @@ impl fmt::Display for Label {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VerdictRefusal {
     /// The server's copy could not be read: no document, a stale one, or a
-    /// transport/status failure.
+    /// transport/status failure. [`verdict_gate`] makes `cause` one
+    /// printable line.
     #[error("cannot read the report document for {rrid} ({cause}); refusing to {decision}")]
     Unreadable {
         /// The report the document belongs to.
@@ -128,7 +130,8 @@ pub async fn verdict_gate(
             .map_err(|cause| VerdictRefusal::Unreadable {
                 rrid: rrid.to_string(),
                 decision,
-                cause,
+                // It can carry TeReGen's own words; keep it one printable line.
+                cause: sanitize_external(&cause, Some(500)).replace(['\n', '\t'], " "),
             })?;
     if verdict != Some(decision.required()) {
         return Err(VerdictRefusal::WrongVerdict {

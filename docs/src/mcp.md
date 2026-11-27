@@ -283,9 +283,15 @@ prompt at the REPL never blocks waiting for input:
   a verdict to confirm. The reviewer and document checks, the Slack gate and the
   backend's own checks (Gitea: hash gate, assignment, already decided; OBS: `-g`,
   assignment) all run before `reviewer` records or uploads anything, so a
-  refusal from them publishes nothing. The OBS verdict check cannot: it reads
-  the uploaded document, and a Gitea head that moves during the upload is
-  refused at the LGTM with the reviewer already stored.
+  refusal from them publishes nothing. The verdict check, on OBS and Gitea
+  alike, cannot: it reads TeReGen's copy of the document after the upload,
+  immediately before posting (`approve` needs `PASSED`; `reject` needs
+  `FAILED` and a non-blank top `comment`; an unreadable document refuses), and
+  a Gitea head that moves during the upload is refused at the LGTM with the
+  reviewer already stored. A document changed on TeReGen after that read is
+  not noticed. On Gitea a `job_cancel` that lands during the read stops the
+  call with nothing posted. Without `reviewer`, both refuse while the loaded
+  document has uncommitted edits. PI requests skip the verdict check.
 - **`load_template`**'s interactive "Force continue loading template ?"
   fallback — for a stale checkout hash that TeReGen also refuses to
   regenerate (already hand-edited) — is exposed as the `--force-continue`

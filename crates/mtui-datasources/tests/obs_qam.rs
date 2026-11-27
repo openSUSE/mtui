@@ -1489,6 +1489,44 @@ async fn reject_refused_when_the_document_cannot_be_read() {
     assert_eq!(post_count(&api).await, 0);
 }
 
+/// TeReGen's own words reach the refusal as one printable line: an OSC 52
+/// clipboard write, a newline that would forge a line and a tab are gone, and
+/// the words themselves stay.
+#[tokio::test]
+async fn a_hostile_document_error_reaches_the_refusal_as_one_clean_line() {
+    let hostile = "bad id\u{1b}]52;c;aGk=\u{7}\nforged: line\twith tab";
+    for decision in ["approve", "reject"] {
+        let api = MockServer::start().await;
+        let teregen = MockServer::start().await;
+        mount_assigned_request(&api).await;
+        Mock::given(method("GET"))
+            .and(path(DOCUMENT_PATH))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({ "error": hostile })),
+            )
+            .mount(&teregen)
+            .await;
+        mount_post_request(&api, "56789").await;
+
+        let err = match decision {
+            "approve" => approve_with(&api, &teregen).await,
+            _ => reject_with(&api, &teregen).await,
+        }
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("the server rejects this id: bad id forged: line with tab"),
+            "{decision}: {msg:?}"
+        );
+        assert!(
+            !msg.contains(['\u{1b}', '\u{7}', '\n', '\t']),
+            "{decision}: {msg:?}"
+        );
+        assert_eq!(post_count(&api).await, 0, "{decision}");
+    }
+}
+
 #[tokio::test]
 async fn reject_pi_skips_attribute_and_document() {
     let api = MockServer::start().await;
