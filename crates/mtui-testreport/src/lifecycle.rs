@@ -17,7 +17,7 @@ use mtui_datasources::qem_dashboard::incident::QemIncident;
 use mtui_datasources::{RegenOutcome, TeReGen, VerifyPolicy};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
-use mtui_types::sanitize::sanitize_log;
+use mtui_types::sanitize::{sanitize_external, sanitize_log};
 use mtui_types::{UpdateID, Workflow};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -133,7 +133,8 @@ impl LoadError {
 /// `Session::load_update` can surface *why* rather than "could not load".
 fn null_with_error(config: Config, reason: String) -> NullReport {
     let mut report = NullReport::new(config);
-    report.base_mut().load_error = Some(reason);
+    // The reason can quote the document, such as a value that failed to parse.
+    report.base_mut().load_error = Some(sanitize_external(&reason, None));
     report
 }
 

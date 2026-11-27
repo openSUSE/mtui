@@ -6,6 +6,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::{ArtifactStored, TeregenV2};
 use mtui_testreport::{collect_artifacts, upload_current};
 use mtui_types::report_document::{ReportDocument, Req};
+use mtui_types::sanitize::sanitize_external;
 
 use super::apicall::teregen_v2_writer;
 use super::support::{complete_with_templates, require_document, stale_hash_gate};
@@ -105,7 +106,8 @@ pub(crate) async fn upload_and_report(
 ) -> Result<UploadSummary, CommandError> {
     if let Some(drift) = &session.metadata().base().schema_drift {
         return Err(CommandError::Other(format!(
-            "teregen's report schema differs from this mtui's ({drift}); upgrade mtui before writing"
+            "teregen's report schema differs from this mtui's ({}); upgrade mtui before writing",
+            sanitize_external(drift, None)
         )));
     }
     let report_wd = session
@@ -457,6 +459,28 @@ mod tests {
             "{err:?}"
         );
         assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    /// The drift names keys from TeReGen's live schema, so it is server text.
+    #[tokio::test]
+    async fn document_path_schema_drift_error_is_sanitized() {
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        let doc_id = "SUSE:Maintenance:1:1";
+        let (mut session, _buf) = session_with_hosts(doc_id, &["h1"], "ok");
+        let _tmp = set_bare_report_wd(&mut session);
+        let base = session.metadata_mut().base_mut();
+        base.document = Some(minimal_document(doc_id));
+        base.schema_drift = Some("/k\u{9b}2Jey\u{202e}: added to live".to_owned());
+
+        let client = teregen_v2_client(&server, store_file);
+        let err = commit_document(&mut session, &client).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m == "teregen's report schema differs from this mtui's (/key: added to live); upgrade mtui before writing"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mtui_types::report_document::{
     DocWorkflow, DocumentKind, Issues, ReportDocument, Target, TestPlatform,
 };
-use mtui_types::sanitize::sanitize_log;
+use mtui_types::sanitize::{sanitize_external, sanitize_log};
 use mtui_types::{RepoUrl, RepoUrlParseError, RequestReviewID, SystemProduct};
 
 use crate::products::{normalize, normalize_16};
@@ -35,7 +35,7 @@ pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
     if doc.kind == DocumentKind::Slfo && doc.workflow == DocWorkflow::Obs {
         return Err(format!(
             "{} is served through the OBS workflow, but SLFO updates are Gitea pull requests only",
-            doc.id
+            sanitize_external(&doc.id, None)
         ));
     }
     Ok(())
@@ -742,5 +742,16 @@ mod tests {
         apply_document(&mut b, &d);
         assert_eq!(b.rrid, None);
         assert_eq!(b.realid.as_deref(), Some("not-an-rrid-at-all-1234"));
+    }
+
+    #[test]
+    fn check_document_refusal_sanitizes_the_id() {
+        let mut d = doc(SLFO_GITEA);
+        d.workflow = DocWorkflow::Obs;
+        d.id = "bad \u{9b}2J\u{202e}id".to_owned();
+        assert_eq!(
+            check_document(&d),
+            Err("bad id is served through the OBS workflow, but SLFO updates are Gitea pull requests only".to_owned())
+        );
     }
 }

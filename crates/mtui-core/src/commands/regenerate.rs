@@ -201,10 +201,10 @@ impl Command for Regenerate {
             return Ok(());
         }
         if !outcome.ok {
-            let state = outcome.state.as_deref().unwrap_or("unknown");
+            let state = sanitize_external(outcome.state.as_deref().unwrap_or("unknown"), Some(500));
             let mut msg = format!("Regeneration of {rrid_str} did not finish (state: {state})");
             if let Some(err) = &outcome.minion_error {
-                msg.push_str(&format!(": {err}"));
+                msg.push_str(&format!(": {}", sanitize_external(err, Some(500))));
             }
             session.display.println(&msg);
             return Ok(());
@@ -832,6 +832,61 @@ mod tests {
         // It reports what it saw rather than claiming success or failure.
         let out = buf.contents();
         assert!(out.contains("did not finish (state: running)"), "{out}");
+    }
+
+    /// The state and job error of an unfinished wait are TeReGen's text: the
+    /// state is the last one seen, so a cancel is what surfaces an arbitrary one.
+    #[tokio::test]
+    async fn an_unfinished_wait_sanitizes_the_state_and_the_job_error() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{rrid}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 9})))
+            .mount(&server)
+            .await;
+        let (hit_tx, hit_rx) = tokio::sync::oneshot::channel();
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{rrid}/status")))
+            .respond_with(SignalOnFirstHit {
+                hit: std::sync::Mutex::new(Some(hit_tx)),
+                body: serde_json::json!({
+                    "minion_state": format!("run\u{9b}2Jning\u{202e}{}", "x".repeat(600)),
+                    "minion_error": format!("boom\u{1b}[31m!{}", "x".repeat(600)),
+                }),
+            })
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        let cancel = session.cancel_token();
+        tokio::spawn(async move {
+            hit_rx.await.unwrap();
+            cancel.cancel();
+        });
+
+        let args = matches(&Regenerate, &[]);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Regenerate.call(&mut session, &args),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let out = buf.contents();
+        // Each is cut to the 500 characters the refusal gets.
+        let mark = crate::display::TRUNCATION_MARK;
+        assert!(
+            out.contains(&format!(
+                "did not finish (state: running{}{mark}): boom!{}{mark}",
+                "x".repeat(493),
+                "x".repeat(495)
+            )),
+            "{out:?}"
+        );
+        assert!(!out.contains(['\u{9b}', '\u{202e}', '\u{1b}']), "{out:?}");
     }
 
     #[tokio::test]

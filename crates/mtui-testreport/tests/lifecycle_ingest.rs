@@ -1387,3 +1387,43 @@ async fn untrusted_gitea_origin_is_sanitized_in_the_log() {
     );
     assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
 }
+
+/// The load error is what `load_template` shows on the REPL and over MCP, and
+/// a document that fails to parse puts TeReGen's own value in it.
+#[tokio::test]
+async fn an_unparseable_document_is_sanitized_in_the_load_error() {
+    let teregen = MockServer::start().await;
+    serve_document(
+        &teregen,
+        MAINT_RRID,
+        maintenance_document(MAINT_RRID).replace(
+            r#""kind": "maintenance""#,
+            "\"kind\": \"bad\u{9b}2J\u{202e}kind\"",
+        ),
+    )
+    .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.teregen_api_v2 = teregen.uri();
+    let update = UpdateID::parse(MAINT_RRID).unwrap();
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Kernel,
+        false,
+        LoadContext::default(),
+    )
+    .await
+    .expect("not cancelled");
+    let load_error = report
+        .base()
+        .load_error
+        .clone()
+        .expect("a failed load names why");
+    assert!(load_error.contains("badkind"), "{load_error:?}");
+    assert!(
+        !load_error.contains(['\u{9b}', '\u{202e}']),
+        "{load_error:?}"
+    );
+}
