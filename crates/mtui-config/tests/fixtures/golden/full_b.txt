@@ -66,4 +66,10 @@ Config {
     ],
     obs_api_url: "https://obs.b.example.com",
     obs_request_timeout: 40,
+    notices: [],
+    source: ConfigSource {
+        explicit: None,
+        user_file: None,
+        home: None,
+    },
 }

@@ -55,4 +55,10 @@ Config {
     mcp_put_dirs: [],
     obs_api_url: "https://api.suse.de",
     obs_request_timeout: 180,
+    notices: [],
+    source: ConfigSource {
+        explicit: None,
+        user_file: None,
+        home: None,
+    },
 }

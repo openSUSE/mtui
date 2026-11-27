@@ -1,0 +1,7 @@
+unknown key [gitea] gitea_token in <file>; ignored
+unknown table [mirrors] in <file>; ignored
+unknown key [mtui] chdir_to_template_dir in <file>; ignored
+unknown key [mtui] tempdir in <file>; ignored
+unknown key [openqa] distri in <file>; ignored
+unknown key stray in <file>; ignored
+unknown table [svn] in <file>; ignored

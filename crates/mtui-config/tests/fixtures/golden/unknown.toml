@@ -1,0 +1,27 @@
+# Keys no option reads: each is named once, never with its value.
+stray = 1
+
+[mtui]
+tempdir = "/scratch"
+chdir_to_template_dir = true
+user = "kept"
+ssl_verify = false
+
+[openqa]
+distri = "sle"
+
+[gitea]
+gitea_token = "SENTINEL-value-never-echoed"
+
+[target]
+protected_packages = ["kernel-foo"]
+
+[svn]
+path = "svn+ssh://svn@svn.example/testreports"
+user = "SENTINEL-value-never-echoed"
+
+[[mirrors]]
+url = "SENTINEL-value-never-echoed"
+
+[[mirrors]]
+url = "SENTINEL-value-never-echoed"

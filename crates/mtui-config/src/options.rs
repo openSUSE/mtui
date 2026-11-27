@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 
+use crate::notice::{ConfigNotice, ConfigSource};
 use crate::paths::expanduser;
 
 /// TLS certificate-verification policy for outbound HTTP.
@@ -680,6 +681,13 @@ pub struct Config {
     /// Coarse wall-clock budget (seconds) for a whole native OBS operation,
     /// checked *between* its HTTP calls. Default 180.
     pub obs_request_timeout: u64,
+
+    /// What loading the files ignored: an unknown key or table (named, never
+    /// its value) and an unread legacy `~/.mtuirc`. `config show` prints them.
+    pub notices: Vec<ConfigNotice>,
+
+    /// Which file is in use, for hints naming where to set an option.
+    pub source: ConfigSource,
 }
 
 impl Default for Config {
@@ -745,6 +753,8 @@ impl Default for Config {
             mcp_put_dirs: Vec::new(),
             obs_api_url: "https://api.suse.de".to_owned(),
             obs_request_timeout: 180,
+            notices: Vec::new(),
+            source: ConfigSource::default(),
         }
     }
 }
@@ -994,12 +1004,14 @@ impl Config {
                 "obs_request_timeout",
                 d.obs_request_timeout
             ),
+            notices: d.notices,
+            source: d.source,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1118,9 +1130,9 @@ mod tests {
         );
     }
 
-    /// Every field of every event emitted by `f` on this thread. Installed
-    /// globally: see `mtui-datasources/tests/log_capture.rs` for why.
-    fn capture_fields(f: impl FnOnce()) -> String {
+    /// The level and every field of every event emitted by `f` on this thread.
+    /// Installed globally: see `mtui-datasources/tests/log_capture.rs` for why.
+    pub(crate) fn capture_fields(f: impl FnOnce()) -> String {
         use std::cell::RefCell;
         use std::fmt::Write as _;
         use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -1139,6 +1151,7 @@ mod tests {
             fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
                 SINK.with(|s| {
                     if let Some(buf) = s.borrow_mut().as_mut() {
+                        let _ = write!(buf, "level={} ", event.metadata().level());
                         event.record(&mut Fields(buf));
                     }
                 });

@@ -292,6 +292,10 @@ serde_path_to_error = "0.1"
 # serde-saphyr is the maintained, serde-native replacement. It streams and
 # builds no DOM, so rows go through serde_json::Value instead.
 serde-saphyr = "2"
+# Names the keys of an `mtui.toml` that no option reads, from the same serde
+# derive that loads the file, so the known set cannot drift. dtolnay-owned,
+# depends on serde_core only.
+serde_ignored = "0.1"
 # serialises tests that mutate process-global env vars ($OSC_CONFIG, $HOME,
 # $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
 # in parallel threads, so env mutation must not race.

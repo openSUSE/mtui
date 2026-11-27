@@ -13,49 +13,87 @@
 
 pub mod atomic;
 pub mod error;
+pub mod notice;
 pub mod options;
 pub mod paths;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 pub(crate) use error::ConfigError;
+pub use notice::{ConfigNotice, ConfigSource};
 pub use options::{Config, SslVerify};
-pub(crate) use paths::config_search_paths;
 pub use paths::data_dir;
+pub(crate) use paths::{Chain, config_chain};
 
+use notice::{MAX_NOTICES_PER_FILE, clean_key};
 use options::RawConfig;
 
 impl Config {
     /// Load configuration from the resolved search paths.
     ///
     /// `explicit` is the optional `--config` path. Files are merged
-    /// **lowest-precedence first** (see `config_search_paths`): `/etc` →
+    /// **lowest-precedence first** (see `config_chain`): `/etc` →
     /// `~/.mtui.toml` → the XDG file, so a per-user file overrides `/etc` on
     /// shared keys. An absent file is skipped silently, an unreadable or
     /// unparseable one is logged at ERROR and skipped — loading never
-    /// hard-fails, and absent options take their documented defaults.
+    /// hard-fails, and absent options take their documented defaults. What a
+    /// loaded file held but no option reads is logged at WARN and kept in
+    /// [`Config::notices`], as is an unread `~/.mtuirc` when no TOML file was
+    /// loaded.
     #[must_use]
     pub fn load(explicit: Option<PathBuf>) -> Self {
-        let mut merged = RawConfig::default();
-        for path in config_search_paths(explicit) {
-            match read_file(&path) {
-                Ok(Some(raw)) => merged.merge(raw),
-                Ok(None) => { /* absent file: not an error */ }
-                Err(err) => {
-                    tracing::error!(
-                        path = %path.display(),
-                        error = %err,
-                        "ignoring config file that failed to load; using defaults for its options"
-                    );
-                }
-            }
-        }
-        Config::from_raw(merged)
+        load_from(&config_chain(explicit))
     }
 }
 
+/// [`Config::load`] over a resolved chain, so tests need not touch the process
+/// environment or the machine's `/etc`.
+fn load_from(chain: &Chain) -> Config {
+    let mut merged = RawConfig::default();
+    let mut notices = Vec::new();
+    let mut loaded_any = false;
+    for path in &chain.layers {
+        match read_file(path) {
+            Ok(Some((raw, unknown))) => {
+                merged.merge(raw);
+                notices.extend(unknown);
+                loaded_any = true;
+            }
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    "ignoring config file that failed to load; using defaults for its options"
+                );
+            }
+        }
+    }
+    if let Some(rc) = &chain.legacy_rc
+        && !loaded_any
+        && rc.is_file()
+    {
+        notices.insert(
+            0,
+            ConfigNotice::LegacyRc {
+                path: rc.clone(),
+                user_file: chain.source.user_file.clone(),
+            },
+        );
+    }
+    for notice in &notices {
+        tracing::warn!("{}", notice.render(None));
+    }
+    let mut config = Config::from_raw(merged);
+    config.notices = notices;
+    config.source = chain.source.clone();
+    config
+}
+
 /// Read and parse one config file; `Ok(None)` means the file does not exist.
-fn read_file(path: &Path) -> Result<Option<RawConfig>, ConfigError> {
+/// Alongside the options it returns a notice per key no option reads.
+fn read_file(path: &Path) -> Result<Option<(RawConfig, Vec<ConfigNotice>)>, ConfigError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -66,11 +104,93 @@ fn read_file(path: &Path) -> Result<Option<RawConfig>, ConfigError> {
             });
         }
     };
-    let raw = toml::from_str::<RawConfig>(&contents).map_err(|source| ConfigError::Toml {
+    let toml_err = |source| ConfigError::Toml {
         path: path.to_path_buf(),
         source,
-    })?;
-    Ok(Some(raw))
+    };
+    let mut unknown: Vec<Vec<String>> = Vec::new();
+    let raw: RawConfig = serde_ignored::deserialize(
+        toml::Deserializer::parse(&contents).map_err(toml_err)?,
+        |ignored| {
+            let mut segments = Vec::new();
+            path_segments(&ignored, &mut segments);
+            unknown.push(segments);
+        },
+    )
+    .map_err(toml_err)?;
+    Ok(Some((raw, unknown_notices(path, &unknown, &contents))))
+}
+
+/// The keys leading to an ignored value; the value itself is never kept.
+fn path_segments(path: &serde_ignored::Path<'_>, out: &mut Vec<String>) {
+    use serde_ignored::Path as P;
+    match path {
+        P::Root => {}
+        P::Seq { parent, index } => {
+            path_segments(parent, out);
+            out.push(index.to_string());
+        }
+        P::Map { parent, key } => {
+            path_segments(parent, out);
+            out.push(key.clone());
+        }
+        P::Some { parent } | P::NewtypeStruct { parent } | P::NewtypeVariant { parent } => {
+            path_segments(parent, out);
+        }
+    }
+}
+
+/// Names each ignored key by table and key, a whole unknown table as one, and
+/// only counts those past [`MAX_NOTICES_PER_FILE`].
+fn unknown_notices(path: &Path, unknown: &[Vec<String>], contents: &str) -> Vec<ConfigNotice> {
+    let mut top_level: Option<Option<toml::Table>> = None;
+    let mut notices: Vec<ConfigNotice> = unknown
+        .iter()
+        .take(MAX_NOTICES_PER_FILE)
+        .map(|segments| {
+            let file = path.to_path_buf();
+            match segments.as_slice() {
+                [table, key @ ..] if !key.is_empty() => ConfigNotice::UnknownKey {
+                    file,
+                    table: Some(clean_key(table)),
+                    key: clean_key(&key.join(".")),
+                },
+                [name]
+                    if top_level
+                        .get_or_insert_with(|| toml::from_str(contents).ok())
+                        .as_ref()
+                        .and_then(|t| t.get(name))
+                        .is_some_and(is_table) =>
+                {
+                    ConfigNotice::UnknownTable {
+                        file,
+                        table: clean_key(name),
+                    }
+                }
+                _ => ConfigNotice::UnknownKey {
+                    file,
+                    table: None,
+                    key: clean_key(&segments.join(".")),
+                },
+            }
+        })
+        .collect();
+    if unknown.len() > MAX_NOTICES_PER_FILE {
+        notices.push(ConfigNotice::MoreUnknown {
+            file: path.to_path_buf(),
+            count: unknown.len() - MAX_NOTICES_PER_FILE,
+        });
+    }
+    notices
+}
+
+/// A table, or an array of tables (`[[name]]`).
+fn is_table(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::Table(_) => true,
+        toml::Value::Array(items) => !items.is_empty() && items.iter().all(toml::Value::is_table),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -91,8 +211,15 @@ mod tests {
     #[test]
     fn load_missing_file_yields_defaults() {
         let path = std::env::temp_dir().join("mtui-config-does-not-exist.toml");
-        let cfg = Config::load(Some(path));
-        assert_eq!(cfg, Config::default());
+        let cfg = Config::load(Some(path.clone()));
+        assert_eq!(cfg.source.explicit, Some(path));
+        assert_eq!(
+            Config {
+                source: ConfigSource::default(),
+                ..cfg
+            },
+            Config::default()
+        );
     }
 
     #[test]
@@ -278,9 +405,213 @@ mod tests {
         assert_eq!(Config::load(Some(path)).ssl_verify, SslVerify::Enabled);
     }
 
+    const UNKNOWN: &str = include_str!("../tests/fixtures/golden/unknown.toml");
+    const UNKNOWN_GOLDEN: &str = include_str!("../tests/fixtures/golden/unknown.txt");
+
+    fn chain(layers: &[PathBuf], legacy_rc: Option<&Path>, home: Option<&Path>) -> Chain {
+        Chain {
+            layers: layers.to_vec(),
+            legacy_rc: legacy_rc.map(Path::to_path_buf),
+            source: ConfigSource {
+                explicit: None,
+                user_file: home.map(|h| h.join(".config/mtui/mtui.toml")),
+                home: home.map(Path::to_path_buf),
+            },
+        }
+    }
+
+    fn notices_of(chain: &Chain) -> (Vec<ConfigNotice>, String) {
+        let mut notices = Vec::new();
+        let logs = crate::options::tests::capture_fields(|| {
+            notices = load_from(chain).notices;
+        });
+        (notices, logs)
+    }
+
+    fn unknown_key(file: &Path, table: &str, key: &str) -> ConfigNotice {
+        ConfigNotice::UnknownKey {
+            file: file.to_path_buf(),
+            table: Some(table.to_owned()),
+            key: key.to_owned(),
+        }
+    }
+
+    #[test]
+    fn unknown_keys_are_named_once_with_file_and_table_never_with_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtui.toml");
+        std::fs::write(&path, UNKNOWN).unwrap();
+
+        let (notices, logs) = notices_of(&chain(std::slice::from_ref(&path), None, None));
+
+        let file = path.display().to_string();
+        let rendered: String = notices
+            .iter()
+            .map(|n| format!("{}\n", n.render(None).replace(&file, "<file>")))
+            .collect();
+        assert_eq!(rendered, UNKNOWN_GOLDEN);
+        for notice in &notices {
+            assert!(
+                logs.contains(&format!("level=WARN message={} ", notice.render(None))),
+                "{notice:?} not logged at WARN: {logs}"
+            );
+        }
+        assert!(!logs.contains("SENTINEL"), "a value leaked: {logs}");
+        assert!(!rendered.contains("SENTINEL"), "a value leaked: {rendered}");
+    }
+
+    #[test]
+    fn unknown_keys_do_not_stop_the_known_ones_from_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtui.toml");
+        std::fs::write(&path, UNKNOWN).unwrap();
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.session_user, "kept");
+        assert_eq!(cfg.ssl_verify, SslVerify::Disabled);
+        assert_eq!(cfg.target_protected_packages, vec!["kernel-foo".to_owned()]);
+    }
+
+    /// Guards against a known option being reported as unknown.
+    #[test]
+    fn a_known_option_is_never_reported_as_unknown() {
+        for name in ["full_a.toml", "full_b.toml", "invalid.toml"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/golden")
+                .join(name);
+            assert!(path.is_file(), "fixture missing: {}", path.display());
+            let (notices, _) = notices_of(&chain(&[path], None, None));
+            assert!(notices.is_empty(), "{name}: {notices:?}");
+        }
+    }
+
+    #[test]
+    fn the_same_unknown_key_is_named_once_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.toml");
+        let b = dir.path().join("b.toml");
+        std::fs::write(&a, "[mtui]\ntempdir = \"/x\"\n").unwrap();
+        std::fs::write(&b, "[mtui]\ntempdir = \"/y\"\n").unwrap();
+        let (notices, _) = notices_of(&chain(&[a.clone(), b.clone()], None, None));
+        assert_eq!(
+            notices,
+            vec![
+                unknown_key(&a, "mtui", "tempdir"),
+                unknown_key(&b, "mtui", "tempdir"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_past_the_cap_are_counted_not_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtui.toml");
+        let body: String = (0..MAX_NOTICES_PER_FILE + 5)
+            .map(|i| format!("k{i:02} = 1\n"))
+            .collect();
+        std::fs::write(&path, format!("[mtui]\n{body}")).unwrap();
+
+        let (notices, _) = notices_of(&chain(std::slice::from_ref(&path), None, None));
+
+        assert_eq!(notices.len(), MAX_NOTICES_PER_FILE + 1, "{notices:?}");
+        assert_eq!(notices[0], unknown_key(&path, "mtui", "k00"));
+        assert_eq!(
+            notices[MAX_NOTICES_PER_FILE],
+            ConfigNotice::MoreUnknown {
+                file: path.clone(),
+                count: 5
+            }
+        );
+    }
+
+    #[test]
+    fn a_key_name_reaches_a_notice_without_terminal_controls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtui.toml");
+        std::fs::write(&path, "[mtui]\n\"evil\\u001b]52;c;x\\u0007key\" = 1\n").unwrap();
+
+        let (notices, logs) = notices_of(&chain(std::slice::from_ref(&path), None, None));
+
+        assert_eq!(notices, vec![unknown_key(&path, "mtui", "evil]52;c;xkey")]);
+        assert!(!logs.contains('\u{1b}'), "{logs:?}");
+    }
+
+    /// The note when no TOML file was loaded, in the form headless output uses.
+    const MTUIRC_HEADLESS: &str = "~/.mtuirc is not read: mtui reads only TOML config \
+         files; put its settings in ~/.config/mtui/mtui.toml; see \
+         https://opensuse.github.io/mtui/configuration.html";
+
+    #[test]
+    fn the_mtuirc_note_appears_once_when_no_toml_file_was_loaded() {
+        let home = tempfile::tempdir().unwrap();
+        let rc = home.path().join(".mtuirc");
+        std::fs::write(&rc, "[mtui]\ngitea_token = SENTINEL\n").unwrap();
+        let broken = home.path().join("broken.toml");
+        std::fs::write(&broken, "user = = 1\n").unwrap();
+        let absent = home.path().join("absent.toml");
+
+        for layers in [
+            vec![absent.clone(), absent.clone()],
+            vec![absent.clone(), broken],
+        ] {
+            let (notices, logs) = notices_of(&chain(&layers, Some(&rc), Some(home.path())));
+
+            let rendered: Vec<String> = notices
+                .iter()
+                .map(|n| n.render(Some(home.path())))
+                .collect();
+            assert_eq!(rendered, [MTUIRC_HEADLESS], "{layers:?}");
+            assert_eq!(
+                logs.matches("level=WARN ").count(),
+                1,
+                "logged once: {logs}"
+            );
+            assert!(logs.contains(".mtuirc is not read"), "{logs}");
+            assert_eq!(
+                logs.contains("level=ERROR "),
+                layers[1] != absent,
+                "the parse error is still logged: {logs}"
+            );
+            assert!(!logs.contains("SENTINEL"), "{logs}");
+        }
+    }
+
+    /// Guards against the note ignoring a loaded file in any slot, the system
+    /// one included, and against naming an rc that does not exist.
+    #[test]
+    fn the_mtuirc_note_is_silenced_by_any_loaded_file_or_a_missing_rc() {
+        let home = tempfile::tempdir().unwrap();
+        let rc = home.path().join(".mtuirc");
+        let loaded = home.path().join("loaded.toml");
+        std::fs::write(&loaded, "[mtui]\nuser = \"u\"\n").unwrap();
+        let absent = home.path().join("absent.toml");
+
+        let (missing_rc, _) = notices_of(&chain(
+            std::slice::from_ref(&absent),
+            Some(&rc),
+            Some(home.path()),
+        ));
+        assert!(missing_rc.is_empty(), "rc absent: {missing_rc:?}");
+
+        std::fs::write(&rc, "[mtui]\n").unwrap();
+        for layers in [
+            vec![loaded.clone(), absent.clone(), absent.clone()],
+            vec![absent.clone(), absent.clone(), loaded.clone()],
+        ] {
+            let (notices, _) = notices_of(&chain(&layers, Some(&rc), Some(home.path())));
+            assert!(notices.is_empty(), "{layers:?}: {notices:?}");
+        }
+    }
+
     #[test]
     fn empty_file_is_all_defaults() {
         let path = write_tmp("empty.toml", "");
-        assert_eq!(Config::load(Some(path)), Config::default());
+        let cfg = Config::load(Some(path));
+        assert_eq!(
+            Config {
+                source: ConfigSource::default(),
+                ..cfg
+            },
+            Config::default()
+        );
     }
 }
