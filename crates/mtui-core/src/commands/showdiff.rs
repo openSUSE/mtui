@@ -300,7 +300,8 @@ impl ProductPr {
     }
 }
 
-/// Shows the raw OBS source diff.
+/// Shows the update's source diff: the OBS source diff, or on a Gitea-workflow
+/// update the product pull request's diff.
 pub struct ShowDiff;
 
 #[async_trait]
@@ -342,7 +343,8 @@ impl Command for ShowDiff {
     }
 }
 
-/// Analyzes the OBS source diff to assist code review.
+/// Analyzes the OBS source diff to assist code review; refuses on a
+/// Gitea-workflow update, where only the product pull request is available.
 pub struct AnalyzeDiff;
 
 #[async_trait]
