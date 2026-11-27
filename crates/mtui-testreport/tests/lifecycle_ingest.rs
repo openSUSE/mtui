@@ -1137,12 +1137,16 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails_document() {
 // --- TeReGen's text reaching the log ---
 
 /// Server text carrying a C1 CSI introducer (with its parameters), a bidi
-/// override, and a tail long enough to pass the log's cap; [`READABLE`] is the
-/// start of what survives sanitizing it.
+/// override, a newline that would start a forged record, and a tail long
+/// enough to pass the log's cap; [`READABLE`] is the start of what survives
+/// sanitizing it.
 fn hostile() -> String {
-    format!("bad \u{9b}2J\u{202e}reason{}", "x".repeat(600))
+    format!(
+        "bad \u{9b}2J\u{202e}reason\nFORGED record{}",
+        "x".repeat(600)
+    )
 }
-const READABLE: &str = "bad reason";
+const READABLE: &str = "bad reason\\nFORGED record";
 
 fn assert_sanitized(events: &str, expected: &str) {
     assert!(events.contains(expected), "{events:?}");
@@ -1150,6 +1154,10 @@ fn assert_sanitized(events: &str, expected: &str) {
     assert!(!events.contains('\u{202e}'), "{events:?}");
     assert!(events.contains(TRUNCATION_MARK), "{events:?}");
     assert!(!events.contains(&"x".repeat(500)), "{events:?}");
+    assert!(
+        !events.lines().any(|l| l.starts_with("FORGED")),
+        "{events:?}"
+    );
 }
 
 /// Drives a stale SLFO load into `regenerate_via_teregen` against `v1` (the
@@ -1344,17 +1352,26 @@ async fn gitea_failure_events(api: impl Fn(&str) -> String) -> String {
 /// them; none may carry what TeReGen put in it.
 #[tokio::test]
 async fn gitea_failure_is_sanitized_in_the_log() {
-    let events = gitea_failure_events(|uri| format!("{uri}/pulls/1\u{9b}2J\u{202e}")).await;
+    // JSON-escaped, so the document carries a real newline.
+    let events =
+        gitea_failure_events(|uri| format!("{uri}/pulls/1\u{9b}2J\u{202e}\\nFORGED")).await;
     let line = events
         .lines()
         .find(|l| l.contains("TestReport isn't loaded") && l.contains("error="))
         .unwrap_or_else(|| panic!("{events:?}"));
-    assert!(line.contains("/pulls/1 returned status 500"), "{line:?}");
+    assert!(
+        line.contains("/pulls/1FORGED returned status 500"),
+        "{line:?}"
+    );
     assert!(
         events.contains("failed with status code: 500"),
         "{events:?}"
     );
     assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
+    assert!(
+        !events.lines().any(|l| l.starts_with("FORGED")),
+        "{events:?}"
+    );
 }
 
 /// A PR API URL on another origin is refused before any request, and the

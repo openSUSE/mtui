@@ -23,6 +23,8 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
+use mtui_types::sanitize::sanitize_log;
+
 use crate::error::{CommandError, CommandResult};
 use crate::session::{Activation, Session};
 use crate::template_scope::{SingleTemplate, canonical_template_name};
@@ -303,7 +305,12 @@ pub trait Command: Send + Sync {
                     break;
                 }
                 Err(exc) => {
-                    tracing::error!(command = self.name(), rrid = %rrid, error = %exc, "command failed");
+                    tracing::error!(
+                        command = self.name(),
+                        rrid = %rrid,
+                        error = %sanitize_log(&exc.to_string(), None),
+                        "command failed"
+                    );
                     failures.push((rrid.clone(), exc));
                 }
             }
@@ -583,6 +590,23 @@ mod tests {
         }
     }
 
+    /// A fan-out probe whose body fails with text that holds a newline, as a
+    /// `CommandError` carrying sanitised server text may.
+    struct FailingFanout;
+
+    #[async_trait]
+    impl Command for FailingFanout {
+        fn name(&self) -> &'static str {
+            "failing_fanout_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Err(CommandError::Other("bad\nFORGED record".to_owned()))
+        }
+    }
+
     /// A [`Scope::Single`] probe that resolves to whatever is active and
     /// ignores it, like `unload <rrid>` / `config` / `help`. Its parser
     /// declares neither template flag.
@@ -763,6 +787,28 @@ mod tests {
                 .filter_map(|c| c.message.clone())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_template_is_logged_on_one_line() {
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session.templates.add(crate::commands::testkit::fake_report(
+            "SUSE:Maintenance:2:2",
+            &["h2"],
+            "ok",
+        ));
+        let args = crate::commands::testkit::matches(&FailingFanout, &[]);
+
+        log_capture::start();
+        FailingFanout.run(&mut session, &args).await.unwrap_err();
+        let logged = log_capture::take();
+
+        let errors: Vec<String> = logged
+            .iter()
+            .filter(|c| c.message.as_deref() == Some("command failed"))
+            .filter_map(|c| c.error.clone())
+            .collect();
+        assert_eq!(errors, vec!["bad\\nFORGED record".to_owned(); 2]);
     }
 
     /// The legitimate empty-session case (nothing loaded) must stay silent:

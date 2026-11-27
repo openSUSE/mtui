@@ -17,7 +17,7 @@ use mtui_datasources::qem_dashboard::incident::QemIncident;
 use mtui_datasources::{RegenOutcome, TeReGen, VerifyPolicy};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
-use mtui_types::sanitize::sanitize_external;
+use mtui_types::sanitize::sanitize_log;
 use mtui_types::{UpdateID, Workflow};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -230,7 +230,7 @@ pub async fn make_testreport(
         }
         HashCheck::Failed(e) => {
             error!("Gitea API call failed");
-            info!(error = %sanitize_external(&e, REASON_LIMIT), "TestReport isn't loaded");
+            info!(error = %sanitize_log(&e, REASON_LIMIT), "TestReport isn't loaded");
             return Ok(Box::new(null_with_error(
                 checkout_config,
                 format!("Gitea API call failed: {e}"),
@@ -428,16 +428,13 @@ async fn regenerate_via_teregen(
         return Ok(None);
     }
     if let Some(err) = &outcome.error {
-        error!(
-            "Regeneration refused: {}",
-            sanitize_external(err, REASON_LIMIT)
-        );
+        error!("Regeneration refused: {}", sanitize_log(err, REASON_LIMIT));
         return Ok(None);
     }
     if let Some(failed) = &outcome.failed {
         error!(
             "Regeneration request failed: {}",
-            sanitize_external(failed, REASON_LIMIT)
+            sanitize_log(failed, REASON_LIMIT)
         );
         return Ok(None);
     }
@@ -458,7 +455,7 @@ async fn regenerate_via_teregen(
         let reason = e.into_failure()?;
         error!(
             "Reload after regeneration failed: {}",
-            sanitize_external(&reason, REASON_LIMIT)
+            sanitize_log(&reason, REASON_LIMIT)
         );
         return Ok(None);
     }
@@ -483,11 +480,11 @@ fn unfinished_message(outcome: &RegenOutcome) -> String {
     let detail = outcome
         .minion_error
         .as_deref()
-        .map(|e| format!(": {}", sanitize_external(e, REASON_LIMIT)))
+        .map(|e| format!(": {}", sanitize_log(e, REASON_LIMIT)))
         .unwrap_or_default();
     format!(
         "Regeneration did not finish (state={}){detail}",
-        sanitize_external(outcome.state.as_deref().unwrap_or("unknown"), REASON_LIMIT)
+        sanitize_log(outcome.state.as_deref().unwrap_or("unknown"), REASON_LIMIT)
     )
 }
 
@@ -570,7 +567,7 @@ async fn load_via_document(
         Ok(live) => {
             let drift = mtui_types::report_document::schema_drift(&live);
             if let Some(drift) = &drift {
-                warn!(drift = %sanitize_external(drift, REASON_LIMIT), "teregen's report schema differs from this mtui's; writes are refused");
+                warn!(drift = %sanitize_log(drift, REASON_LIMIT), "teregen's report schema differs from this mtui's; writes are refused");
             }
             drift
         }

@@ -130,6 +130,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A newline in TeReGen's text no longer starts a new line in mtui's log, where
+  it could pass for a record of its own: it is written as `\n` in the log
+  lines that carry TeReGen's text and in the error logged for each template a
+  command fails on.
 - The hint after "Gitea API token is not configured" names what mtui reads:
   `-g/--gitea-token`, or `token` under `[gitea]` in the config file in use
   (the `--config`/`$MTUI_CONF` file, else the per-user one). It used to name a `GITEA_TOKEN` variable and a `~/.mtuirc`
