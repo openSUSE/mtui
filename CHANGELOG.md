@@ -130,6 +130,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `export` no longer logs credentials embedded in the configured openQA URL
+  when it downloads install or kernel logs, or skips or refuses one.
 - More of TeReGen's text is sanitised before mtui shows it: escape sequences,
   control characters and bidirectional overrides no longer reach the output
   of `load_template`, `checkout`, `commit` or the MCP `report_file_read` tool

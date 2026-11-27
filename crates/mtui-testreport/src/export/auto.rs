@@ -8,6 +8,7 @@
 
 use futures::stream::{self, StreamExt};
 use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
+use mtui_datasources::sanitize_url;
 use mtui_types::URLs;
 
 use super::base::ExportContext;
@@ -89,7 +90,7 @@ impl AutoExport {
         match fetcher.get_bytes(&url.url).await {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(_) => {
-                tracing::error!("log {} failed to download", url.url);
+                tracing::error!("log {} failed to download", sanitize_url(&url.url));
                 String::new()
             }
         }

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
+use mtui_datasources::sanitize_url;
 use mtui_types::Test;
 
 use crate::support::fileops::atomic_write_file;
@@ -167,9 +168,10 @@ fn plan(
             && is_safe_component(&test.name))
     {
         tracing::error!(
-            "Refusing unsafe export path component for test {:?} (arch {:?}) on {host}",
+            "Refusing unsafe export path component for test {:?} (arch {:?}) on {}",
             test.name,
-            test.arch
+            test.arch,
+            sanitize_url(host)
         );
         return None;
     }
@@ -207,7 +209,11 @@ fn plan(
             Some((remote, local))
         }
         LogKind::Empty => {
-            tracing::debug!("No log to download for test: {} on {host}", test.name);
+            tracing::debug!(
+                "No log to download for test: {} on {}",
+                test.name,
+                sanitize_url(host)
+            );
             None
         }
     }
@@ -306,7 +312,7 @@ async fn subdl(
     test: &Test,
     mode: ErrorMode,
 ) -> Result<(), DownloadError> {
-    tracing::info!("Downloading log {remote}");
+    tracing::info!("Downloading log {}", sanitize_url(remote));
     match fetcher.get_bytes(remote).await {
         Ok(data) => {
             let err = match persist_download(data, local.to_path_buf()).await {
@@ -323,7 +329,7 @@ async fn subdl(
             }
         }
         Err(error) => {
-            tracing::error!("Download from {remote} failed: {error}");
+            tracing::error!("Download from {} failed: {error}", sanitize_url(remote));
             match mode {
                 ErrorMode::Full => Err(ResultsMissingError {
                     test: test.name.clone(),
