@@ -230,6 +230,8 @@ pub(crate) mod testkit {
             pub message: Option<String>,
             /// The template id a per-rrid event carried, if present.
             pub rrid: Option<String>,
+            /// The `error` field, if present.
+            pub error: Option<String>,
         }
 
         thread_local! {
@@ -244,6 +246,7 @@ pub(crate) mod testkit {
             succeeded: Option<String>,
             message: Option<String>,
             rrid: Option<String>,
+            error: Option<String>,
         }
 
         impl Visit for CaptureVisitor {
@@ -254,6 +257,7 @@ pub(crate) mod testkit {
                     "succeeded" => self.succeeded = Some(format!("{value:?}")),
                     "message" => self.message = Some(format!("{value:?}")),
                     "rrid" => self.rrid = Some(format!("{value:?}")),
+                    "error" => self.error = Some(format!("{value:?}")),
                     _ => {}
                 }
             }
@@ -270,6 +274,7 @@ pub(crate) mod testkit {
                                 succeeded: v.succeeded,
                                 message: v.message,
                                 rrid: v.rrid,
+                                error: v.error,
                             });
                         }
                     }

@@ -117,6 +117,14 @@ fn skip_control_string(chars: &mut std::iter::Peekable<std::str::Chars>) {
     }
 }
 
+/// [`sanitize_external`] for a log record, which must stay one line: `\n` is
+/// written as `\n`, so a literal backslash-n in `text` reads the same (not
+/// reversible, but it cannot start a record).
+#[must_use]
+pub fn sanitize_log(text: &str, limit: Option<usize>) -> String {
+    sanitize_external(text, limit).replace('\n', "\\n")
+}
+
 /// An ECMA-48 intermediate byte (0x20–0x2F).
 fn is_intermediate(c: char) -> bool {
     ('\u{20}'..='\u{2f}').contains(&c)
@@ -183,5 +191,20 @@ mod tests {
         // Filtered characters do not spend the budget, so an escape flood
         // cannot squeeze the visible text out of a bounded row.
         assert_eq!(sanitize_external("\u{1b}[31m\u{1b}[31mab", Some(2)), "ab");
+    }
+
+    #[test]
+    fn sanitize_log_keeps_a_record_on_one_line() {
+        assert_eq!(
+            sanitize_log("a\u{1b}[31m\tb\nERROR forged", None),
+            "a\tb\\nERROR forged"
+        );
+        // A lone CR is dropped, a CRLF keeps only its escaped LF, and a literal
+        // backslash-n passes through as it was.
+        assert_eq!(sanitize_log("a\rb\r\nc\\nd", None), "ab\\nc\\nd");
+        assert_eq!(
+            sanitize_log("abc\ndef", Some(4)),
+            format!("abc\\n{TRUNCATION_MARK}")
+        );
     }
 }
