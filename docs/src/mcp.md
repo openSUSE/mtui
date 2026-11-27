@@ -230,6 +230,24 @@ reports an aggregate failure at the end.
 > `load_template` and `unload <rrid>` **are** exposed — each names its own RRID.
 > `list_templates` is available as a read-only listing.
 
+## What `approve` reports on OBS
+
+After an OBS approval (maintenance and PI requests) succeeds, `approve` reads
+the request again and, below `approved <rrid>`, prints one line per review
+still `new` that belongs to a QA group (a group whose name starts with `qam`)
+or to the acting user: `still open: review by group <group>`, or
+`still open: review by user <user>`. The automation groups `qam-auto` and
+`qam-openqa` are named too, as `still open: review by group <group> (automated)`,
+because an open automated review also keeps the request from releasing. At most
+ten are named; a `still open: <n> more` line counts the rest. Only when none is
+open does it print `no QA review left open on <rrid>`. If that read fails, the one line is
+`approved <rrid>; could not re-read its reviews (<cause>), check them`: the
+approval stands and the call succeeds, but never with the all-clear line. A
+refused or failed approval makes no read. The Gitea path prints only
+`approved <rrid>`, since its bot posts the official review asynchronously.
+The reply is text only: a command tool returns one text block, so there is no
+structured `open_reviews` field. The REPL prints the same lines.
+
 ## Non-interactive prompt behaviour
 
 MCP sessions run with no interactive prompter installed, so a command that would

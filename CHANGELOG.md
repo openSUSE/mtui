@@ -52,6 +52,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- After an OBS approval (maintenance and PI), `approve` reads the request again
+  and names each QA group review still open on it as
+  `still open: review by group <group>`, an automation group's (`qam-auto`,
+  `qam-openqa`) as `still open: review by group <group> (automated)`, and the
+  acting user's own as `still open: review by user <user>` (at most ten, then a
+  count). Only when none is open does it print
+  `no QA review left open on <rrid>`. If that read fails it prints
+  `approved <rrid>; could not re-read its reviews (<cause>), check them` and
+  still succeeds. The reply is text only, on MCP too: there is no structured
+  `open_reviews` field. The Gitea path is unchanged (#898).
 - `run`'s description (its help and its MCP tool description) now says that
   package transactions belong in `install`/`uninstall`, where the removal check
   applies (#873).

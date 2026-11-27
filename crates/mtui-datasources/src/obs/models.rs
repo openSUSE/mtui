@@ -38,6 +38,12 @@ pub(crate) fn is_qam_group(name: &str) -> bool {
     name.starts_with("qam") && !IGNORED_QAM_GROUPS.contains(&name)
 }
 
+/// An automation group under the `qam` prefix: a bot, not a tester, reviews for it.
+#[must_use]
+pub(crate) fn is_qam_automation_group(name: &str) -> bool {
+    IGNORED_QAM_GROUPS.contains(&name)
+}
+
 /// One `<history>` entry of a review (who did what, when).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEvent {

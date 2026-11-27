@@ -827,16 +827,20 @@ pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
     }
 }
 
+/// External text as one printable line, bounded to `limit` characters: a
+/// newline or tab in it would forge a second line.
+pub(crate) fn one_line(text: &str, limit: Option<usize>) -> String {
+    crate::display::sanitize_external(text, limit).replace(['\n', '\t'], " ")
+}
+
 /// One `warning:` line per item this session left on a closed host, shared by
 /// `remove_host`, `unload`, `quit` and a reload that replaces a template.
 pub(crate) fn leftover_notices(
     leftovers: &std::collections::BTreeMap<String, mtui_hosts::HostLeftovers>,
 ) -> Vec<String> {
-    use crate::display::sanitize_external;
     use mtui_hosts::{CloseRelease, TestRepos};
 
-    // A newline or tab in a caller-supplied name would forge a second line.
-    let clean = |s: &str| sanitize_external(s, None).replace(['\n', '\t'], " ");
+    let clean = |s: &str| one_line(s, None);
     let mut lines = Vec::new();
     for (host, left) in leftovers {
         let host = clean(host);

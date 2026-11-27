@@ -274,6 +274,62 @@ async fn approve_preflight_checks_groups_and_assignment_without_posting() {
     }
 }
 
+/// Only open QAM group reviews and the acting user's own open review count:
+/// not accepted or declined ones, not the automation groups, not a non-QAM
+/// group, not another user's.
+#[tokio::test]
+async fn open_reviews_lists_open_qam_and_automation_groups_and_the_own_user_review() {
+    use mtui_datasources::obs::qam::OpenReview;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<request id='70000'><state name='review'/>\
+             <review state='accepted' by_group='qam-sle'/>\
+             <review state='accepted' by_user='qamuser'/>\
+             <review state='new' by_group='qam-cloud'/>\
+             <review state='declined' by_group='qam-kernel'/>\
+             <review state='new' by_group='qam-auto'/>\
+             <review state='new' by_group='qam-openqa'/>\
+             <review state='new' by_group='maintenance-team'/>\
+             <review state='new' by_user='bob'/>\
+             <review state='new' by_user='qamuser'/>\
+             <review state='new' by_group='qam-kernel'/></request>",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
+    let open = osc.open_reviews().await.unwrap();
+
+    assert_eq!(
+        open,
+        vec![
+            OpenReview::Group("qam-cloud".to_owned()),
+            OpenReview::AutomatedGroup("qam-auto".to_owned()),
+            OpenReview::AutomatedGroup("qam-openqa".to_owned()),
+            OpenReview::User("qamuser".to_owned()),
+            OpenReview::Group("qam-kernel".to_owned()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn open_reviews_surfaces_a_failed_read() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let osc = Osc::with_factory(Config::default(), pi_rrid(), factory_for(server.uri()));
+    let err = osc.open_reviews().await.unwrap_err();
+    assert!(matches!(err, ObsError::Api { status: 503, .. }), "{err:?}");
+}
+
 #[tokio::test]
 async fn reject_happy_path_declines_via_injected_client() {
     // PI reject: preconditions + reject-reason attribute are skipped for PI,
