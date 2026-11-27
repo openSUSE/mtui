@@ -169,7 +169,12 @@ mod tests {
         let mut a = args();
         a.auto_review_id = Some("SUSE:Maintenance:99999:99999".parse().unwrap());
 
-        let flow = seed_session(&registry, &mut session, &a).await;
+        let flow = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            seed_session(&registry, &mut session, &a),
+        )
+        .await
+        .expect("a cancelled load must not wait out the busy poll");
 
         assert_eq!(flow, ControlFlow::Break(ExitStatus::Interrupted));
     }
