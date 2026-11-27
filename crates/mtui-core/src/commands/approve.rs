@@ -48,7 +48,6 @@ enum Backend {
 /// or a failed call always refuses.
 /// After an OBS approval the request is read again and the reply names the QA
 /// group reviews still open on it; a failed read is reported, not an error.
-/// Unlocks PI reference hosts afterwards.
 pub struct Approve;
 
 #[async_trait]
