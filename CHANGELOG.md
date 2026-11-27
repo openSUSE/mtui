@@ -100,6 +100,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The hint after "Gitea API token is not configured" names what mtui reads:
+  `-g/--gitea-token`, or `token` under `[gitea]` in the config file in use
+  (the `--config`/`$MTUI_CONF` file, else the per-user one). It used to name a `GITEA_TOKEN` variable and a `~/.mtuirc`
+  file mtui never reads, and misspelled the flag as `--gitea_token` (#899).
 - `update` no longer confirms a bare success on a host where a tracked
   package did not end at the update's version, or whose version query did not
   answer: the REPL output and the MCP tool result name each such package with
