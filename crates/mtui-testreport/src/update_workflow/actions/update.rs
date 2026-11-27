@@ -21,6 +21,24 @@
 //! check failure fires the rollback downgrade, so a cosmetic `zypper -n rr`
 //! hiccup must not revert every healthy patched host.
 //!
+//! # The cleanup marker
+//!
+//! The cleanup runs after the patch whatever its status; only a probe failure
+//! exits before it. Its own result goes to stdout as the line
+//! `mtui: test repository cleanup: <outcome>`
+//! with one of these outcomes:
+//!
+//! * `removed`: every `zypper -n rr` exited `0` and there was at least one,
+//!   or `zypper -n lr` exited `6` ("no repositories defined", so none of ours
+//!   is left);
+//! * `unmatched`: the listing answered `0` but matched none of the update's
+//!   aliases, which proves nothing (a non-GNU awk degrades `\>` this way);
+//! * `failed`: the listing, its filter, or any removal failed.
+//!
+//! The loop runs under `set -f`, so an alias is never pathname-expanded.
+//! It is split across format string and argument like the probe marker, for
+//! the same reason.
+//!
 //! Emptiness is tested with `set -- $mtui_patches` + `[ "$#" -gt 0 ]`, not
 //! `[ -n … ]`: a whitespace-only list is "non-empty" to `-n` but splits into
 //! zero words, so the patch would run with no operands.
@@ -125,7 +143,17 @@ if [ "$$#" -gt 0 ]; then
   mtui_status=$$?
 fi
 zypper -n patches | grep $repa
-zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
+mtui_cleanup=removed
+mtui_repo_rows=$$(zypper -n lr)
+case "$$?" in 0) mtui_cleanup=unmatched ;; 6) ;; *) mtui_cleanup=failed ;; esac
+mtui_repos=$$(printf '%s\n' "$$mtui_repo_rows" | awk -F "|" '/$repa\>/ { print $2; }') || mtui_cleanup=failed
+set -f
+for mtui_repo in $$mtui_repos; do
+  [ "$$mtui_cleanup" = unmatched ] && mtui_cleanup=removed
+  zypper -n rr "$$mtui_repo" || mtui_cleanup=failed
+done
+set +f
+printf 'mtui: %s\n' "test repository cleanup: $$mtui_cleanup"
 exit $$mtui_status
 "#
         )
@@ -171,6 +199,9 @@ mod tests {
     use super::*;
     use crate::update_workflow::checks::update::PROBE_FAILURE_MARKER;
 
+    /// The cleanup's marker line, up to its outcome.
+    const CLEANUP_MARKER: &str = "mtui: test repository cleanup: ";
+
     /// Both update scripts are rendered from one shared body; their bytes are
     /// what runs on every refhost, so any drift must be deliberate.
     #[test]
@@ -182,11 +213,11 @@ mod tests {
         }
         assert_eq!(
             (ZYPPER_UPDATE.len(), fnv1a(ZYPPER_UPDATE)),
-            (972, 0x7d52187710fe09df)
+            (1347, 0x6ca73ca5dbebe631)
         );
         assert_eq!(
             (SLM_UPDATE.len(), fnv1a(SLM_UPDATE)),
-            (983, 0xc585f637c819d245)
+            (1358, 0xc890547604ea9053)
         );
     }
 
@@ -217,8 +248,8 @@ mod tests {
         assert!(rendered.contains(r"/:p=1:2\>/"));
         // awk field ref `$2` preserved (safe_substitute leaves it).
         assert!(rendered.contains("print $2;"));
-        // `$$r` -> literal `$r` for the shell loop.
-        assert!(rendered.contains("zypper -n rr $r; done"));
+        // `$$mtui_repo` -> literal `$mtui_repo` for the shell loop.
+        assert!(rendered.contains("zypper -n rr \"$mtui_repo\" || mtui_cleanup=failed"));
         // Braces are literal to the substituter — only `$` is special — so the
         // awk action reaches the remote shell exactly as written.
         assert!(rendered.contains("{ print $2; }"));
@@ -306,6 +337,10 @@ mod tests {
             !rendered.contains(PROBE_FAILURE_MARKER),
             "{name}: the script text must not contain the marker it prints: {rendered}"
         );
+        assert!(
+            !rendered.contains(CLEANUP_MARKER),
+            "{name}: nor the cleanup marker: {rendered}"
+        );
         // The patch list is captured before the patch so the empty case is
         // distinguishable — and captured in three steps, as one contiguous
         // block, because each step is load-bearing:
@@ -359,7 +394,7 @@ mod tests {
         // motivates the whole fix) and the cleanup loop are still there, still
         // in that order, still after the patch — and that `exit` is last.
         let tail = format!(
-            "fi\nzypper -n patches | grep {repa}\nzypper -n lr | awk -F \"|\" '/{repa}\\>/ {{ print $2; }}' | while read r; do zypper -n rr $r; done\nexit $mtui_status\n"
+            "fi\nzypper -n patches | grep {repa}\nmtui_cleanup=removed\nmtui_repo_rows=$(zypper -n lr)\ncase \"$?\" in 0) mtui_cleanup=unmatched ;; 6) ;; *) mtui_cleanup=failed ;; esac\nmtui_repos=$(printf '%s\\n' \"$mtui_repo_rows\" | awk -F \"|\" '/{repa}\\>/ {{ print $2; }}') || mtui_cleanup=failed\nset -f\nfor mtui_repo in $mtui_repos; do\n  [ \"$mtui_cleanup\" = unmatched ] && mtui_cleanup=removed\n  zypper -n rr \"$mtui_repo\" || mtui_cleanup=failed\ndone\nset +f\nprintf 'mtui: %s\\n' \"test repository cleanup: $mtui_cleanup\"\nexit $mtui_status\n"
         );
         assert!(
             rendered.ends_with(&tail),
@@ -520,9 +555,11 @@ refresh)
     ;;
 lr)
     if [ -n "$MTUI_STUB_REPO_ROW" ]; then printf '%s\n' "$MTUI_STUB_REPO_ROW"; fi
+    exit "$MTUI_STUB_LR_EXIT"
     ;;
 rr)
     printf '%s\n' "$*" >> "$MTUI_STUB_DIR/cleanup.ran" || exit 97
+    if [ -n "$MTUI_STUB_CLEANUP_FAIL" ] && [ "$3" = "$MTUI_STUB_CLEANUP_FAIL" ]; then exit 3; fi
     exit "$MTUI_STUB_CLEANUP_EXIT"
     ;;
 in)
@@ -621,6 +658,8 @@ exit "$MTUI_STUB_PATCH_EXIT"
             patch_exit: i32,
             /// `zypper -n rr`'s status in the repo-cleanup loop.
             cleanup_exit: i32,
+            /// `zypper -n lr`'s status, on every listing.
+            lr_exit: i32,
             /// The `zypper -n patches` row. Empty means the update matches no
             /// patch on this host.
             patch_row: &'static str,
@@ -628,6 +667,12 @@ exit "$MTUI_STUB_PATCH_EXIT"
             /// nothing to remove — its body never runs, so the loop's status is
             /// `0`, the masking #400 was about.
             repo_row: &'static str,
+            /// The alias whose `zypper -n rr` exits `3`, whatever
+            /// `cleanup_exit` says.
+            cleanup_fail: &'static str,
+            /// awk's status on the cleanup's listing only (input carrying a
+            /// repository row); every other awk call runs the real one.
+            listing_awk_exit: i32,
         }
 
         impl Default for Knobs {
@@ -638,8 +683,11 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     awk_exit: 0,
                     patch_exit: 0,
                     cleanup_exit: 0,
+                    lr_exit: 0,
                     patch_row: PATCH_ROW,
                     repo_row: "",
+                    cleanup_fail: "",
+                    listing_awk_exit: 0,
                 }
             }
         }
@@ -668,20 +716,39 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     &format!("#!/bin/sh\ncat > /dev/null\nexit {}\n", knobs.awk_exit),
                 );
             }
+            if knobs.listing_awk_exit != 0 {
+                let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                    .map(|d| d.join("awk"))
+                    .find(|p| p.is_file())
+                    .expect("an awk on PATH");
+                write_exe(
+                    stubs.dir.path(),
+                    "awk",
+                    &format!(
+                        "#!/bin/sh\nmtui_in=$(cat)\ncase \"$mtui_in\" in *'| Yes | Yes'*) exit {} ;; esac\n\
+                         printf '%s\\n' \"$mtui_in\" | {} \"$@\"\n",
+                        knobs.listing_awk_exit,
+                        real.display()
+                    ),
+                );
+            }
             let rendered = cmds
                 .render_command(&vars(REPA, "pkg-a"))
                 .expect("safe substitute never fails");
             let mut cmd = Command::new("/bin/sh");
             cmd.arg("-c")
                 .arg(&rendered)
+                .current_dir(stubs.dir.path())
                 .env("PATH", &stubs.path)
                 .env("MTUI_STUB_DIR", stubs.dir.path())
                 .env("MTUI_STUB_REFRESH_EXIT", knobs.refresh_exit.to_string())
                 .env("MTUI_STUB_PATCHES_EXIT", knobs.patches_exit.to_string())
                 .env("MTUI_STUB_PATCH_EXIT", knobs.patch_exit.to_string())
                 .env("MTUI_STUB_CLEANUP_EXIT", knobs.cleanup_exit.to_string())
+                .env("MTUI_STUB_LR_EXIT", knobs.lr_exit.to_string())
                 .env("MTUI_STUB_PATCH_ROW", knobs.patch_row)
-                .env("MTUI_STUB_REPO_ROW", knobs.repo_row);
+                .env("MTUI_STUB_REPO_ROW", knobs.repo_row)
+                .env("MTUI_STUB_CLEANUP_FAIL", knobs.cleanup_fail);
             let out = sh_output(&mut cmd);
             Ran {
                 code: out
@@ -807,6 +874,179 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     ran.code, 0,
                     "{name}: a cosmetic cleanup hiccup must not fail the update"
                 );
+            }
+        }
+
+        /// The cleanup marker's value, from the last marker line.
+        fn marker(stdout: &str) -> Option<&str> {
+            stdout
+                .lines()
+                .rev()
+                .find_map(|line| line.strip_prefix(CLEANUP_MARKER))
+        }
+
+        /// Two update repositories listed, so the loop runs twice.
+        const TWO_REPO_ROWS: &str =
+            "1 | issue-a:p=42:7>repo | Yes | Yes\n2 | issue-b:p=42:7>repo | Yes | Yes";
+
+        /// The marker is the flow's evidence of what the cleanup did, so it
+        /// must follow the listing's and the removals' statuses and never
+        /// touch the exit status.
+        #[test]
+        fn the_cleanup_marker_reports_what_the_removals_did() {
+            let with_row = |knobs: Knobs| Knobs {
+                repo_row: REPO_ROW,
+                ..knobs
+            };
+            let cases = [
+                ("healthy", with_row(Knobs::default()), Some("removed"), 0, 1),
+                (
+                    "failed patch",
+                    with_row(Knobs {
+                        patch_exit: 8,
+                        ..Knobs::default()
+                    }),
+                    Some("removed"),
+                    8,
+                    1,
+                ),
+                (
+                    "failed removal",
+                    with_row(Knobs {
+                        cleanup_exit: 3,
+                        ..Knobs::default()
+                    }),
+                    Some("failed"),
+                    0,
+                    1,
+                ),
+                (
+                    "no repositories defined",
+                    Knobs {
+                        lr_exit: 6,
+                        ..Knobs::default()
+                    },
+                    Some("removed"),
+                    0,
+                    0,
+                ),
+                (
+                    "listing matched nothing",
+                    Knobs::default(),
+                    Some("unmatched"),
+                    0,
+                    0,
+                ),
+                (
+                    "failed listing",
+                    with_row(Knobs {
+                        lr_exit: 1,
+                        ..Knobs::default()
+                    }),
+                    Some("failed"),
+                    0,
+                    1,
+                ),
+                (
+                    "failed listing filter",
+                    with_row(Knobs {
+                        listing_awk_exit: 2,
+                        ..Knobs::default()
+                    }),
+                    Some("failed"),
+                    0,
+                    0,
+                ),
+                (
+                    "first of two removals failed",
+                    Knobs {
+                        repo_row: TWO_REPO_ROWS,
+                        cleanup_fail: "issue-a:p=42:7>repo",
+                        ..Knobs::default()
+                    },
+                    Some("failed"),
+                    0,
+                    2,
+                ),
+                (
+                    "failed probe",
+                    with_row(Knobs {
+                        patches_exit: 7,
+                        ..Knobs::default()
+                    }),
+                    None,
+                    7,
+                    0,
+                ),
+            ];
+            for (name, cmds) in templates() {
+                for (case, knobs, reported, code, removals) in cases {
+                    let stubs = Stubs::new();
+                    let ran = run_script(&cmds, &stubs, knobs);
+                    assert_reached_stub(name, &stubs, &ran, "patches");
+                    assert_eq!(
+                        marker(&ran.stdout),
+                        reported,
+                        "{name}, {case}: {}",
+                        ran.stdout
+                    );
+                    assert_eq!(ran.code, code, "{name}, {case}: the patch's status");
+                    assert_eq!(
+                        stubs.cleanup_invocations().len(),
+                        removals,
+                        "{name}, {case}"
+                    );
+                }
+            }
+        }
+
+        /// A later success must not overwrite an earlier failure, and every
+        /// listed alias still gets its removal.
+        #[test]
+        fn every_alias_is_removed_and_one_failure_sticks() {
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        repo_row: TWO_REPO_ROWS,
+                        cleanup_fail: "issue-a:p=42:7>repo",
+                        ..Knobs::default()
+                    },
+                );
+                assert_eq!(
+                    stubs.cleanup_invocations(),
+                    ["-n rr issue-a:p=42:7>repo", "-n rr issue-b:p=42:7>repo"],
+                    "{name}"
+                );
+                assert_eq!(marker(&ran.stdout), Some("failed"), "{name}");
+            }
+        }
+
+        /// `issue_alias` builds aliases from product metadata, so a glob
+        /// character cannot be ruled out; `set -f` keeps it literal even when
+        /// a file in the working directory matches it.
+        #[test]
+        fn an_alias_is_never_pathname_expanded() {
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                fs::write(stubs.dir.path().join("issue-x:p=42:7>repo"), "").expect("decoy");
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        repo_row: "1 | issue-[x]:p=42:7>repo | Yes | Yes",
+                        ..Knobs::default()
+                    },
+                );
+                assert_eq!(
+                    stubs.cleanup_invocations(),
+                    ["-n rr issue-[x]:p=42:7>repo"],
+                    "{name}: {}",
+                    ran.stderr
+                );
+                assert_eq!(marker(&ran.stdout), Some("removed"), "{name}");
             }
         }
 
