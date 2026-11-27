@@ -353,6 +353,70 @@ async fn install_shell_quotes_malicious_package_name_end_to_end() {
     );
 }
 
+/// A [`PlanProvider`] whose doer carries a dry run, so the removal guard runs.
+struct ProbingProvider;
+
+impl PlanProvider for ProbingProvider {
+    fn doer(&self, _role: &str, _release: &str, _transactional: bool) -> Result<Doer, HostError> {
+        Ok(
+            Doer::new("zypper -n in -y -l $packages", "systemctl reboot")
+                .with_probe(Some("zypper -x -n in --dry-run -y -l $packages".into())),
+        )
+    }
+
+    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+        Box::new(|_a: CheckArgs<'_>| Ok(()))
+    }
+}
+
+/// Runs `op` with a hostile package name and returns the dry run's re-split words.
+async fn dry_run_words(op: fn(Vec<String>) -> Operation) -> Vec<String> {
+    let (h1, m1) = target("h1", "SLES", "15.5", false);
+    let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(ProbingProvider));
+
+    let _ = op(vec!["foo; rm -rf /".to_owned()])
+        .run(&mut group)
+        .await
+        .expect("a wired group runs");
+
+    let probe = package_commands(&m1)
+        .into_iter()
+        .find(|c| c.starts_with("zypper -x "))
+        .expect("the dry run ran");
+    shlex::split(&probe).expect("the dry run re-splits")
+}
+
+fn hostile_dry_run_words() -> Vec<String> {
+    [
+        "zypper",
+        "-x",
+        "-n",
+        "in",
+        "--dry-run",
+        "-y",
+        "-l",
+        "foo; rm -rf /",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+#[tokio::test]
+async fn install_shell_quotes_a_malicious_package_name_in_the_dry_run() {
+    assert_eq!(
+        dry_run_words(Operation::install).await,
+        hostile_dry_run_words()
+    );
+}
+
+#[tokio::test]
+async fn uninstall_shell_quotes_a_malicious_package_name_in_the_dry_run() {
+    assert_eq!(
+        dry_run_words(Operation::uninstall).await,
+        hostile_dry_run_words()
+    );
+}
+
 #[tokio::test]
 async fn uninstall_uses_uninstaller_role() {
     let (provider, lookups, _checked) = RecordingProvider::new();

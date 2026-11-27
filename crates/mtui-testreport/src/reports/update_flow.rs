@@ -15634,6 +15634,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_shell_quotes_a_malicious_package_name_in_the_dry_run() {
+        let probe = "zypper -x -n in --dry-run -y -l 'foo; rm -rf /'";
+        let (t1, h1) = target_answering("h1", probe, &dry_run_removing(&[]), 0, "");
+        let mut group = HostsGroup::new(vec![t1], false);
+
+        let _ = super::perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["foo; rm -rf /".to_owned()],
+            false,
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let dry_runs: Vec<String> = h1
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with("zypper -x "))
+            .collect();
+        assert_eq!(dry_runs, [probe.to_owned()]);
+    }
+
+    #[tokio::test]
     async fn downgrade_refuses_only_the_host_whose_dry_run_removes_a_protected_package() {
         let probe = format!(
             "zypper -x -n in --dry-run -C --force-resolution --oldpackage -y {}",
