@@ -15479,6 +15479,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn neither_a_refused_nor_a_cancelled_install_is_recorded() {
+        let probe = "zypper -x -n in --dry-run -y -l libfoo";
+        let packages = ["libfoo".to_owned()];
+        let (t1, _h1) = sles15_on(
+            "h1",
+            dry_run_conn("h1", probe, &dry_run_removing(&["glibc"]), "", 0),
+        );
+        let (t2, _h2) = sles15_on(
+            "h2",
+            dry_run_conn("h2", probe, &dry_run_removing(&[]), "", 0),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        super::perform_install(&mut group, &packages, false, &mut Vec::new())
+            .await
+            .expect_err("h1 was refused");
+
+        assert!(group.get("h1").unwrap().leftovers().installed.is_empty());
+        assert_eq!(group.get("h2").unwrap().leftovers().installed, packages);
+
+        let (mut group, _h) = target_cancelling_during(probe);
+        let err = super::perform_install(&mut group, &packages, false, &mut Vec::new())
+            .await
+            .expect_err("cancelled");
+
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(group.get("h1").unwrap().leftovers().installed.is_empty());
+    }
+
+    #[tokio::test]
     async fn a_refusal_collected_before_the_cancel_outranks_it() {
         let probe = "zypper -x -n rm --dry-run libfoo";
         let token = HostsGroup::new(Vec::new(), false).cancel_token();
