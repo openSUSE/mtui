@@ -291,4 +291,12 @@ mod tests {
         let t = "plain u:p@h/r text";
         assert_eq!(sanitize_urls_in_text(t), t);
     }
+
+    #[test]
+    fn sanitize_urls_in_text_keeps_every_byte_but_the_userinfo() {
+        assert_eq!(
+            sanitize_urls_in_text("zypper ar https://u:p@h\u{202e}.example/a\u{1b}[31m x"),
+            "zypper ar https://***@h\u{202e}.example/a\u{1b}[31m x"
+        );
+    }
 }
