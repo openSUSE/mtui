@@ -234,7 +234,8 @@ degradation:
   same transaction.
 - SLE 11 hosts: their zypper predates the releases whose dry-run output the
   check was verified against.
-- `YUM` hosts: yum/dnf have no machine-readable transaction summary.
+- `YUM` hosts: yum/dnf print the transaction only as a human-readable table,
+  and no output of theirs has been captured to verify a parser against.
 
 `run` is not checked either, nor is the rollback of a failed `update`: it
 undoes a half-applied update, so it is never refused.

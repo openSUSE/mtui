@@ -16889,4 +16889,57 @@ mod tests {
             }
         }
     }
+
+    /// No captured `yum`/`dnf` output pins a parser, so a YUM host's transaction
+    /// runs unchecked and the result says so.
+    #[tokio::test]
+    async fn a_yum_transaction_runs_unchecked_and_says_so() {
+        let packages = ["pkg-a".to_owned()];
+        for (verb, command) in [
+            ("install", "yum -y install pkg-a"),
+            ("uninstall", "yum -y remove pkg-a"),
+            ("prepare", "yum -y --disablerepo=*testing* install pkg-a"),
+        ] {
+            let (t, h) = rhel_target("h1");
+            let mut group = HostsGroup::new(vec![t], false);
+            let mut diagnostics = Vec::new();
+
+            let res = match verb {
+                "install" => {
+                    super::perform_install(&mut group, &packages, false, &mut diagnostics).await
+                }
+                "uninstall" => {
+                    super::perform_uninstall(&mut group, &packages, false, &mut diagnostics).await
+                }
+                _ => {
+                    super::perform_prepare(
+                        &mut group,
+                        &NoopRepo,
+                        &packages,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &mut diagnostics,
+                    )
+                    .await
+                }
+            };
+
+            assert!(res.is_ok(), "{verb}: {res:?}");
+            assert!(
+                h.commands().iter().any(|c| c.contains(command)),
+                "{verb}: {:?}",
+                h.commands()
+            );
+            assert!(
+                !h.commands()
+                    .iter()
+                    .any(|c| c.contains("--dry-run") || c.contains("--assumeno")),
+                "{verb}: {:?}",
+                h.commands()
+            );
+            assert_eq!(diagnostics, vec![unchecked_note("h1")], "{verb}");
+        }
+    }
 }
