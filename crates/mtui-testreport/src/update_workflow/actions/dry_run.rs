@@ -11,9 +11,10 @@
 //! show a booted-root probe resolves the same transaction.
 //!
 //! `YUM` has none: `yum`/`dnf` report a transaction only as a human-readable
-//! table whose layout differs between yum 3 and dnf 4/5, so those hosts are not
-//! checked. Neither is SLE 11: its zypper 1.6 predates the releases whose XML
-//! summary the guard's parser is pinned against.
+//! table, and no capture of it exists to pin a parser to; the captures it needs
+//! are listed in `tests/fixtures/zypper_dry_run/PROVENANCE.md` (in
+//! `mtui-hosts`). Neither is SLE 11: its zypper 1.6 predates the releases whose
+//! XML summary the guard's parser is pinned against.
 
 use crate::update_workflow::{Family, Role, family};
 
