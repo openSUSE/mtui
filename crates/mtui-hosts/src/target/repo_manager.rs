@@ -26,7 +26,7 @@ use mtui_types::system::SystemProduct;
 use mtui_types::url_redaction::sanitize_url;
 use tracing::{debug, info, warn};
 
-use super::Target;
+use super::{Target, TestRepos};
 
 /// Which repository change a `set` forwards: add or remove.
 ///
@@ -317,6 +317,7 @@ impl<'a> RepoManager<'a> {
         let mut failure: Option<RepoFailure> = None;
         let mut registered = false;
         let mut remove_failed = false;
+        let mut remove_unanswered = false;
 
         // Snapshot the flattened system so its borrow does not overlap the mutable calls
         // below.
@@ -406,7 +407,11 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
-                    remove_failed = true;
+                    if self.target.lastexit() == Some(-1) {
+                        remove_unanswered = true;
+                    } else {
+                        remove_failed = true;
+                    }
                     failure.get_or_insert(RepoFailure::Remove { url: safe_url });
                 }
             } else {
@@ -461,11 +466,17 @@ impl<'a> RepoManager<'a> {
             None => failure.map_or(Ok(RepoOutcome::Done), Err),
         };
         self.target.set_last_repo(recorded);
-        // A failed remove may have left an earlier add in place.
-        if is_ar {
-            self.target.repos_added |= registered;
-        } else if is_rr && !remove_failed {
-            self.target.repos_added = false;
+        if is_ar && registered {
+            self.target.test_repos = TestRepos::Configured;
+        } else if is_rr && self.target.test_repos != TestRepos::NotAdded {
+            // A checked removal outranks whatever the record said.
+            self.target.test_repos = if remove_failed {
+                TestRepos::Configured
+            } else if remove_unanswered {
+                TestRepos::Unknown
+            } else {
+                TestRepos::Removed
+            };
         }
         true
     }
@@ -518,6 +529,7 @@ mod tests {
     use mtui_types::system::{System, SystemProduct};
 
     use super::*;
+    use crate::CleanupReport;
     use crate::connection::MockConnection;
 
     /// An `RRID` fixture: `SUSE:Maintenance:1:2`.
@@ -766,11 +778,12 @@ mod tests {
     async fn an_add_records_repositories_added_and_a_remove_clears_it() {
         let (sles, repos) = sles_repos();
         let (mut t, _conn) = target_with(system_of(sles, &[]), false);
-        assert!(!t.leftovers().repos_added);
+        assert_eq!(t.leftovers().test_repos, TestRepos::NotAdded);
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
-        assert!(t.leftovers().repos_added, "a registered add is recorded");
+        assert_eq!(t.leftovers().test_repos, TestRepos::Configured);
         t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
-        assert!(!t.leftovers().repos_added, "a clean remove clears it");
+        assert_eq!(t.leftovers().test_repos, TestRepos::Removed);
+        assert!(t.leftovers().is_empty());
     }
 
     /// The products match nothing, so the add registers no repository.
@@ -779,7 +792,7 @@ mod tests {
         let (_, repos) = sles_repos();
         let (mut t, _conn) = target_with(system_of(product("SLES", "16.0"), &[]), false);
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
-        assert!(!t.leftovers().repos_added);
+        assert_eq!(t.leftovers().test_repos, TestRepos::NotAdded);
     }
 
     #[tokio::test]
@@ -796,7 +809,7 @@ mod tests {
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles, &[]), false);
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
-        assert!(!t.leftovers().repos_added);
+        assert_eq!(t.leftovers().test_repos, TestRepos::NotAdded);
     }
 
     /// The add collided with an alias already registered, so it is there.
@@ -814,7 +827,7 @@ mod tests {
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles, &[]), false);
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
-        assert!(t.leftovers().repos_added);
+        assert_eq!(t.leftovers().test_repos, TestRepos::Configured);
     }
 
     #[tokio::test]
@@ -829,7 +842,61 @@ mod tests {
         t.set_system(system_of(sles, &[]), false);
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
         t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
-        assert!(t.leftovers().repos_added);
+        assert_eq!(t.leftovers().test_repos, TestRepos::Configured);
+    }
+
+    /// The inline cleanup said "removed"; the checked removal that follows
+    /// failed, so the record must not stay optimistic.
+    #[tokio::test]
+    async fn a_failed_checked_remove_re_raises_an_inline_removal() {
+        use mtui_types::hostlog::CommandLog;
+
+        let (sles, repos) = sles_repos();
+        let rr_cmd = "zypper -n rr https://example/repo";
+        let conn = MockConnection::new("h1")
+            .with_response(rr_cmd, CommandLog::new(rr_cmd, "", "boom", 1, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles, &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        t.note_inline_repo_cleanup(CleanupReport::Removed);
+        t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
+        assert_eq!(t.leftovers().test_repos, TestRepos::Configured);
+    }
+
+    /// A removal that never answered (timeout, lost link) proves nothing.
+    #[tokio::test]
+    async fn an_unanswered_checked_remove_leaves_the_record_unknown() {
+        use mtui_types::hostlog::CommandLog;
+
+        let (sles, repos) = sles_repos();
+        let rr_cmd = "zypper -n rr https://example/repo";
+        let conn =
+            MockConnection::new("h1").with_response(rr_cmd, CommandLog::new(rr_cmd, "", "", -1, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles, &[]), false);
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        t.note_inline_repo_cleanup(CleanupReport::Removed);
+        t.repo_manager().run_zypper("-n rr", &repos, &rrid()).await;
+        assert_eq!(t.leftovers().test_repos, TestRepos::Unknown);
+    }
+
+    #[tokio::test]
+    async fn an_inline_cleanup_is_recorded_only_after_an_add() {
+        let (sles, repos) = sles_repos();
+        let (mut t, _conn) = target_with(system_of(sles, &[]), false);
+        t.note_inline_repo_cleanup(CleanupReport::Unknown);
+        assert_eq!(
+            t.leftovers().test_repos,
+            TestRepos::NotAdded,
+            "nothing was added"
+        );
+        assert!(t.leftovers().is_empty());
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+        t.note_inline_repo_cleanup(CleanupReport::Unknown);
+        assert_eq!(t.leftovers().test_repos, TestRepos::Unknown);
+        assert!(!t.leftovers().is_empty(), "an unknown cleanup is reported");
+        t.note_inline_repo_cleanup(CleanupReport::Removed);
+        assert!(t.leftovers().is_empty());
     }
 
     // --- run_zypper: matched == 0 warning ----------------------------------

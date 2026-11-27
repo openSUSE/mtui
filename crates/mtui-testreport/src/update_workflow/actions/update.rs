@@ -26,7 +26,7 @@
 //! The cleanup runs after the patch whatever its status; only a probe failure
 //! exits before it. Its own result goes to stdout as the line
 //! `mtui: test repository cleanup: <outcome>`
-//! with one of these outcomes:
+//! ([`inline_cleanup`](crate::update_workflow::checks::update::inline_cleanup)):
 //!
 //! * `removed`: every `zypper -n rr` exited `0` and there was at least one,
 //!   or `zypper -n lr` exited `6` ("no repositories defined", so none of ours
@@ -181,6 +181,16 @@ fn slmicro() -> ActionCommands {
     ActionCommands::with_reboot(SLM_UPDATE).with_mode(SubstMode::Safe)
 }
 
+/// Whether the update script for `(release, transactional)` removes the test
+/// repositories itself and reports it with the cleanup marker.
+#[must_use]
+pub(crate) fn removes_repos(release: &str, transactional: bool) -> bool {
+    family(release, transactional).is_some_and(|f| match f {
+        Family::Zypper | Family::Transactional => true,
+        Family::Yum => false,
+    })
+}
+
 /// The update command for `(release, transactional)`, or `None` for an unknown
 /// key (provider maps `None` to `MissingUpdaterError`).
 #[must_use]
@@ -197,10 +207,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::update_workflow::checks::update::PROBE_FAILURE_MARKER;
-
-    /// The cleanup's marker line, up to its outcome.
-    const CLEANUP_MARKER: &str = "mtui: test repository cleanup: ";
+    use crate::update_workflow::checks::update::{CLEANUP_MARKER, PROBE_FAILURE_MARKER};
 
     /// Both update scripts are rendered from one shared body; their bytes are
     /// what runs on every refhost, so any drift must be deliberate.
@@ -233,6 +240,29 @@ mod tests {
             assert!(
                 updater(rel, false).is_some(),
                 "expected zypper updater for {rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn removes_repos_names_exactly_the_scripts_that_report_a_cleanup() {
+        // Exhaustive, so a new family must be given a key here.
+        let key = |f: Family| match f {
+            Family::Zypper => ("15", false),
+            Family::Yum => ("YUM", false),
+            Family::Transactional => ("slmicro", true),
+        };
+        for f in [Family::Zypper, Family::Yum, Family::Transactional] {
+            let (release, transactional) = key(f);
+            assert_eq!(family(release, transactional), Some(f));
+            let script = updater(release, transactional)
+                .expect("a known key")
+                .render_command(&vars(":p=1:2", "pkg-a"))
+                .expect("safe substitute never fails");
+            assert_eq!(
+                removes_repos(release, transactional),
+                script.contains("\"test repository cleanup: $mtui_cleanup\""),
+                "{f:?}"
             );
         }
     }

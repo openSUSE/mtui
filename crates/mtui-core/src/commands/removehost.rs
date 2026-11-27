@@ -282,9 +282,8 @@ mod tests {
         assert_eq!(buf.contents().trim_end(), "Removed h1");
     }
 
-    const REPOS_LEFT: &str = "warning: h1: the update's repositories are still configured \
-        (this session's last repository change there was an add); with the update loaded, \
-        reconnect the host and run `set_repo --remove`";
+    const REPOS_LEFT: &str = "warning: h1: the test update repositories are still configured; \
+        with the update loaded, reconnect the host and run `set_repo --remove`";
 
     async fn set_repo(session: &mut Session, flag: &str) {
         use crate::commands::setrepo::SetRepo;

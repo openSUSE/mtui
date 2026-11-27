@@ -833,7 +833,7 @@ pub(crate) fn leftover_notices(
     leftovers: &std::collections::BTreeMap<String, mtui_hosts::HostLeftovers>,
 ) -> Vec<String> {
     use crate::display::sanitize_external;
-    use mtui_hosts::CloseRelease;
+    use mtui_hosts::{CloseRelease, TestRepos};
 
     // A newline or tab in a caller-supplied name would forge a second line.
     let clean = |s: &str| sanitize_external(s, None).replace(['\n', '\t'], " ");
@@ -873,11 +873,15 @@ pub(crate) fn leftover_notices(
                  stays until it is older than [lock] {age} or someone runs `{unlock}`"
             ));
         }
-        if left.repos_added {
+        if left.test_repos.is_left() {
+            let repos = if left.test_repos == TestRepos::Unknown {
+                format!("may still be configured ({})", TestRepos::UNREPORTED)
+            } else {
+                "are still configured".to_owned()
+            };
             lines.push(format!(
-                "warning: {host}: the update's repositories are still configured (this \
-                 session's last repository change there was an add); with the update loaded, \
-                 reconnect the host and run `set_repo --remove`"
+                "warning: {host}: the test update repositories {repos}; with the update \
+                 loaded, reconnect the host and run `set_repo --remove`"
             ));
         }
         if !left.installed.is_empty() {
@@ -963,6 +967,29 @@ mod tests {
                  may have been installed before)"
             ]
         );
+        let unknown = std::collections::BTreeMap::from([(
+            "h1".to_owned(),
+            HostLeftovers {
+                test_repos: mtui_hosts::TestRepos::Unknown,
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            leftover_notices(&unknown),
+            [
+                "warning: h1: the test update repositories may still be configured (their removal \
+                 is not confirmed); with the update loaded, reconnect the host and run \
+                 `set_repo --remove`"
+            ]
+        );
+        let removed = std::collections::BTreeMap::from([(
+            "h1".to_owned(),
+            HostLeftovers {
+                test_repos: mtui_hosts::TestRepos::Removed,
+                ..Default::default()
+            },
+        )]);
+        assert!(leftover_notices(&removed).is_empty());
         let clean = std::collections::BTreeMap::from([("h2".to_owned(), HostLeftovers::default())]);
         assert!(leftover_notices(&clean).is_empty());
     }
