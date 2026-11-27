@@ -5,9 +5,15 @@
 //! requested; only the copy that reaches a log line, error message, prompt or
 //! stored command log goes through these helpers.
 //!
+//! [`sanitize_url`] also drops control characters and bidi overrides;
+//! [`sanitize_urls_in_text`] masks userinfo only, as it rewrites text that is
+//! stored and parsed.
+//!
 //! This is not secret detection: only the userinfo of a `scheme://` authority
 //! (and, for [`sanitize_url`], a bare `…@…` string) is masked. A password
 //! printed without a URL, or carried in a path or query, is not recognised.
+
+use crate::sanitize::sanitize_external;
 
 /// Return `url` with any userinfo (`user[:password]@`) replaced by `***`, for
 /// safe logging/diagnostics.
@@ -17,8 +23,17 @@
 /// the authority's userinfo is touched, so scheme, host, port, path and query
 /// keep a log line useful. On any unexpected shape it fails closed, stripping an
 /// entire `…@` authority prefix rather than risk echoing a credential.
+///
+/// The URL can come from a document or a server, so the result also drops what
+/// [`sanitize_external`] drops, and `\n` and `\t` too: a URL parser discards
+/// them, so the line shows the URL that was requested and stays one line.
 #[must_use]
 pub fn sanitize_url(url: &str) -> String {
+    sanitize_external(&mask_userinfo(url), None).replace(['\n', '\t'], "")
+}
+
+/// [`sanitize_url`]'s userinfo masking alone, leaving every other byte as is.
+fn mask_userinfo(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         // No scheme separator: fail closed on any `@`.
         return match rest_after_at(url) {
@@ -87,7 +102,7 @@ pub fn sanitize_urls_in_text(text: &str) -> String {
             .find(ends_authority)
             .map_or(rest.len(), |i| authority_start + i);
         out.push_str(&rest[..scheme_start]);
-        out.push_str(&sanitize_url(&rest[scheme_start..end]));
+        out.push_str(&mask_userinfo(&rest[scheme_start..end]));
         rest = &rest[end..];
     }
     out.push_str(rest);
@@ -185,6 +200,27 @@ mod tests {
     fn sanitize_url_at_in_path_is_not_userinfo() {
         let url = "https://host.example/users/me@example.com";
         assert_eq!(sanitize_url(url), url);
+    }
+
+    /// A URL from a document or a server reaches log lines through this, so
+    /// what a terminal would act on goes, while the host stays readable and the
+    /// userinfo is still masked.
+    #[test]
+    fn sanitize_url_drops_control_and_bidi_characters() {
+        assert_eq!(
+            sanitize_url(
+                "https://us\u{9b}2Jer:p\u{202e}w@host.example/a\u{1b}[31mb?q=\u{202e}1\n2#f\u{7}"
+            ),
+            "https://***@host.example/ab?q=12#f"
+        );
+        assert_eq!(
+            sanitize_url("https://host.example/pulls/1\u{9b}2J\u{202e}\nFORGED\tx"),
+            "https://host.example/pulls/1FORGEDx"
+        );
+        assert_eq!(
+            sanitize_url("alice:s3cret@host\u{202e}.example/x"),
+            "***@host.example/x"
+        );
     }
 
     #[test]
