@@ -293,6 +293,10 @@ checkpoints are:
   did not reach.
 - A command applying to several loaded templates stops at the next template
   boundary, and reports how many it got through.
+- `load_template` stops while it waits for TeReGen: for a report that is still
+  being generated, and for the regeneration of a stale template. Nothing is
+  loaded; a regeneration it had already requested keeps running on the server,
+  and the reply says so.
 - `install`, `uninstall`, `run`, and `reboot` finish the host operation already
   under way first, then stop.
 
@@ -302,8 +306,11 @@ simply finishes and reports normally — the cancel arrived too late to change
 anything, and saying "cancelled" would be a lie about work that was in fact done.
 Two long waits are their own case: `request_review --watch` and `regenerate`
 stop watching and tell you so (the review request stays posted, the
-regeneration keeps running on the server), and both count as success. Either
-way the session stays usable — the next command starts with a clean slate.
+regeneration keeps running on the server), and both count as success. Once
+`regenerate` has seen the regeneration finish, a cancel while it loads the new
+report is a cancel like any other: `error: cancelled`, saying the report was
+regenerated but not reloaded. Either way the session stays usable — the next
+command starts with a clean slate.
 
 A second Ctrl-C **force-quits** (exit status 130). This is the escape hatch for a
 host that has stopped responding, and it comes at a cost: the running command is

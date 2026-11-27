@@ -782,7 +782,9 @@ Four job-control tools manage them:
   rather than a failure: `request_review --watch` stops watching (the request
   stays posted) and `regenerate` stops waiting (the server keeps building). Both
   return success, so their job ends `done`, not `cancelled`, with the reply text
-  saying what was and was not finished.
+  saying what was and was not finished. That covers `regenerate`'s wait only: a
+  cancel while it reloads the finished report ends the job `cancelled`, as does a
+  cancel while `load_template` waits for TeReGen.
 
 `wait_seconds` (0-120, default 0) turns a poll loop into one held request:
 `job_status` and `job_result` park until the job is terminal or the budget
