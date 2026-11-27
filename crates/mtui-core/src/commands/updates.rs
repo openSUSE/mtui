@@ -2277,27 +2277,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assignment_fields_with_status_all_are_refused() {
+    async fn assignment_fields_with_a_non_testing_status_are_refused() {
         // Printing "unassigned" for an SLFO row TeReGen served without
         // assignment data would be false. expect(0) pins the pre-query refusal.
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/updates"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
-            )
-            .expect(0)
-            .mount(&server)
-            .await;
-        let (mut session, _buf) = teregen_session(&server);
-        let args = matches(&Updates, &["--status", "all", "-F", "Assigned Roles"]);
-        let err = Updates.call(&mut session, &args).await.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("'Assigned Roles' needs assignment data"),
-            "{msg}"
-        );
-        assert!(msg.contains("--status testing"), "{msg}");
+        for status in ["all", "tested"] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/updates"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+                )
+                .expect(0)
+                .mount(&server)
+                .await;
+            let (mut session, _buf) = teregen_session(&server);
+            let args = matches(&Updates, &["--status", status, "-F", "Assigned Roles"]);
+            let err = Updates.call(&mut session, &args).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("'Assigned Roles' needs assignment data"),
+                "{status}: {msg}"
+            );
+            assert!(msg.contains("--status testing"), "{status}: {msg}");
+        }
 
         // The same field in an assignment view is fine (--all-assignees).
         let server2 = MockServer::start().await;
