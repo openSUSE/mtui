@@ -16808,4 +16808,85 @@ mod tests {
         );
         assert!(ran(&h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
     }
+
+    /// A RHEL host, which takes the `YUM` entries.
+    fn rhel_target(hostname: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("rhel", "8", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle)
+    }
+
+    /// A host the embedded prepare could not check is named in `update`'s
+    /// diagnostics, which the command renders into its reply, and named once
+    /// though the `--newpackage` prepare cannot check it either.
+    #[tokio::test]
+    async fn update_names_the_host_its_prepare_could_not_check() {
+        let yum_report = || {
+            let mut report = report_with_rrid();
+            report.base_mut().update_repos.insert(
+                SystemProduct::new("rhel", "8", "x86_64"),
+                "https://example/rhel".to_owned(),
+            );
+            report
+        };
+        for options in [
+            UpdateOptions::default(),
+            UpdateOptions::default().newpackage(),
+        ] {
+            let mut cases: Vec<(String, SlReport, (Target, MockConnection))> =
+                TRANSACTIONAL_PRODUCTS
+                    .into_iter()
+                    .map(|product| {
+                        (
+                            format!("{product:?}"),
+                            transactional_report(),
+                            transactional_target("h1", product, ""),
+                        )
+                    })
+                    .collect();
+            cases.push(("YUM".to_owned(), yum_report(), rhel_target("h1")));
+            for (label, report, (t, h)) in cases {
+                let packages = report.get_package_list();
+                let mut group = HostsGroup::new(vec![t], false);
+                let mut diagnostics = Vec::new();
+
+                let res = perform_update(
+                    &mut group,
+                    &report,
+                    &packages,
+                    "42",
+                    "7",
+                    None,
+                    options,
+                    &mut diagnostics,
+                )
+                .await;
+
+                assert!(res.is_ok(), "{label} {options:?}: {res:?}");
+                assert!(
+                    !h.commands().iter().any(|c| c.contains("--dry-run")),
+                    "{label} {options:?}: {:?}",
+                    h.commands()
+                );
+                assert_eq!(
+                    diagnostics
+                        .iter()
+                        .filter(|d| d.degradation)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    vec![unchecked_note("h1")],
+                    "{label} {options:?}"
+                );
+            }
+        }
+    }
 }
