@@ -181,6 +181,13 @@ that set holds a protected package the command did not name, or when the dry
 run fails, times out, or its output cannot be read. Every other removal is
 allowed and reported as `<host>: the transaction also removes …`.
 
+A dry run that exits `104` (zypper's "not found": a requested package is in no
+enabled repository, as an update's new package is during its first prepare)
+has not failed: zypper commits nothing at `104`, so its complete output is
+judged like any other and, without a summary, removes nothing. The real
+command then runs and fails as it would without the check; `show_log` keeps
+that dry run's XML, which carries zypper's "No provider" message.
+
 The check is best-effort. The real command resolves the transaction again,
 after its own refresh, and PackageKit or another zypper user on the host can
 change what it resolves to between the dry run and the commit.

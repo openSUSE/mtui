@@ -36,8 +36,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a host where the solver would remove a protected package the command did not
   name (the kernel, `systemd`, `glibc`, `rpm`, `zypper`/`libzypp`, `openssh`,
   `grub2`, `dracut`, `bash`, `pam`, …), or where the dry run fails, times out
-  or cannot be read. A refused host's transaction is not run and the host fails
-  the command by name; the other hosts carry on. Other removals are reported
+  or cannot be read. A dry run that exits `104` ("not found", which commits
+  nothing) is judged like a clean one, so the real command runs and fails on
+  its own, and an update that adds a package still patches its hosts. A
+  refused host's transaction is not run and the host fails the command by
+  name; the other hosts carry on. Other removals are reported
   per host. The new `--allow-removal` flag commits the transaction anyway. The
   check is best-effort: the real command resolves the transaction again.
   Transactional (SL Micro, transactional SLES 16), SLE 11 and YUM hosts are not

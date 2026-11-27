@@ -14,6 +14,7 @@ command byte for byte, for the removal-guard tests in
 | `leap156_in_bash_nothing_to_do.xml` | `opensuse/leap:15.6` (1.14.94) | `zypper -x -n in --dry-run -y -l bash` (refreshes first) | 0 |
 | `leap156_rm_missing.xml` | `opensuse/leap:15.6` (1.14.94) | `zypper -x -n --no-refresh rm --dry-run nonexistent-pkg-xyz` | 104 |
 | `leap156_rm_glibc_problem.xml` | `opensuse/leap:15.6` (1.14.94) | `zypper -x -n rm --dry-run glibc` | 4 |
+| `leap156_in_less_nonexistent.xml` | `opensuse/leap:15.6` (1.14.94), the image's linux/amd64 build run under emulation on an aarch64 host, captured 2026-11-27 | `zypper -x -n in --dry-run -y -l less nonexistent-pkg-xyz` (refreshes first) | 104 |
 | `tw_rm_libcurl4.xml` | `opensuse/tumbleweed` (1.14.102) | `zypper -x -n rm --dry-run libcurl4` | 0 |
 
 The `<install-summary>` layout read here (`<to-remove>` holding one
