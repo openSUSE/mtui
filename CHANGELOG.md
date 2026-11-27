@@ -130,10 +130,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- TeReGen's reason for rejecting an id or an upload is sanitised where mtui
-  reads it, so control characters and bidirectional overrides no longer reach
-  the output of `load_template`, `checkout`, `commit` or the MCP
-  `report_file_read` tool.
+- More of TeReGen's text is sanitised before mtui shows it: escape sequences,
+  control characters and bidirectional overrides no longer reach the output
+  of `load_template`, `checkout`, `commit` or the MCP `report_file_read` tool
+  through TeReGen's reason for rejecting an id or an upload; nor `regenerate`'s
+  message for a job that did not finish (its state and error, each now cut to
+  500 characters like the refusal), `commit`'s refusal over a drifted report
+  schema, or a failed load's reason, which can quote a document value that
+  failed to parse or the document's `id`.
 - A newline in TeReGen's text no longer starts a new line in mtui's log, where
   it could pass for a record of its own: it is written as `\n` in the log
   lines that carry TeReGen's text and in the error logged for each template a
