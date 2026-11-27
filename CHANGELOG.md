@@ -33,9 +33,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   applies (#873).
 - `updates` refuses `--assignee`, `--mine` and `--all-assignees`, and an
   assignment-derived `-F` field, with any `--status` other than `testing`,
-  `--status all` included, before a query is sent; such a call used to list
-  the testing queue and now fails. 26.4.1 shipped this refusal but listed it
-  under Fixed, together with the wrong-queue fix it belongs to.
+  `--status all` included, before a query is sent. The assignment flags with
+  any such status, and the field with a named one, used to list the testing
+  queue and now fail; the field with `--status all` was already refused, and
+  only its message changed. 26.4.1 shipped this refusal but listed it under
+  Fixed, together with the wrong-queue fix it belongs to.
 - Two changes that 26.4.1 shipped without a note. `regenerate` counts any 2xx
   reply from TeReGen as an enqueued job, whatever its body: a 2xx whose JSON
   body carried an `error` key, or a non-`202` 2xx without a JSON object body,
