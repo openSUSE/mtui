@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::error::HttpError;
 use crate::sshsig::SshSigError;
+use crate::teregen::verdict::VerdictRefusal;
 
 /// The OBS backend error family.
 ///
@@ -70,6 +71,10 @@ pub enum ObsError {
     /// while still folding both into a logged `false`.
     #[error("{0}")]
     Op(String),
+
+    /// The report document's verdict does not allow the approve or reject.
+    #[error(transparent)]
+    Verdict(#[from] VerdictRefusal),
 
     /// A transport failure, a non-2xx surfaced by the shared HTTP layer, or a
     /// client-build failure (e.g. an unreadable CA bundle).

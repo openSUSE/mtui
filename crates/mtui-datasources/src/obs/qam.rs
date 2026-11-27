@@ -16,7 +16,6 @@
 //! `Config`; the facade binds them from a resolved `Config`, and the TLS
 //! posture travels with the injected client.
 
-use mtui_types::report_document::Verdict;
 use mtui_types::{RequestKind, RequestReviewID};
 
 use futures::stream::{self, StreamExt};
@@ -33,6 +32,7 @@ use crate::obs::models::{
 };
 
 use crate::teregen::document::TeregenV2;
+use crate::teregen::verdict::{Decision, verdict_gate};
 
 const PREFIX: &str = "[oscqam] ";
 
@@ -41,14 +41,6 @@ const PREFIX: &str = "[oscqam] ";
 /// two GETs per row against the shared OBS API; `max_oqa_parallel` is scoped to
 /// the oqa-search overview), so the fan-out owns its bound.
 const REQUESTS_CONCURRENCY: usize = 8;
-
-fn verdict_label(verdict: Option<Verdict>) -> &'static str {
-    match verdict {
-        Some(Verdict::Passed) => "PASSED",
-        Some(Verdict::Failed) => "FAILED",
-        None => "null",
-    }
-}
 
 /// Whether the request carries no maintenance testreport or `MAINT` attribute,
 /// so the `qam.suse.de` preconditions do not apply: true for PI requests only.
@@ -533,9 +525,9 @@ pub async fn approve_preflight(
 ///
 /// # Errors
 ///
-/// Returns [`ObsError::Op`] if groups are given (group-approve refused), the
-/// user is not assigned, or the report document's verdict is not `PASSED`
-/// (non-PI); or a transport/API error.
+/// Returns [`ObsError::Op`] if groups are given (group-approve refused) or the
+/// user is not assigned; [`ObsError::Verdict`] if the report document's verdict
+/// is not `PASSED` (non-PI); or a transport/API error.
 pub async fn approve(
     client: &ObsClient,
     v2: &TeregenV2,
@@ -546,20 +538,7 @@ pub async fn approve(
 ) -> Result<(), ObsError> {
     approve_preflight(client, rrid, user, groups).await?;
     if gates_on_report_document(rrid) {
-        let (verdict, _) = super::preconditions::report_verdict(v2, rrid)
-            .await
-            .map_err(|cause| {
-                ObsError::Op(format!(
-                    "cannot read the report document for {rrid} ({cause}); refusing to approve"
-                ))
-            })?;
-        if verdict != Some(Verdict::Passed) {
-            return Err(ObsError::Op(format!(
-                "report document for {rrid} has verdict {}, not PASSED; set it and `commit` the \
-                 report first (refusing to approve)",
-                verdict_label(verdict)
-            )));
-        }
+        verdict_gate(v2, rrid, Decision::Approve).await?;
     }
     let comment = format!(
         "{PREFIX}Approving {rrid} for {user}. Testreport: {}",
@@ -651,7 +630,7 @@ async fn write_reject_reason(
 ///
 /// # Errors
 ///
-/// Returns [`ObsError::Op`] if the report document's verdict is not `FAILED` or
+/// Returns [`ObsError::Verdict`] if the report document's verdict is not `FAILED` or
 /// it has no comment (non-PI); or a transport/API error.
 // The explicit-params design (no `Config` coupling) puts `reject` one arg past
 // clippy's default threshold.
@@ -671,26 +650,7 @@ pub async fn reject(
     }
     let request = get_request(client, rrid).await?;
     if gates_on_report_document(rrid) {
-        let (verdict, comment) = super::preconditions::report_verdict(v2, rrid)
-            .await
-            .map_err(|cause| {
-                ObsError::Op(format!(
-                    "cannot read the report document for {rrid} ({cause}); refusing to reject"
-                ))
-            })?;
-        if verdict != Some(Verdict::Failed) {
-            return Err(ObsError::Op(format!(
-                "report document for {rrid} has verdict {}, not FAILED; set it and `commit` the \
-                 report first (refusing to reject)",
-                verdict_label(verdict)
-            )));
-        }
-        if comment.is_none_or(|c| c.trim().is_empty()) {
-            return Err(ObsError::Op(format!(
-                "report document for {rrid} has no comment; set one and `commit` the report \
-                 first (refusing to reject)"
-            )));
-        }
+        verdict_gate(v2, rrid, Decision::Reject).await?;
         write_reject_reason(client, &request, rrid, reason).await?;
     }
     // Parity: the reviewer's -M message is not recorded in the decline comment.

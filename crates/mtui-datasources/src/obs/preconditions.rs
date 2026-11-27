@@ -4,17 +4,16 @@
 //! (a plain HTTPS GET, **no OBS auth** — this is the reports host, not the OBS
 //! API). [`approve`](crate::obs::qam::approve) /
 //! [`reject`](crate::obs::qam::reject) read the tester's `verdict` and
-//! `comment` from the report document on TeReGen v2 instead ([`report_verdict`]):
+//! `comment` from the report document on TeReGen v2 instead
+//! ([`verdict_gate`](crate::teregen::verdict::verdict_gate)):
 //! mtui no longer writes the text log, and a document upload does not re-render
 //! it. The caller skips both for PI requests, which carry no maintenance
 //! testreport.
 
 use mtui_types::RequestReviewID;
-use mtui_types::report_document::Verdict;
 
 use crate::error::HttpError;
 use crate::http::{HttpClient, MAX_API_BODY, read_body_capped, sanitize_url};
-use crate::teregen::document::{DocumentFetch, TeregenV2};
 
 /// The machine-readable testreport log URL:
 /// `reports_url.rstrip('/') + "/" + rrid + "/log"`.
@@ -65,27 +64,6 @@ pub(crate) async fn fetch_testreport_log(
             tracing::error!("could not read testreport body {safe_url}: {e}");
             None
         }
-    }
-}
-
-/// The report document's `verdict` and top-level `comment`, fetched fresh.
-///
-/// # Errors
-///
-/// The cause, ready to embed in a refusal: no document, a stale one, or the
-/// transport/status failure.
-pub(crate) async fn report_verdict(
-    v2: &TeregenV2,
-    rrid: &RequestReviewID,
-) -> Result<(Option<Verdict>, Option<String>), String> {
-    match v2.fetch_document(&rrid.to_string(), None).await {
-        Ok(DocumentFetch::Fresh { document, .. }) => {
-            Ok((document.verdict.0, document.comment.0.clone()))
-        }
-        Ok(DocumentFetch::NotModified) => {
-            Err("the server answered 304 to an unconditional request".to_owned())
-        }
-        Err(e) => Err(e.to_string()),
     }
 }
 
