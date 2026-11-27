@@ -10,6 +10,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `update` gains `--allow-removal`, and both prepares it runs now go through
+  the removal guard like the standalone `prepare`. A host the first prepare
+  refuses (its dry run would remove a protected package, or cannot be read) is
+  not prepared and is left out of the patch: the reply gives the reason once,
+  as `<host>: its prepare was refused: …`, however the update ends, and the
+  update fails naming the host while the other hosts are patched. A host the
+  `--newpackage` prepare refuses is named in a warning and the update stands.
+  A host neither prepare could check is named once. A cancel during the first
+  prepare now stops the update before any repository is added or lock taken,
+  and any host failure collected before a cancel (a refused, uncomposed or
+  unreached host) is reported as that failure rather than as a cancellation.
+  The rollback of a failed update is never refused (#877). **MCP schema
+  note:** the `update` tool gains an optional boolean `allow_removal`.
 - New `[target] protected_packages` config key: a list of package names the
   removal guard protects on top of its built-in list (another kernel flavour, a
   site's network service). Names match exactly, and the built-in list always
@@ -29,8 +42,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   check is best-effort: the real command resolves the transaction again.
   Transactional (SL Micro, transactional SLES 16), SLE 11 and YUM hosts are not
   checked, and the command output names each one as unchecked; `run` and the
-  prepare and rollback inside `update` are not checked either. The guard's dry
-  runs stay out of the exported install logs, and `show_log` omits the XML of
+  rollback of a failed `update` are not checked either. The guard's dry runs
+  stay out of the exported install logs, and `show_log` omits the XML of
   a successful dry run. See "Removal guard" in the docs (#873). **MCP schema
   note:** the four tools gain an optional boolean `allow_removal`.
 

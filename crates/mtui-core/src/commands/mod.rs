@@ -586,10 +586,10 @@ pub(crate) mod testkit {
         async fn perform_update(
             &self,
             _targets: &mut HostsGroup,
-            _noprepare: bool,
-            _newpackage: bool,
+            options: mtui_testreport::UpdateOptions,
             diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            Self::note_allow_removal(options.allow_removal, diagnostics);
             if self.update_diagnostics {
                 // Both shapes, so the render path is exercised fully.
                 diagnostics.push(mtui_testreport::Diagnostic::highlighted(

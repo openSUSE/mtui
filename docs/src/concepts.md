@@ -170,9 +170,10 @@ concurrently across enabled hosts.
 
 ## Removal guard
 
-`install`, `uninstall`, `prepare` and `downgrade` let the package solver decide
-what else a transaction takes with it, and `-n` accepts the result. Before
-committing, each checked host first resolves the same transaction with a dry
+`install`, `uninstall`, `prepare`, `downgrade` and the two prepares `update`
+runs (before the patch, and after it with `--newpackage`) let the package
+solver decide what else a transaction takes with it, and `-n` accepts the
+result. Before committing, each checked host first resolves the same transaction with a dry
 run (`zypper -x … --dry-run`) and reads the packages it would remove. The host
 is refused — its transaction is not run, it is not rebooted, it gets no history
 row, and it fails the command by name while the other hosts carry on — when
@@ -191,10 +192,19 @@ A refused host has still been through the steps before the dry run:
 - `prepare`: the update repository was added and refreshed, and stays.
 - `downgrade`: the update repository was removed and the repositories
   refreshed; it is not added back.
+- `update`, first prepare: its repository step has run. The host is then left
+  out of the update: it is not patched, its reason is reported once as
+  `<host>: its prepare was refused: …` however the update ends, and the update
+  fails naming it while the other hosts are patched. When every host is
+  refused, nothing is patched.
+- `update --newpackage`, the prepare after the patch: the host keeps its patch
+  and the update stands; the refusal is named in a warning.
 
-In `install`, `uninstall` and `prepare`, a cancel (Ctrl-C, MCP `job_cancel`)
-that lands while the dry run is running stops the command before the
-transaction is dispatched on any host.
+In `install`, `uninstall`, `prepare` and `update`, a cancel (Ctrl-C, MCP
+`job_cancel`) that lands while the dry run is running stops the command before
+the transaction is dispatched on any host; `update` then adds no repository
+and takes no lock. A host refused before the cancel is still named as a
+failure rather than reported as cancelled.
 
 Protected, by exact name: the base system (`aaa_base`, `bash`, `bash-sh`,
 `coreutils`, `filesystem`, `glibc`, `pam`, `systemd`, `udev`, `util-linux`),
@@ -226,7 +236,8 @@ degradation:
   check was verified against.
 - `YUM` hosts: yum/dnf have no machine-readable transaction summary.
 
-`run` is not checked either, nor are the prepare and rollback inside `update`.
+`run` is not checked either, nor is the rollback of a failed `update`: it
+undoes a half-applied update, so it is never refused.
 
 `show_log` omits the XML of a zypper dry run that succeeded, whoever ran it (the
 guard, or a `run` command with the same `zypper -x -n in|rm --dry-run` prefix);

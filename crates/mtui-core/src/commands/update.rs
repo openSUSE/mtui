@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
-use super::perform::{PerformOp, drive};
+use super::perform::{PerformOp, add_allow_removal_arg, drive};
 use super::support::{
     CompletionFlags, add_hosts_arg, complete_fanout_flags, completion_flags, require_packages,
 };
@@ -20,6 +20,7 @@ static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
             "hosts",
             "noprepare",
             "newpackage",
+            "allow_removal",
             "template",
             "all_templates",
         ],
@@ -35,6 +36,9 @@ static FLAGS: LazyLock<CompletionFlags> = LazyLock::new(|| {
 ///
 /// * `--noprepare` skips the initial prepare procedure.
 /// * `--newpackage` installs new packages (a testing prepare) after the update.
+/// * `--allow-removal` skips the removal guard on both prepares, the initial
+///   one and the `--newpackage` one; the rollback of a failed update is never
+///   guarded.
 pub struct Update;
 
 #[async_trait]
@@ -52,7 +56,7 @@ impl Command for Update {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(cmd)
+        add_allow_removal_arg(add_hosts_arg(cmd))
             .arg(
                 Arg::new("newpackage")
                     .long("newpackage")
@@ -132,6 +136,7 @@ mod tests {
                 "--target",
                 "--noprepare",
                 "--newpackage",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates",
@@ -146,6 +151,7 @@ mod tests {
                 "--target",
                 "--noprepare",
                 "--newpackage",
+                "--allow-removal",
                 "--template",
                 "--all-templates"
             ]
@@ -156,11 +162,23 @@ mod tests {
     fn complete_drops_a_used_flag_under_either_spelling() {
         assert_eq!(
             update_complete("-", "update -t h1 --noprepare -"),
-            ["--newpackage", "-T", "--template", "--all-templates"]
+            [
+                "--newpackage",
+                "--allow-removal",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
         );
         assert_eq!(
             update_complete("-", "update --target h1 --newpackage -"),
-            ["--noprepare", "-T", "--template", "--all-templates"]
+            [
+                "--noprepare",
+                "--allow-removal",
+                "-T",
+                "--template",
+                "--all-templates"
+            ]
         );
     }
 
@@ -172,6 +190,7 @@ mod tests {
                 "-t",
                 "--target",
                 "--newpackage",
+                "--allow-removal",
                 "-T",
                 "--template",
                 "--all-templates"
@@ -204,8 +223,10 @@ mod tests {
     fn flags_default_false_and_parse() {
         let d = matches(&Update, &[]);
         assert!(!d.get_flag("noprepare") && !d.get_flag("newpackage"));
-        let a = matches(&Update, &["--noprepare", "--newpackage"]);
+        assert!(!d.get_flag("allow_removal"));
+        let a = matches(&Update, &["--noprepare", "--newpackage", "--allow-removal"]);
         assert!(a.get_flag("noprepare") && a.get_flag("newpackage"));
+        assert!(a.get_flag("allow_removal"));
     }
 
     #[tokio::test]

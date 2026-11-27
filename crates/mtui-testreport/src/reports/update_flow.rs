@@ -24,6 +24,7 @@ use mtui_types::RequestReviewID;
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
 
+use crate::update_workflow::UpdateOptions;
 use crate::update_workflow::actions::ActionCommands;
 use crate::update_workflow::actions::downgrade::TRANSACTIONAL_ROLLBACK;
 use crate::update_workflow::actions::update::removes_repos;
@@ -112,7 +113,8 @@ pub enum UpdateFailure {
     ProbeFailed(UpdateError),
     /// The patch left out one or more hosts the update does not cover: `prepare`
     /// refused them because their products compose none of the update's
-    /// packages, or the update's repositories would not reach them
+    /// packages or because the removal guard refused their transaction, or the
+    /// update's repositories would not reach them
     /// ([`RepoOutcome::reach`]). The other hosts were patched normally; when
     /// every enabled host was left out, nothing was dispatched at all.
     ///
@@ -232,8 +234,7 @@ pub async fn perform_update_with_rollback(
     rrid: Option<&RequestReviewID>,
     packages: &[String],
     targets: &mut HostsGroup,
-    noprepare: bool,
-    newpackage: bool,
+    options: UpdateOptions,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     let Some(rrid) = rrid else {
@@ -248,8 +249,7 @@ pub async fn perform_update_with_rollback(
         &rrid.maintenance_id,
         &rrid.review_id.to_string(),
         Some(&id),
-        noprepare,
-        newpackage,
+        options,
         diagnostics,
     )
     .await
@@ -279,8 +279,7 @@ pub async fn perform_update_with_rollback(
             packages,
             Some(&id),
             Some(after_patch),
-            // Recovery from a failed update; `update` has no `--allow-removal`
-            // to lift a refusal with.
+            // Never guarded: it undoes a half-applied update.
             true,
             diagnostics,
         )
@@ -405,16 +404,27 @@ enum PrepareFailure {
     /// failures: `update` warns there because `build_update_maps` re-detects the
     /// unresolved-key cause moments later and aborts with `MissingUpdater`.
     ///
-    /// `uncomposed` names, as `host -> its products`, the hosts whose products
-    /// compose none of the packages, so nothing was installed on them. `update`
-    /// excludes exactly those from its patch; it cannot otherwise tell them from
-    /// the package-manager noise this variant tolerates.
+    /// `failures` is never empty; the prepare's verdict is their aggregate,
+    /// with `completed` as its completed hosts. `left_out` names the hosts
+    /// nothing was installed on because their products compose none of the
+    /// packages or the removal guard refused them. `update` excludes exactly
+    /// those from its patch; it cannot otherwise tell them from the
+    /// package-manager noise this variant tolerates.
     HostReported {
-        error: UpdateError,
-        uncomposed: BTreeMap<String, String>,
+        failures: Vec<UpdateError>,
+        completed: Vec<String>,
+        left_out: BTreeMap<String, LeftOut>,
     },
     /// A cancellation checkpoint, not a failure.
     Cancelled(UpdateError),
+}
+
+/// Why a prepare left a host without a package baseline.
+enum LeftOut {
+    /// The host's products, named here, compose none of the packages.
+    Uncomposed(String),
+    /// The removal guard refused the host's transaction, for this reason.
+    Refused(String),
 }
 
 /// One host's label for missing-doer errors: `host (Product version,
@@ -1255,11 +1265,12 @@ pub async fn perform_prepare(
 fn flatten_prepare_failure(result: Result<(), PrepareFailure>) -> Result<(), UpdateError> {
     match result {
         Ok(()) => Ok(()),
-        Err(
-            PrepareFailure::DidNotRun(e)
-            | PrepareFailure::HostReported { error: e, .. }
-            | PrepareFailure::Cancelled(e),
-        ) => Err(e),
+        Err(PrepareFailure::DidNotRun(e) | PrepareFailure::Cancelled(e)) => Err(e),
+        Err(PrepareFailure::HostReported {
+            failures,
+            completed,
+            ..
+        }) => aggregate_failures("prepare", failures).map_err(|e| e.with_completed(completed)),
     }
 }
 
@@ -1466,7 +1477,7 @@ async fn prepare_body(
     // Apart from `accounted` (which also holds the `--installed` probe's dead and
     // skipped hosts): only these have no package baseline and are excluded from
     // an embedded `update`.
-    let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
+    let mut left_out: BTreeMap<String, LeftOut> = BTreeMap::new();
 
     // Before the `--installed` probe, so a host the update composes nothing for
     // is never probed. Skipped on an empty list, where every host would compose
@@ -1484,7 +1495,7 @@ async fn prepare_body(
                 host.clone(),
             ));
             accounted.insert(host.clone());
-            uncomposed.insert(host, products);
+            left_out.insert(host, LeftOut::Uncomposed(products));
         }
     }
 
@@ -1531,6 +1542,7 @@ async fn prepare_body(
             if let Some(host) = &e.host {
                 lists.remove(host);
                 accounted.insert(host.clone());
+                left_out.insert(host.clone(), LeftOut::Refused(e.reason.clone()));
             }
             accounted_failures.push(e);
         }
@@ -1678,11 +1690,10 @@ async fn prepare_body(
     // bury a broken host the operator must still see.
     if !failures.is_empty() {
         let completed = completed_hosts(targets, &dispatched, &failures);
-        return aggregate_failures("prepare", failures).map_err(|error| {
-            PrepareFailure::HostReported {
-                error: error.with_completed(completed),
-                uncomposed,
-            }
+        return Err(PrepareFailure::HostReported {
+            failures,
+            completed,
+            left_out,
         });
     }
     if cancelled {
@@ -1690,8 +1701,7 @@ async fn prepare_body(
             "prepare cancelled before any package was installed",
         )));
     }
-    aggregate_failures("prepare", failures)
-        .map_err(|error| PrepareFailure::HostReported { error, uncomposed })
+    Ok(())
 }
 
 /// Records which hosts a prepare fan-out reached, and which of them it failed
@@ -2660,9 +2670,14 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 /// `packages` is the report's package list; `maintenance_id`/`review_id` build
 /// the `$repa` selector. `id` is the RRID recorded in the remote history line
 /// once a command has dispatched (`None` for a direct call with no report).
-/// `noprepare` skips the initial prepare; `newpackage` runs a testing prepare
-/// after the update. `diagnostics` collects the update check's
-/// recognised-but-non-fatal output sections for the command layer.
+/// `options.noprepare` skips the initial prepare; `options.newpackage` runs a
+/// testing prepare after the update. Unless `options.allow_removal`, both
+/// prepares run the removal guard: a host the initial one refuses is excluded
+/// from the patch (see [`UpdateFailure::Excluded`]), one the newpackage one
+/// refuses is a warning. The rollback is never guarded. A cancel collected
+/// after a host failure is reported as that failure. `diagnostics` collects the
+/// update check's recognised-but-non-fatal output sections for the command
+/// layer.
 ///
 /// A run that excluded hosts but patched the rest fails with
 /// [`UpdateFailure::Excluded`] or [`UpdateFailure::RepoAdd`], whose error lists
@@ -2681,10 +2696,14 @@ pub async fn perform_update(
     maintenance_id: &str,
     review_id: &str,
     id: Option<&str>,
-    noprepare: bool,
-    newpackage: bool,
+    options: UpdateOptions,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateFailure> {
+    let UpdateOptions {
+        noprepare,
+        allow_removal,
+        ..
+    } = options;
     let registry = WorkflowRegistry::default();
 
     // Entry gate: nothing has run yet, so a cancel here is a clean no-op.
@@ -2725,7 +2744,7 @@ pub async fn perform_update(
             .collect()
     });
 
-    let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
+    let mut left_out: BTreeMap<String, LeftOut> = BTreeMap::new();
     if !noprepare {
         // Default flags (remove-repo prepare). A prepare that could not run
         // aborts; one that ran and reported a host failure only warns (see
@@ -2738,53 +2757,88 @@ pub async fn perform_update(
             false,
             false,
             false,
-            // `update` has no `--allow-removal` to lift a refusal with.
-            true,
+            allow_removal,
             diagnostics,
         )
         .await
         {
             Ok(()) => {}
             Err(PrepareFailure::DidNotRun(e)) => return Err(UpdateFailure::Prepare(e)),
-            Err(PrepareFailure::Cancelled(e)) => return Err(UpdateFailure::Cancelled(e)),
+            Err(PrepareFailure::Cancelled(e)) => {
+                return Err(outranked_cancel(excluded, e, UpdateFailure::Excluded));
+            }
             Err(PrepareFailure::HostReported {
-                error,
-                uncomposed: refused,
+                failures,
+                left_out: prepare_left_out,
+                ..
             }) => {
-                warn!(error = %error, "prepare before update reported a host failure; continuing");
-                diagnostics.push(Diagnostic::degradation(format!(
-                    "prepare before update reported a host failure ({error}); continuing"
-                )));
-                uncomposed = refused;
+                // A refused host's reason is given once, by its diagnostic below.
+                let others: Vec<UpdateError> = failures
+                    .into_iter()
+                    .filter(|e| {
+                        !e.host.as_ref().is_some_and(|h| {
+                            matches!(prepare_left_out.get(h), Some(LeftOut::Refused(_)))
+                        })
+                    })
+                    .collect();
+                if let Err(error) = aggregate_failures("prepare", others) {
+                    warn!(error = %error, "prepare before update reported a host failure; continuing");
+                    diagnostics.push(Diagnostic::degradation(format!(
+                        "prepare before update reported a host failure ({error}); continuing"
+                    )));
+                }
+                left_out = prepare_left_out;
             }
         }
     }
 
-    // A refused host has no package baseline, so it is dropped from the fan-out
+    // A left-out host has no package baseline, so it is dropped from the fan-out
     // below and named in the verdict rather than covered by the group's success.
-    let refused: Vec<UpdateError> = uncomposed
-        .iter()
-        .map(|(host, products)| {
-            UpdateError::new(
-                format!(
-                    "this host's products ({products}) compose none of the update's packages; \
-                     it was excluded from the update"
-                ),
-                host.clone(),
-            )
-        })
-        .collect();
-    // Pushed here so it reaches an MCP caller on both the success and failure
-    // paths, not only via the final `Excluded` return.
-    for e in &refused {
-        diagnostics.push(Diagnostic::degradation(e.to_string()));
+    for (host, why) in &left_out {
+        let e = match why {
+            LeftOut::Uncomposed(products) => {
+                let e = UpdateError::new(
+                    format!(
+                        "this host's products ({products}) compose none of the update's \
+                         packages; it was excluded from the update"
+                    ),
+                    host.clone(),
+                );
+                // Pushed here so it reaches an MCP caller on both the success
+                // and failure paths, not only via the final `Excluded` return.
+                diagnostics.push(Diagnostic::degradation(e.to_string()));
+                e
+            }
+            LeftOut::Refused(reason) => {
+                // Pushed now: a lock, updater or patch failure ends the update
+                // without `excluded`, so the verdict alone would drop it.
+                diagnostics.push(Diagnostic::degradation(format!(
+                    "{host}: its prepare was refused: {reason}; it was excluded from the update"
+                )));
+                UpdateError::new(
+                    "its prepare was refused by the removal guard (reason above); it was \
+                     excluded from the update",
+                    host.clone(),
+                )
+            }
+        };
+        excluded.push(e);
     }
-    excluded.extend(refused);
-    if !uncomposed.is_empty()
+
+    // A cancel during the prepare stops before any lock or repository add.
+    if !noprepare && targets.cancel_requested() {
+        let cancel = UpdateError::cancelled(
+            "cancelled during the prepare, before the update's repositories were added; \
+             nothing was patched (any package the prepare installed is in `list_history`)",
+        );
+        return Err(outranked_cancel(excluded, cancel, UpdateFailure::Excluded));
+    }
+
+    if !left_out.is_empty()
         && targets
             .targets()
             .filter(|t| t.state() == mtui_types::TargetState::Enabled)
-            .all(|t| uncomposed.contains_key(t.hostname()) || unreached.contains(t.hostname()))
+            .all(|t| left_out.contains_key(t.hostname()) || unreached.contains(t.hostname()))
     {
         // Nothing left to patch, and nothing locked or added yet. `excluded` is
         // non-empty here, so this is always the `Err` arm.
@@ -2800,7 +2854,7 @@ pub async fn perform_update(
     let mut eligible: BTreeSet<String> = targets
         .names()
         .into_iter()
-        .filter(|host| !uncomposed.contains_key(host) && !unreached.contains(host))
+        .filter(|host| !left_out.contains_key(host) && !unreached.contains(host))
         .collect();
 
     // Resolve the updater before any fan-out: a host with no updater doer
@@ -2908,16 +2962,20 @@ pub async fn perform_update(
         tracing::info!("cancelled: stopping before the update command was dispatched");
         abandon_add(targets, &eligible, report).await;
         // A completed prepare's packages stay, though the repo add is undone.
-        return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
-            if noprepare {
-                "cancelled before the update command was dispatched".to_owned()
-            } else {
-                "cancelled before the update command was dispatched; any packages \
-                 installed by the prepare that ran first are left in place \
-                 (see `list_history`)"
-                    .to_owned()
-            },
-        )));
+        let cancel = UpdateError::cancelled(if noprepare {
+            "cancelled before the update command was dispatched".to_owned()
+        } else {
+            "cancelled before the update command was dispatched; any packages \
+             installed by the prepare that ran first are left in place \
+             (see `list_history`)"
+                .to_owned()
+        });
+        let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
+            UpdateFailure::RepoAdd
+        } else {
+            UpdateFailure::Excluded
+        };
+        return Err(outranked_cancel(excluded, cancel, wrap));
     }
 
     // Two-phase: run + check + reboot under the lock (unlock always), then repo
@@ -2994,28 +3052,12 @@ pub async fn perform_update(
         // Ahead of the finishing steps' own diagnostics, under the verdict line.
         diagnostics.push(Diagnostic::degradation(message));
         if !completed.is_empty() {
-            finish_update(
-                targets,
-                &completed,
-                report,
-                packages,
-                newpackage,
-                diagnostics,
-            )
-            .await;
+            finish_update(targets, &completed, report, packages, options, diagnostics).await;
         }
         return Err(e);
     }
 
-    finish_update(
-        targets,
-        &eligible,
-        report,
-        packages,
-        newpackage,
-        diagnostics,
-    )
-    .await;
+    finish_update(targets, &eligible, report, packages, options, diagnostics).await;
     // A repo-add failure outranks the other exclusions in the label; every
     // kind of message survives in `excluded`'s joined detail either way.
     let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
@@ -3029,6 +3071,24 @@ pub async fn perform_update(
     aggregate_failures("update", excluded).map_err(|e| wrap(e.with_completed(completed)))
 }
 
+/// The verdict of an update stopped by `cancel`: every host failure collected
+/// before it outranks it, wrapped by `wrap`, with the cancel appended to the
+/// summary; with none, the cancel itself.
+fn outranked_cancel(
+    mut excluded: Vec<UpdateError>,
+    cancel: UpdateError,
+    wrap: fn(UpdateError) -> UpdateFailure,
+) -> UpdateFailure {
+    if excluded.is_empty() {
+        return UpdateFailure::Cancelled(cancel);
+    }
+    excluded.push(cancel.clone());
+    match aggregate_failures("update", excluded) {
+        Err(e) => wrap(e),
+        Ok(()) => UpdateFailure::Cancelled(cancel),
+    }
+}
+
 /// The steps that follow a passed patch on `hosts`: the `--newpackage` testing
 /// prepare, the post-update package check, and the test repository cleanup.
 async fn finish_update(
@@ -3036,14 +3096,15 @@ async fn finish_update(
     hosts: &BTreeSet<String>,
     report: &dyn SetRepo,
     packages: &[String],
-    newpackage: bool,
+    options: UpdateOptions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Scoped to `hosts`: this *adds* the test repo and `remove_test_repos` only
     // removes it from `hosts`, so a group-wide add would strand it on an
     // excluded host.
-    if newpackage
-        && let Err(e) = flatten_prepare_failure(
+    if options.newpackage {
+        let mut own = Vec::new();
+        let result = flatten_prepare_failure(
             perform_prepare_classified(
                 targets,
                 report,
@@ -3052,17 +3113,24 @@ async fn finish_update(
                 false,
                 true,
                 false,
-                true,
-                diagnostics,
+                options.allow_removal,
+                &mut own,
             )
             .await,
-        )
-    {
-        warn!(error = %e, "newpackage prepare after update failed");
-        diagnostics.push(Diagnostic::degradation(format!(
-            "newpackage prepare after update failed ({e}); the update stands, the newpackage \
-             step did not happen"
-        )));
+        );
+        // The initial prepare already named the hosts it could not check.
+        for d in own {
+            if !diagnostics.contains(&d) {
+                diagnostics.push(d);
+            }
+        }
+        if let Err(e) = result {
+            warn!(error = %e, "newpackage prepare after update failed");
+            diagnostics.push(Diagnostic::degradation(format!(
+                "newpackage prepare after update failed ({e}); the update stands, the newpackage \
+                 step did not happen"
+            )));
+        }
     }
 
     targets.package_check(true, Some(hosts)).await;
@@ -4917,8 +4985,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -4987,8 +5054,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         ))
         .await;
@@ -5088,8 +5154,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5140,8 +5205,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await
@@ -5198,8 +5262,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -5241,8 +5304,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5291,7 +5353,11 @@ mod tests {
         let (report, mut group) = sl_micro_pair(&["pkg-a"], &["pkg-z"]);
 
         let err = report
-            .perform_update(&mut group, false, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("an update that excluded a host is not a success");
 
@@ -5311,8 +5377,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5324,7 +5389,11 @@ mod tests {
 
         let (report, mut group) = sl_micro_pair(&["pkg-z"], &["pkg-z"]);
         let err = report
-            .perform_update(&mut group, false, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("nothing was patched");
         assert!(err.completed().is_empty(), "{err:?}");
@@ -5349,8 +5418,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5361,7 +5429,11 @@ mod tests {
         assert!(e.completed().is_empty(), "{e:?}");
 
         let err = report
-            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .perform_update(
+                &mut group(),
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed");
         assert!(err.completed().is_empty(), "{err:?}");
@@ -5423,15 +5495,22 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
 
-        let Err(UpdateFailure::Cancelled(e)) = res else {
-            panic!("a cancel at the pre-dispatch gate is Cancelled: {res:?}");
+        // h2's exclusion, collected before the cancel, outranks it.
+        let Err(UpdateFailure::Excluded(e)) = res else {
+            panic!("a cancel at the pre-dispatch gate names h2: {res:?}");
         };
+        assert!(!e.is_cancelled(), "{e:?}");
+        assert!(
+            e.reason.starts_with("update failed on h2 (h2: ")
+                && e.reason
+                    .contains("cancelled before the update command was dispatched"),
+            "{e:?}"
+        );
         // Arms the case: h2 was refused and h1 still eligible when the cancel
         // landed, yet h1 was never patched.
         assert_eq!(
@@ -5471,8 +5550,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await
@@ -5894,8 +5972,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5906,7 +5983,11 @@ mod tests {
         assert_eq!(e.completed(), ["h1"], "{e:?}");
 
         let err = report
-            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .perform_update(
+                &mut group(),
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h2's patch never ran");
         assert_eq!(err.completed(), ["h1"], "{err:?}");
@@ -5927,8 +6008,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5956,8 +6036,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -5968,7 +6047,11 @@ mod tests {
         assert_eq!(e.completed(), ["h1"], "{e:?}");
 
         let err = report
-            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .perform_update(
+                &mut group(),
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h2 never came back");
         assert_eq!(err.completed(), ["h1"], "{err:?}");
@@ -6078,8 +6161,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6119,8 +6201,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6157,8 +6238,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6173,7 +6253,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
         let mut diagnostics = Vec::new();
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch never ran");
         assert!(rebooted(&h2), "{:?}", h2.fired_commands());
@@ -6217,7 +6301,11 @@ mod tests {
         let (mut g, h1, h2, update) = group();
         let mut diagnostics = Vec::new();
         report
-            .perform_update(&mut g, true, false, &mut diagnostics)
+            .perform_update(
+                &mut g,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1 could not work out what to patch");
         assert!(
@@ -6252,8 +6340,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -6288,8 +6375,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6302,7 +6388,11 @@ mod tests {
 
         let (mut g, handles) = group();
         report
-            .perform_update(&mut g, true, false, &mut Vec::new())
+            .perform_update(
+                &mut g,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1 could not work out what to patch");
         for (name, handle) in ["h1", "h2", "h3"].into_iter().zip(&handles) {
@@ -6330,8 +6420,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6364,8 +6453,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6393,8 +6481,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6476,8 +6563,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare(),
             diagnostics,
         )
         .await
@@ -6583,7 +6669,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert!(
@@ -6613,7 +6703,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert_eq!(
@@ -6645,7 +6739,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1], false);
 
         report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert!(
@@ -6671,7 +6769,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1], false);
 
         report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert!(
@@ -6776,8 +6878,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -6815,8 +6916,10 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            true,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -6882,8 +6985,10 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            true,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -6921,8 +7026,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -6950,8 +7054,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6981,8 +7084,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -6992,7 +7094,11 @@ mod tests {
         assert!(e.completed().is_empty(), "{e:?}");
 
         let err = report
-            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .perform_update(
+                &mut group(),
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h2's patch failed");
         assert!(err.completed().is_empty(), "{err:?}");
@@ -7015,8 +7121,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -7028,7 +7133,11 @@ mod tests {
         assert_eq!(scope.hosts(), &names(&["h1", "h2"]));
 
         let err = report
-            .perform_update(&mut group(), true, false, &mut Vec::new())
+            .perform_update(
+                &mut group(),
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h2 never rebooted");
         assert!(err.completed().is_empty(), "{err:?}");
@@ -7067,8 +7176,11 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            newpackage,
+            UpdateOptions {
+                newpackage,
+                allow_removal: true,
+                ..UpdateOptions::default()
+            },
             &mut Vec::new(),
         ))
         .await;
@@ -7136,8 +7248,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -7265,8 +7376,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -7320,8 +7430,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -7399,8 +7508,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            true,
+            UpdateOptions::default().newpackage().allow_removal(),
             &mut Vec::new(),
         ))
         .await;
@@ -7467,8 +7575,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            true,
+            UpdateOptions::default().newpackage().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -7544,8 +7651,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -8465,8 +8571,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -8556,7 +8661,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("the update check fails, triggering the rollback");
 
@@ -8817,8 +8926,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -8888,8 +8996,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -9256,8 +9363,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -9297,8 +9403,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -9372,8 +9477,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -9427,8 +9531,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -10184,7 +10287,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
         let err = res.expect_err("a lost transactional host must not report success");
         assert!(
@@ -10258,7 +10365,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("a host whose patch never ran must not report success");
         assert!(
@@ -10304,8 +10415,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -10328,7 +10438,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("a host that never rebooted must not report success");
         assert!(
@@ -10363,7 +10477,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("two failed reboots must not report success");
         assert!(err.reason.contains("h1"), "reason: {}", err.reason);
@@ -10388,7 +10506,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("an undispatched reboot must not report success");
         assert!(
@@ -10417,8 +10539,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -10475,8 +10596,10 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            true,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -10540,8 +10663,10 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            true,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -10595,8 +10720,7 @@ mod tests {
                 "42",
                 "7",
                 None,
-                true,
-                false,
+                UpdateOptions::default().noprepare().allow_removal(),
                 &mut Vec::new(),
             )
             .await;
@@ -10729,8 +10853,7 @@ mod tests {
                 "42",
                 "7",
                 None,
-                false,
-                false,
+                UpdateOptions::default().allow_removal(),
                 &mut Vec::new(),
             )
             .await;
@@ -10842,8 +10965,7 @@ mod tests {
                     "42",
                     "7",
                     None,
-                    false,
-                    false,
+                    UpdateOptions::default().allow_removal(),
                     &mut diagnostics,
                 )
                 .await
@@ -10936,8 +11058,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -11015,8 +11136,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -11059,8 +11179,7 @@ mod tests {
                 "42",
                 "7",
                 None,
-                true,
-                false,
+                UpdateOptions::default().noprepare().allow_removal(),
                 &mut diagnostics,
             )
             .await;
@@ -11506,7 +11625,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h2's patch failed");
 
@@ -11542,7 +11665,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h2's patch failed");
 
@@ -11571,7 +11698,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h2's reboot did not take");
 
@@ -11601,7 +11732,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h2's patch failed");
 
@@ -11869,8 +12004,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -11911,7 +12045,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("a host that could not list its patches must not report success");
         assert_eq!(err.reason, "could not determine what to patch");
@@ -11950,8 +12088,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -11976,7 +12113,11 @@ mod tests {
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
         report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("two failed hosts must not report success");
         for (name, handle) in [("h1", &h1), ("h2", &h2)] {
@@ -12002,7 +12143,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("two failed hosts must not report success");
         assert!(
@@ -12052,8 +12197,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12100,8 +12244,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -12147,7 +12290,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
 
         // Not vacuous: the 102 was actually delivered, and to the patch.
@@ -12193,8 +12340,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12250,7 +12396,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
         assert!(res.is_err(), "check failure surfaces as Err: {res:?}");
 
@@ -12285,8 +12435,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12329,7 +12478,11 @@ mod tests {
 
         let mut diagnostics = Vec::new();
         let err = report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("a held lock aborts the update");
 
@@ -12373,7 +12526,11 @@ mod tests {
 
         let mut diagnostics = Vec::new();
         let res = report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await;
 
         let err = res.expect_err("check failure still surfaces");
@@ -12453,7 +12610,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
 
@@ -12488,8 +12649,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12555,8 +12715,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12597,8 +12756,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         ))
         .await;
@@ -12941,8 +13099,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -12986,8 +13143,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -13029,8 +13185,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -13451,8 +13606,7 @@ mod tests {
                 "42",
                 "7",
                 None,
-                false,
-                false,
+                UpdateOptions::default().allow_removal(),
                 &mut diagnostics,
             )
             .await;
@@ -13872,7 +14026,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("a cancelled update reports an error");
 
@@ -13977,7 +14135,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
 
         assert!(res.is_ok(), "uncancelled update still succeeds: {res:?}");
@@ -13996,7 +14158,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
         assert!(res.is_ok(), "PI update succeeds: {res:?}");
 
@@ -14016,7 +14182,11 @@ mod tests {
         seed_rrid_and_package(&mut report);
 
         let res = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await;
         assert!(res.is_ok(), "OBS update succeeds: {res:?}");
 
@@ -14117,8 +14287,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -14190,8 +14359,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -14247,8 +14415,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -14296,8 +14463,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -14372,8 +14538,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -14436,8 +14601,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -14478,8 +14642,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -14512,7 +14675,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![h1], false);
 
         let err = report
-            .perform_update(&mut group, true, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("a host no repository matches must not report an update");
 
@@ -14544,7 +14711,11 @@ mod tests {
             let (h1, h1_handle) = sles_aarch64_target("h1", "");
             let mut group = HostsGroup::new(vec![h1], false);
             let res = report
-                .perform_update(&mut group, true, false, &mut Vec::new())
+                .perform_update(
+                    &mut group,
+                    UpdateOptions::default().noprepare().allow_removal(),
+                    &mut Vec::new(),
+                )
                 .await;
             got.push((res.map_err(|e| e.to_string()), h1_handle.commands()));
         }
@@ -14582,8 +14753,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -14639,8 +14809,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -14695,8 +14864,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -14793,8 +14961,10 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            true,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
             &mut diagnostics,
         )
         .await;
@@ -15343,7 +15513,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         let err = report
-            .perform_update(&mut group, false, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
@@ -15394,7 +15568,11 @@ mod tests {
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
         report
-            .perform_update(&mut group, false, false, &mut Vec::new())
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed its check");
 
@@ -15465,8 +15643,7 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -15480,7 +15657,11 @@ mod tests {
         let (mut g, h1, h2) = group();
         let mut diagnostics = Vec::new();
         report
-            .perform_update(&mut g, true, false, &mut diagnostics)
+            .perform_update(
+                &mut g,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
 
@@ -15520,7 +15701,11 @@ mod tests {
         let mut diagnostics = Vec::new();
 
         report
-            .perform_update(&mut group, true, false, &mut diagnostics)
+            .perform_update(
+                &mut group,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut diagnostics,
+            )
             .await
             .expect_err("h1's patch failed its check");
 
@@ -15563,15 +15748,18 @@ mod tests {
             "42",
             "7",
             None,
-            true,
-            false,
+            UpdateOptions::default().noprepare().allow_removal(),
             &mut diagnostics,
         )
         .await;
 
         let (mut g, h1, h2) = group();
         report
-            .perform_update(&mut g, true, false, &mut Vec::new())
+            .perform_update(
+                &mut g,
+                UpdateOptions::default().noprepare().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed its check");
         assert!(
@@ -15647,8 +15835,7 @@ mod tests {
             "42",
             "7",
             None,
-            false,
-            false,
+            UpdateOptions::default().allow_removal(),
             &mut Vec::new(),
         )
         .await;
@@ -15656,7 +15843,11 @@ mod tests {
 
         let (mut g, h1, h2) = group();
         report
-            .perform_update(&mut g, false, false, &mut Vec::new())
+            .perform_update(
+                &mut g,
+                UpdateOptions::default().allow_removal(),
+                &mut Vec::new(),
+            )
             .await
             .expect_err("h1's patch failed its check");
 
@@ -16197,5 +16388,424 @@ mod tests {
         };
         assert!(!downgraded(&h1), "{:?}", h1.commands());
         assert!(downgraded(&h2), "{:?}", h2.commands());
+    }
+
+    const PREPARE_PROBE: &str = "zypper -x -n in --dry-run -y -l pkg-a";
+
+    /// `update`'s embedded prepare is guarded like the standalone one: the
+    /// refused host is left out of the update, its peer is patched.
+    #[tokio::test]
+    async fn update_excludes_the_host_whose_prepare_dry_run_removes_a_protected_package() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let (t2, h2) = target_answering("h2", PREPARE_PROBE, &dry_run_removing(&[]), 0, "");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(err)) = res else {
+            panic!("h1's prepare was refused: {res:?}");
+        };
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason.ends_with("it was excluded from the update"),
+            "{err:?}"
+        );
+        assert_eq!(err.completed(), ["h2".to_owned()]);
+        assert!(ran(&h1, PREPARE_PROBE) && ran(&h2, PREPARE_PROBE));
+        assert!(
+            !ran(&h1, "zypper -n in -y -l  pkg-a"),
+            "{:?}",
+            h1.commands()
+        );
+        assert!(!was_patched(&h1), "{:?}", h1.commands());
+        assert!(was_patched(&h2), "{:?}", h2.commands());
+        // The reason is given once: in the diagnostic, not again in the verdict.
+        assert_eq!(refusals_named(&diagnostics), 1, "{diagnostics:?}");
+        assert!(!err.reason.contains("glibc"), "{err:?}");
+    }
+
+    /// How many degradations name h1's refusal with its reason.
+    fn refusals_named(diagnostics: &[Diagnostic]) -> usize {
+        degradations(diagnostics)
+            .iter()
+            .filter(|d| {
+                d.starts_with("h1: its prepare was refused: ")
+                    && d.contains("protected package(s) glibc")
+            })
+            .count()
+    }
+
+    /// An update that ends before its verdict lists the exclusions still names
+    /// the host its prepare refused, with the reason: here the lock is lost to
+    /// another tester between the prepare and the update.
+    #[tokio::test]
+    async fn a_refusal_is_named_when_the_update_lock_then_fails() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _h1) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let (t2, h2) = target_answering("h2", PREPARE_PROBE, &dry_run_removing(&[]), 0, "");
+        let repo = ContendingRepo::new(
+            vec![(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                names(&["pkg-a"]),
+            )],
+            h2.clone(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(matches!(res, Err(UpdateFailure::LockFailed(_))), "{res:?}");
+        assert_eq!(refusals_named(&diagnostics), 1, "{diagnostics:?}");
+    }
+
+    /// As above, when a peer the prepare could build no command for has no
+    /// updater either.
+    #[tokio::test]
+    async fn a_refusal_is_named_when_a_peer_then_has_no_updater() {
+        let packages = vec!["pkg-a".to_owned()];
+        let (t1, _h1) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        t2.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &RecordingRepo::default(),
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(UpdateFailure::MissingUpdater(_))),
+            "{res:?}"
+        );
+        assert_eq!(refusals_named(&diagnostics), 1, "{diagnostics:?}");
+    }
+
+    /// As above, when the patch then fails its check on the peer.
+    #[tokio::test]
+    async fn a_refusal_is_named_when_the_patch_then_fails() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let patch = zypper_patch_command(&packages);
+        let (t1, _h1) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let conn = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                PREPARE_PROBE,
+                CommandLog::new(PREPARE_PROBE, dry_run_removing(&[]), "", 0, 0),
+            )
+            .with_response(patch.clone(), CommandLog::new(patch, "", "", 104, 0));
+        let (t2, _h2) = sles15_on("h2", conn);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(matches!(res, Err(UpdateFailure::Check(..))), "{res:?}");
+        assert_eq!(refusals_named(&diagnostics), 1, "{diagnostics:?}");
+        // No repository was added to the refused host, so no record names it.
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::NotAdded
+        );
+        assert!(
+            !degradations(&diagnostics)
+                .iter()
+                .any(|d| d.contains("configured on h1")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_with_allow_removal_prepares_without_a_dry_run() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, h) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default().allow_removal(),
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(res.is_ok(), "{res:?}");
+        assert!(
+            !h.commands().iter().any(|c| c.contains("--dry-run")),
+            "{:?}",
+            h.commands()
+        );
+        assert!(ran(&h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
+        assert!(was_patched(&h), "{:?}", h.commands());
+    }
+
+    /// The rollback undoes a half-applied update, so the guard never stands in
+    /// its way, even when the update itself was guarded.
+    #[tokio::test]
+    async fn the_rollback_of_a_guarded_update_is_never_refused() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let patch = zypper_patch_command(&packages);
+        // Any other dry run answers the version line, which the guard cannot read.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                PREPARE_PROBE,
+                CommandLog::new(PREPARE_PROBE, dry_run_removing(&[]), "", 0, 0),
+            )
+            .with_response(patch.clone(), CommandLog::new(patch, "", "", 104, 0));
+        let (t, h) = sles15_on("h1", conn);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        report
+            .perform_update(&mut group, UpdateOptions::default(), &mut Vec::new())
+            .await
+            .expect_err("h1's patch failed its check");
+
+        assert!(ran(&h, PREPARE_PROBE), "{:?}", h.commands());
+        let commands = h.commands();
+        assert!(
+            commands
+                .iter()
+                .any(|c| c.contains("&& zypper -n in -C --force-resolution --oldpackage")),
+            "the rollback downgraded h1: {commands:?}"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| c.contains("--dry-run") && c.contains("--oldpackage")),
+            "{commands:?}"
+        );
+    }
+
+    /// A refusal in the embedded prepare outranks a cancel that lands during
+    /// its dry run: the reply names the refused host, and nothing is patched.
+    #[tokio::test]
+    async fn an_update_prepare_refusal_collected_before_the_cancel_outranks_it() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let token = HostsGroup::new(Vec::new(), false).cancel_token();
+        let (t1, h1) = sles15_on(
+            "h1",
+            dry_run_conn("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), "", 0),
+        );
+        let (t2, h2) = sles15_on(
+            "h2",
+            dry_run_conn("h2", PREPARE_PROBE, &dry_run_removing(&[]), "", 0)
+                .with_cancel_on_command(PREPARE_PROBE, token.clone()),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        group.set_cancel_token(token);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(err)) = res else {
+            panic!("h1's refusal outranks the cancel: {res:?}");
+        };
+        assert!(!err.is_cancelled(), "{err:?}");
+        assert!(err.completed().is_empty(), "{err:?}");
+        assert_eq!(refusals_named(&diagnostics), 1, "{diagnostics:?}");
+        assert!(
+            err.reason.starts_with("update failed on h1 (h1: ")
+                && err.reason.contains(
+                    "cancelled during the prepare, before the update's repositories were added"
+                ),
+            "{err:?}"
+        );
+        for h in [&h1, &h2] {
+            assert!(!was_patched(h), "{:?}", h.commands());
+            assert!(!ran(h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
+            assert!(
+                !h.commands().iter().any(|c| c.starts_with("zypper -n ar ")),
+                "no test repository is added after the cancel: {:?}",
+                h.commands()
+            );
+            assert_eq!(
+                lock_takes(h),
+                1,
+                "only the prepare's lock: {:?}",
+                h.sftp_ops()
+            );
+        }
+    }
+
+    /// Any host failure collected before a cancel outranks it, not only a
+    /// refusal: here a host the update's repositories do not reach.
+    #[tokio::test]
+    async fn an_unreached_host_outranks_a_cancel_during_the_update_prepare() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let token = HostsGroup::new(Vec::new(), false).cancel_token();
+        let (t1, _h1) = sles_aarch64_target("h1", "");
+        let (t2, h2) = sles15_on(
+            "h2",
+            dry_run_conn("h2", PREPARE_PROBE, &dry_run_removing(&[]), "", 0)
+                .with_cancel_on_command(PREPARE_PROBE, token.clone()),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        group.set_cancel_token(token);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(err)) = res else {
+            panic!("h1's exclusion outranks the cancel: {res:?}");
+        };
+        assert!(!err.is_cancelled(), "{err:?}");
+        assert!(
+            err.reason.starts_with("update failed on h1 (h1: "),
+            "{err:?}"
+        );
+        assert!(!was_patched(&h2), "{:?}", h2.commands());
+    }
+
+    /// The `--newpackage` prepare after the patch is guarded too; a refusal
+    /// there leaves the update standing and names the refused host once.
+    #[tokio::test]
+    async fn update_newpackage_prepare_refuses_a_protected_removal() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let (t2, h2) = target_answering("h2", PREPARE_PROBE, &dry_run_removing(&[]), 0, "");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default().noprepare().newpackage(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(res.is_ok(), "the update stands: {res:?}");
+        assert!(was_patched(&h1) && was_patched(&h2));
+        assert!(
+            !ran(&h1, "zypper -n in -y -l  pkg-a"),
+            "{:?}",
+            h1.commands()
+        );
+        assert!(ran(&h2, "zypper -n in -y -l  pkg-a"), "{:?}", h2.commands());
+        let naming: Vec<&str> = degradations(&diagnostics)
+            .into_iter()
+            .filter(|d| d.contains("h1"))
+            .collect();
+        assert_eq!(naming.len(), 1, "{diagnostics:?}");
+        assert!(
+            naming[0].starts_with("newpackage prepare after update failed (h1: ")
+                && naming[0].contains("protected package(s) glibc"),
+            "{naming:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_newpackage_prepare_with_allow_removal_runs_no_dry_run() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, h) = target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default()
+                .noprepare()
+                .newpackage()
+                .allow_removal(),
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(res.is_ok(), "{res:?}");
+        assert!(
+            !h.commands().iter().any(|c| c.contains("--dry-run")),
+            "{:?}",
+            h.commands()
+        );
+        assert!(ran(&h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
     }
 }
