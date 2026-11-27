@@ -11,6 +11,8 @@ mod authoring;
 mod commit_upload;
 #[path = "document_refresh.rs"]
 mod document_refresh;
+#[path = "export_auto.rs"]
+mod export_auto;
 #[path = "fs_responsiveness.rs"]
 mod fs_responsiveness;
 #[path = "ingest.rs"]
