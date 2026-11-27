@@ -204,7 +204,9 @@ the boot chain (`dracut`, `kmod`, `shim`, and the kernels `kernel-default`,
 stack (`libzypp`, `rpm`, `rpm-ndb`, `snapper`, `transactional-update`, `tukit`,
 `zypper`), and what keeps the host reachable (`NetworkManager`, `wicked`,
 `openssh`, `openssh-common`, `openssh-server`, `sudo`); and `grub2` with every
-`grub2-*` package. The list is built in. Known gaps: the `libtukit` library
+`grub2-*` package. The list is built in; `[target] protected_packages` (see
+[Configuration](configuration.md#target)) adds more names, matched exactly,
+and cannot remove any. Known gaps: the `libtukit` library
 packages and the products' `*-release` packages are not on it, so a
 transaction that removes them without also removing a listed package is not
 refused.

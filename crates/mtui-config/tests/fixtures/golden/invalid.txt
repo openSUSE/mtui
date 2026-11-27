@@ -31,6 +31,9 @@ Config {
     slack_poll_interval: 120,
     slack_watch_timeout: 3600,
     target_tempdir: "/tmp",
+    target_protected_packages: [
+        "kept",
+    ],
     lock_reap_stale: true,
     lock_stale_age: 0,
     pool_reap_stale: true,

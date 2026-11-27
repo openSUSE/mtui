@@ -535,7 +535,9 @@ pub trait TestReport {
     /// null object) is a no-op `Ok(())`; so is every `perform_*` default below.
     ///
     /// Unless `allow_removal`, each host first resolves the transaction with a
-    /// dry run and refuses it where a protected package would be removed.
+    /// dry run and refuses it where a protected package would be removed: a
+    /// built-in one, or one of this report's `[target] protected_packages`,
+    /// which every guarded `perform_*` default pushes onto `targets`.
     async fn perform_install(
         &self,
         targets: &mut HostsGroup,
@@ -546,6 +548,7 @@ pub trait TestReport {
         if self.as_set_repo().is_none() {
             return Ok(());
         }
+        targets.set_extra_protected_packages(self.base().config.target_protected_packages.clone());
         update_flow::perform_install(targets, packages, allow_removal, diagnostics).await
     }
 
@@ -563,6 +566,7 @@ pub trait TestReport {
         if self.as_set_repo().is_none() {
             return Ok(());
         }
+        targets.set_extra_protected_packages(self.base().config.target_protected_packages.clone());
         update_flow::perform_uninstall(targets, packages, allow_removal, diagnostics).await
     }
 
@@ -592,6 +596,7 @@ pub trait TestReport {
         let Some(report) = self.as_set_repo() else {
             return Ok(());
         };
+        targets.set_extra_protected_packages(self.base().config.target_protected_packages.clone());
         update_flow::perform_prepare(
             targets,
             report,
@@ -625,6 +630,7 @@ pub trait TestReport {
         let Some(report) = self.as_set_repo() else {
             return Ok(());
         };
+        targets.set_extra_protected_packages(self.base().config.target_protected_packages.clone());
         let id = self.rrid().map(ToString::to_string);
         update_flow::perform_downgrade(
             targets,

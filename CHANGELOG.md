@@ -10,6 +10,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `[target] protected_packages` config key: a list of package names the
+  removal guard protects on top of its built-in list (another kernel flavour, a
+  site's network service). Names match exactly, and the built-in list always
+  applies. Across config files the list is not merged: a later file's list
+  replaces an earlier one's, and `[]` clears it. A malformed entry is dropped
+  with an error while the rest still apply; a value that is not an array, or
+  holds no valid name, is ignored and the earlier file's list stays.
+  `config show target_protected_packages` prints it (#878).
 - `install`, `uninstall`, `prepare` and `downgrade` now resolve each host's
   transaction with a `zypper --dry-run` before committing it, and refuse it on
   a host where the solver would remove a protected package the command did not

@@ -37,6 +37,7 @@ baremetal = "http://bm.a.example.com"
 
 [target]
 tempdir = "/var/tmp/a"
+protected_packages = ["kernel-foo", "netsvc-a"]
 
 [gitea]
 token = "tok-a"

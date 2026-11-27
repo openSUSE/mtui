@@ -64,6 +64,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "slack_poll_interval" => config.slack_poll_interval.to_string(),
         "slack_watch_timeout" => config.slack_watch_timeout.to_string(),
         "target_tempdir" => config.target_tempdir.display().to_string(),
+        "target_protected_packages" => config.target_protected_packages.join(", "),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
         "pool_reap_stale" => config.pool_reap_stale.to_string(),
@@ -181,7 +182,7 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
 
 /// The attribute names `show` lists when given none, in a stable order.
 /// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
-const ATTRS: [&str; 38] = [
+const ATTRS: [&str; 39] = [
     "template_dir",
     "session_user",
     "install_logs",
@@ -213,6 +214,7 @@ const ATTRS: [&str; 38] = [
     "slack_poll_interval",
     "slack_watch_timeout",
     "target_tempdir",
+    "target_protected_packages",
     "lock_reap_stale",
     "lock_stale_age",
     "pool_reap_stale",
@@ -496,6 +498,42 @@ mod tests {
         assert!(out.contains("openqa_instance"));
         assert!(out.contains("openqa_instance_baremetal"));
         assert!(out.contains("gitea_token"));
+    }
+
+    #[tokio::test]
+    async fn show_target_protected_packages_on_both_surfaces() {
+        for is_repl in [true, false] {
+            let (mut session, buf) = empty_session();
+            session.is_repl = is_repl;
+            session.config.target_protected_packages = vec!["kernel-foo".into(), "netsvc".into()];
+            ConfigCmd
+                .call(
+                    &mut session,
+                    &matches(&ConfigCmd, &["show", "target_protected_packages"]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                buf.contents().trim_end(),
+                "target_protected_packages = \"kernel-foo, netsvc\"",
+                "is_repl={is_repl}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn target_protected_packages_is_read_only() {
+        let (mut session, _buf) = empty_session();
+        session.config.target_protected_packages = vec!["netsvc".into()];
+        let err = ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "target_protected_packages", "x"]),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("read-only"), "{err}");
+        assert_eq!(session.config.target_protected_packages, ["netsvc"]);
     }
 
     #[tokio::test]

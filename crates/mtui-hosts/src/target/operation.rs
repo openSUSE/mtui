@@ -213,6 +213,9 @@ pub trait OperationGroup: Send {
     /// checkpoint before the command dispatches.
     fn cancel_requested(&self) -> bool;
 
+    /// The package names the removal guard protects on top of its built-in list.
+    fn extra_protected_packages(&self) -> &[String];
+
     /// Releases the shared operation lock, returning each host's [`LockOutcome`] so the
     /// caller can tell a benign [`Contended`](LockOutcome::Contended) lock from a
     /// stranded [`Failed`](LockOutcome::Failed) one.
@@ -666,6 +669,8 @@ mod tests {
         cancel_on_first_run: bool,
         /// Whether `run` has been called.
         ran: bool,
+        /// What `extra_protected_packages` answers.
+        extra_protected_packages: Vec<String>,
     }
 
     impl MockGroup {
@@ -693,6 +698,7 @@ mod tests {
                 history_hosts: Vec::new(),
                 cancel_on_first_run: false,
                 ran: false,
+                extra_protected_packages: Vec::new(),
             }
         }
 
@@ -786,6 +792,10 @@ mod tests {
 
         fn cancel_requested(&self) -> bool {
             self.cancel_on_first_run && self.ran
+        }
+
+        fn extra_protected_packages(&self) -> &[String] {
+            &self.extra_protected_packages
         }
 
         async fn add_history(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
@@ -1467,6 +1477,39 @@ mod tests {
         assert_eq!(
             report.dry_runs.verdicts["h2"],
             Ok(strs(&["libfoo", "libfoo-devel"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_groups_extra_protected_names_refuse_the_host() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check("h1", false, guarded_doer(), sink)];
+        let mut group = MockGroup::new(Ok(plans)).with_output(
+            "h1",
+            &dry_run_removing(&["libfoo", "netsvc"]),
+            0,
+        );
+        group.extra_protected_packages = strs(&["netsvc"]);
+
+        let report = Operation::uninstall(strs(&["libfoo"]))
+            .run(&mut group)
+            .await
+            .expect("the run started");
+
+        assert!(
+            report.dry_runs.verdicts["h1"]
+                .as_ref()
+                .unwrap_err()
+                .contains("protected package(s) netsvc ("),
+            "{:?}",
+            report.dry_runs
+        );
+        assert!(
+            !group
+                .events()
+                .contains(&Event::Run(vec![("h1".into(), "rm libfoo".into())])),
+            "{:?}",
+            group.events()
         );
     }
 

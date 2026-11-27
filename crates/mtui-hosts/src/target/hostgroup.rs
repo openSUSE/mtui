@@ -268,6 +268,9 @@ pub struct HostsGroup {
     /// The registry that lets members tell a sibling group's operation lock from their
     /// own; `None` leaves each member on its own.
     op_lock_holders: Option<OpLockHolders>,
+    /// Package names the removal guard protects on top of its built-in list,
+    /// pushed down from `[target] protected_packages`.
+    extra_protected_packages: Vec<String>,
 }
 
 impl HostsGroup {
@@ -289,7 +292,14 @@ impl HostsGroup {
             max_parallel: 0,
             cancel: CancellationToken::new(),
             op_lock_holders: None,
+            extra_protected_packages: Vec::new(),
         }
+    }
+
+    /// Sets the package names the removal guard protects on top of its
+    /// built-in list.
+    pub fn set_extra_protected_packages(&mut self, names: Vec<String>) {
+        self.extra_protected_packages = names;
     }
 
     /// Installs the registry shared with the process's other groups on every
@@ -444,7 +454,7 @@ impl HostsGroup {
 
     /// A group over `targets` carrying this group's pushed-down session state:
     /// session mode, plan provider, `max_parallel`, cancellation token,
-    /// prompter and operation-lock registry.
+    /// prompter, operation-lock registry and extra protected packages.
     fn sibling_group(&self, targets: Vec<Target>) -> HostsGroup {
         let mut group = HostsGroup::new(targets, self.is_repl);
         group.plan_provider = self.plan_provider.clone();
@@ -452,6 +462,7 @@ impl HostsGroup {
         group.cancel = self.cancel.clone();
         group.prompter = self.prompter.clone();
         group.op_lock_holders = self.op_lock_holders.clone();
+        group.extra_protected_packages = self.extra_protected_packages.clone();
         group
     }
 
@@ -1643,6 +1654,10 @@ impl OperationGroup for HostsGroup {
         HostsGroup::cancel_requested(self)
     }
 
+    fn extra_protected_packages(&self) -> &[String] {
+        &self.extra_protected_packages
+    }
+
     async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
         HostsGroup::unlock(self, None).await
     }
@@ -1925,6 +1940,20 @@ mod tests {
         // that carried the prompter to `selected` but dropped it from `remainder`.
         assert!(sel.prompter.is_some(), "selected half keeps the prompter");
         assert!(rem.prompter.is_some(), "remainder keeps the prompter");
+    }
+
+    #[test]
+    fn select_split_carries_the_extra_protected_names_to_both_halves() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        g.set_extra_protected_packages(vec!["netsvc".to_owned()]);
+
+        let (sel, rem) = g
+            .select_split(Some(&["h1".to_owned()]), true)
+            .expect("split succeeds");
+
+        let want = ["netsvc".to_owned()];
+        assert_eq!(OperationGroup::extra_protected_packages(&sel), want);
+        assert_eq!(OperationGroup::extra_protected_packages(&rem), want);
     }
 
     #[test]

@@ -158,6 +158,60 @@ fn is_relative_dir_name(raw: &str) -> bool {
         && token != ".."
 }
 
+/// Reads `[target] protected_packages` leniently, at parse time so the file
+/// merge only ever sees a usable list: `None` (keep the earlier file's list)
+/// for a non-array value or an array with no valid name, while `[]` clears it.
+fn lenient_protected_packages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let toml::Value::Array(entries) = toml::Value::deserialize(deserializer)? else {
+        tracing::error!(
+            option = "protected_packages",
+            "expected an array of package names; ignoring the option"
+        );
+        return Ok(None);
+    };
+    let had_entries = !entries.is_empty();
+    let names: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let Some(name) = entry.as_str().map(str::trim) else {
+                tracing::error!(
+                    option = "protected_packages",
+                    entry = %entry,
+                    "expected a package name string; dropping the entry"
+                );
+                return None;
+            };
+            if name.is_empty() {
+                tracing::error!(
+                    option = "protected_packages",
+                    "empty package name; dropping the entry"
+                );
+                return None;
+            }
+            if name.contains(|c: char| c.is_whitespace() || matches!(c, '*' | '?' | '[' | ']')) {
+                tracing::error!(
+                    option = "protected_packages",
+                    entry = name,
+                    "expected one exact package name; dropping the entry"
+                );
+                return None;
+            }
+            Some(name.to_owned())
+        })
+        .collect();
+    if had_entries && names.is_empty() {
+        tracing::error!(
+            option = "protected_packages",
+            "no valid package name; keeping the earlier list"
+        );
+        return Ok(None);
+    }
+    Ok(Some(names))
+}
+
 /// Floor under a non-zero `[mcp] audit_log_max_bytes`.
 ///
 /// Below about one record the sink rotates on every append and the audit trail
@@ -236,6 +290,8 @@ pub(crate) struct OpenqaSection {
 #[serde(default)]
 pub(crate) struct TargetSection {
     pub tempdir: Option<PathBuf>,
+    #[serde(deserialize_with = "lenient_protected_packages")]
+    pub protected_packages: Option<Vec<String>>,
 }
 
 /// `[gitea]` table — credentials for the Gitea PR review workflow.
@@ -370,6 +426,7 @@ impl RawConfig {
         take!(openqa, openqa);
         take!(openqa, baremetal);
         take!(target, tempdir);
+        take!(target, protected_packages);
         take!(gitea, token);
         take!(gitea, url);
         take!(slack, enabled);
@@ -515,6 +572,9 @@ pub struct Config {
     // [target]
     /// Remote scratch directory on target hosts.
     pub target_tempdir: PathBuf,
+    /// Package names the removal guard protects on top of its built-in list,
+    /// matched exactly.
+    pub target_protected_packages: Vec<String>,
 
     // [lock]
     /// On connect, force-remove a pre-existing remote lock older than
@@ -657,6 +717,7 @@ impl Default for Config {
             slack_poll_interval: 120,
             slack_watch_timeout: 3600,
             target_tempdir: PathBuf::from("/tmp"),
+            target_protected_packages: Vec::new(),
             lock_reap_stale: true,
             lock_stale_age: 86400,
             pool_reap_stale: true,
@@ -834,6 +895,10 @@ impl Config {
                 .target
                 .tempdir
                 .map_or(d.target_tempdir, |p| expanduser(&p)),
+            target_protected_packages: raw
+                .target
+                .protected_packages
+                .unwrap_or(d.target_protected_packages),
             lock_reap_stale: raw.lock.reap_stale.unwrap_or(d.lock_reap_stale),
             lock_stale_age: raw.lock.stale_age.unwrap_or(d.lock_stale_age),
             pool_reap_stale: raw.lock.pool_reap_stale.unwrap_or(d.pool_reap_stale),
@@ -1328,6 +1393,81 @@ mod tests {
             Config::from_raw(raw).mcp_put_dirs,
             vec![PathBuf::from("/srv/ok")]
         );
+    }
+
+    #[test]
+    fn protected_packages_default_to_none_and_are_trimmed() {
+        assert!(Config::default().target_protected_packages.is_empty());
+        let raw: RawConfig = toml::from_str(
+            "[target]\nprotected_packages = [\"  kernel-foo \", \"\", \"   \", \"netsvc\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Config::from_raw(raw).target_protected_packages,
+            vec!["kernel-foo".to_owned(), "netsvc".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_malformed_protected_package_entry_drops_alone() {
+        let raw: RawConfig = toml::from_str(
+            "[target]\nprotected_packages = [\"ok-pkg\", 3, \"two words\", \"kernel-*\", \"x[1]\"]\n\
+             [connection]\nconnection_timeout = 42\n",
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert_eq!(c.target_protected_packages, vec!["ok-pkg".to_owned()]);
+        assert_eq!(c.connection_timeout, 42);
+    }
+
+    #[test]
+    fn a_non_array_protected_packages_is_ignored_without_dropping_the_file() {
+        let raw: RawConfig = toml::from_str(
+            "[target]\nprotected_packages = \"kernel-foo\"\n[connection]\nconnection_timeout = 42\n",
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert!(c.target_protected_packages.is_empty());
+        assert_eq!(c.connection_timeout, 42);
+    }
+
+    /// A later file's unusable value must not cost the earlier file's names.
+    #[test]
+    fn a_later_bad_protected_packages_keeps_the_earlier_list() {
+        for bad in ["\"kernel-foo\"", "[\"\", 3, \"a b\"]", "7"] {
+            let mut merged = parse("[target]\nprotected_packages = [\"netsvc\"]\n");
+            merged.merge(parse(&format!("[target]\nprotected_packages = {bad}\n")));
+            assert_eq!(
+                Config::from_raw(merged).target_protected_packages,
+                vec!["netsvc".to_owned()],
+                "{bad}"
+            );
+        }
+        let mut cleared = parse("[target]\nprotected_packages = [\"netsvc\"]\n");
+        cleared.merge(parse("[target]\nprotected_packages = []\n"));
+        assert!(
+            Config::from_raw(cleared)
+                .target_protected_packages
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn every_dropped_protected_package_is_logged() {
+        let logs = capture_fields(|| {
+            for value in ["[\"ok\", 3, \"\", \"a b\"]", "\"kernel-foo\"", "[\"x*\"]"] {
+                Config::from_raw(parse(&format!("[target]\nprotected_packages = {value}\n")));
+            }
+        });
+        for message in [
+            "expected a package name string; dropping the entry",
+            "empty package name; dropping the entry",
+            "expected one exact package name; dropping the entry",
+            "expected an array of package names; ignoring the option",
+            "no valid package name; keeping the earlier list",
+        ] {
+            assert!(logs.contains(message), "{message}: {logs}");
+        }
     }
 
     #[test]
