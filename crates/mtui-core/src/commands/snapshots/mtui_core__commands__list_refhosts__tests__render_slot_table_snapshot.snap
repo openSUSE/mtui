@@ -1,0 +1,17 @@
+---
+source: crates/mtui-core/src/commands/list_refhosts.rs
+expression: "format!(\"{with}\\n---\\n{without}\")"
+---
+SLOT                               HOSTS FREE LOCKED POOL UNREACHABLE VERDICT FREE HOSTS
+sles-15-6 x86_64                       3    1      0    1           1 free    whale-00
+sles-15-6 aarch64 +sdk                 1    0      1    0           0 busy
+sles-15-6 s390x                        0    0      0    0           0 none
+
+3 slot(s)
+---
+SLOT                               HOSTS VERDICT
+sles-15-6 x86_64                       3
+sles-15-6 aarch64 +sdk                 1
+sles-15-6 s390x                        0 none
+
+3 of 5 slot(s)
