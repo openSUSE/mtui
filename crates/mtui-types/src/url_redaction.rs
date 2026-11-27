@@ -5,9 +5,9 @@
 //! requested; only the copy that reaches a log line, error message, prompt or
 //! stored command log goes through these helpers.
 //!
-//! [`sanitize_url`] also drops control characters and bidi overrides;
-//! [`sanitize_urls_in_text`] masks userinfo only, as it rewrites text that is
-//! stored and parsed.
+//! [`sanitize_url`] also drops control characters and bidi overrides, for text
+//! that is shown. [`mask_userinfo`] and [`sanitize_urls_in_text`] mask userinfo
+//! only, for a record of what ran and for text that is stored and parsed.
 //!
 //! This is not secret detection: only the userinfo of a `scheme://` authority
 //! (and, for [`sanitize_url`], a bare `…@…` string) is masked. A password
@@ -32,8 +32,10 @@ pub fn sanitize_url(url: &str) -> String {
     sanitize_external(&mask_userinfo(url), None).replace(['\n', '\t'], "")
 }
 
-/// [`sanitize_url`]'s userinfo masking alone, leaving every other byte as is.
-fn mask_userinfo(url: &str) -> String {
+/// [`sanitize_url`]'s userinfo masking alone, leaving every other byte as is:
+/// for a record of what ran or was sent, which must not be filtered.
+#[must_use]
+pub fn mask_userinfo(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         // No scheme separator: fail closed on any `@`.
         return match rest_after_at(url) {

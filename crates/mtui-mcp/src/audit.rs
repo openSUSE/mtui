@@ -592,7 +592,7 @@ fn arms_next(token: &str) -> bool {
 /// Mask one whitespace-delimited token in place.
 fn mask_token(token: &str) -> Cow<'_, str> {
     if token.contains("://") {
-        let stripped = mtui_datasources::sanitize_url(token);
+        let stripped = mtui_types::url_redaction::mask_userinfo(token);
         return if stripped == token {
             Cow::Borrowed(token)
         } else {
@@ -1361,6 +1361,22 @@ mod tests {
         let raw = serde_json::to_string(&args).expect("serialisable");
         assert!(!raw.contains("alice"), "no value is recorded: {raw}");
         assert_eq!(args["secret"], json!(false));
+    }
+
+    /// The record is of what ran, so a URL token keeps every byte the host got
+    /// except its userinfo: control characters and bidi overrides stay.
+    #[test]
+    fn mask_secrets_keeps_a_url_tokens_other_bytes() {
+        let raw = "zypper ar https://h.example/a\u{202e}b\u{1b}]8;;https://evil.example/\u{7}c x";
+        assert_eq!(mask_secrets(raw), raw);
+        assert_eq!(
+            mask_secrets("zypper ar https://u:p@h.example/a\u{202e}b x"),
+            "zypper ar https://***@h.example/a\u{202e}b x"
+        );
+        assert_eq!(
+            mask_secrets("curl https://u:p\"@h.example/x"),
+            "curl https://***@h.example/x"
+        );
     }
 
     #[test]
