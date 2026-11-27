@@ -2161,6 +2161,27 @@ async fn a_busy_server_is_not_reported_as_generating() {
     assert!(!msg.contains("generating"), "{msg}");
 }
 
+/// The listing's 400 reason is TeReGen's text, and it reaches the refusal.
+#[tokio::test]
+async fn a_rejected_listing_reason_is_sanitized_in_the_refusal() {
+    let server = MockServer::start().await;
+    let f = Files::new(&server).await;
+    f.serve_artifacts(&server, 400, json!({"error": "bad \u{9b}2J\u{202e}id"}))
+        .await;
+
+    let msg = refusal(
+        &f.session,
+        "report_file_read",
+        json!({"path": "results/b.log"}),
+    )
+    .await;
+    assert!(
+        msg.contains("server listing failed: the server rejects this id: bad id"),
+        "{msg:?}"
+    );
+    assert!(!msg.contains(['\u{9b}', '\u{202e}']), "{msg:?}");
+}
+
 #[tokio::test]
 async fn a_missing_file_stays_not_found_when_the_server_cannot_answer() {
     let server = MockServer::start().await;

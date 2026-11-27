@@ -498,6 +498,69 @@ mod tests {
         assert!(out.contains("artifact h1.log: FAILED"), "{out}");
     }
 
+    /// A 400's error message is TeReGen's text, on the document and on an
+    /// artifact alike.
+    #[tokio::test]
+    async fn document_path_upload_rejections_are_sanitized() {
+        let rejected = || {
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"error": "bad \u{9b}2J\u{202e}id"}))
+        };
+        let doc_id = "SUSE:Maintenance:1:1";
+        let doc = minimal_document(doc_id);
+        let unsafe_chars = ['\u{9b}', '\u{202e}'];
+
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_auth_success(&server).await;
+        Mock::given(method("PUT"))
+            .and(wpath(format!("/reports/{doc_id}")))
+            .respond_with(rejected())
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = session_with_hosts(doc_id, &["h1"], "ok");
+        let _tmp = set_bare_report_wd(&mut session);
+        session.metadata_mut().base_mut().document = Some(doc.clone());
+        session.metadata_mut().base_mut().document_etag = Some("\"x\"".to_owned());
+        let client = teregen_v2_client(&server, store_file);
+        let err = commit_document(&mut session, &client).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("bad id") && !m.contains(unsafe_chars)),
+            "{err:?}"
+        );
+
+        let server = MockServer::start().await;
+        let (_dir, store_file) = store_path();
+        mount_auth_success(&server).await;
+        Mock::given(method("PUT"))
+            .and(wpath(format!("/reports/{doc_id}")))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_string(serde_json::to_string(&doc).unwrap()),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(wpath(format!("/reports/{doc_id}/artifacts/h1.log")))
+            .respond_with(rejected())
+            .mount(&server)
+            .await;
+        let (mut session, buf) = session_with_hosts(doc_id, &["h1"], "ok");
+        let tmp = set_bare_report_wd(&mut session);
+        std::fs::create_dir_all(tmp.path().join("install_logs")).unwrap();
+        std::fs::write(tmp.path().join("install_logs/h1.log"), b"log").unwrap();
+        session.metadata_mut().base_mut().document = Some(doc);
+        session.metadata_mut().base_mut().document_etag = Some("\"x\"".to_owned());
+        let client = teregen_v2_client(&server, store_file);
+        commit_document(&mut session, &client).await.unwrap_err();
+        let out = buf.contents();
+        assert!(
+            out.contains("artifact h1.log: FAILED") && out.contains("bad id"),
+            "{out:?}"
+        );
+        assert!(!out.contains(unsafe_chars), "{out:?}");
+    }
+
     #[tokio::test]
     async fn document_path_no_etag_sends_zero_requests() {
         let server = MockServer::start().await;

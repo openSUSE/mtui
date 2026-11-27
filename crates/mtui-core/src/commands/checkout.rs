@@ -228,6 +228,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_step_sanitizes_a_rejected_ids_reason() {
+        let server = MockServer::start().await;
+        mount_document(
+            &server,
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"error": "bad \u{9b}2J\u{202e}id"})),
+        )
+        .await;
+        let (mut session, _buf) = document_session(&server, false);
+
+        let err = refresh_step(&mut session, &client(&server), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("the server rejects this id: bad id")
+                    && !m.contains(['\u{9b}', '\u{202e}'])),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_dirty_document_is_refused_before_any_request() {
         let server = MockServer::start().await;
         let (mut session, _buf) = document_session(&server, true);
