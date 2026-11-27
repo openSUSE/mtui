@@ -219,6 +219,10 @@ degradation:
 
 `run` is not checked either, nor are the prepare and rollback inside `update`.
 
+`show_log` omits the XML of a zypper dry run that succeeded, whoever ran it (the
+guard, or a `run` command with the same `zypper -x -n in|rm --dry-run` prefix);
+a failed or unreadable dry run's XML is shown, as it holds zypper's reason.
+
 On a non-transactional host `downgrade` downgrades one package per
 transaction, but the guard judges one dry run of all the host's packages
 together. The single transactions can resolve differently from the combined
