@@ -24,6 +24,24 @@ static ARCH_RE: LazyLock<Regex> =
 static NAMED_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)\((.*)\)").expect("static named-version regex is valid"));
 
+/// Why a `testplatform` names no slot.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TestplatformError {
+    /// No `arch=[…]` segment.
+    #[error("testplatform \"{0}\" yields no slot: it has no `arch=[…]` segment")]
+    NoArch(String),
+    /// An `arch=` segment that is not `[…]`.
+    #[error(
+        "testplatform \"{0}\" yields no slot: its arch segment does not parse as \
+         `arch=[<arch>,…]`"
+    )]
+    UnparsableArch(String),
+    /// An empty element in the arch list (`arch=[]`, `arch=[x86_64,]`), which
+    /// would match every arch rather than name one.
+    #[error("testplatform \"{0}\" names an empty arch in its `arch=[…]` segment")]
+    EmptyArch(String),
+}
+
 /// A search query against a [`Refhosts`](super::store::Refhosts) database.
 ///
 /// Each field is optional and the matcher skips unset ones (empty `arch`,
@@ -53,6 +71,29 @@ impl Attributes {
     ///
     #[must_use]
     pub fn from_testplatform(testplatform: &str) -> Vec<Self> {
+        Self::parse(testplatform).0
+    }
+
+    /// [`from_testplatform`](Self::from_testplatform), refusing a testplatform
+    /// that requests no slot or an empty arch.
+    ///
+    /// # Errors
+    /// A [`TestplatformError`] naming what is missing or empty.
+    pub fn try_from_testplatform(testplatform: &str) -> Result<Vec<Self>, TestplatformError> {
+        let tp = || testplatform.to_owned();
+        match Self::parse(testplatform) {
+            (attrs, _) if attrs.iter().any(|a| a.arch.is_empty()) => {
+                Err(TestplatformError::EmptyArch(tp()))
+            }
+            (attrs, _) if !attrs.is_empty() => Ok(attrs),
+            (_, true) => Err(TestplatformError::UnparsableArch(tp())),
+            (_, false) => Err(TestplatformError::NoArch(tp())),
+        }
+    }
+
+    /// The per-arch attributes, and whether any `arch=` segment was present.
+    fn parse(testplatform: &str) -> (Vec<Self>, bool) {
+        let mut arch_seen = false;
         let mut base = Self::default();
         let mut arch_list: Vec<String> = Vec::new();
 
@@ -64,6 +105,7 @@ impl Attributes {
 
             match key {
                 "arch" => {
+                    arch_seen = true;
                     if let Some(cap) = ARCH_RE.captures(content) {
                         arch_list = cap[1].split(',').map(|x| x.trim().to_owned()).collect();
                     }
@@ -88,14 +130,15 @@ impl Attributes {
             }
         }
 
-        arch_list
+        let attrs = arch_list
             .into_iter()
             .map(|arch| {
                 let mut attr = base.clone();
                 attr.arch = arch;
                 attr
             })
-            .collect()
+            .collect();
+        (attrs, arch_seen)
     }
 
     /// The queried architecture; empty means "any".
@@ -200,6 +243,54 @@ fn parse_field(value: &str) -> VersionField {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn try_from_testplatform_refuses_what_requests_no_arch() {
+        let refused = |tp: &str| Attributes::try_from_testplatform(tp).unwrap_err();
+        let base = "base=sles(major=15,minor=6)";
+        assert_eq!(refused(base), TestplatformError::NoArch(base.to_owned()));
+        let tp = format!("{base};arch=x86_64");
+        assert_eq!(refused(&tp), TestplatformError::UnparsableArch(tp.clone()));
+        for arch in ["[]", "[ ]", "[x86_64,]", "[,x86_64]"] {
+            let tp = format!("{base};arch={arch}");
+            assert_eq!(
+                refused(&tp),
+                TestplatformError::EmptyArch(tp.clone()),
+                "{tp}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_from_testplatform_accepts_what_from_testplatform_parses() {
+        let tp = "base=sles(major=15,minor=6);arch=[x86_64, aarch64];addon=sdk(major=15)";
+        let attrs = Attributes::try_from_testplatform(tp).unwrap();
+        assert_eq!(attrs, Attributes::from_testplatform(tp));
+        let arches: Vec<&str> = attrs.iter().map(Attributes::arch).collect();
+        assert_eq!(arches, ["x86_64", "aarch64"]);
+    }
+
+    #[test]
+    fn try_from_testplatform_error_messages_say_why() {
+        let msg = |tp: &str| {
+            Attributes::try_from_testplatform(tp)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            msg("base=sles"),
+            "testplatform \"base=sles\" yields no slot: it has no `arch=[…]` segment"
+        );
+        assert_eq!(
+            msg("base=sles;arch=x86_64"),
+            "testplatform \"base=sles;arch=x86_64\" yields no slot: its arch segment does \
+             not parse as `arch=[<arch>,…]`"
+        );
+        assert_eq!(
+            msg("base=sles;arch=[]"),
+            "testplatform \"base=sles;arch=[]\" names an empty arch in its `arch=[…]` segment"
+        );
+    }
 
     fn v(major: u64, minor: Option<VersionField>) -> Version {
         Version {

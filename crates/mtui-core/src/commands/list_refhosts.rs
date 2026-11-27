@@ -425,6 +425,10 @@ impl Command for ListRefhosts {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        if let Some(tp) = args.get_one::<String>("testplatform") {
+            Attributes::try_from_testplatform(tp)
+                .map_err(|e| CommandError::Other(e.to_string()))?;
+        }
         let config = session.config.clone();
 
         let factory = RefhostsFactory::production(
@@ -1275,6 +1279,40 @@ default:
         let parsed: serde_json::Value = serde_json::from_str(&buf.contents()).unwrap();
         assert_eq!(parsed.as_array().unwrap().len(), 1);
         assert_eq!(parsed[0]["name"], "whale-01");
+    }
+
+    #[tokio::test]
+    async fn call_refuses_a_testplatform_that_requests_no_slot() {
+        use crate::commands::testkit::matches;
+        for (tp, why) in [
+            (
+                "base=sles(major=15,minor=6)",
+                "it has no `arch=[…]` segment",
+            ),
+            (
+                "base=sles(major=15,minor=6);arch=x86_64",
+                "its arch segment does not parse",
+            ),
+            ("base=sles(major=15,minor=6);arch=[]", "names an empty arch"),
+            (
+                "base=sles(major=15,minor=6);arch=[x86_64,]",
+                "names an empty arch",
+            ),
+        ] {
+            for json in [false, true] {
+                let (mut session, buf, _dir) = session_with_refhosts_file(YAML);
+                let mut argv = vec!["--testplatform", tp];
+                if json {
+                    argv.push("--json");
+                }
+                let err = ListRefhosts
+                    .call(&mut session, &matches(&ListRefhosts, &argv))
+                    .await
+                    .expect_err("a testplatform requesting no slot is refused");
+                assert!(err.to_string().contains(why), "{tp}: {err}");
+                assert_eq!(buf.contents(), "", "{tp}: nothing printed");
+            }
+        }
     }
 
     #[tokio::test]
