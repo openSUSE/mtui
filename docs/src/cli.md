@@ -450,7 +450,7 @@ Options:
 
 ## `show_diff`
 
-Shows the raw OBS source diff.
+Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff.
 
 ```text
 Usage: show_diff
@@ -462,7 +462,7 @@ Options:
 
 ## `analyze_diff`
 
-Analyzes the OBS source diff to assist code review.
+Analyzes the OBS source diff to assist code review; on a Gitea-workflow update only the product pull request is available, and it refuses.
 
 ```text
 Usage: analyze_diff

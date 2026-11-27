@@ -4,7 +4,9 @@
 //! sections (`changes files:`, `old:`, `new:`, `spec files:`, repeated `other
 //! changes:`), *not* a plain unified diff, so it is parsed section by section.
 //! `show_diff` pages the raw file; `analyze_diff` cross-checks patch definitions
-//! against application and surfaces review-relevant references.
+//! against application and surfaces review-relevant references. On a
+//! Gitea-workflow update the only diff is the product pull request's, which
+//! carries no package source: `show_diff` warns, `analyze_diff` refuses.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -14,11 +16,11 @@ use clap::ArgMatches;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use mtui_datasources::{Gitea, Osc};
+use mtui_datasources::{Gitea, Osc, sanitize_url};
 use mtui_types::enums::RequestKind;
 
 use super::apicall::{gitea_client, is_gitea_workflow, osc_client};
-use super::support::{complete_with_templates, page_output};
+use super::support::{complete_with_templates, one_line, page_output};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -247,6 +249,57 @@ async fn source_diff(
     Ok(text)
 }
 
+/// The product pull request a Gitea-workflow report's diff is fetched from.
+/// mtui does not follow it to the package pull requests, so that diff alone
+/// never reviews a package's source.
+struct ProductPr {
+    url: String,
+    packages: Vec<String>,
+}
+
+/// The [`ProductPr`] of a Gitea-workflow report, `None` for any other.
+fn product_pr(session: &Session) -> Option<ProductPr> {
+    if !is_gitea_workflow(session) {
+        return None;
+    }
+    let base = session.metadata().base();
+    let url = base
+        .giteapr
+        .as_deref()
+        .or(base.giteaprapi.as_deref())
+        .map_or_else(|| "(unknown)".to_owned(), sanitize_url);
+    let packages = base
+        .document
+        .as_ref()
+        .map(|d| {
+            d.update
+                .source_packages
+                .iter()
+                .map(|p| one_line(p, Some(200)))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ProductPr {
+        url: one_line(&url, Some(500)),
+        packages,
+    })
+}
+
+impl ProductPr {
+    /// What was not reviewed and why, as one line.
+    fn summary(&self) -> String {
+        let what = if self.packages.is_empty() {
+            "the update's source".to_owned()
+        } else {
+            format!("the source of {}", self.packages.join(", "))
+        };
+        format!(
+            "{what} was not reviewed: only the product pull request {} was read, not the package pull requests",
+            self.url
+        )
+    }
+}
+
 /// Shows the raw OBS source diff.
 pub struct ShowDiff;
 
@@ -257,7 +310,9 @@ impl Command for ShowDiff {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Shows the raw OBS source diff.")
+        Some(
+            "Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff.",
+        )
     }
 
     fn scope(&self) -> Scope {
@@ -270,9 +325,19 @@ impl Command for ShowDiff {
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let (path, may_fetch, fetcher) = diff_source(session)?;
+        let product = product_pr(session);
         let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
+        let warning = product.map(|pr| format!("warning: {}", pr.summary()));
+        // First so it survives the MCP output cap and a pager quit; last so it
+        // follows a long diff.
+        if let Some(w) = &warning {
+            session.display.println(w);
+        }
         let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
         page_output(session, &lines).await;
+        if let Some(w) = &warning {
+            session.display.println(w);
+        }
         Ok(())
     }
 }
@@ -287,7 +352,9 @@ impl Command for AnalyzeDiff {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Analyzes the OBS source diff to assist code review.")
+        Some(
+            "Analyzes the OBS source diff to assist code review; on a Gitea-workflow update only the product pull request is available, and it refuses.",
+        )
     }
 
     fn scope(&self) -> Scope {
@@ -296,7 +363,11 @@ impl Command for AnalyzeDiff {
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let (path, may_fetch, fetcher) = diff_source(session)?;
+        let product = product_pr(session);
         let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
+        if let Some(pr) = product {
+            return Err(CommandError::Other(pr.summary()));
+        }
         let sections = split_sections(&text);
 
         let spec_lines = flatten(&sections, "spec files");
@@ -831,6 +902,182 @@ spec files:
                 "{err:?}"
             );
             assert!(!dir.path().join("source.diff").exists());
+        }
+    }
+
+    /// A Gitea-workflow report: its diff is the product pull request's, which
+    /// mtui does not follow to the package pull requests.
+    mod product_pr {
+        use mtui_types::UpdateSource;
+        use mtui_types::fixtures::SLFO_GITEA;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use super::*;
+
+        const PR_PATH: &str = "/api/v1/repos/products/SLFO/pulls/7819";
+        const PR_URL: &str = "https://src.suse.de/products/SLFO/pulls/7819";
+        const PRODUCT_DIFF: &str = "\
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old line
++new line
+";
+        const WARNING: &str = "warning: the source of ansible-trento, mcp-server-trento, trento-agent, \
+trento-checks, trento-wanda, trento-web was not reviewed: only the product pull request \
+https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requests";
+
+        /// The SLFO document fixture, its PR served by `server`.
+        fn gitea_session(
+            server: &MockServer,
+        ) -> (Session, crate::commands::testkit::Buffer, tempfile::TempDir) {
+            let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:7819", &["h1"], "ok");
+            let dir = tempfile::tempdir().unwrap();
+            let base = session.metadata_mut().base_mut();
+            base.path = Some(dir.path().join("log"));
+            base.document = Some(SLFO_GITEA.parse().unwrap());
+            base.update_source = UpdateSource::Git;
+            base.giteapr = Some(PR_URL.to_owned());
+            base.giteaprapi = Some(format!("{}{PR_PATH}", server.uri()));
+            session.config.gitea_url = server.uri();
+            session.config.gitea_token = "tok".to_owned();
+            (session, buf, dir)
+        }
+
+        async fn serve_product_diff(body: &str) -> MockServer {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("{PR_PATH}.diff")))
+                .and(header("Authorization", "token tok"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        }
+
+        fn lines(out: &str) -> Vec<&str> {
+            out.lines().filter(|l| !l.is_empty()).collect()
+        }
+
+        #[tokio::test]
+        async fn show_diff_shows_the_product_diff_between_two_warnings() {
+            let server = serve_product_diff(PRODUCT_DIFF).await;
+            let (mut session, buf, _dir) = gitea_session(&server);
+
+            ShowDiff
+                .call(&mut session, &matches(&ShowDiff, &[]))
+                .await
+                .unwrap();
+
+            let out = buf.contents();
+            insta::assert_snapshot!("show_diff_product_only", out);
+            let lines = lines(&out);
+            assert_eq!(lines.first(), Some(&WARNING), "{out}");
+            assert_eq!(lines.last(), Some(&WARNING), "{out}");
+            assert_eq!(
+                &lines[1..lines.len() - 1],
+                &PRODUCT_DIFF.lines().collect::<Vec<_>>()[..]
+            );
+        }
+
+        #[tokio::test]
+        async fn analyze_diff_on_a_product_diff_fails_instead_of_finding_nothing() {
+            let server = serve_product_diff(PRODUCT_DIFF).await;
+            let (mut session, buf, _dir) = gitea_session(&server);
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            let out = buf.contents();
+            assert!(!out.contains("No spec mentioned"), "{out}");
+            insta::assert_snapshot!("analyze_diff_product_only", format!("{out}--\n{err}"));
+        }
+
+        /// An empty product diff is no review either.
+        #[tokio::test]
+        async fn an_empty_product_diff_is_not_a_success() {
+            let server = serve_product_diff("").await;
+            let (mut session, buf, _dir) = gitea_session(&server);
+
+            ShowDiff
+                .call(&mut session, &matches(&ShowDiff, &[]))
+                .await
+                .unwrap();
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            let out = buf.contents();
+            assert_eq!(lines(&out), vec![WARNING, WARNING], "{out}");
+            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
+        }
+
+        /// The cache holds the product diff too; reading it is no review.
+        #[tokio::test]
+        async fn a_cached_product_diff_fails_without_fetching() {
+            let server = MockServer::start().await;
+            let (mut session, _buf, dir) = gitea_session(&server);
+            std::fs::write(dir.path().join("source.diff"), PRODUCT_DIFF).unwrap();
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+
+        /// A package name from the document cannot start a line of its own.
+        #[tokio::test]
+        async fn a_hostile_package_name_stays_on_one_line() {
+            let server = MockServer::start().await;
+            let (mut session, _buf, dir) = gitea_session(&server);
+            std::fs::write(dir.path().join("source.diff"), PRODUCT_DIFF).unwrap();
+            if let Some(doc) = session.metadata_mut().base_mut().document.as_mut() {
+                doc.update.source_packages = vec!["evil\nwarning: all reviewed\tok".to_owned()];
+            }
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            let msg = err.to_string();
+            assert!(!msg.contains(['\n', '\t']), "{msg:?}");
+            assert!(
+                msg.starts_with("the source of evil warning: all reviewed ok was"),
+                "{msg}"
+            );
+        }
+
+        /// Without the human-facing URL the API URL is named; without either,
+        /// and without a package list, the text still reads.
+        #[test]
+        fn fallbacks_name_what_is_known() {
+            let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:7819", &["h1"], "ok");
+            let base = session.metadata_mut().base_mut();
+            base.update_source = UpdateSource::Git;
+            base.giteaprapi =
+                Some("https://src.suse.de/api/v1/repos/products/SLFO/pulls/7819".to_owned());
+            assert_eq!(
+                product_pr(&session).unwrap().summary(),
+                "the update's source was not reviewed: only the product pull request \
+https://src.suse.de/api/v1/repos/products/SLFO/pulls/7819 was read, not the package pull requests"
+            );
+
+            session.metadata_mut().base_mut().giteaprapi = None;
+            assert_eq!(
+                product_pr(&session).unwrap().summary(),
+                "the update's source was not reviewed: only the product pull request \
+(unknown) was read, not the package pull requests"
+            );
         }
     }
 }

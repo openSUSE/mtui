@@ -1,0 +1,6 @@
+---
+source: crates/mtui-core/src/commands/showdiff.rs
+expression: "format!(\"{out}--\\n{err}\")"
+---
+--
+the source of ansible-trento, mcp-server-trento, trento-agent, trento-checks, trento-wanda, trento-web was not reviewed: only the product pull request https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requests
