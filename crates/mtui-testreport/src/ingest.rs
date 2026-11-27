@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mtui_types::report_document::{
     DocWorkflow, DocumentKind, Issues, ReportDocument, Target, TestPlatform,
 };
+use mtui_types::sanitize::sanitize_log;
 use mtui_types::{RepoUrl, RepoUrlParseError, RequestReviewID, SystemProduct};
 
 use crate::products::{normalize, normalize_16};
@@ -46,7 +47,7 @@ pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
 pub fn apply_document(base: &mut TestReportBase, doc: &ReportDocument) {
     base.rrid = RequestReviewID::parse(&doc.id).ok();
     if base.rrid.is_none() {
-        tracing::warn!(id = %doc.id, "report document: id did not parse as an RRID");
+        tracing::warn!(id = %sanitize_log(&doc.id, None), "report document: id did not parse as an RRID");
     }
     base.realid = Some(doc.id.clone());
 

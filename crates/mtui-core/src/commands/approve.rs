@@ -7,6 +7,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::obs::qam::OpenReview;
 use mtui_datasources::{Gitea, GiteaError, Osc, Slack, is_ack_reaction};
 use mtui_testreport::HashCheck;
+use mtui_types::sanitize::sanitize_log;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{
@@ -354,7 +355,11 @@ async fn hash_gate(
             }
         }
         HashCheck::Mismatch { expected, actual } => {
-            tracing::error!(%expected, %actual, "GiteaPR hash differs from testreport");
+            tracing::error!(
+                expected = %sanitize_log(&expected, None),
+                %actual,
+                "GiteaPR hash differs from testreport"
+            );
             if let Some(given) = accept_head {
                 if given == actual {
                     session.display.println(&format!(
@@ -954,6 +959,31 @@ mod tests {
         let args = matches(&Approve, &[]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("hash differs")));
+    }
+
+    /// `expected` is the hash the document records, so TeReGen's text.
+    #[tokio::test]
+    async fn gitea_hash_mismatch_logs_the_recorded_hash_on_one_line() {
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old\u{9b}2J\u{202e}\nFORGED record".to_owned(),
+                actual: "new".to_owned(),
+            },
+            "http://gitea.invalid/api",
+        );
+
+        let args = matches(&Approve, &[]);
+        crate::commands::testkit::log_capture::start();
+        Approve.call(&mut session, &args).await.unwrap_err();
+        let logged = crate::commands::testkit::log_capture::take();
+
+        let line = logged
+            .iter()
+            .find(|c| c.message.as_deref() == Some("GiteaPR hash differs from testreport"))
+            .map(|c| c.fields.clone())
+            .expect("the mismatch is logged");
+        assert!(line.contains(" expected=old\\nFORGED record "), "{line:?}");
+        assert!(!line.contains(['\u{9b}', '\u{202e}']), "{line:?}");
     }
 
     #[tokio::test]

@@ -146,3 +146,18 @@ fn ingest_golden_per_pair() {
         insta::assert_snapshot!(name, projection(report.base()));
     }
 }
+
+#[test]
+fn unparsable_id_is_sanitized_in_the_log() {
+    let mut document: ReportDocument = mtui_types::fixtures::MAXIMAL.parse().unwrap();
+    document.id = "bad \u{9b}2J\u{202e}id\nFORGED record".to_owned();
+    let mut report = new_report(RequestKind::Maintenance, Config::default());
+    let events =
+        crate::log_capture::capture_events(|| apply_document(report.base_mut(), &document));
+    assert!(events.contains("id=bad id\\nFORGED record"), "{events:?}");
+    assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
+    assert!(
+        !events.lines().any(|l| l.starts_with("FORGED")),
+        "{events:?}"
+    );
+}
