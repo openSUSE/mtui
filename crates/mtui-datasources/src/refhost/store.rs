@@ -275,12 +275,13 @@ impl Refhosts {
     ///
     /// Where [`slot_of`](Self::slot_of) keys on every module a host happens to
     /// have installed, this keys on what the testplatform distinguishes: the
-    /// base product + version requested, the host's arch (testplatforms fan out
-    /// one query per arch), and only the addons explicitly asked for. Hosts
+    /// base product + version requested, the `arch` (testplatforms fan out one
+    /// query per arch), and only the addons explicitly asked for. Hosts
     /// satisfying the same query are interchangeable, so they collapse to one
-    /// slot and the arbiter draws a single host from it.
+    /// slot and the arbiter draws a single host from it. Keyed whether or not a
+    /// host serves it.
     #[must_use]
-    fn slot_for_query(attribute: &Attributes, host: &Host) -> Slot {
+    fn slot_for_query(attribute: &Attributes, arch: &str) -> Slot {
         let (name, ver_str) = match &attribute.product {
             None => (String::new(), String::new()),
             Some(product) => (
@@ -290,7 +291,7 @@ impl Refhosts {
         };
         let mut addons: Vec<String> = attribute.addons.iter().map(|a| a.name.clone()).collect();
         addons.sort();
-        (name, ver_str, host.arch.clone(), addons)
+        (name, ver_str, arch.to_owned(), addons)
     }
 
     /// Return pool candidates `(host, slot)` keyed on the query slot.
@@ -309,12 +310,42 @@ impl Refhosts {
             }
             for attribute in attributes {
                 if Self::is_candidate_match(host, attribute) {
-                    out.push((host.clone(), Self::slot_for_query(attribute, host)));
+                    out.push((host.clone(), Self::slot_for_query(attribute, &host.arch)));
                     break;
                 }
             }
         }
         out
+    }
+
+    /// Return each requested slot of `attributes` with the hosts pool selection
+    /// draws it from.
+    ///
+    /// The slots [`search_pool_by_query`](Self::search_pool_by_query) yields, in
+    /// first-seen order, then one host-less slot per requested arch no host
+    /// matched, in query order, so an arch the inventory lacks is keyed too.
+    #[must_use]
+    pub fn pool_slots_by_query(&self, attributes: &[Attributes]) -> Vec<(Slot, Vec<Host>)> {
+        let mut slots: Vec<(Slot, Vec<Host>)> = Vec::new();
+        for (host, slot) in self.search_pool_by_query(attributes) {
+            match slots.iter_mut().find(|(s, _)| *s == slot) {
+                Some((_, hosts)) => hosts.push(host),
+                None => slots.push((slot, vec![host])),
+            }
+        }
+        let covered: std::collections::HashSet<String> = slots
+            .iter()
+            .map(|((_, _, arch, _), _)| arch.clone())
+            .collect();
+        let mut uncovered: Vec<&str> = Vec::new();
+        for attribute in attributes {
+            let arch = attribute.arch.as_str();
+            if !arch.is_empty() && !covered.contains(arch) && !uncovered.contains(&arch) {
+                uncovered.push(arch);
+                slots.push((Self::slot_for_query(attribute, arch), Vec::new()));
+            }
+        }
+        slots
     }
 
     /// A `base=<name>` query is satisfied when the host's base product matches
@@ -916,7 +947,7 @@ default:
         );
         let attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
         assert_eq!(
-            Refhosts::slot_for_query(&attrs[0], &h),
+            Refhosts::slot_for_query(&attrs[0], &h.arch),
             (
                 "sles".to_owned(),
                 "15-5".to_owned(),
@@ -932,7 +963,7 @@ default:
         let attrs = Attributes::from_testplatform(
             "base=sles(major=15,minor=6);arch=[aarch64];addon=sdk(major=15,minor=6)",
         );
-        let slot = Refhosts::slot_for_query(&attrs[0], &h);
+        let slot = Refhosts::slot_for_query(&attrs[0], &h.arch);
         assert_eq!(slot.2, "aarch64");
         assert_eq!(slot.3, vec!["sdk".to_owned()]);
     }
@@ -977,6 +1008,77 @@ default:
         let names: Vec<_> = pairs.iter().map(|(h, _)| h.name.clone()).collect();
         let unique: std::collections::HashSet<_> = names.iter().cloned().collect();
         assert_eq!(names.len(), unique.len(), "no host appears twice");
+    }
+
+    fn pool_slot_names(slots: &[(Slot, Vec<Host>)]) -> Vec<(String, Vec<String>)> {
+        slots
+            .iter()
+            .map(|((p, v, a, addons), hosts)| {
+                (
+                    format!("{p}|{v}|{a}|{}", addons.join(",")),
+                    hosts.iter().map(|h| h.name.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pool_slots_by_query_groups_served_slots_and_keys_unserved_arches() {
+        let attrs = Attributes::from_testplatform(
+            "base=sles(major=15,minor=5);arch=[s390x,x86_64,ppc64le,s390x]",
+        );
+        let slots = pool().pool_slots_by_query(&attrs);
+        assert_eq!(
+            pool_slot_names(&slots),
+            vec![
+                (
+                    "sles|15-5|x86_64|".to_owned(),
+                    vec!["host-default-x86".to_owned(), "host-nbg-x86".to_owned()]
+                ),
+                (
+                    "sles|15-5|ppc64le|".to_owned(),
+                    vec!["host-nbg-only-here".to_owned()]
+                ),
+                ("sles|15-5|s390x|".to_owned(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn pool_slots_by_query_agrees_with_search_pool_by_query() {
+        let attrs = Attributes::from_testplatform(
+            "base=sles(major=15,minor=5);arch=[x86_64,ppc64le,aarch64]",
+        );
+        let store = pool();
+        let mut from_pairs: Vec<(Slot, String)> = store
+            .search_pool_by_query(&attrs)
+            .into_iter()
+            .map(|(h, s)| (s, h.name))
+            .collect();
+        let mut from_slots: Vec<(Slot, String)> = store
+            .pool_slots_by_query(&attrs)
+            .into_iter()
+            .flat_map(|(s, hosts)| hosts.into_iter().map(move |h| (s.clone(), h.name)))
+            .collect();
+        from_pairs.sort();
+        from_slots.sort();
+        assert!(!from_pairs.is_empty());
+        assert_eq!(from_slots, from_pairs);
+    }
+
+    #[test]
+    fn pool_slots_by_query_counts_a_host_serving_through_an_addon() {
+        let store = Refhosts::from_hosts(vec![ltss_host("SP6", "SP6", true)]);
+        let attrs =
+            Attributes::from_testplatform("base=SLES-LTSS(major=15,minor=SP6);arch=[x86_64]");
+        let slots = store.pool_slots_by_query(&attrs);
+        assert_eq!(
+            pool_slot_names(&slots),
+            vec![(
+                "SLES-LTSS|15-SP6|x86_64|".to_owned(),
+                vec!["ltss-x86".to_owned()]
+            )]
+        );
     }
 
     // --- name_glob ---------------------------------------------------------
