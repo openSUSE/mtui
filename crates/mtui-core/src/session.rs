@@ -4424,6 +4424,56 @@ mod tests {
         assert_eq!(unserved, Vec::new());
     }
 
+    /// A candidate no other slot needs is drawn ahead of a shared one that
+    /// comes first, so the shared host stays free when every slot has its own.
+    #[tokio::test]
+    async fn pool_select_draws_private_candidates_and_leaves_the_shared_one() {
+        let sp5 = || Some(Version::new(15, Some(VersionField::Text("SP5".to_owned()))));
+        let row = |name: &str, addons: &[&str]| Host {
+            name: name.to_owned(),
+            arch: "x86_64".to_owned(),
+            product: Product {
+                name: "SLES".to_owned(),
+                version: sp5(),
+            },
+            addons: addons
+                .iter()
+                .map(|a| mtui_types::Addon {
+                    name: (*a).to_owned(),
+                    version: sp5(),
+                })
+                .collect(),
+        };
+        let store = Refhosts::from_hosts(vec![
+            row("p", &["SLES-LTSS", "sle-ha"]),
+            row("q", &["SLES-LTSS"]),
+            row("r", &["sle-ha"]),
+        ]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![
+            LTSS_TP.to_owned(),
+            "base=sle-ha(major=15,minor=SP5);arch=[x86_64]".to_owned(),
+        ];
+
+        let (chosen, slot_candidates, unserved) = Session::pool_select(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut Default::default(),
+            0,
+            0,
+            no_shuffle,
+        )
+        .await;
+
+        assert_eq!(unserved, Vec::new());
+        assert_eq!(slot_candidates.len(), 2);
+        assert_eq!(chosen, vec!["q", "r"]);
+        assert_eq!(arbiter.owner_of("p"), None);
+    }
+
     /// Slots competing for the same hosts are matched, so each is served when
     /// some assignment serves them all, whatever order they come in.
     #[tokio::test]
@@ -4712,6 +4762,43 @@ mod tests {
                  (h2.example.com by SUSE:Maintenance:2:2) or already serving another \
                  slot (h1.example.com)"
             ]
+        );
+    }
+
+    /// A host held for a slot this call does not ask for is not drawn again
+    /// for another slot it matches, even when every free candidate is claimed
+    /// elsewhere: that slot is reported busy and the host stays with its own.
+    #[tokio::test]
+    async fn pool_select_busy_slot_does_not_take_a_host_held_for_an_absent_slot() {
+        let store = hpc_ltss_store(&["h1.example.com"], &["h2.example.com"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("h1.example.com", &owner));
+        assert!(arbiter.try_acquire("h2.example.com", &other));
+        let mut served =
+            std::collections::HashMap::from([("h1.example.com".to_owned(), HPC_SLOT.to_owned())]);
+        let tps = vec![LTSS_TP.to_owned()];
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+
+        assert_eq!(chosen, Vec::<String>::new());
+        assert_eq!(
+            unserved,
+            vec![Unserved::Busy {
+                slot: LTSS_SLOT.to_owned(),
+                holders: vec![(
+                    "h2.example.com".to_owned(),
+                    "SUSE:Maintenance:2:2".to_owned()
+                )],
+                shared: vec!["h1.example.com".to_owned()],
+            }]
+        );
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([("h1.example.com".to_owned(), HPC_SLOT.to_owned())])
         );
     }
 
