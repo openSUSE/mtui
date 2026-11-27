@@ -991,7 +991,8 @@ payload key is ever an indexed OTLP attribute.
 
 Everything else is **masked**, not trusted. Every recorded string, at any
 nesting — `run` and `comment` argv included — runs through a token scanner that
-strips URL userinfo (the same `sanitize_url` the rest of mtui logs through) and
+strips URL userinfo (and only that: every other byte of a URL is kept, since
+the record is of what ran) and
 replaces the value of a secret-named flag or key: `--password secret`,
 `DB_PASSWORD=…`, `x-api-key: …`, `Authorization: Bearer …`,
 `Authorization: token …` and `'{"password":"…"}'` all record `<redacted>`,
