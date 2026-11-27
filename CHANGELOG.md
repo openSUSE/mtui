@@ -96,10 +96,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - TeReGen's text no longer reaches mtui's log unfiltered. Escape sequences,
   control characters and bidirectional overrides are stripped, as the display
   already did, and each text is cut to 500 characters, in: the schema-drift
-  warning any load can log; the Gitea error a failed hash check logs, which
-  names the document's PR API URL; and, when a stale template is regenerated
-  on load, the reason a regeneration was refused or failed, the job's state
-  and error, and a failed reload's reason.
+  warning any load can log; the Gitea error a failed hash check logs; and,
+  when a stale template is regenerated on load, the reason a regeneration was
+  refused or failed, the job's state and error, and a failed reload's reason.
+  Every URL mtui shows with its credentials masked now also drops those
+  characters, and newlines and tabs, so the document's PR API URL is clean in
+  every line a failed Gitea call or a refused Gitea origin writes.
 - A Ctrl-C or MCP `job_cancel` now stops `load_template` while it waits for
   TeReGen — to finish generating the document or to regenerate a stale
   template — instead of only after the wait of up to ten minutes ends. The

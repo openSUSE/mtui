@@ -1289,10 +1289,10 @@ async fn schema_drift_is_sanitized_in_the_log() {
     assert_sanitized(&events, &format!("drift=/{READABLE}x"));
 }
 
-/// The Gitea error names the PR API URL, which is the document's
-/// `update.origin.api` as TeReGen sent it.
-#[tokio::test]
-async fn gitea_failure_is_sanitized_in_the_log() {
+/// Loads an SLFO document whose PR API URL (`update.origin.api`, TeReGen's
+/// text) is `api(gitea_uri)`, against a Gitea that fails every request, and
+/// returns every log line the load emitted.
+async fn gitea_failure_events(api: impl Fn(&str) -> String) -> String {
     let gitea = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(500))
@@ -1302,11 +1302,7 @@ async fn gitea_failure_is_sanitized_in_the_log() {
     serve_document(
         &teregen,
         SLFO_RRID,
-        slfo_gitea_document(
-            SLFO_RRID,
-            &format!("{}/pulls/1\u{9b}2J\u{202e}", gitea.uri()),
-            "sha",
-        ),
+        slfo_gitea_document(SLFO_RRID, &api(&gitea.uri()), "sha"),
     )
     .await;
     let tmp = tempfile::tempdir().unwrap();
@@ -1316,7 +1312,7 @@ async fn gitea_failure_is_sanitized_in_the_log() {
     config.teregen_api_v2 = teregen.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
-    let events = capture_events_async(async {
+    capture_events_async(async {
         let report = make_testreport(
             &update,
             config,
@@ -1328,11 +1324,36 @@ async fn gitea_failure_is_sanitized_in_the_log() {
         .expect("not cancelled");
         assert!(!report.is_loaded());
     })
-    .await;
+    .await
+}
+
+/// The failed hash check logs the PR API URL on several lines, at WARN among
+/// them; none may carry what TeReGen put in it.
+#[tokio::test]
+async fn gitea_failure_is_sanitized_in_the_log() {
+    let events = gitea_failure_events(|uri| format!("{uri}/pulls/1\u{9b}2J\u{202e}")).await;
     let line = events
         .lines()
         .find(|l| l.contains("TestReport isn't loaded") && l.contains("error="))
         .unwrap_or_else(|| panic!("{events:?}"));
     assert!(line.contains("/pulls/1 returned status 500"), "{line:?}");
-    assert!(!line.contains(['\u{9b}', '\u{202e}']), "{line:?}");
+    assert!(
+        events.contains("failed with status code: 500"),
+        "{events:?}"
+    );
+    assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
+}
+
+/// A PR API URL on another origin is refused before any request, and the
+/// refusal names it.
+#[tokio::test]
+async fn untrusted_gitea_origin_is_sanitized_in_the_log() {
+    let events =
+        gitea_failure_events(|_| "http://evil.invalid/pulls/1\u{9b}2J\u{202e}".to_owned()).await;
+    assert!(
+        events
+            .contains("Refusing to send Gitea token to untrusted URL http://evil.invalid/pulls/1"),
+        "{events:?}"
+    );
+    assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
 }
