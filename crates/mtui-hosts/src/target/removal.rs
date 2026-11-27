@@ -142,11 +142,13 @@ pub fn dry_run_succeeded(exitcode: i32, stdout: &str) -> bool {
 /// # Errors
 ///
 /// Returns the refusal reason when the dry run failed, its output cannot be
-/// parsed, or it would remove a protected package that is not in `requested`.
+/// parsed, or it would remove a protected package (built in, or one of the
+/// configured `extra`) that is not in `requested`.
 pub fn judge_dry_run(
     exitcode: i32,
     stdout: &str,
     requested: &[String],
+    extra: &[String],
 ) -> Result<Vec<String>, String> {
     // `Target::run` records -1 when no exit code came back.
     if exitcode == -1 {
@@ -167,7 +169,10 @@ pub fn judge_dry_run(
     let protected: Vec<&str> = removed
         .iter()
         .map(String::as_str)
-        .filter(|name| is_protected(name) && !requested.iter().any(|r| r == name))
+        .filter(|name| {
+            (is_protected(name) || extra.iter().any(|e| e == name))
+                && !requested.iter().any(|r| r == name)
+        })
         .collect();
     if protected.is_empty() {
         return Ok(removed);
@@ -190,7 +195,8 @@ pub struct DryRuns {
 }
 
 /// Runs each host's dry run (`None`: the host has none the guard can read) and
-/// judges it with [`judge_dry_run`].
+/// judges it with [`judge_dry_run`] against the group's
+/// [`extra_protected_packages`](OperationGroup::extra_protected_packages) names.
 ///
 /// Returns one verdict per probed host, and names every host without a probe
 /// as unchecked.
@@ -221,12 +227,13 @@ pub async fn probe_removals(
     }
     let hosts: Vec<String> = commands.iter().map(|(h, _)| h.clone()).collect();
     group.run(commands).await;
+    let extra = group.extra_protected_packages();
     let verdicts = hosts
         .into_iter()
         .map(|host| {
             let verdict = group.last_output(&host).map_or_else(
                 || Err("no dry-run output was recorded".to_owned()),
-                |o| judge_dry_run(o.exitcode, &o.stdout, requested),
+                |o| judge_dry_run(o.exitcode, &o.stdout, requested, extra),
             );
             match &verdict {
                 Ok(removed) if !removed.is_empty() => {
@@ -374,8 +381,8 @@ mod tests {
 
     #[test]
     fn a_cascade_into_a_protected_package_is_refused() {
-        let reason =
-            judge_dry_run(0, fixture("leap156_rm_libcurl4"), &strs(&["libcurl4"])).unwrap_err();
+        let reason = judge_dry_run(0, fixture("leap156_rm_libcurl4"), &strs(&["libcurl4"]), &[])
+            .unwrap_err();
         assert!(
             reason.contains("protected package(s) libzypp, zypper"),
             "{reason}"
@@ -384,7 +391,8 @@ mod tests {
             reason.contains("curl, libcurl4, libzypp, zypper"),
             "{reason}"
         );
-        let reason = judge_dry_run(0, fixture("tw_rm_libcurl4"), &strs(&["libcurl4"])).unwrap_err();
+        let reason =
+            judge_dry_run(0, fixture("tw_rm_libcurl4"), &strs(&["libcurl4"]), &[]).unwrap_err();
         assert!(
             reason.contains("protected package(s) libzypp, zypper"),
             "{reason}"
@@ -394,14 +402,15 @@ mod tests {
     #[test]
     fn unprotected_dependants_proceed() {
         assert_eq!(
-            judge_dry_run(0, fixture("leap156_rm_curl"), &strs(&["curl"])),
+            judge_dry_run(0, fixture("leap156_rm_curl"), &strs(&["curl"]), &[]),
             Ok(strs(&["curl"]))
         );
         assert_eq!(
             judge_dry_run(
                 0,
                 fixture("leap156_in_busybox_less"),
-                &strs(&["busybox-less"])
+                &strs(&["busybox-less"]),
+                &[]
             ),
             Ok(strs(&["less"]))
         );
@@ -411,31 +420,58 @@ mod tests {
     fn a_protected_package_the_command_names_is_not_refused() {
         // Asked for libzypp alone: zypper still goes with it, unasked.
         let reason =
-            judge_dry_run(0, fixture("leap156_rm_libzypp"), &strs(&["libzypp"])).unwrap_err();
+            judge_dry_run(0, fixture("leap156_rm_libzypp"), &strs(&["libzypp"]), &[]).unwrap_err();
         assert!(reason.contains("protected package(s) zypper ("), "{reason}");
         assert_eq!(
             judge_dry_run(
                 0,
                 fixture("leap156_rm_libzypp"),
-                &strs(&["libzypp", "zypper"])
+                &strs(&["libzypp", "zypper"]),
+                &[]
             ),
             Ok(strs(&["libzypp", "zypper"]))
         );
     }
 
     #[test]
+    fn a_configured_name_is_protected_exactly_on_top_of_the_built_in_list() {
+        let extra = strs(&["curl"]);
+        let reason = judge_dry_run(
+            0,
+            fixture("leap156_rm_libcurl4"),
+            &strs(&["libcurl4"]),
+            &extra,
+        )
+        .unwrap_err();
+        assert!(
+            reason.contains("protected package(s) curl, libzypp, zypper ("),
+            "{reason}"
+        );
+        // A configured name the command asks for is not refused.
+        assert_eq!(
+            judge_dry_run(0, fixture("leap156_rm_curl"), &strs(&["curl"]), &extra),
+            Ok(strs(&["curl"]))
+        );
+        // Exact, like the built-in names: no prefix match.
+        assert_eq!(
+            judge_dry_run(0, fixture("leap156_rm_curl"), &[], &strs(&["cur", "curl-"])),
+            Ok(strs(&["curl"]))
+        );
+    }
+
+    #[test]
     fn a_failed_or_unreadable_dry_run_fails_closed() {
-        let reason = judge_dry_run(104, fixture("leap156_rm_missing"), &[]).unwrap_err();
+        let reason = judge_dry_run(104, fixture("leap156_rm_missing"), &[], &[]).unwrap_err();
         assert!(reason.contains("exit 104"), "{reason}");
-        let reason = judge_dry_run(4, fixture("leap156_rm_glibc_problem"), &[]).unwrap_err();
+        let reason = judge_dry_run(4, fixture("leap156_rm_glibc_problem"), &[], &[]).unwrap_err();
         assert!(reason.contains("exit 4"), "{reason}");
-        let reason = judge_dry_run(-1, "", &[]).unwrap_err();
+        let reason = judge_dry_run(-1, "", &[], &[]).unwrap_err();
         assert!(
             reason.starts_with("the dry run timed out or could not reach the host"),
             "{reason}"
         );
-        let reason = judge_dry_run(0, "ok", &[]).unwrap_err();
+        let reason = judge_dry_run(0, "ok", &[], &[]).unwrap_err();
         assert!(reason.contains("could not be read"), "{reason}");
-        assert!(judge_dry_run(106, fixture("leap156_rm_curl"), &[]).is_ok());
+        assert!(judge_dry_run(106, fixture("leap156_rm_curl"), &[], &[]).is_ok());
     }
 }

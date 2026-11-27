@@ -27,6 +27,9 @@ api_v2 = ""
 openqa = "nope"
 baremetal = "http://"
 
+[target]
+protected_packages = ["", 7, "a b", "kernel-*", " kept "]
+
 [gitea]
 url = "gitea.example.com"
 

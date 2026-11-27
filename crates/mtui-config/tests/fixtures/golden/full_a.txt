@@ -33,6 +33,10 @@ Config {
     slack_poll_interval: 16,
     slack_watch_timeout: 17,
     target_tempdir: "/var/tmp/a",
+    target_protected_packages: [
+        "kernel-foo",
+        "netsvc-a",
+    ],
     lock_reap_stale: false,
     lock_stale_age: 18,
     pool_reap_stale: false,
