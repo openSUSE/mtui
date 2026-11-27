@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::Refhosts;
 use mtui_datasources::http::VerifyPolicy;
-use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
+use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig, Slot};
 use mtui_hosts::Target;
 use mtui_hosts::target::LockRow;
 use mtui_types::Host;
@@ -34,13 +34,7 @@ const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/
 /// Non-`free` or pool-claimed rows survive the crush: the actionable lock signal.
 /// Severity: `locked` or pool-claimed (2) outrank other states (1).
 fn anomaly_severity(r: &Record) -> u8 {
-    if matches!(r.lock.as_deref(), Some("locked")) || r.pool.is_some() {
-        2
-    } else if !matches!(r.lock.as_deref(), None | Some("free")) {
-        1
-    } else {
-        0
-    }
+    r.state().severity()
 }
 
 /// One matched refhost, rendered as a table row or a JSON object.
@@ -72,6 +66,11 @@ pub struct Record {
 }
 
 impl Record {
+    /// The row's `--free` state.
+    fn state(&self) -> HostState {
+        HostState::of(self.lock.as_deref(), self.pool.as_deref())
+    }
+
     /// Omits the `--free` fields when unset (only set under `--free`).
     fn to_json(&self) -> Value {
         let mut obj = json!({
@@ -123,10 +122,7 @@ fn ver_str(host: &Host) -> String {
 
 /// Build a [`Record`] from a matched host, tagging its `--pool` slot.
 fn record(host: &Host, with_slot: bool) -> Record {
-    let slot = with_slot.then(|| {
-        let (name, ver, arch, _addons) = Refhosts::slot_of(host);
-        format!("{name}-{ver} {arch}")
-    });
+    let slot = with_slot.then(|| slot_label(&Refhosts::slot_of(host), false));
     Record {
         name: host.name.clone(),
         arch: host.arch.clone(),
@@ -187,12 +183,7 @@ pub struct Filters<'a> {
 /// through, since the probe never resolved a trustworthy state to combine.
 #[must_use]
 fn lock_label(lock: Option<&str>, pool: Option<&str>) -> String {
-    match lock {
-        Some("free") if pool.is_some() => "pool".to_owned(),
-        Some("locked") if pool.is_some() => "locked+pool".to_owned(),
-        Some(other) => other.to_owned(),
-        None => String::new(),
-    }
+    HostState::of(lock, pool).label().to_owned()
 }
 
 /// Who holds a row's operation lock and pool claim, in `list_locks`'s
@@ -304,6 +295,403 @@ pub fn render_json(records: &[Record]) -> String {
     serde_json::to_string_pretty(&arr).expect("records serialize")
 }
 
+/// One host's `--free` state, folded from its probed `lock` and `pool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostState {
+    /// Not probed: `--free` was not given, or the host was outside the window.
+    Unprobed,
+    /// Neither an operation lock nor a pool claim.
+    Free,
+    /// Pool-claimed, without an operation lock.
+    Pool,
+    /// Operation-locked, without a pool claim.
+    Locked,
+    /// Operation-locked and pool-claimed.
+    LockedPool,
+    /// The operation lock could not be read.
+    Unreachable,
+    /// The probe never finished.
+    Unknown,
+}
+
+impl HostState {
+    /// `unreachable`/`unknown` ignore the claim: the probe resolved no state to combine.
+    fn of(lock: Option<&str>, pool: Option<&str>) -> Self {
+        match (lock, pool.is_some()) {
+            (None, _) => Self::Unprobed,
+            (Some("free"), false) => Self::Free,
+            (Some("free"), true) => Self::Pool,
+            (Some("locked"), false) => Self::Locked,
+            (Some("locked"), true) => Self::LockedPool,
+            (Some("unreachable"), _) => Self::Unreachable,
+            (Some(_), _) => Self::Unknown,
+        }
+    }
+
+    /// The table's lock column.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unprobed => "",
+            Self::Free => "free",
+            Self::Pool => "pool",
+            Self::Locked => "locked",
+            Self::LockedPool => "locked+pool",
+            Self::Unreachable => "unreachable",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Row-budget severity: a lock or claim (2) outranks an unread state (1).
+    fn severity(self) -> u8 {
+        match self {
+            Self::Locked | Self::LockedPool | Self::Pool => 2,
+            Self::Unreachable | Self::Unknown => 1,
+            Self::Free | Self::Unprobed => 0,
+        }
+    }
+}
+
+/// Whether a slot has a free host, per its `--free` survey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// At least one host is free.
+    Free,
+    /// Every host was reached and every one is taken.
+    Busy,
+    /// No host is free, and at least one was unreachable or not probed.
+    Unknown,
+    /// The inventory has no host for the slot.
+    NoHost,
+}
+
+impl Verdict {
+    /// The wire spelling, shared by the table and `--json`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Busy => "busy",
+            Self::Unknown => "unknown",
+            Self::NoHost => "none",
+        }
+    }
+
+    /// Row-budget severity: a slot nobody can draw from now (2) outranks an
+    /// undecided one (1).
+    fn severity(self) -> u8 {
+        match self {
+            Self::NoHost | Self::Busy => 2,
+            Self::Unknown => 1,
+            Self::Free => 0,
+        }
+    }
+}
+
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One `--summary` row: a slot and the matched hosts that serve it.
+#[derive(Debug, Clone)]
+pub struct SlotRow {
+    /// The slot key: as pool selection keys it under `--testplatform`, else
+    /// [`Refhosts::slot_of`].
+    pub slot: Slot,
+    /// The hosts serving the slot, each probed under `--free`.
+    pub hosts: Vec<Record>,
+}
+
+/// A slot's hosts folded by [`HostState`]; the counts are disjoint.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Tally {
+    /// Names of the hosts with neither an operation lock nor a pool claim.
+    pub free: Vec<String>,
+    /// Hosts holding an operation lock, pool-claimed or not.
+    pub locked: usize,
+    /// Hosts pool-claimed without an operation lock.
+    pub pool: usize,
+    /// Hosts the probe could not read, or never finished.
+    pub unreachable: usize,
+    /// Hosts never probed.
+    pub unprobed: usize,
+}
+
+impl SlotRow {
+    /// Folds the hosts' probe states into a [`Tally`].
+    #[must_use]
+    pub fn tally(&self) -> Tally {
+        let mut tally = Tally::default();
+        for r in &self.hosts {
+            match r.state() {
+                HostState::Free => tally.free.push(r.name.clone()),
+                HostState::Locked | HostState::LockedPool => tally.locked += 1,
+                HostState::Pool => tally.pool += 1,
+                HostState::Unreachable | HostState::Unknown => tally.unreachable += 1,
+                HostState::Unprobed => tally.unprobed += 1,
+            }
+        }
+        tally
+    }
+
+    /// [`Verdict::NoHost`] for a slot no host serves; with `free` probed, the
+    /// survey's verdict; otherwise none.
+    #[must_use]
+    pub fn verdict(&self, free: bool) -> Option<Verdict> {
+        if self.hosts.is_empty() {
+            return Some(Verdict::NoHost);
+        }
+        if !free {
+            return None;
+        }
+        let tally = self.tally();
+        Some(if !tally.free.is_empty() {
+            Verdict::Free
+        } else if tally.unreachable + tally.unprobed > 0 {
+            Verdict::Unknown
+        } else {
+            Verdict::Busy
+        })
+    }
+
+    /// Every key is always present; the `--free` counts are `null` unless `free`.
+    fn to_json(&self, free: bool) -> Value {
+        let (product, version, arch, addons) = &self.slot;
+        let tally = free.then(|| self.tally());
+        json!({
+            "slot": {"product": product, "version": version, "arch": arch, "addons": addons},
+            "hosts": self.hosts.len(),
+            "free": tally.as_ref().map(|t| &t.free),
+            "locked": tally.as_ref().map(|t| t.locked),
+            "pool": tally.as_ref().map(|t| t.pool),
+            "unreachable": tally.as_ref().map(|t| t.unreachable),
+            "verdict": self.verdict(free).map(Verdict::as_str),
+        })
+    }
+}
+
+/// A slot as `product-version arch`, then ` +addon,…` when `with_addons` and it
+/// requires any.
+fn slot_label((product, version, arch, addons): &Slot, with_addons: bool) -> String {
+    let name = [product.as_str(), version.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let mut label = format!("{name} {arch}").trim().to_owned();
+    if with_addons && !addons.is_empty() {
+        label.push_str(&format!(" +{}", addons.join(",")));
+    }
+    label
+}
+
+/// Group the matched hosts into `--summary` slot rows, offline.
+#[must_use]
+pub fn gather_slots(store: &Refhosts, args: &Filters<'_>) -> Vec<SlotRow> {
+    let rows = |slots: Vec<(Slot, Vec<Host>)>| {
+        slots
+            .into_iter()
+            .map(|(slot, hosts)| SlotRow {
+                slot,
+                hosts: hosts.iter().map(|h| record(h, false)).collect(),
+            })
+            .collect()
+    };
+    if let Some(tp) = args.testplatform {
+        // The slots `add_host`'s pool selection keys for this testplatform.
+        return rows(store.pool_slots_by_query(&Attributes::from_testplatform(tp)));
+    }
+    let mut slots: indexmap::IndexMap<Slot, Vec<Host>> = indexmap::IndexMap::new();
+    for host in store.query(
+        None,
+        args.name,
+        args.arch,
+        args.product,
+        args.version,
+        args.addon,
+    ) {
+        slots
+            .entry(Refhosts::slot_of(&host))
+            .or_default()
+            .push(host);
+    }
+    rows(slots.into_iter().collect())
+}
+
+/// Render slot rows as an aligned table; `total` is the pre-window slot count.
+#[must_use]
+pub fn render_slot_table(rows: &[SlotRow], free: bool, total: usize) -> String {
+    let line = |slot: &str, hosts: &str, counts: [&str; 4], verdict: &str, names: &str| {
+        let mut cols = vec![format!("{slot:<34}"), format!("{hosts:>5}")];
+        if free {
+            cols.push(format!(
+                "{:>4} {:>6} {:>4} {:>11}",
+                counts[0], counts[1], counts[2], counts[3]
+            ));
+        }
+        cols.push(format!("{verdict:<7}"));
+        if free {
+            cols.push(names.to_owned());
+        }
+        cols.join(" ").trim_end().to_owned()
+    };
+    let mut out = line(
+        "SLOT",
+        "HOSTS",
+        ["FREE", "LOCKED", "POOL", "UNREACHABLE"],
+        "VERDICT",
+        "FREE HOSTS",
+    );
+    out.push('\n');
+    for r in rows {
+        let tally = r.tally();
+        let counts = [
+            tally.free.len().to_string(),
+            tally.locked.to_string(),
+            tally.pool.to_string(),
+            tally.unreachable.to_string(),
+        ];
+        out.push_str(&line(
+            &slot_label(&r.slot, true),
+            &r.hosts.len().to_string(),
+            [&counts[0], &counts[1], &counts[2], &counts[3]],
+            r.verdict(free).map_or("", Verdict::as_str),
+            &tally.free.join(","),
+        ));
+        out.push('\n');
+    }
+    if rows.len() == total {
+        out.push_str(&format!("\n{} slot(s)", rows.len()));
+    } else {
+        out.push_str(&format!("\n{} of {total} slot(s)", rows.len()));
+    }
+    out
+}
+
+/// Serialize slot rows as pretty JSON.
+///
+/// # Panics
+/// Never in practice: the value is a plain array of objects.
+#[must_use]
+pub fn render_slot_json(rows: &[SlotRow], free: bool) -> String {
+    let arr = Value::Array(rows.iter().map(|r| r.to_json(free)).collect());
+    serde_json::to_string_pretty(&arr).expect("slot rows serialize")
+}
+
+/// Probes every host of every row in one bounded fan-out, as [`probe_locks`].
+async fn probe_slots(config: &ProbeConfig, rows: &mut [SlotRow], connect: Connector) {
+    let lens: Vec<usize> = rows.iter().map(|r| r.hosts.len()).collect();
+    let mut flat: Vec<Record> = rows
+        .iter_mut()
+        .flat_map(|r| std::mem::take(&mut r.hosts))
+        .collect();
+    probe_locks(config, &mut flat, connect).await;
+    let mut flat = flat.into_iter();
+    for (row, n) in rows.iter_mut().zip(lens) {
+        row.hosts = flat.by_ref().take(n).collect();
+    }
+}
+
+/// What a `--summary` run reads: the parsed flags, the inventory, and how a
+/// `--free` probe reaches a host.
+struct Survey<'a> {
+    args: &'a ArgMatches,
+    config: &'a mtui_config::Config,
+    store: &'a Refhosts,
+    filters: &'a Filters<'a>,
+    connect: Connector,
+}
+
+/// The windowed rows of a `--summary` run, before the row budget.
+struct SummaryRows {
+    /// The slot rows `--offset`/`--limit` kept, each host probed under `--free`.
+    rows: Vec<SlotRow>,
+    /// Slots matched before the window.
+    total: usize,
+    /// Hosts matched before the window.
+    total_hosts: usize,
+}
+
+/// The `--summary` slot rows windowed by `--offset`/`--limit`, with every host
+/// of a kept slot probed under `--free`.
+async fn summary_rows(survey: &Survey<'_>) -> SummaryRows {
+    let rows = gather_slots(survey.store, survey.filters);
+    let total = rows.len();
+    let total_hosts = rows.iter().map(|r| r.hosts.len()).sum();
+    let mut rows = window(survey.args, rows);
+    if survey.args.get_flag("free") && !rows.is_empty() {
+        probe_slots(&ProbeConfig::new(survey.config), &mut rows, survey.connect).await;
+    }
+    SummaryRows {
+        rows,
+        total,
+        total_hosts,
+    }
+}
+
+/// `--summary`: [`summary_rows`] under the row budget, as a table or JSON.
+///
+/// JSON is a plain array unless rows were cut, by the window or the row
+/// budget: then `{"rows", "window"?, "truncation"?, "probe"?}`.
+async fn summarize(session: &mut Session, survey: &Survey<'_>) {
+    let free = survey.args.get_flag("free");
+    let SummaryRows {
+        rows,
+        total,
+        total_hosts,
+    } = summary_rows(survey).await;
+    let windowed = rows.len();
+    let probed: usize = rows.iter().map(|r| r.hosts.len()).sum();
+    let probe_cut = free && probed < total_hosts;
+    let crushed = crush(
+        rows,
+        |r| r.slot.clone(),
+        |r| r.verdict(free).map_or(0, Verdict::severity),
+    );
+    if survey.args.get_flag("json") {
+        let truncation = crushed.meta(REFHOSTS_HINT);
+        if windowed == total && truncation.is_none() {
+            session
+                .display
+                .println(&render_slot_json(&crushed.kept, free));
+            return;
+        }
+        let mut obj = serde_json::Map::new();
+        let rows = crushed.kept.iter().map(|r| r.to_json(free)).collect();
+        obj.insert("rows".to_owned(), Value::Array(rows));
+        if windowed < total {
+            obj.insert(
+                "window".to_owned(),
+                json!({"kept": windowed, "total": total}),
+            );
+        }
+        if let Some(t) = truncation {
+            obj.insert("truncation".to_owned(), t);
+        }
+        if probe_cut {
+            obj.insert("probe".to_owned(), probe_meta(probed, total_hosts));
+        }
+        session.display.println(
+            &serde_json::to_string_pretty(&Value::Object(obj)).expect("envelope serializes"),
+        );
+        return;
+    }
+    if total == 0 {
+        session.display.println("no refhosts match");
+        return;
+    }
+    session
+        .display
+        .println(&render_slot_table(&crushed.kept, free, total));
+    if let Some(notice) = crushed.notice(REFHOSTS_HINT) {
+        session.display.println(&notice);
+    }
+    if probe_cut {
+        session.display.println(&probe_notice(probed, total_hosts));
+    }
+}
+
 #[async_trait]
 impl Command for ListRefhosts {
     fn name(&self) -> &'static str {
@@ -374,6 +762,18 @@ impl Command for ListRefhosts {
                     .help("group by test-target slot (product+version+arch+addons)"),
             )
             .arg(
+                Arg::new("summary")
+                    .long("summary")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with_all(["pool", "verbose"])
+                    .help(
+                        "one row per slot instead of per host: its host count, and with \
+                     --free the free/locked/pool/unreachable counts, the free hosts and a \
+                     verdict (free/busy/unknown/none); with --testplatform every requested \
+                     arch gets a row, `none` when no host serves it",
+                    ),
+            )
+            .arg(
                 Arg::new("json")
                     .long("json")
                     .action(ArgAction::SetTrue)
@@ -412,6 +812,7 @@ impl Command for ListRefhosts {
                 &["--version"],
                 &["--addon"],
                 &["--pool"],
+                &["--summary"],
                 &["--json"],
                 &["--limit"],
                 &["--offset"],
@@ -469,6 +870,18 @@ impl Command for ListRefhosts {
             pool,
         };
 
+        if args.get_flag("summary") {
+            let survey = Survey {
+                args,
+                config: &config,
+                store: &store,
+                filters: &filters,
+                connect: ssh_target,
+            };
+            summarize(session, &survey).await;
+            return Ok(());
+        }
+
         let records = gather(&store, &filters);
         let matched_total = records.len();
 
@@ -480,7 +893,7 @@ impl Command for ListRefhosts {
         let window_dropped = matched_total.saturating_sub(windowed.len());
 
         if free && !windowed.is_empty() {
-            probe_locks(&ProbeConfig::new(&config), &mut windowed).await;
+            probe_locks(&ProbeConfig::new(&config), &mut windowed, ssh_target).await;
         }
 
         // Row budget backstops the whole-inventory dump: head+tail+anomalies, exact-deduped.
@@ -564,6 +977,15 @@ mod probe_config {
 }
 use probe_config::ProbeConfig;
 
+/// Builds the not-yet-connected [`Target`] a `--free` probe reads one host
+/// through; a seam so tests probe mock connections.
+type Connector = fn(&mtui_config::Config, &str) -> Target;
+
+/// The production [`Connector`]: a real SSH target.
+fn ssh_target(config: &mtui_config::Config, name: &str) -> Target {
+    Target::new(config, name.to_owned(), TargetState::Enabled)
+}
+
 /// What a `--free` probe learned about one host: the lock label and the held
 /// operation lock and pool claim, if any.
 type Probe = (String, Option<LockRow>, Option<LockRow>);
@@ -597,7 +1019,7 @@ async fn probe_state(target: &mut Target, host: &str) -> Probe {
 ///
 /// The only on-wire part of the command; failures are swallowed per host so one
 /// dead host never aborts the listing.
-async fn probe_locks(config: &ProbeConfig, records: &mut [Record]) {
+async fn probe_locks(config: &ProbeConfig, records: &mut [Record], connect: Connector) {
     // Caps peak concurrent connections on large inventories: one task per
     // record, but at most `[connection] max_parallel` connecting at once.
     let bound = (config.get().max_parallel as usize).max(1);
@@ -610,7 +1032,7 @@ async fn probe_locks(config: &ProbeConfig, records: &mut [Record]) {
         set.spawn(async move {
             // Held for the task's lifetime, so at most `bound` probes run.
             let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
-            let mut target = Target::new(&config, name.clone(), TargetState::Enabled);
+            let mut target = connect(&config, &name);
             let probe = match target.connect().await {
                 Ok(()) => probe_state(&mut target, &name).await,
                 Err(_) => ("unreachable".to_owned(), None, None),
@@ -1600,5 +2022,646 @@ default:
         assert_eq!(obj["rows"].as_array().unwrap().len(), 10, "{out}");
         assert!(!out.contains("…[truncated"), "{out}");
         assert!(!out.contains("…[probed"), "{out}");
+    }
+
+    // ------------------------------------------------------------ --summary
+
+    fn slot_names(rows: &[SlotRow]) -> Vec<(String, Vec<&str>)> {
+        rows.iter()
+            .map(|r| {
+                (
+                    slot_label(&r.slot, true),
+                    r.hosts.iter().map(|h| h.name.as_str()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn rows_of(tp: &str) -> Vec<SlotRow> {
+        gather_slots(
+            &store(),
+            &Filters {
+                testplatform: Some(tp),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn summary_keys_every_requested_arch_including_an_unserved_one() {
+        let rows = rows_of("base=sles(major=15,minor=6);arch=[x86_64,s390x,aarch64]");
+        assert_eq!(
+            slot_names(&rows),
+            vec![
+                ("sles-15-6 x86_64".to_owned(), vec!["whale-01"]),
+                ("sles-15-6 aarch64".to_owned(), vec!["whale-02"]),
+                ("sles-15-6 s390x".to_owned(), vec![]),
+            ]
+        );
+        assert_eq!(rows[2].verdict(false), Some(Verdict::NoHost));
+        assert_eq!(rows[2].verdict(true), Some(Verdict::NoHost));
+        assert_eq!(rows[0].verdict(false), None);
+    }
+
+    /// A host matches at most one attribute of a testplatform (they differ only
+    /// by arch), so the only way to count one twice is to query a repeated arch
+    /// twice: that must still give one row holding the host once.
+    #[test]
+    fn summary_counts_a_host_once_when_its_arch_is_requested_twice() {
+        let rows = rows_of("base=sles(major=15,minor=6);arch=[x86_64,aarch64,x86_64]");
+        assert_eq!(
+            slot_names(&rows),
+            vec![
+                ("sles-15-6 x86_64".to_owned(), vec!["whale-01"]),
+                ("sles-15-6 aarch64".to_owned(), vec!["whale-02"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn summary_counts_a_host_serving_the_slot_through_an_addon() {
+        let mut ltss = host("ltss-01", "x86_64", Some(VersionField::Num(6)), vec![]);
+        ltss.product.name = "SLES".to_owned();
+        ltss.addons.push(mtui_types::Addon {
+            name: "SLES-LTSS".to_owned(),
+            version: Some(ver(15, Some(VersionField::Num(6)))),
+        });
+        let store = Refhosts::from_hosts(vec![ltss]);
+        let rows = gather_slots(
+            &store,
+            &Filters {
+                testplatform: Some("base=SLES-LTSS(major=15,minor=6);arch=[x86_64]"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            slot_names(&rows),
+            vec![("SLES-LTSS-15-6 x86_64".to_owned(), vec!["ltss-01"])]
+        );
+    }
+
+    #[test]
+    fn summary_without_testplatform_groups_by_full_slot() {
+        let rows = gather_slots(&store(), &Filters::default());
+        assert_eq!(
+            slot_names(&rows),
+            vec![
+                ("sles-15-6 x86_64 +sdk".to_owned(), vec!["whale-01"]),
+                ("sles-15-6 aarch64".to_owned(), vec!["whale-02"]),
+                ("sles-15-5 x86_64".to_owned(), vec!["shark-01"]),
+            ]
+        );
+    }
+
+    fn claim() -> Option<LockRow> {
+        Some(LockRow {
+            is_locked: true,
+            locked_by: "bob".to_owned(),
+            comment: "SUSE:Maintenance:9:9".to_owned(),
+            ..LockRow::default()
+        })
+    }
+
+    /// A one-slot row whose hosts carry the given `(lock, claimed)` probe
+    /// results; a `""` lock leaves the host unprobed.
+    fn probed(states: &[(&str, bool)]) -> SlotRow {
+        let hosts = states
+            .iter()
+            .enumerate()
+            .map(|(i, (lock, claimed))| {
+                let mut r = record(
+                    &host(
+                        &format!("whale-{i:02}"),
+                        "x86_64",
+                        Some(VersionField::Num(6)),
+                        vec![],
+                    ),
+                    false,
+                );
+                if !lock.is_empty() {
+                    let op = (*lock == "locked").then(|| LockRow {
+                        is_locked: true,
+                        locked_by: "alice".to_owned(),
+                        ..LockRow::default()
+                    });
+                    apply_probe(
+                        &mut r,
+                        ((*lock).to_owned(), op, claimed.then(claim).flatten()),
+                    );
+                }
+                r
+            })
+            .collect();
+        SlotRow {
+            slot: (
+                "sles".to_owned(),
+                "15-6".to_owned(),
+                "x86_64".to_owned(),
+                vec![],
+            ),
+            hosts,
+        }
+    }
+
+    fn tally(free: &[&str], locked: usize, pool: usize, unreachable: usize) -> Tally {
+        Tally {
+            free: free.iter().map(|s| (*s).to_owned()).collect(),
+            locked,
+            pool,
+            unreachable,
+            unprobed: 0,
+        }
+    }
+
+    #[test]
+    fn summary_free_host_next_to_an_unreachable_one_is_free() {
+        let row = probed(&[("unreachable", false), ("free", false)]);
+        assert_eq!(row.tally(), tally(&["whale-01"], 0, 0, 1));
+        assert_eq!(row.verdict(true), Some(Verdict::Free));
+    }
+
+    #[test]
+    fn summary_every_host_taken_is_busy() {
+        let row = probed(&[("locked", false), ("free", true), ("locked", true)]);
+        assert_eq!(row.tally(), tally(&[], 2, 1, 0));
+        assert_eq!(row.verdict(true), Some(Verdict::Busy));
+    }
+
+    #[test]
+    fn summary_no_free_host_and_one_unreachable_is_unknown() {
+        let row = probed(&[("locked", false), ("unreachable", false)]);
+        assert_eq!(row.verdict(true), Some(Verdict::Unknown));
+        let row = probed(&[("unknown", false)]);
+        assert_eq!(row.tally(), tally(&[], 0, 0, 1));
+        assert_eq!(row.verdict(true), Some(Verdict::Unknown));
+    }
+
+    #[test]
+    fn summary_pool_claim_without_operation_lock_is_taken_not_free() {
+        let row = probed(&[("free", true)]);
+        assert_eq!(row.tally(), tally(&[], 0, 1, 0));
+        assert_eq!(row.verdict(true), Some(Verdict::Busy));
+    }
+
+    #[test]
+    fn summary_unprobed_host_is_not_counted_as_unreachable() {
+        let row = probed(&[("locked", false), ("", false)]);
+        assert_eq!(
+            row.tally(),
+            Tally {
+                unprobed: 1,
+                ..tally(&[], 1, 0, 0)
+            }
+        );
+        assert_eq!(row.verdict(true), Some(Verdict::Unknown));
+    }
+
+    #[test]
+    fn host_state_classifies_every_probe_outcome_once() {
+        let cases = [
+            (None::<&str>, None::<&str>, HostState::Unprobed, "", 0),
+            (Some("free"), None, HostState::Free, "free", 0),
+            (Some("free"), Some(""), HostState::Pool, "pool", 2),
+            (Some("locked"), None, HostState::Locked, "locked", 2),
+            (
+                Some("locked"),
+                Some("R"),
+                HostState::LockedPool,
+                "locked+pool",
+                2,
+            ),
+            (
+                Some("unreachable"),
+                None,
+                HostState::Unreachable,
+                "unreachable",
+                1,
+            ),
+            (Some("unknown"), Some("R"), HostState::Unknown, "unknown", 1),
+        ];
+        for (lock, pool, state, label, severity) in cases {
+            let got = HostState::of(lock, pool);
+            assert_eq!(got, state, "{lock:?} {pool:?}");
+            assert_eq!(got.label(), label);
+            assert_eq!(got.severity(), severity);
+        }
+    }
+
+    #[test]
+    fn verdict_severity_ranks_undrawable_over_undecided_over_free() {
+        let order = [
+            Verdict::NoHost,
+            Verdict::Busy,
+            Verdict::Unknown,
+            Verdict::Free,
+        ]
+        .map(Verdict::severity);
+        assert_eq!(order, [2, 2, 1, 0]);
+        assert_eq!(Verdict::NoHost.to_string(), "none");
+    }
+
+    fn summary_fixture() -> Vec<SlotRow> {
+        let mut free = probed(&[("free", false), ("unreachable", false), ("free", true)]);
+        free.hosts[2].name = "whale-03".to_owned();
+        let mut busy = probed(&[("locked", false)]);
+        busy.slot.2 = "aarch64".to_owned();
+        busy.slot.3 = vec!["sdk".to_owned()];
+        let none = SlotRow {
+            slot: (
+                "sles".to_owned(),
+                "15-6".to_owned(),
+                "s390x".to_owned(),
+                vec![],
+            ),
+            hosts: vec![],
+        };
+        vec![free, busy, none]
+    }
+
+    #[test]
+    fn render_slot_table_snapshot() {
+        let rows = summary_fixture();
+        let with = render_slot_table(&rows, true, 3);
+        let without = render_slot_table(&rows, false, 5);
+        insta::assert_snapshot!(format!("{with}\n---\n{without}"));
+    }
+
+    #[test]
+    fn render_slot_json_shape() {
+        let rows = summary_fixture();
+        let probed: Value = serde_json::from_str(&render_slot_json(&rows, true)).unwrap();
+        assert_eq!(
+            probed,
+            json!([
+                {"slot": {"product": "sles", "version": "15-6", "arch": "x86_64", "addons": []},
+                 "hosts": 3, "free": ["whale-00"], "locked": 0, "pool": 1, "unreachable": 1,
+                 "verdict": "free"},
+                {"slot": {"product": "sles", "version": "15-6", "arch": "aarch64", "addons": ["sdk"]},
+                 "hosts": 1, "free": [], "locked": 1, "pool": 0, "unreachable": 0,
+                 "verdict": "busy"},
+                {"slot": {"product": "sles", "version": "15-6", "arch": "s390x", "addons": []},
+                 "hosts": 0, "free": [], "locked": 0, "pool": 0, "unreachable": 0,
+                 "verdict": "none"},
+            ])
+        );
+        let offline: Value = serde_json::from_str(&render_slot_json(&rows, false)).unwrap();
+        assert_eq!(
+            offline,
+            json!([
+                {"slot": {"product": "sles", "version": "15-6", "arch": "x86_64", "addons": []},
+                 "hosts": 3, "free": null, "locked": null, "pool": null, "unreachable": null,
+                 "verdict": null},
+                {"slot": {"product": "sles", "version": "15-6", "arch": "aarch64", "addons": ["sdk"]},
+                 "hosts": 1, "free": null, "locked": null, "pool": null, "unreachable": null,
+                 "verdict": null},
+                {"slot": {"product": "sles", "version": "15-6", "arch": "s390x", "addons": []},
+                 "hosts": 0, "free": null, "locked": null, "pool": null, "unreachable": null,
+                 "verdict": "none"},
+            ])
+        );
+    }
+
+    /// Every mock connection [`mock_target`] built for a host named `ro-*`.
+    static READ_ONLY_HANDLES: std::sync::Mutex<Vec<(String, mtui_hosts::MockConnection)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    /// A [`Connector`] over mock connections, by host-name marker: `down`
+    /// cannot read its operation lock, `locked` holds one, `claimed` is
+    /// pool-claimed, anything else is free.
+    fn mock_target(config: &mtui_config::Config, name: &str) -> Target {
+        use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH};
+        let mut conn = MockConnection::new(name);
+        if name.contains("down") {
+            conn = conn.with_open_error(TARGET_LOCK_PATH);
+        } else if name.contains("locked") {
+            conn = conn.with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        } else if name.contains("claimed") {
+            conn = conn.with_file(
+                POOL_LOCK_PATH,
+                b"1600000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+            );
+        }
+        if name.starts_with("ro-") {
+            READ_ONLY_HANDLES
+                .lock()
+                .unwrap()
+                .push((name.to_owned(), conn.clone()));
+        }
+        Target::with_connection_and_config(config, name, TargetState::Enabled, Box::new(conn))
+    }
+
+    fn fleet(hosts: &[(&str, &str)]) -> Refhosts {
+        Refhosts::from_hosts(
+            hosts
+                .iter()
+                .map(|(name, arch)| host(name, arch, Some(VersionField::Num(6)), vec![]))
+                .collect(),
+        )
+    }
+
+    /// Runs `summarize` over `store` with mock probes; returns its output.
+    async fn summary_output(store: &Refhosts, argv: &[&str]) -> String {
+        use crate::commands::testkit::matches;
+        let (mut session, buf, _dir) = session_with_refhosts_file(YAML);
+        let args = matches(&ListRefhosts, argv);
+        let config = session.config.clone();
+        let filters = Filters {
+            testplatform: args.get_one::<String>("testplatform").map(String::as_str),
+            name: args.get_one::<String>("name").map(String::as_str),
+            ..Default::default()
+        };
+        let survey = Survey {
+            args: &args,
+            config: &config,
+            store,
+            filters: &filters,
+            connect: mock_target,
+        };
+        summarize(&mut session, &survey).await;
+        buf.contents()
+    }
+
+    fn four_hosts() -> Refhosts {
+        fleet(&[
+            ("free-a", "x86_64"),
+            ("down-b", "aarch64"),
+            ("locked-c", "x86_64"),
+            ("claimed-d", "s390x"),
+        ])
+    }
+
+    #[tokio::test]
+    async fn summary_rows_probe_every_host_of_each_kept_slot_only() {
+        use crate::commands::testkit::matches;
+        let args = matches(&ListRefhosts, &["--summary", "--free", "--limit", "2"]);
+        let survey = Survey {
+            args: &args,
+            config: &mtui_config::Config::default(),
+            store: &four_hosts(),
+            filters: &Filters::default(),
+            connect: mock_target,
+        };
+        let out = summary_rows(&survey).await;
+        assert_eq!((out.total, out.total_hosts), (3, 4));
+        let probed: Vec<_> = out
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    slot_label(&r.slot, true),
+                    r.hosts
+                        .iter()
+                        .map(|h| (h.name.as_str(), h.state()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            probed,
+            vec![
+                (
+                    "sles-15-6 x86_64".to_owned(),
+                    vec![("free-a", HostState::Free), ("locked-c", HostState::Locked)]
+                ),
+                (
+                    "sles-15-6 aarch64".to_owned(),
+                    vec![("down-b", HostState::Unreachable)]
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_free_json_folds_every_probed_host() {
+        let out = summary_output(&four_hosts(), &["--summary", "--free", "--json"]).await;
+        let rows: Value = serde_json::from_str(out.trim()).unwrap();
+        let rows = rows.as_array().expect("nothing cut: a plain array");
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r["slot"]["arch"].clone(),
+                    r["free"].clone(),
+                    r["locked"].clone(),
+                    r["pool"].clone(),
+                    r["unreachable"].clone(),
+                    r["verdict"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    json!("x86_64"),
+                    json!(["free-a"]),
+                    json!(1),
+                    json!(0),
+                    json!(0),
+                    json!("free")
+                ),
+                (
+                    json!("aarch64"),
+                    json!([]),
+                    json!(0),
+                    json!(0),
+                    json!(1),
+                    json!("unknown")
+                ),
+                (
+                    json!("s390x"),
+                    json!([]),
+                    json!(0),
+                    json!(1),
+                    json!(0),
+                    json!("busy")
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_probe_only_reads_and_reaps_nothing() {
+        use mtui_hosts::MockSftpOp;
+        let store = fleet(&[
+            ("ro-locked-1", "x86_64"),
+            ("ro-claimed-2", "aarch64"),
+            ("ro-free-3", "s390x"),
+        ]);
+        let out = summary_output(&store, &["--summary", "--free"]).await;
+        assert!(out.contains("3 slot(s)"), "{out}");
+        let handles: Vec<_> = READ_ONLY_HANDLES.lock().unwrap().iter().cloned().collect();
+        assert_eq!(handles.len(), 3);
+        for (name, conn) in handles {
+            let writes: Vec<_> = conn
+                .sftp_ops()
+                .into_iter()
+                .filter(|op| {
+                    matches!(
+                        op,
+                        MockSftpOp::Put { .. }
+                            | MockSftpOp::PutBytes { .. }
+                            | MockSftpOp::Write { .. }
+                            | MockSftpOp::Append(_)
+                            | MockSftpOp::Remove(_)
+                    )
+                })
+                .collect();
+            assert!(writes.is_empty(), "{name}: {writes:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn summary_offset_window_is_named_in_text_and_json() {
+        let text = summary_output(&four_hosts(), &["--summary", "--offset", "1"]).await;
+        assert!(!text.contains("sles-15-6 x86_64"), "{text}");
+        assert!(text.contains("sles-15-6 aarch64"), "{text}");
+        assert!(text.contains("\n2 of 3 slot(s)"), "{text}");
+        assert!(
+            !text.contains("…[probed"),
+            "no probe, no probe note: {text}"
+        );
+
+        let json = summary_output(&four_hosts(), &["--summary", "--json", "--offset", "1"]).await;
+        let env: Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(env["window"], json!({"kept": 2, "total": 3}), "{json}");
+        assert_eq!(env["rows"].as_array().unwrap().len(), 2);
+        assert_eq!(env["rows"][0]["slot"]["arch"], "aarch64");
+        assert!(env.get("truncation").is_none() && env.get("probe").is_none());
+    }
+
+    #[tokio::test]
+    async fn summary_free_window_notes_the_unprobed_hosts() {
+        let argv = ["--summary", "--free", "--limit", "1"];
+        let text = summary_output(&four_hosts(), &argv).await;
+        assert!(
+            text.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[probed 2 of 4 hosts")),
+            "{text}"
+        );
+        let mut argv = argv.to_vec();
+        argv.push("--json");
+        let env: Value =
+            serde_json::from_str(summary_output(&four_hosts(), &argv).await.trim()).unwrap();
+        assert_eq!(env["probe"], json!({"probed": 2, "total": 4}));
+        assert_eq!(env["window"], json!({"kept": 1, "total": 3}));
+    }
+
+    /// 150 one-host slots (distinct arches), `locked-075` and `down-080` mid-list.
+    fn wide_fleet() -> Refhosts {
+        let names: Vec<(String, String)> = (0..150)
+            .map(|i| {
+                let name = match i {
+                    75 => "locked-075".to_owned(),
+                    80 => "down-080".to_owned(),
+                    _ => format!("free-{i:03}"),
+                };
+                (name, format!("arch{i:03}"))
+            })
+            .collect();
+        let refs: Vec<(&str, &str)> = names
+            .iter()
+            .map(|(n, a)| (n.as_str(), a.as_str()))
+            .collect();
+        fleet(&refs)
+    }
+
+    #[tokio::test]
+    async fn summary_over_the_row_budget_keeps_anomalies_and_says_so() {
+        let text = summary_output(&wide_fleet(), &["--summary", "--free"]).await;
+        assert!(text.contains("arch075"), "busy slot survives: {text}");
+        assert!(text.contains("arch080"), "unknown slot survives: {text}");
+        assert!(
+            !text.contains("arch060"),
+            "a free mid slot is dropped: {text}"
+        );
+        assert!(text.contains("\n52 of 150 slot(s)"), "{text}");
+        assert!(
+            text.contains("…[truncated 98 of 150 rows (2/2 anomalies kept)"),
+            "{text}"
+        );
+
+        let json = summary_output(&wide_fleet(), &["--summary", "--free", "--json"]).await;
+        let env: Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(env["truncation"]["truncated"], 98, "{json}");
+        assert_eq!(env["truncation"]["anomaly_total"], 2, "{json}");
+        assert!(env.get("window").is_none() && env.get("probe").is_none());
+        let verdicts: Vec<&str> = env["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["verdict"] != "free")
+            .map(|r| r["verdict"].as_str().unwrap())
+            .collect();
+        assert_eq!(verdicts, ["busy", "unknown"]);
+    }
+
+    #[tokio::test]
+    async fn summary_with_no_matching_host_says_so() {
+        let text = summary_output(&four_hosts(), &["--summary", "-n", "nope-*"]).await;
+        assert_eq!(text.trim(), "no refhosts match");
+        let json = summary_output(&four_hosts(), &["--summary", "-n", "nope-*", "--json"]).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(json.trim()).unwrap(),
+            json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn call_summary_names_an_unserved_arch() {
+        use crate::commands::testkit::matches;
+        let (mut session, buf, _dir) = session_with_refhosts_file(YAML);
+        let args = matches(
+            &ListRefhosts,
+            &[
+                "--testplatform",
+                "base=sles(major=15,minor=6);arch=[x86_64,s390x]",
+                "--summary",
+            ],
+        );
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(
+            lines.contains(&"sles-15-6 x86_64                       1"),
+            "{out}"
+        );
+        assert!(
+            lines.contains(&"sles-15-6 s390x                        0 none"),
+            "{out}"
+        );
+        assert!(out.contains("2 slot(s)"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn call_summary_refuses_a_testplatform_with_an_empty_arch() {
+        use crate::commands::testkit::matches;
+        let (mut session, buf, _dir) = session_with_refhosts_file(YAML);
+        let args = matches(
+            &ListRefhosts,
+            &[
+                "--testplatform",
+                "base=sles(major=15,minor=6);arch=[x86_64,]",
+                "--summary",
+            ],
+        );
+        let err = ListRefhosts.call(&mut session, &args).await.unwrap_err();
+        assert!(err.to_string().contains("names an empty arch"), "{err}");
+        assert_eq!(buf.contents(), "");
+    }
+
+    #[test]
+    fn summary_refuses_pool_and_verbose() {
+        for other in ["--pool", "-v"] {
+            let parsed = ListRefhosts
+                .configure(clap::Command::new("list_refhosts"))
+                .try_get_matches_from(["list_refhosts", "--summary", other]);
+            assert_eq!(
+                parsed.unwrap_err().kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{other}"
+            );
+        }
     }
 }

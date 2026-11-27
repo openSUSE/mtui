@@ -151,6 +151,21 @@ command out across all of them.
 To search the inventory *without* connecting, use
 [`list_refhosts`](cli.md#list_refhosts) — it reads the same source offline (no
 SSH, no lock, no loaded report).
+`list_refhosts --testplatform '<query>' --summary` prints one row per slot
+that one query requests, keyed as pool selection keys it (so a host serving the
+product only as an addon counts), and gives an arch no host serves a row with
+verdict `none`. Add `--free` to survey which slots have a free host now
+(`free`), have every host taken (`busy`), or could not be told because a host
+was unreachable (`unknown`). Each host of one query has a single arch, so it is
+counted for at most one of its slots. The verdict is a snapshot of one
+testplatform, not a reservation: across an update's testplatforms one host can
+be the only free candidate for two slots, and `add_host` then serves one and
+names the other busy or shared; a host pool-claimed by your own update shows as
+taken, since the probe knows no RRID; a pool claim that cannot be read counts
+as no claim. Without `--testplatform` the rows are keyed by each host's full
+(product, version, arch, addons), a stricter key than pool selection's. A query
+with no `arch=[…]` segment, one that does not parse, or an empty arch in it
+(`arch=[]`, `arch=[x86_64,]`) is refused, with or without `--summary`.
 
 ## Product-drift check on connect
 

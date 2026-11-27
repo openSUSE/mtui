@@ -10,6 +10,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `list_refhosts --summary` (MCP: `summary: true`) prints one row per slot
+  instead of one per host: the slot and its host count, and with `--free` the
+  free, locked, pool-claimed and unreachable counts, the free hosts' names and
+  a verdict — `free` (a host has no operation lock and no pool claim), `busy`
+  (every host was reached and is taken), `unknown` (no free host, and one could
+  not be probed) or `none` (no host serves the slot). With `--testplatform` the
+  slots are keyed as pool selection keys that one testplatform, one per
+  requested arch, so an arch no host serves gets a `none` row instead of
+  disappearing; without it hosts are grouped by their full (product, version,
+  arch, addons) slot, a different and stricter key. The verdict is a
+  point-in-time survey of one testplatform, not a promise that `add_host` will
+  draw that host: across an update's testplatforms one host can be the only
+  free candidate for two slots, a host pool-claimed by your own update shows as
+  taken (the probe knows no RRID), and a pool claim that cannot be read counts
+  as no claim. `--json` gives `[{"slot": {"product", "version", "arch",
+  "addons"}, "hosts", "free", "locked", "pool", "unreachable", "verdict"}]`,
+  every key always present and the counts `null` without `--free`; when
+  `--limit`/`--offset` or the row budget cut rows it is
+  `{"rows", "window"?, "truncation"?, "probe"?}`. `--free` probes every host
+  of each slot it prints, read-only, and notes the hosts it left unprobed.
+  `--summary` refuses `--pool` and `--verbose`. **MCP schema note:** the
+  `list_refhosts` tool gains an optional boolean `summary`.
 - `update` gains `--allow-removal`, and both prepares it runs now go through
   the removal guard like the standalone `prepare`. A host the first prepare
   refuses (its dry run would remove a protected package, or cannot be read) is

@@ -166,6 +166,27 @@ on `SIGKILL` or a crash: those holds stay until a later session reaps them
 past `[lock] stale_age` / `pool_stale_age` (one day by default) or someone runs
 `unlock -f` / `unlock -p -f`. `list_refhosts --free` names the holder, start
 time and comment of every lock it finds, without attaching or reaping.
+`list_refhosts` with `summary: true` answers "is there a free host for this
+product, version and arch" per slot instead of per host: with `testplatform`
+and `free: true` each requested arch gets one row with its free hosts and a
+`free`/`busy`/`unknown`/`none` verdict, `none` naming an arch the inventory has
+no host for. With `json: true` each row is
+
+```json
+{"slot": {"product": "sles", "version": "15-SP6", "arch": "x86_64", "addons": []},
+ "hosts": 2, "free": ["host-a"], "locked": 0, "pool": 1, "unreachable": 0,
+ "verdict": "free"}
+```
+
+Every key is always present: without `free: true`, `free`, `locked`, `pool`
+and `unreachable` are `null` and `verdict` is `"none"` or `null`. The counts
+never overlap: an operation-locked host counts as `locked` even when also
+pool-claimed. The reply is a bare array unless rows were cut; then it is
+`{"rows": [...]}` plus `"window": {"kept", "total"}` for `limit`/`offset`,
+`"truncation"` for the row budget, and `"probe": {"probed", "total"}` when
+`free` left hosts unprobed. A verdict is a snapshot of one testplatform: it
+does not reserve the host, a host your own update pool-claimed shows as taken,
+and one host can be the only free candidate for slots of two testplatforms.
 
 This isolation depends on rmcp's legacy `Mcp-Session-Id` session lifecycle, so
 over **HTTP** `mtui-mcp` advertises protocol revisions `2024-11-05` through

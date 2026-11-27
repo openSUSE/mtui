@@ -616,6 +616,11 @@ expression: pretty
           "description": "base-product substring, e.g. sles / sled / SLE_HPC",
           "type": "string"
         },
+        "summary": {
+          "default": false,
+          "description": "one row per slot instead of per host: its host count, and with --free the free/locked/pool/unreachable counts, the free hosts and a verdict (free/busy/unknown/none); with --testplatform every requested arch gets a row, `none` when no host serves it",
+          "type": "boolean"
+        },
         "testplatform": {
           "description": "match a SMELT testplatform query",
           "type": "string"

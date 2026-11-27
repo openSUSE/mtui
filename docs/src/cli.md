@@ -1133,6 +1133,9 @@ Options:
       --pool
           group by test-target slot (product+version+arch+addons)
 
+      --summary
+          one row per slot instead of per host: its host count, and with --free the free/locked/pool/unreachable counts, the free hosts and a verdict (free/busy/unknown/none); with --testplatform every requested arch gets a row, `none` when no host serves it
+
       --json
           emit a JSON array of kept rows; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON (--free windowing adds a "probe" object)
 
