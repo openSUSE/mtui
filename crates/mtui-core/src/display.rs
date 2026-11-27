@@ -423,10 +423,12 @@ impl CommandPromptDisplay {
         for (cmdline, stdout, stderr, exitcode) in hostlog {
             sink(&format!("{hostname}:~> {cmdline} [{exitcode}]"));
             sink("stdout:");
-            // The guard's dry-run XML runs to hundreds of KB; its verdict is in
-            // the command's own output.
-            if mtui_testreport::update_workflow::is_dry_run(cmdline) {
-                sink("(the removal guard's dry-run XML is not shown)");
+            // A successful dry run's XML runs to hundreds of KB; a failed one
+            // holds zypper's reason, so it is shown.
+            if mtui_testreport::update_workflow::is_dry_run(cmdline)
+                && mtui_hosts::target::removal::dry_run_succeeded(*exitcode, stdout)
+            {
+                sink("(dry-run XML omitted)");
             } else {
                 for line in stdout.split('\n') {
                     sink(line);
@@ -1110,37 +1112,53 @@ mod tests {
     }
 
     #[test]
-    fn show_log_omits_the_removal_guards_dry_run_xml() {
-        let mut captured: Vec<String> = Vec::new();
-        {
-            let mut sink = |m: &str| captured.push(m.to_owned());
-            CommandPromptDisplay::show_log(
-                "test_host",
-                &[(
-                    "zypper -x -n rm --dry-run libfoo".to_owned(),
-                    "<stream>".to_owned(),
-                    String::new(),
-                    0,
-                )],
-                None,
-                &mut sink,
-            );
-        }
+    fn show_log_omits_only_a_successful_dry_runs_xml() {
+        let ok = "<?xml version='1.0'?>\n<stream>\n</stream>";
+        let failed = "<?xml version='1.0'?>\n<stream>\n<message type=\"error\">Problem: x</message>\n</stream>";
+        let show = |stdout: &str, exitcode: i32| {
+            let mut captured: Vec<String> = Vec::new();
+            {
+                let mut sink = |m: &str| captured.push(m.to_owned());
+                CommandPromptDisplay::show_log(
+                    "test_host",
+                    &[(
+                        "zypper -x -n rm --dry-run libfoo".to_owned(),
+                        stdout.to_owned(),
+                        String::new(),
+                        exitcode,
+                    )],
+                    None,
+                    &mut sink,
+                );
+            }
+            captured
+        };
+
+        let captured = show(ok, 0);
         assert_eq!(
-            captured[1..3],
+            captured[1..4],
             [
                 "test_host:~> zypper -x -n rm --dry-run libfoo [0]",
-                "stdout:"
+                "stdout:",
+                "(dry-run XML omitted)"
             ]
-        );
-        assert_eq!(
-            captured[3],
-            "(the removal guard's dry-run XML is not shown)"
         );
         assert!(
             !captured.iter().any(|l| l.contains("<stream>")),
             "{captured:?}"
         );
+
+        for (stdout, exitcode) in [(failed, 4), (failed, 104), ("<stream>", 0)] {
+            let captured = show(stdout, exitcode);
+            assert!(
+                captured.iter().any(|l| l == "<stream>"),
+                "exit {exitcode}: {captured:?}"
+            );
+            assert!(
+                !captured.iter().any(|l| l.contains("omitted")),
+                "exit {exitcode}: {captured:?}"
+            );
+        }
     }
 
     #[test]

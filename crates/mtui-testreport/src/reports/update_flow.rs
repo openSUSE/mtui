@@ -1584,18 +1584,18 @@ async fn prepare_body(
     //   `aggregate_failures` into its summary, where `host` becomes `None` and
     //   the MCP client loses *which* refhost to look at. The check's verdict is
     //   kept as the more specific; `downgrade_body` resolves the overlap alike.
-    // * An `accounted` host: no install command was built for it, so its last
-    //   snapshot is the `--installed` probe's, and scoring that invents a verdict.
-    // * An out-of-scope host: its `last*` is some earlier phase's.
+    // * A host the install fan-out did not reach (out of scope, `accounted`, or
+    //   every host after a cancel): its last snapshot is an earlier phase's, such
+    //   as the `--installed` probe's or the dry run's, and scoring that invents a
+    //   verdict.
     // * A transactional host whose clean exit wrote only the discard notice to
     //   stderr, which transactional-update prints on a no-op prepare.
     let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
         .into_iter()
         .filter(|e| {
-            e.host.as_ref().is_none_or(|h| in_scope(h))
+            e.host.as_ref().is_none_or(|h| dispatched.contains(h))
                 && !e.host.as_ref().is_some_and(|h| {
                     check_failed.contains(h)
-                        || accounted.contains(h)
                         || targets.get(h).is_some_and(|t| {
                             t.transactional()
                                 && t.lastexit() == Some(0)
@@ -15426,19 +15426,24 @@ mod tests {
         }
     }
 
-    /// A SLES 15 host whose guard dry run `probe` finds nothing to remove, and
-    /// lands a cancel on the group's token while it runs.
-    fn target_cancelling_during(probe: &str) -> (HostsGroup, MockConnection) {
-        let token = HostsGroup::new(Vec::new(), false).cancel_token();
-        let conn = MockConnection::new("h1")
+    /// A connection whose guard dry run `probe` answers `stdout`, `stderr` and
+    /// `exit`, and every other command an empty success.
+    fn dry_run_conn(
+        hostname: &str,
+        probe: &str,
+        stdout: &str,
+        stderr: &str,
+        exit: i16,
+    ) -> MockConnection {
+        MockConnection::new(hostname)
             .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_response(
-                probe,
-                CommandLog::new(probe, dry_run_removing(&[]), "", 0, 0),
-            )
-            .with_cancel_on_command(probe, token.clone());
+            .with_response(probe, CommandLog::new(probe, stdout, stderr, exit, 0))
+    }
+
+    /// A SLES 15 target named `hostname` on `conn`.
+    fn sles15_on(hostname: &str, conn: MockConnection) -> (Target, MockConnection) {
         let handle = conn.clone();
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("SLES", "15.5", "x86_64"),
@@ -15447,9 +15452,59 @@ mod tests {
             ),
             false,
         );
+        (t, handle)
+    }
+
+    /// A SLES 15 host whose guard dry run `probe` finds nothing to remove,
+    /// exiting `exit` with `stderr`, and lands a cancel on the group's token
+    /// while it runs.
+    fn target_cancelling_during_with(
+        probe: &str,
+        exit: i16,
+        stderr: &str,
+    ) -> (HostsGroup, MockConnection) {
+        let token = HostsGroup::new(Vec::new(), false).cancel_token();
+        let (t, handle) = sles15_on(
+            "h1",
+            dry_run_conn("h1", probe, &dry_run_removing(&[]), stderr, exit)
+                .with_cancel_on_command(probe, token.clone()),
+        );
         let mut group = HostsGroup::new(vec![t], false);
         group.set_cancel_token(token);
         (group, handle)
+    }
+
+    fn target_cancelling_during(probe: &str) -> (HostsGroup, MockConnection) {
+        target_cancelling_during_with(probe, 0, "")
+    }
+
+    #[tokio::test]
+    async fn a_refusal_collected_before_the_cancel_outranks_it() {
+        let probe = "zypper -x -n rm --dry-run libfoo";
+        let token = HostsGroup::new(Vec::new(), false).cancel_token();
+        let (t1, h1) = sles15_on(
+            "h1",
+            dry_run_conn("h1", probe, &dry_run_removing(&["libfoo", "glibc"]), "", 0),
+        );
+        let (t2, h2) = sles15_on(
+            "h2",
+            dry_run_conn("h2", probe, &dry_run_removing(&["libfoo"]), "", 0)
+                .with_cancel_on_command(probe, token.clone()),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        group.set_cancel_token(token);
+
+        let err =
+            super::perform_uninstall(&mut group, &["libfoo".to_owned()], false, &mut Vec::new())
+                .await
+                .expect_err("h1 was refused");
+
+        assert!(!err.is_cancelled(), "{err:?}");
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(err.reason.contains("glibc"), "{err:?}");
+        for h in [&h1, &h2] {
+            assert_eq!(h.commands(), vec![probe.to_owned()]);
+        }
     }
 
     #[tokio::test]
@@ -15482,31 +15537,35 @@ mod tests {
     #[tokio::test]
     async fn a_cancel_during_the_prepare_dry_run_prepares_nothing() {
         let probe = "zypper -x -n in --dry-run -y -l pkg-a";
-        let (mut group, h) = target_cancelling_during(probe);
+        // An accepted dry run that exits 106 or warns on stderr is not the prepare's failure.
+        for (exit, stderr) in [(0, ""), (106, ""), (0, "a repository warning")] {
+            let (mut group, h) = target_cancelling_during_with(probe, exit, stderr);
 
-        let err = super::perform_prepare(
-            &mut group,
-            &NoopRepo,
-            &["pkg-a".to_owned()],
-            false,
-            false,
-            false,
-            false,
-            &mut Vec::new(),
-        )
-        .await
-        .expect_err("cancelled");
+            let err = super::perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+                false,
+                &mut Vec::new(),
+            )
+            .await
+            .expect_err("cancelled");
 
-        assert!(err.is_cancelled(), "{err:?}");
-        assert!(
-            !h.commands().iter().any(|c| c.starts_with("zypper -n in")),
-            "{:?}",
-            h.commands()
-        );
-        assert!(
-            h.file_contents(HISTORY_LOG).is_none(),
-            "nothing ran to record"
-        );
+            assert!(err.is_cancelled(), "exit {exit} {stderr:?}: {err:?}");
+            assert_eq!(err.host, None, "exit {exit} {stderr:?}: {err:?}");
+            assert!(
+                !h.commands().iter().any(|c| c.starts_with("zypper -n in")),
+                "{:?}",
+                h.commands()
+            );
+            assert!(
+                h.file_contents(HISTORY_LOG).is_none(),
+                "nothing ran to record"
+            );
+        }
     }
 
     #[tokio::test]

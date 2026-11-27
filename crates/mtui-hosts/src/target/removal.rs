@@ -121,6 +121,18 @@ fn attr(e: &BytesStart<'_>, key: &str) -> Option<String> {
         .map(std::borrow::Cow::into_owned)
 }
 
+/// Whether a dry run's exit is one the install check accepts as success.
+fn exit_accepted(exitcode: i32) -> bool {
+    matches!(exitcode, 0 | 100..=103 | 106 | 107)
+}
+
+/// Whether a dry run exited as a successful one does and left a complete
+/// stream; a failed one's stream carries zypper's reason.
+#[must_use]
+pub fn dry_run_succeeded(exitcode: i32, stdout: &str) -> bool {
+    exit_accepted(exitcode) && parse_removals(stdout).is_ok()
+}
+
 /// Judges one host's dry run: its removal set, or why the transaction is
 /// refused there.
 ///
@@ -144,7 +156,7 @@ pub fn judge_dry_run(
                 .to_owned(),
         );
     }
-    if !matches!(exitcode, 0 | 100..=103 | 106 | 107) {
+    if !exit_accepted(exitcode) {
         return Err(format!(
             "the dry run failed (exit {exitcode}), so what the transaction would remove is unknown"
         ));
@@ -271,6 +283,16 @@ mod tests {
 
     fn strs(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn only_an_accepted_and_complete_dry_run_succeeded() {
+        let complete = fixture("leap156_rm_curl");
+        assert!(dry_run_succeeded(0, complete));
+        assert!(dry_run_succeeded(106, complete));
+        assert!(!dry_run_succeeded(104, complete));
+        assert!(!dry_run_succeeded(-1, complete));
+        assert!(!dry_run_succeeded(0, "<stream>"));
     }
 
     #[test]

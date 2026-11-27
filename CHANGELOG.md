@@ -22,9 +22,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Transactional (SL Micro, transactional SLES 16), SLE 11 and YUM hosts are not
   checked, and the command output names each one as unchecked; `run` and the
   prepare and rollback inside `update` are not checked either. The guard's dry
-  runs stay out of the exported install logs, and `show_log` omits their XML.
-  See "Removal guard" in the docs (#873). **MCP schema note:** the four tools
-  gain an optional boolean `allow_removal`.
+  runs stay out of the exported install logs, and `show_log` omits the XML of
+  a successful dry run. See "Removal guard" in the docs (#873). **MCP schema
+  note:** the four tools gain an optional boolean `allow_removal`.
 
 ### Changed
 

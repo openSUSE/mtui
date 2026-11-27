@@ -247,7 +247,8 @@ pub struct OperationReport {
     /// refused host ran nothing past its dry run.
     pub dry_runs: DryRuns,
     /// A cancel arrived before the command dispatched: nothing ran past the
-    /// dry run on any host, and the lock was released.
+    /// dry run on any host, and the unlock was attempted (a failure is in
+    /// [`unlock_failures`](Self::unlock_failures)).
     pub cancelled: bool,
 }
 
