@@ -308,8 +308,8 @@ pub fn document_tool_descriptors() -> Vec<ToolDescriptor> {
              null when the server has none; sizes differ until `commit` uploads. `server_only` \
              lists server files with no local copy, each with its `dir` and the `path` \
              report_file_read reads it from: null when a same-named copy in a preferred directory \
-             answers every such path, or the `dir` is missing or not one of `build_checks`, \
-             `install_logs` and `uploads`. A failed server \
+             answers every such path, the `dir` is missing or not one of `build_checks`, \
+             `install_logs` and `uploads`, or the name is not a plain file name. A failed server \
              listing leaves the local list and sets `server_error`. {DOCUMENT_NOTE} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(vec![("template", template_prop())], &[]),
