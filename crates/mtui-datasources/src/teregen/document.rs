@@ -16,6 +16,7 @@
 
 use mtui_config::Config;
 use mtui_types::report_document::{DocumentError, ReportDocument, parse_and_warn_on_dropped_keys};
+use mtui_types::sanitize::sanitize_external;
 use reqwest::StatusCode;
 use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE};
 use serde::Deserialize;
@@ -814,14 +815,14 @@ async fn send_get(
 }
 
 /// Extract a `{"error": "..."}` body's message, falling back to the raw body
-/// (lossily decoded) when it is not that exact shape. Truncated to
-/// [`MAX_DETAIL_LEN`].
+/// (lossily decoded) when it is not that exact shape. Sanitised once here, so
+/// every consumer can print it, and truncated to [`MAX_DETAIL_LEN`].
 fn error_detail(bytes: &[u8]) -> String {
     let detail = serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
-    cap_detail(&detail)
+    cap_detail(&sanitize_external(&detail, None))
 }
 
 /// `text` cut to [`MAX_DETAIL_LEN`] on a char boundary.
@@ -847,6 +848,18 @@ mod tests {
         assert!(
             rendered.contains("qam.example.invalid"),
             "debug: {rendered}"
+        );
+    }
+
+    #[test]
+    fn error_detail_is_sanitized_in_both_shapes() {
+        assert_eq!(
+            error_detail(br#"{"error": "bad \u009b2J\u202eid"}"#),
+            "bad id"
+        );
+        assert_eq!(
+            error_detail("plain \u{1b}[31mbody".as_bytes()),
+            "plain body"
         );
     }
 

@@ -251,6 +251,34 @@ mod tests {
         assert!(session.templates.is_empty());
     }
 
+    /// A rejected id's reason is TeReGen's text; it reaches the REPL and MCP
+    /// through this error.
+    #[tokio::test]
+    async fn a_rejected_id_reports_the_server_reason_sanitized() {
+        let (mut session, _buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        let server = MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/reports/SUSE:Maintenance:1:1"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({"error": "bad \u{9b}2J\u{202e}id"})),
+            )
+            .mount(&server)
+            .await;
+        session.config.teregen_api_v2 = server.uri();
+
+        let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:1:1"]);
+        let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("the server rejects this id: bad id")
+                    && !m.contains(['\u{9b}', '\u{202e}'])),
+            "{err:?}"
+        );
+    }
+
     /// Loads `-k SUSE:Maintenance:1:1` under an already-cancelled session token
     /// against a teregen answering every document `GET` with `status`.
     async fn load_cancelled_against(status: u16) -> (Session, CommandResult) {
