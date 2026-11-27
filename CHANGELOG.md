@@ -59,6 +59,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A failed `update` no longer says the test update repositories are left on a
+  host where the update script already removed them, and neither does the
+  `warning:` line a later `remove_host`, `unload`, `quit` or reload prints.
+  The update script now ends with a `mtui: test repository cleanup: removed`,
+  `…: failed` or `…: unmatched` line (visible in `show_log`), and both
+  messages, plus the one for a failed lock before the post-update removal,
+  follow it:
+  - a host whose update stopped before that step, whose cleanup reported a
+    failure, or whose later checked removal failed is named as "the test
+    update repositories are still configured on <hosts>";
+  - a host where nothing reported the outcome (its output was lost, carried
+    no such line, or its listing matched none of the repositories), a
+    transactional host whose script removed them from the running system
+    (the staged snapshot its next boot activates may still list them), and a
+    host whose checked removal never answered get a new "may still be
+    configured on <hosts> (their removal is not confirmed; …)" clause, and
+    the teardown a matching "may still be configured" warning;
+  - a host the script reported clean, or one this session added no
+    repositories to, gets no repository clause at all.
+
+  The update failure message names hosts instead of saying "there", and no
+  longer says "left in place … for retry/diagnosis"; a host the automatic
+  rollback reverts is named, if at all, in a separate `after the rollback, …`
+  line once the rollback has run. The teardown line now reads "the test update
+  repositories are still configured" and no longer says "(this session's last
+  repository change there was an add)". The lock-failure diagnostic names only
+  the hosts whose record still carries the repositories, instead of "left
+  configured on every host" (#879).
 - `add_host` without `-t`, and the autoconnect after `load_template`, no
   longer skip a test-target slot because a host drawn for another slot also
   matches it, such as an `SLE_HPC` host carrying the `SLES-LTSS` addon. Slots

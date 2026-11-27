@@ -145,9 +145,8 @@ pub struct Target {
     /// run's verdict. `None` means not attempted for this report, and every consumer
     /// must treat it as benign, like [`last_upload`](Self::last_upload)'s `None`.
     last_repo: Option<std::result::Result<RepoOutcome, RepoFailure>>,
-    /// Whether this session's last change to the update's repositories here
-    /// was an add.
-    repos_added: bool,
+    /// Where the test update repositories this session added here stand.
+    test_repos: TestRepos,
     /// Packages this session's `install` put here that no later `uninstall`
     /// removed.
     installed: std::collections::BTreeSet<String>,
@@ -186,6 +185,42 @@ impl CloseRelease {
     }
 }
 
+/// Where the test update repositories this session added to a host stand.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TestRepos {
+    /// This session added none.
+    #[default]
+    NotAdded,
+    /// Configured: added, or a removal failed.
+    Configured,
+    /// A removal succeeded.
+    Removed,
+    /// A removal was not confirmed.
+    Unknown,
+}
+
+impl TestRepos {
+    /// Why an [`Unknown`](Self::Unknown) record is not a claim either way.
+    pub const UNREPORTED: &str = "their removal is not confirmed";
+
+    /// Whether the repositories may still be on the host.
+    #[must_use]
+    pub fn is_left(self) -> bool {
+        matches!(self, Self::Configured | Self::Unknown)
+    }
+}
+
+/// What an update script reported about its own repository cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupReport {
+    /// Every removal it ran succeeded.
+    Removed,
+    /// A listing or a removal failed.
+    Failed,
+    /// No report, or a listing that matched none of the repositories.
+    Unknown,
+}
+
 /// What this session left on a host, read from its in-memory records after a
 /// [`close`](Target::close) — no remote I/O.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -194,8 +229,8 @@ pub struct HostLeftovers {
     pub operation_lock: Option<CloseRelease>,
     /// Why this session still holds the host's pool claim, if it does.
     pub pool_claim: Option<CloseRelease>,
-    /// The session's last change to the update's repositories was an add.
-    pub repos_added: bool,
+    /// Where the test update repositories the session added stand.
+    pub test_repos: TestRepos,
     /// Packages the session's `install` put on the host and no later
     /// `uninstall` removed.
     pub installed: Vec<String>,
@@ -207,7 +242,7 @@ impl HostLeftovers {
     pub fn is_empty(&self) -> bool {
         self.operation_lock.is_none()
             && self.pool_claim.is_none()
-            && !self.repos_added
+            && !self.test_repos.is_left()
             && self.installed.is_empty()
     }
 }
@@ -253,7 +288,7 @@ impl Target {
             last_upload: None,
             last_download: None,
             last_repo: None,
-            repos_added: false,
+            test_repos: TestRepos::NotAdded,
             installed: std::collections::BTreeSet::new(),
             lock_release: CloseRelease::Unfinished,
             pool_release: CloseRelease::Unfinished,
@@ -870,6 +905,18 @@ impl Target {
         }
     }
 
+    /// Records what an update script's own repository cleanup did, unless
+    /// this session added no repositories here.
+    pub fn note_inline_repo_cleanup(&mut self, report: CleanupReport) {
+        if self.test_repos != TestRepos::NotAdded {
+            self.test_repos = match report {
+                CleanupReport::Removed => TestRepos::Removed,
+                CleanupReport::Failed => TestRepos::Configured,
+                CleanupReport::Unknown => TestRepos::Unknown,
+            };
+        }
+    }
+
     /// What this session left on the host, from its in-memory records only.
     ///
     /// Meant for after [`close`](Self::close): a hold still recorded then is
@@ -882,7 +929,7 @@ impl Target {
                 .held_comment(LockKind::Pool)
                 .is_some()
                 .then_some(self.pool_release),
-            repos_added: self.repos_added,
+            test_repos: self.test_repos,
             installed: self.installed.iter().cloned().collect(),
         }
     }

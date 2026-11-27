@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use mtui_hosts::target::removal;
 use mtui_hosts::{
-    Command, HostError, HostsGroup, LockOutcome, Operation, OperationGroup, RebootFailure,
-    RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo,
+    CleanupReport, Command, HostError, HostsGroup, LockOutcome, Operation, OperationGroup,
+    RebootFailure, RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo, TestRepos,
 };
 use mtui_types::RequestReviewID;
 use mtui_types::shellquote::quote_args;
@@ -26,6 +26,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::actions::ActionCommands;
 use crate::update_workflow::actions::downgrade::TRANSACTIONAL_ROLLBACK;
+use crate::update_workflow::actions::update::removes_repos;
+use crate::update_workflow::checks::update::{inline_cleanup, probe_marked};
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic};
 use crate::update_workflow::{Role, UpdateError, WorkflowRegistry};
 
@@ -297,6 +299,13 @@ pub async fn perform_update_with_rollback(
             )));
         }
         targets.set_cancel_token(token);
+        let rolled: Vec<String> = hosts.iter().cloned().collect();
+        let clauses = repos_left_clauses(targets, &rolled);
+        if !clauses.is_empty() {
+            let message = format!("after the rollback, {}", clauses.join("; "));
+            warn!("{message}");
+            diagnostics.push(Diagnostic::degradation(message));
+        }
     }
     match failure {
         UpdateFailure::Prepare(e) => {
@@ -2932,9 +2941,13 @@ pub async fn perform_update(
             .filter(|h| !completed.contains(*h) && is_enabled(targets, h))
             .cloned()
             .collect();
-        // The rollback's downgrade removes the test repositories from the hosts
-        // it reaches.
-        let message = if let Some(scope) = e.rollback() {
+        // The rollback's hosts are named once it has run.
+        let untouched: Vec<String> = unfinished
+            .iter()
+            .filter(|h| e.rollback().is_none_or(|scope| !scope.hosts().contains(*h)))
+            .cloned()
+            .collect();
+        let mut message = if let Some(scope) = e.rollback() {
             let (rolled, kept): (Vec<String>, Vec<String>) = unfinished
                 .iter()
                 .cloned()
@@ -2968,20 +2981,15 @@ pub async fn perform_update(
                         unknown.join(", ")
                     ));
                 }
-                message.push_str(&format!(
-                    "; the test update repositories are left in place on {} for \
-                     retry/diagnosis (remove later with `set_repo --remove`)",
-                    kept.join(", ")
-                ));
                 message
             }
         } else {
-            format!(
-                "update did not complete on {}; the test update repositories are left in place \
-                 there for retry/diagnosis (remove later with `set_repo --remove`)",
-                unfinished.join(", ")
-            )
+            format!("update did not complete on {}", unfinished.join(", "))
         };
+        for clause in repos_left_clauses(targets, &untouched) {
+            message.push_str("; ");
+            message.push_str(&clause);
+        }
         warn!("{message}");
         // Ahead of the finishing steps' own diagnostics, under the verdict line.
         diagnostics.push(Diagnostic::degradation(message));
@@ -3080,15 +3088,19 @@ async fn remove_test_repos(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if let Err(e) = targets.update_lock(Some(hosts)).await {
+        let hosts: Vec<String> = hosts.iter().cloned().collect();
+        let clauses = repos_left_clauses(targets, &hosts);
+        let left = if clauses.is_empty() {
+            "no host is recorded as still carrying them".to_owned()
+        } else {
+            clauses.join("; ")
+        };
         warn!(
             error = %e,
-            "could not lock hosts to remove the test update repositories; \
-             they are left configured on every host (remove later with \
-             `set_repo --remove`)"
+            "could not lock hosts to remove the test update repositories; {left}"
         );
         diagnostics.push(Diagnostic::degradation(format!(
-            "could not lock hosts to remove the test update repositories ({e}); they are left \
-             configured on every host (remove later with `set_repo --remove`)"
+            "could not lock hosts to remove the test update repositories ({e}); {left}"
         )));
         return;
     }
@@ -3120,6 +3132,69 @@ async fn remove_test_repos(
             &unlock_failures,
         )));
     }
+}
+
+/// Records on each dispatched host what its update script's repository
+/// cleanup reported, before a reboot replaces the script's snapshot.
+///
+/// A probe failure exits before the cleanup, so it leaves the record alone;
+/// no marker (a timeout, a lost session, no output) is unknown.
+fn note_inline_cleanup(targets: &mut HostsGroup, dispatched: &BTreeSet<String>) {
+    for target in targets.targets_mut() {
+        if !dispatched.contains(target.hostname())
+            || target.state() != mtui_types::TargetState::Enabled
+            || !target
+                .workflow_key()
+                .is_some_and(|(release, transactional)| removes_repos(&release, transactional))
+        {
+            continue;
+        }
+        if probe_marked(target.lastout(), target.lasterr()) {
+            continue;
+        }
+        let report = match inline_cleanup(target.lastout()) {
+            // A removal from the running /etc may not reach the snapshot the
+            // patch staged, which the next boot activates.
+            CleanupReport::Removed if target.transactional() => CleanupReport::Unknown,
+            report => report,
+        };
+        target.note_inline_repo_cleanup(report);
+    }
+}
+
+/// The clauses naming which of `hosts` may still carry the test update
+/// repositories, read from each host's record as the teardown warning reads it.
+fn repos_left_clauses(targets: &HostsGroup, hosts: &[String]) -> Vec<String> {
+    let with = |state: TestRepos| -> Vec<&str> {
+        hosts
+            .iter()
+            .filter(|h| {
+                targets
+                    .get(h)
+                    .is_some_and(|t| t.leftovers().test_repos == state)
+            })
+            .map(String::as_str)
+            .collect()
+    };
+    let mut clauses = Vec::new();
+    let configured = with(TestRepos::Configured);
+    if !configured.is_empty() {
+        clauses.push(format!(
+            "the test update repositories are still configured on {} (remove later with \
+             `set_repo --remove`)",
+            configured.join(", ")
+        ));
+    }
+    let unknown = with(TestRepos::Unknown);
+    if !unknown.is_empty() {
+        clauses.push(format!(
+            "the test update repositories may still be configured on {} ({}; remove later \
+             with `set_repo --remove`)",
+            unknown.join(", "),
+            TestRepos::UNREPORTED
+        ));
+    }
+    clauses
 }
 
 /// Runs the update commands, checks the hosts they reached (collecting
@@ -3158,6 +3233,7 @@ async fn update_run_phase(
     // `prepare_body`'s: an absent host's last snapshot is another phase's.
     let dispatched: BTreeSet<String> = commands.keys().cloned().collect();
     targets.run(Command::PerHost(commands)).await;
+    note_inline_cleanup(targets, &dispatched);
 
     // Before the reboot: a host that never comes back cannot be written to
     // afterwards, and its state is what an operator most needs to reconstruct.
@@ -3406,8 +3482,8 @@ mod tests {
 
     use mtui_config::options::Config;
     use mtui_hosts::{
-        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, MockEvent, MockSftpOp,
-        TARGET_LOCK_PATH, Target,
+        Check, CheckArgs, CheckFailure, CleanupReport, Doer, HostsGroup, MockConnection, MockEvent,
+        MockSftpOp, TARGET_LOCK_PATH, Target,
     };
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
@@ -4386,6 +4462,8 @@ mod tests {
     struct ComposingRepo {
         composed: HashMap<SystemProduct, BTreeSet<String>>,
         ops: std::sync::Mutex<Vec<(String, RepoOp)>>,
+        /// Also runs the add/remove on the target, so its record follows.
+        register: bool,
     }
 
     impl ComposingRepo {
@@ -4393,6 +4471,16 @@ mod tests {
             Self {
                 composed: entries.into_iter().collect(),
                 ops: std::sync::Mutex::default(),
+                register: false,
+            }
+        }
+
+        /// A repo whose adds and removals reach the target's record, as the
+        /// real reports' do.
+        fn registering() -> Self {
+            Self {
+                register: true,
+                ..Self::default()
             }
         }
 
@@ -4419,6 +4507,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((target.hostname().to_owned(), operation));
+            if self.register {
+                report_with_rrid().set_repo(target, operation).await;
+            }
         }
 
         fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
@@ -6093,12 +6184,15 @@ mod tests {
                 handle.commands()
             );
         }
-        // The text and the rollback decision come from one rule.
-        assert!(
-            degradations(&diagnostics)
-                .iter()
-                .any(|d| d.contains("left in place")),
-            "{diagnostics:?}"
+        // The text and the rollback decision come from one rule. Neither mock
+        // prints the cleanup marker, so neither host's cleanup is known.
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1, h2; the test update repositories may still be \
+                 configured on h1, h2 (their removal is not confirmed; remove later with \
+                 `set_repo --remove`)"
+            ]
         );
     }
 
@@ -6118,8 +6212,7 @@ mod tests {
         };
         let rolling_back = "update did not complete on h1, h2; rolling it back on h2; not on h1, \
                             which could not work out what to patch; the test update repositories \
-                            are left in place on h1 for retry/diagnosis (remove later with \
-                            `set_repo --remove`)";
+                            are still configured on h1 (remove later with `set_repo --remove`)";
 
         let (mut g, h1, h2, update) = group();
         let mut diagnostics = Vec::new();
@@ -6313,6 +6406,346 @@ mod tests {
         assert_eq!(version_queries(&h2), 1, "{:?}", h2.commands());
     }
 
+    /// The update script's last line, as its cleanup prints it.
+    fn cleanup_line(outcome: &str) -> String {
+        format!(
+            "{}{outcome}\n",
+            crate::update_workflow::checks::update::CLEANUP_MARKER
+        )
+    }
+
+    /// An SL Micro host whose patch passes and prints `stdout`, then is lost
+    /// to its reboot.
+    fn slmicro_lost_after_patch(stdout: &str) -> (Target, MockConnection) {
+        let patch = slmicro_patch_command();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(patch.clone(), CommandLog::new(&patch, stdout, "", 0, 0))
+            .with_changing_boot_id()
+            .failing_reconnect();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// A SLES host whose patch exits `exit` after printing `stdout`, and whose
+    /// checked `rr` answers `rr_exit`.
+    fn sles_patch_then_rr(
+        packages: &[String],
+        exit: i16,
+        stdout: &str,
+        rr_exit: i16,
+    ) -> (Target, MockConnection) {
+        let patch = zypper_patch_command(packages);
+        let rr = "zypper -n rr https://example/repo";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(patch.clone(), CommandLog::new(&patch, stdout, "", exit, 0))
+            .with_response(rr, CommandLog::new(rr, "", "", rr_exit, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle)
+    }
+
+    async fn update_noprepare(
+        group: &mut HostsGroup,
+        report: &SlReport,
+        packages: &[String],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), UpdateFailure> {
+        perform_update(
+            group,
+            report,
+            packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            diagnostics,
+        )
+        .await
+    }
+
+    /// The script removed them from the running system, but the staged
+    /// snapshot the reboot activates may still list them.
+    #[tokio::test]
+    async fn a_transactional_cleanup_that_reports_removed_stays_unknown() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = slmicro_lost_after_patch(&cleanup_line("removed"));
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        let res = update_noprepare(&mut group, &report, &packages, &mut diagnostics).await;
+        let Err(UpdateFailure::Reboot(_)) = res else {
+            panic!("an unreachable host is Reboot: {res:?}");
+        };
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c.starts_with("zypper -n ar -cfGkn ")),
+            "the add ran: {:?}",
+            h1.commands()
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Unknown
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1; the test update repositories may still be \
+                 configured on h1 (their removal is not confirmed; \
+                 remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cleanup_that_reports_a_failed_removal_keeps_the_repositories_claimed() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _) = slmicro_lost_after_patch(&cleanup_line("failed"));
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        update_noprepare(&mut group, &report, &packages, &mut diagnostics)
+            .await
+            .expect_err("h1 was lost to its reboot");
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Configured
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1; the test update repositories are still configured \
+                 on h1 (remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
+    /// The script exits at the probe guard, before its cleanup; its output
+    /// carries no cleanup marker, so only the probe precedence keeps this
+    /// from reading as "unknown".
+    #[tokio::test]
+    async fn a_failed_probe_keeps_the_repositories_claimed() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, _, _) = sles_target_with_probe_failure("h1", &packages);
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        let res = update_noprepare(&mut group, &report, &packages, &mut diagnostics).await;
+        let Err(UpdateFailure::ProbeFailed(_)) = res else {
+            panic!("h1's probe failed: {res:?}");
+        };
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Configured
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1; the test update repositories are still configured \
+                 on h1 (remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
+    /// The patch failed, the cleanup still ran and said so, and the rollback
+    /// returns before any removal of its own (no packages to downgrade).
+    #[tokio::test]
+    async fn a_failed_patch_whose_rollback_removes_nothing_trusts_the_cleanup_marker() {
+        let mut report = report_with_rrid();
+        report.base_mut().packages.clear();
+        let packages = report.get_package_list();
+        assert!(packages.is_empty());
+        let (t1, h1) = sles_patch_then_rr(&packages, 104, &cleanup_line("removed"), 0);
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h1's patch failed its check");
+        assert!(
+            !h1.commands().iter().any(|c| c.starts_with("zypper -n rr ")),
+            "no checked removal ran: {:?}",
+            h1.commands()
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Removed
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            ["update did not complete on h1; rolling it back"]
+        );
+    }
+
+    /// Without a marker and with a rollback that removes nothing, the rolled
+    /// back host is named once the rollback has run.
+    #[tokio::test]
+    async fn a_rollback_that_removes_nothing_names_an_unknown_cleanup_after_it_ran() {
+        let mut report = report_with_rrid();
+        report.base_mut().packages.clear();
+        let packages = report.get_package_list();
+        let (t1, _) = sles_patch_then_rr(&packages, 104, "", 0);
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await
+            .expect_err("h1's patch failed its check");
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Unknown
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1; rolling it back",
+                "after the rollback, the test update repositories may still be configured on h1 \
+                 (their removal is not confirmed; remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
+    /// The script's output was lost, so its cleanup is unknown; the rollback's
+    /// checked removal settles it, and the mock's exit `0` is what zypper
+    /// answers for a repository that is already gone. Observed with zypper
+    /// 1.14.101: `zypper --non-interactive --root <empty tree> rr
+    /// https://example.invalid/none` printed "Repository
+    /// 'https://example.invalid/none' not found by alias, number or URI." and
+    /// exited 0.
+    #[tokio::test]
+    async fn a_rollbacks_checked_removal_of_an_absent_repo_settles_an_unknown_cleanup() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = sles_patch_then_rr(&packages, 104, "", 0);
+        let mut group = HostsGroup::new(vec![t1], false);
+
+        report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("h1's patch failed its check");
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c == "zypper -n rr https://example/repo"),
+            "{:?}",
+            h1.commands()
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Removed
+        );
+    }
+
+    /// The cleanup said "removed", the rollback's checked removal then
+    /// failed: the checked result wins.
+    #[tokio::test]
+    async fn a_failed_rollback_removal_re_raises_the_repositories() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t1, h1) = sles_patch_then_rr(&packages, 104, &cleanup_line("removed"), 7);
+        let mut group = HostsGroup::new(vec![t1], false);
+
+        report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("h1's patch failed its check");
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c == "zypper -n rr https://example/repo"),
+            "{:?}",
+            h1.commands()
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Configured
+        );
+    }
+
+    /// The yum script has no cleanup, so a lost one removed nothing.
+    #[tokio::test]
+    async fn a_lost_yum_update_keeps_the_repositories_claimed() {
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("rhel", "9", "x86_64"),
+            "https://example/rhel".to_owned(),
+        );
+        let packages = report.get_package_list();
+        let update = WorkflowRegistry::default()
+            .action_commands(Role::Update, "YUM", false)
+            .expect("yum has an updater")
+            .render_command(
+                &[
+                    ("repa", repa_for("42", "7").as_str()),
+                    ("packages", quote_args(&packages).as_str()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .expect("safe substitution never fails");
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(update.clone(), CommandLog::new(&update, "", "", -1, 0));
+        let handle = conn.clone();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t1.set_system(
+            System::new(
+                SystemProduct::new("rhel", "9", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t1], false);
+        let mut diagnostics = Vec::new();
+
+        let res = update_noprepare(&mut group, &report, &packages, &mut diagnostics).await;
+        let Err(UpdateFailure::NotRun(_)) = res else {
+            panic!("h1's lost patch is NotRun: {res:?}");
+        };
+        assert!(
+            handle.commands().contains(&update),
+            "{:?}",
+            handle.commands()
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Configured
+        );
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "update did not complete on h1; the test update repositories are still configured \
+                 on h1 (remove later with `set_repo --remove`)"
+            ]
+        );
+    }
+
     /// The degradation texts `perform_update` pushed.
     fn degradations(diagnostics: &[Diagnostic]) -> Vec<&str> {
         diagnostics
@@ -6333,7 +6766,7 @@ mod tests {
         let (mut t3, h3) = checked_target("h3", true);
         t3.set_state(TargetState::Disabled);
         let mut group = HostsGroup::new(vec![t1, t2, t3], false);
-        let repo = ComposingRepo::default();
+        let repo = ComposingRepo::registering();
         let mut diagnostics = Vec::new();
 
         let res = perform_update(
@@ -6358,8 +6791,9 @@ mod tests {
         assert_eq!(
             degradations(&diagnostics),
             [
-                "update did not complete on h2; the test update repositories are left in place \
-                 there for retry/diagnosis (remove later with `set_repo --remove`)"
+                "update did not complete on h2; the test update repositories may still be \
+                 configured on h2 (their removal is not confirmed; \
+                 remove later with `set_repo --remove`)"
             ]
         );
     }
@@ -6443,7 +6877,7 @@ mod tests {
 
         let res = perform_update(
             &mut group,
-            &ComposingRepo::default(),
+            &ComposingRepo::registering(),
             &packages,
             "42",
             "7",
@@ -6462,7 +6896,10 @@ mod tests {
         let texts = degradations(&diagnostics);
         assert!(
             texts.len() == 2
-                && texts[0].starts_with("update did not complete on h2;")
+                && texts[0]
+                    == "update did not complete on h2; the test update repositories may still \
+                        be configured on h2 (their removal is not confirmed; remove later \
+                        with `set_repo --remove`)"
                 && texts[1].starts_with("newpackage prepare after update failed"),
             "{texts:?}"
         );
@@ -11646,7 +12083,7 @@ mod tests {
     async fn perform_update_pushes_a_diagnostic_when_the_update_fails() {
         // `-1` on the patch ⇒ nothing is rolled back and the flow returns Err
         // without reaching `remove_test_repos`. The diagnostic must
-        // still tell an MCP caller the repos are left configured — asserted on
+        // still tell an MCP caller the repos may be left configured — asserted on
         // the text (the check itself pushes its own sections into the same
         // vec, so asserting on emptiness could never fail), and that the
         // matching entry is a `degradation`, not a plain/highlighted section.
@@ -11675,7 +12112,9 @@ mod tests {
 
         let repo_left_diagnostic = diagnostics.iter().find(|d| {
             d.text
-                .contains("test update repositories are left in place")
+                == "update did not complete on h1; the test update repositories may still be \
+                    configured on h1 (their removal is not confirmed; remove later with `set_repo \
+                    --remove`)"
         });
         assert!(
             repo_left_diagnostic.is_some(),
@@ -11684,6 +12123,10 @@ mod tests {
         assert!(
             repo_left_diagnostic.unwrap().degradation,
             "the repo-left diagnostic must be a degradation, not a check section"
+        );
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Unknown
         );
     }
 
@@ -11941,12 +12384,20 @@ mod tests {
 
         let rollback_diagnostics: Vec<_> = diagnostics
             .iter()
-            .filter(|d| d.degradation && d.text.contains("rollback"))
+            .filter(|d| d.degradation && d.text.contains("automatic rollback"))
             .collect();
         assert_eq!(
             rollback_diagnostics.len(),
             1,
             "exactly one degradation diagnostic about the rollback: {diagnostics:?}"
+        );
+        // Named after the rollback ran, from the record its failed removal left.
+        assert!(
+            degradations(&diagnostics).contains(
+                &"after the rollback, the test update repositories are still configured on h1 \
+                  (remove later with `set_repo --remove`)"
+            ),
+            "{diagnostics:?}"
         );
         assert_eq!(
             rollback_diagnostics[0].text,
@@ -12247,18 +12698,40 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    async fn remove_test_repos_names_the_error_when_it_cannot_lock() {
-        // A foreign lock makes `update_lock` fail on the only host, so the
-        // cleanup must warn (naming the error and the remedy) instead.
+    /// A SLES host holding a foreign operation lock, carrying `cleanup` as
+    /// its update script's report after the add.
+    async fn foreign_locked_after_add(cleanup: Option<CleanupReport>) -> HostsGroup {
         let foreign = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_file(
                 mtui_hosts::TARGET_LOCK_PATH,
                 b"1700000000:alice:4242:busy".to_vec(),
             );
-        let t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
-        let mut group = HostsGroup::new(vec![t], false);
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        report_with_rrid().set_repo(&mut t, RepoOp::Add).await;
+        if let Some(cleanup) = cleanup {
+            t.note_inline_repo_cleanup(cleanup);
+        }
+        HostsGroup::new(vec![t], false)
+    }
+
+    #[tokio::test]
+    async fn remove_test_repos_names_the_error_when_it_cannot_lock() {
+        // A foreign lock makes `update_lock` fail on the only host, so the
+        // cleanup must warn (naming the error and the remedy) instead.
+        let mut group = foreign_locked_after_add(None).await;
+        assert_eq!(
+            group.get("h1").unwrap().leftovers().test_repos,
+            TestRepos::Configured
+        );
         let repo = RecordingRepo::default();
         let mut diagnostics = Vec::new();
 
@@ -12277,12 +12750,13 @@ mod tests {
         );
         // The lock failure must reach an MCP caller's tool result too (#543),
         // not only the operator's terminal.
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].text.contains("could not lock hosts")
-                && diagnostics[0].text.contains("set_repo --remove"),
-            "{:?}",
-            diagnostics[0]
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "could not lock hosts to remove the test update repositories (Hosts locked: h1: \
+                 held by alice since Tuesday, 14.11.2023 22:13 UTC); the test update \
+                 repositories are still configured on h1 (remove later with `set_repo --remove`)"
+            ]
         );
         // Both the lock error and the remedy must be on the *same* line:
         // `update_lock`'s internal fan-out also WARNs about the foreign-locked
@@ -12290,7 +12764,7 @@ mod tests {
         // the error field dropped from this warning.
         let cleanup_line = logs
             .lines()
-            .find(|l| l.contains("left configured on every host"))
+            .find(|l| l.contains("are still configured on h1"))
             .unwrap_or_else(|| panic!("no cleanup warning found: {logs}"));
         assert!(
             cleanup_line.contains("Hosts locked"),
@@ -12299,6 +12773,31 @@ mod tests {
         assert!(
             cleanup_line.contains("set_repo --remove"),
             "cleanup warning must name the manual remedy: {cleanup_line}"
+        );
+    }
+
+    /// The update scripts already removed the repositories, so a failed lock
+    /// for the checked removal leaves nothing to name.
+    #[tokio::test]
+    async fn a_lock_failure_after_the_scripts_removed_the_repositories_names_none() {
+        let mut group = foreign_locked_after_add(Some(CleanupReport::Removed)).await;
+        let mut diagnostics = Vec::new();
+
+        remove_test_repos(
+            &mut group,
+            &names(&["h1"]),
+            &RecordingRepo::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert_eq!(
+            degradations(&diagnostics),
+            [
+                "could not lock hosts to remove the test update repositories (Hosts locked: h1: \
+                 held by alice since Tuesday, 14.11.2023 22:13 UTC); no host is recorded as \
+                 still carrying them"
+            ]
         );
     }
 
@@ -13660,7 +14159,8 @@ mod tests {
         // exists) but the `lr` probe confirms the repo IS registered, so the
         // host must be patched normally, with no degradation.
         let report = report_with_rrid();
-        let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo 'issue-SLES:15.5:p=42:7'";
+        let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo \
+                      'issue-SLES:15.5:p=42:7'";
         let lr_cmd = "zypper -n lr 'issue-SLES:15.5:p=42:7'";
         let conn = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
@@ -15093,9 +15593,9 @@ mod tests {
         assert_eq!(
             degradations(&diagnostics),
             [
-                "update did not complete on h1, h2; rolling it back on h1; not on h2, whose \
-                 patch result is unknown; the test update repositories are left in place on \
-                 h2 for retry/diagnosis (remove later with `set_repo --remove`)"
+                "update did not complete on h1, h2; rolling it back on h1; not on h2, whose patch \
+                 result is unknown; the test update repositories may still be configured on h2 \
+                 (their removal is not confirmed; remove later with `set_repo --remove`)"
             ]
         );
     }
@@ -15332,7 +15832,8 @@ mod tests {
 
     fn unchecked_note(host: &str) -> Diagnostic {
         Diagnostic::degradation(format!(
-            "{host}: no dry run exists for this host, so what the transaction removes was not checked"
+            "{host}: no dry run exists for this host, so what the transaction removes was not \
+             checked"
         ))
     }
 

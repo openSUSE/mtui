@@ -11,6 +11,7 @@ use crate::update_workflow::checks::{
     ZYPPER_EXIT_INF_REPO_SKIPPED, classify_exit, lock_or_dependency, log_failed,
 };
 use crate::update_workflow::{Family, UpdateError, family};
+use mtui_hosts::CleanupReport;
 
 /// The zypper update check.
 ///
@@ -232,12 +233,7 @@ pub(crate) const PROBE_FAILURE_MARKER: &str = "mtui: could not determine what to
 /// half-applied to repair and the rollback would revert every healthy patched
 /// peer.
 fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
-    let marked = |stream: &str| {
-        stream
-            .lines()
-            .any(|line| line.starts_with(PROBE_FAILURE_MARKER))
-    };
-    if marked(args.stdout) || marked(args.stderr) {
+    if probe_marked(args.stdout, args.stderr) {
         log_failed(args);
         return Err(UpdateError::probe_failure(
             "could not determine what to patch",
@@ -245,6 +241,39 @@ fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
         ));
     }
     Ok(())
+}
+
+/// Whether either stream carries the [`PROBE_FAILURE_MARKER`] line.
+pub(crate) fn probe_marked(stdout: &str, stderr: &str) -> bool {
+    let marked = |stream: &str| {
+        stream
+            .lines()
+            .any(|line| line.starts_with(PROBE_FAILURE_MARKER))
+    };
+    marked(stdout) || marked(stderr)
+}
+
+/// The line the update templates print after their repository cleanup,
+/// followed by `removed`, `unmatched` or `failed`; split in the script text
+/// like [`PROBE_FAILURE_MARKER`].
+pub(crate) const CLEANUP_MARKER: &str = "mtui: test repository cleanup: ";
+
+/// What the update script's repository cleanup reported. A listing that
+/// matched nothing, an unknown value and a missing marker all prove nothing.
+///
+/// The **last** marker line decides: the script prints its own after the
+/// patch, so package output cannot outrank it.
+#[must_use]
+pub(crate) fn inline_cleanup(stdout: &str) -> CleanupReport {
+    match stdout
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix(CLEANUP_MARKER))
+    {
+        Some("removed") => CleanupReport::Removed,
+        Some("failed") => CleanupReport::Failed,
+        _ => CleanupReport::Unknown,
+    }
 }
 
 /// The stdout/stderr classification shared by every update check.
@@ -935,5 +964,35 @@ mod tests {
         let err =
             transactional_update(args("transactional-update", "", "Error: boom", 1)).unwrap_err();
         assert_eq!(err.reason, "RPM Error");
+    }
+
+    #[test]
+    fn inline_cleanup_reads_the_last_anchored_marker() {
+        let line = |v: &str| format!("{CLEANUP_MARKER}{v}");
+        let (removed, failed) = (line("removed"), line("failed"));
+        assert_eq!(
+            inline_cleanup(&format!("out\n{removed}\n")),
+            CleanupReport::Removed
+        );
+        assert_eq!(
+            inline_cleanup(&format!("{failed}\n")),
+            CleanupReport::Failed
+        );
+        assert_eq!(inline_cleanup(&line("unmatched")), CleanupReport::Unknown);
+        // Package output printed before the script's own line cannot win.
+        assert_eq!(
+            inline_cleanup(&format!("{failed}\n{removed}\n")),
+            CleanupReport::Removed
+        );
+        assert_eq!(
+            inline_cleanup(&format!("{removed}\n{failed}\n")),
+            CleanupReport::Failed
+        );
+        assert_eq!(
+            inline_cleanup(&format!("+ {removed}\n")),
+            CleanupReport::Unknown,
+            "anchored"
+        );
+        assert_eq!(inline_cleanup(""), CleanupReport::Unknown);
     }
 }

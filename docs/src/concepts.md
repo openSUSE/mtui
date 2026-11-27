@@ -307,10 +307,24 @@ item, in the command's reply (so an MCP client sees it too):
   (`unlock -f -p`). A lock or claim that now belongs to another owner (this
   session's hold lapsed, e.g. it was reaped as stale and taken) is named as
   such: the close did not release it, and there is no `unlock -f` advice;
-- the update's repositories, when the last repository change this session
-  made on the host was an add (`set_repo -A`, `prepare --update`, or an
-  `update` that stopped before removing them): with the update loaded,
-  reconnect the host and run `set_repo --remove`;
+- the test update repositories this session added, from the host's record
+  of them, which has four states:
+  - *not added* or *removed*: nothing is said;
+  - *configured* (added by `set_repo -A`, `prepare --update` or `update`, and
+    not removed since, or a removal failed): "the test update repositories are
+    still configured";
+  - *unknown* (an `update` script's output reported nothing about its own
+    cleanup, such as after a timeout or a lost session, or its listing matched
+    none of them; a transactional host whose script removed them, since the
+    staged snapshot its next boot activates may still list them; a checked
+    removal that never answered): "may still be configured (their removal is
+    not confirmed)".
+
+  The `update` script removes them itself after the patch and ends its
+  output with `mtui: test repository cleanup: removed`, `failed` or
+  `unmatched`; the record follows that line, and a later checked removal
+  (`set_repo --remove`, the rollback's) overrides it. Either warning ends: with
+  the update loaded, reconnect the host and run `set_repo --remove`;
 - packages this session's `install` put there that no later `uninstall`
   removed. mtui does not check beforehand which of them were already
   installed, so the line says some may have been.

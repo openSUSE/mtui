@@ -433,12 +433,19 @@ and nothing is written there.
   whose patch passed as a successful run would: it reboots the transactional
   ones, then runs the `--newpackage` step, records the post-update package
   versions and removes the test update repositories on every host it
-  completed on. Its degradation names the hosts it did not complete on, which
-  keep their test update repositories for retry/diagnosis. A rollback leaves
-  out a peer that could not work out what to patch, since no patch ran there,
-  and a peer whose patch never ran to completion, which it may be unable to
-  reach or would hit with a second transaction; the degradation names each
-  with its reason, and they keep their test update repositories. A patch that
+  completed on. Its degradation names the hosts it did not complete on, and
+  for each says what the host's record shows about the test update
+  repositories: "still configured on <hosts>" (the script stopped before its
+  cleanup, reported a failed removal, or has none, as on yum), "may still be
+  configured on <hosts>" (the removal is not confirmed: nothing reported it,
+  or the host is transactional and its staged snapshot may still list them),
+  or nothing when the script reported them removed or this
+  session added none. A rollback leaves out a peer that could not work out
+  what to patch, since no patch ran there, and a peer whose patch never ran to
+  completion, which it may be unable to reach or would hit with a second
+  transaction; the degradation names each with its reason. The hosts the
+  rollback reverts are named, from the same record, in a separate
+  `after the rollback, …` degradation once it has run. A patch that
   failed its check rolls back the patched hosts, those two kinds of peer apart,
   and names no host as completed. So does a reboot that did not take on a
   reachable host, but only when every reboot that failed is on a reachable
