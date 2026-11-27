@@ -2395,16 +2395,17 @@ impl Session {
             .iter()
             .map(|tp| {
                 let attrs = Attributes::from_testplatform(tp);
-                let pairs = store.search_pool_by_query(&attrs);
-                (tp, attrs, pairs)
+                (tp, store.pool_slots_by_query(&attrs))
             })
             .collect();
         let mut slots_of: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
-        for (host, slot) in searched.iter().flat_map(|(_, _, pairs)| pairs) {
-            slots_of
-                .entry(host.name.as_str())
-                .or_default()
-                .insert(slot_key(slot));
+        for (slot, hosts) in searched.iter().flat_map(|(_, slots)| slots) {
+            for host in hosts {
+                slots_of
+                    .entry(host.name.as_str())
+                    .or_default()
+                    .insert(slot_key(slot));
+            }
         }
         let demand: HashMap<String, usize> = slots_of
             .into_iter()
@@ -2414,35 +2415,24 @@ impl Session {
         // Per testplatform in order; `None` marks a slot's place until it is decided.
         let mut report: Vec<Option<Unserved>> = Vec::new();
         let mut slots: Vec<(String, Vec<String>, usize)> = Vec::new();
-        for (tp, attrs, pairs) in searched {
-            if pairs.is_empty() {
+        for (tp, query_slots) in searched {
+            if query_slots.iter().all(|(_, hosts)| hosts.is_empty()) {
                 info!("autoconnect: nothing found for testplatform {tp:?}");
                 report.push(Some(Unserved::NoRefhost { tp: tp.clone() }));
                 continue;
             }
-            // A pair exists only for an arch some host matched; name the rest.
-            let covered: std::collections::HashSet<&str> =
-                pairs.iter().map(|(_, slot)| slot.2.as_str()).collect();
-            let mut uncovered: Vec<&str> = Vec::new();
-            for arch in attrs.iter().map(Attributes::arch) {
-                if !arch.is_empty() && !covered.contains(arch) && !uncovered.contains(&arch) {
-                    uncovered.push(arch);
-                    report.push(Some(Unserved::NoArchRefhost {
-                        tp: tp.clone(),
-                        arch: arch.to_owned(),
-                    }));
-                }
+            for (slot, _) in query_slots.iter().filter(|(_, hosts)| hosts.is_empty()) {
+                report.push(Some(Unserved::NoArchRefhost {
+                    tp: tp.clone(),
+                    arch: slot.2.clone(),
+                }));
             }
-            // IndexMap iterates in first-seen slot order.
-            let mut by_slot: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
-            for (host, slot) in pairs {
-                by_slot.entry(slot_key(&slot)).or_default().push(host.name);
-            }
-
-            for (slot, mut candidates) in by_slot {
-                if !drawn.insert(slot.clone()) {
+            for (slot, hosts) in query_slots {
+                let slot = slot_key(&slot);
+                if hosts.is_empty() || !drawn.insert(slot.clone()) {
                     continue;
                 }
+                let mut candidates: Vec<String> = hosts.into_iter().map(|h| h.name).collect();
                 // Spread load, then remember the order for backup fallback.
                 shuffle(&mut candidates);
                 // Stable, so the shuffle still decides among equally needed hosts.
