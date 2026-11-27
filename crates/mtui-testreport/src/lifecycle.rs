@@ -435,7 +435,11 @@ async fn regenerate_via_teregen(
         return Err(LoadCancelled::Regeneration);
     }
     if !outcome.ok {
-        let detail = failure_detail(outcome.minion_error.as_deref());
+        let detail = outcome
+            .minion_error
+            .as_deref()
+            .map(|e| format!(": {e}"))
+            .unwrap_or_default();
         error!(
             "Regeneration did not finish (state={}){detail}",
             outcome.state.as_deref().unwrap_or("unknown")
@@ -465,19 +469,6 @@ async fn regenerate_via_teregen(
 /// while the job was unfinished, so a job that failed is reported as the failure.
 fn cancelled_job_wait(outcome: &mtui_datasources::RegenOutcome, stopped: bool) -> bool {
     !outcome.ok && stopped && outcome.state.as_deref() != Some("failed")
-}
-
-/// `": <minion error>"`, without control characters since it is server text
-/// bound for the terminal, or empty when TeReGen named none.
-fn failure_detail(minion_error: Option<&str>) -> String {
-    minion_error
-        .map(|e| {
-            format!(
-                ": {}",
-                e.chars().filter(|c| !c.is_control()).collect::<String>()
-            )
-        })
-        .unwrap_or_default()
 }
 
 // Mirrors `TeReGen::wait_for_template`'s poll budget: a `generating`
@@ -1186,11 +1177,5 @@ mod ingest_tests {
         assert!(!cancelled_job_wait(&ended("failed"), true));
         assert!(cancelled_job_wait(&ended("active"), true));
         assert!(!cancelled_job_wait(&ended("active"), false));
-    }
-
-    #[test]
-    fn failure_detail_drops_control_characters() {
-        assert_eq!(failure_detail(Some("bad\u{1b}[2J\nthing")), ": bad[2Jthing");
-        assert_eq!(failure_detail(None), "");
     }
 }
