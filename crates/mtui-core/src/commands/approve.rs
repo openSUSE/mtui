@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_datasources::obs::qam::OpenReview;
 use mtui_datasources::{Gitea, GiteaError, Osc, Slack, is_ack_reaction};
 use mtui_testreport::HashCheck;
 
@@ -13,7 +14,7 @@ use crate::commands::apicall::{
 };
 use crate::commands::commit::{ReviewAction, prepare_reviewer};
 use crate::commands::support::{
-    CompletionFlags, completion_flags, require_update, template_completion,
+    CompletionFlags, completion_flags, one_line, require_update, template_completion,
 };
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -45,6 +46,8 @@ enum Backend {
 /// for confirmation in the REPL (default no) and refuses non-interactively
 /// unless `--accept-head SHA` names the PR head as it is now; a missing token
 /// or a failed call always refuses.
+/// After an OBS approval the request is read again and the reply names the QA
+/// group reviews still open on it; a failed read is reported, not an error.
 /// Unlocks PI reference hosts afterwards.
 pub struct Approve;
 
@@ -161,7 +164,7 @@ impl Command for Approve {
             require_committed_report(session, &rrid, "approve")?;
         }
 
-        match backend {
+        let lines = match backend {
             Backend::Gitea(gitea, head) => {
                 let approved = match head.as_deref() {
                     Some(head) => gitea.approve_if_head(user.as_deref(), head).await,
@@ -176,18 +179,51 @@ impl Command for Approve {
                     };
                     CommandError::Other(format!("gitea approve failed: {e}{hint}"))
                 })?;
+                vec![format!("approved {rrid}")]
             }
             Backend::Obs(osc) => {
                 tracing::info!("Approving request {}", rrid.review_id);
                 osc.approve(&groups)
                     .await
                     .map_err(|e| CommandError::Other(format!("obs approve failed: {e}")))?;
+                // The approval has happened: a failed read must not turn it into a failure.
+                match osc.open_reviews().await {
+                    Ok(open) => open_review_lines(&rrid, &open),
+                    Err(e) => vec![format!(
+                        "approved {rrid}; could not re-read its reviews ({}), check them",
+                        one_line(&e.to_string(), Some(500))
+                    )],
+                }
             }
-        }
+        };
 
-        session.display.println(&format!("approved {rrid}"));
+        for line in lines {
+            session.display.println(&line);
+        }
         Ok(())
     }
+}
+
+/// The most open reviews named one per line after an approval.
+const MAX_OPEN_LISTED: usize = 10;
+
+/// The reply to a completed OBS approval, given the reviews still open after it.
+fn open_review_lines(rrid: &mtui_types::RequestReviewID, open: &[OpenReview]) -> Vec<String> {
+    let mut lines = vec![format!("approved {rrid}")];
+    if open.is_empty() {
+        lines.push(format!("no QA review left open on {rrid}"));
+        return lines;
+    }
+    lines.extend(open.iter().take(MAX_OPEN_LISTED).map(|review| {
+        format!(
+            "still open: review by {}",
+            one_line(&review.to_string(), Some(120))
+        )
+    }));
+    if open.len() > MAX_OPEN_LISTED {
+        lines.push(format!("still open: {} more", open.len() - MAX_OPEN_LISTED));
+    }
+    lines
 }
 
 /// Refuse the approval unless the update's Slack review request was acked.
@@ -1748,6 +1784,346 @@ mod tests {
                 matches!(&err, CommandError::Other(m) if m.contains("could not read oscrc credentials")),
                 "{err:?}"
             );
+        }
+    }
+
+    /// What an OBS approval reports about the reviews left open after it.
+    mod open_reviews {
+        use wiremock::matchers::{method, path as wpath};
+        use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
+
+        use super::*;
+        use crate::commands::testkit::NoOscrc;
+        use crate::commands::testkit::teregen::write_oscrc;
+
+        const ID: &str = "SUSE:PI:1.1:70000";
+
+        /// Before the approval: `alice` holds qam-sle, qam-kernel is unassigned.
+        const BEFORE: &str = "<request id='70000'><state name='review'/>\
+             <review state='accepted' by_group='qam-sle'>\
+             <history who='alice' when='2020-01-01T00:00:00'>\
+             <description>Review got accepted</description></history></review>\
+             <review state='new' by_user='alice'/>\
+             <review state='new' by_group='qam-kernel'/></request>";
+
+        /// The read of the request, before or after the approval.
+        fn read() -> MockBuilder {
+            Mock::given(method("GET")).and(wpath("/request/70000"))
+        }
+
+        /// An OBS mock serving `BEFORE` to the two pre-approval reads, then
+        /// `after`, and answering the accept with `accept`.
+        async fn obs(after: Mock, accept: u16) -> MockServer {
+            let server = MockServer::start().await;
+            read()
+                .respond_with(ResponseTemplate::new(200).set_body_string(BEFORE))
+                .up_to_n_times(2)
+                .mount(&server)
+                .await;
+            after.mount(&server).await;
+            Mock::given(method("POST"))
+                .and(wpath("/request/70000"))
+                .respond_with(ResponseTemplate::new(accept).set_body_string("<status code='ok'/>"))
+                .mount(&server)
+                .await;
+            server
+        }
+
+        #[test]
+        fn the_acting_users_own_open_review_is_named_as_a_user() {
+            let rrid = mtui_types::RequestReviewID::parse(ID).unwrap();
+            let lines = open_review_lines(
+                &rrid,
+                &[
+                    OpenReview::User("alice".to_owned()),
+                    OpenReview::Group("qam-sle".to_owned()),
+                ],
+            );
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    "still open: review by user alice".to_owned(),
+                    "still open: review by group qam-sle".to_owned(),
+                ]
+            );
+        }
+
+        fn after(reviews: &str) -> Mock {
+            read().respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "<request id='70000'><state name='review'/>{reviews}</request>"
+            )))
+        }
+
+        async fn count(server: &MockServer, verb: &str) -> usize {
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method.as_str() == verb)
+                .count()
+        }
+
+        /// Run `approve` against `server`, returning its result and output lines.
+        async fn approve(server: &MockServer) -> (CommandResult, Vec<String>) {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, buf) = session_with_hosts(ID, &["h1"], "ok");
+            session.config.obs_api_url = server.uri();
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), server));
+            let res = Approve.call(&mut session, &matches(&Approve, &[])).await;
+            let lines = buf.contents().lines().map(str::to_owned).collect();
+            (res, lines)
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn names_the_qam_group_reviews_left_open_after_the_approval() {
+            // qam-cloud is only in the post-approval read, so the lines cannot
+            // come from the snapshot taken before it; bob's review is a user's.
+            let server = obs(
+                after(
+                    "<review state='accepted' by_group='qam-sle'/>\
+                     <review state='accepted' by_user='alice'/>\
+                     <review state='new' by_group='qam-kernel'/>\
+                     <review state='new' by_user='bob'/>\
+                     <review state='new' by_group='qam-cloud'/>",
+                ),
+                200,
+            )
+            .await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    "still open: review by group qam-kernel".to_owned(),
+                    "still open: review by group qam-cloud".to_owned(),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn says_so_when_no_qam_review_is_left_open() {
+            let server = obs(
+                after(
+                    "<review state='accepted' by_group='qam-sle'/>\
+                     <review state='accepted' by_user='alice'/>\
+                     <review state='accepted' by_group='qam-kernel'/>\
+                     <review state='accepted' by_group='qam-openqa'/>\
+                     <review state='new' by_group='maintenance-team'/>\
+                     <review state='new' by_user='bob'/>",
+                ),
+                200,
+            )
+            .await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    format!("no QA review left open on {ID}")
+                ]
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn an_open_automation_review_is_named_and_withholds_the_all_clear() {
+            let server = obs(
+                after(
+                    "<review state='accepted' by_group='qam-sle'/>\
+                     <review state='accepted' by_user='alice'/>\
+                     <review state='accepted' by_group='qam-kernel'/>\
+                     <review state='new' by_group='qam-openqa'/>\
+                     <review state='new' by_group='qam-auto'/>",
+                ),
+                200,
+            )
+            .await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    "still open: review by group qam-openqa (automated)".to_owned(),
+                    "still open: review by group qam-auto (automated)".to_owned(),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn names_the_acting_users_own_review_left_open() {
+            let server = obs(
+                after(
+                    "<review state='accepted' by_group='qam-sle'/>\
+                     <review state='new' by_user='alice'/>\
+                     <review state='accepted' by_group='qam-kernel'/>",
+                ),
+                200,
+            )
+            .await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    "still open: review by user alice".to_owned(),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_failed_re_read_still_reports_the_approval_and_never_the_all_clear() {
+            let server = obs(read().respond_with(ResponseTemplate::new(503)), 200).await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [format!(
+                    "approved {ID}; could not re-read its reviews \
+                     (OBS API returned 503 for {}/request/70000), check them",
+                    server.uri()
+                )]
+            );
+            assert_eq!(
+                count(&server, "POST").await,
+                1,
+                "the approval is not retried"
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_transport_error_on_the_re_read_still_reports_the_approval() {
+            let reset =
+                |_: &wiremock::Request| std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+            let server = obs(read().respond_with_err(reset), 200).await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            let cause = lines[0]
+                .strip_prefix(&format!("approved {ID}; could not re-read its reviews ("))
+                .and_then(|rest| rest.strip_suffix("), check them"))
+                .unwrap_or_else(|| panic!("{lines:?}"));
+            assert!(
+                !cause.is_empty() && !cause.contains("OBS API returned"),
+                "{cause}"
+            );
+            assert_eq!(
+                count(&server, "POST").await,
+                1,
+                "the approval is not retried"
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_failed_approval_makes_no_re_read() {
+            let server = obs(after(""), 500).await;
+
+            let (res, lines) = approve(&server).await;
+
+            assert!(
+                matches!(&res, Err(CommandError::Other(m)) if m.starts_with("obs approve failed")),
+                "{res:?}"
+            );
+            assert!(lines.is_empty(), "{lines:?}");
+            let verbs: Vec<String> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.method.to_string())
+                .collect();
+            let accept = verbs.iter().position(|v| v == "POST").expect("the accept");
+            assert!(
+                !verbs[accept..].iter().any(|v| v == "GET"),
+                "no read after the failed accept: {verbs:?}"
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_refused_approval_makes_no_re_read() {
+            // alice holds no review, so the preflight refuses on its one read.
+            let server = MockServer::start().await;
+            read()
+                .respond_with(ResponseTemplate::new(200).set_body_string(
+                    "<request id='70000'><state name='review'/>\
+                     <review state='new' by_group='qam-kernel'/></request>",
+                ))
+                .mount(&server)
+                .await;
+
+            let (res, lines) = approve(&server).await;
+
+            assert!(
+                matches!(&res, Err(CommandError::Other(m)) if m.contains("not assigned")),
+                "{res:?}"
+            );
+            assert!(lines.is_empty(), "{lines:?}");
+            assert_eq!(count(&server, "POST").await, 0);
+            assert_eq!(count(&server, "GET").await, 1, "only the preflight read");
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_hostile_group_name_cannot_forge_a_line() {
+            let server = obs(
+                after(&format!(
+                    "<review state='new' by_group='qam-x&#27;[2J&#10;no QA review left open on {ID}'/>"
+                )),
+                200,
+            )
+            .await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            assert_eq!(
+                lines,
+                [
+                    format!("approved {ID}"),
+                    format!("still open: review by group qam-x no QA review left open on {ID}"),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn a_long_list_is_bounded() {
+            let reviews: String = (0..15)
+                .map(|i| format!("<review state='new' by_group='qam-g{i}'/>"))
+                .collect();
+            let server = obs(after(&reviews), 200).await;
+
+            let (res, lines) = approve(&server).await;
+
+            res.unwrap();
+            let mut want = vec![format!("approved {ID}")];
+            want.extend((0..10).map(|i| format!("still open: review by group qam-g{i}")));
+            want.push("still open: 5 more".to_owned());
+            assert_eq!(lines, want);
         }
     }
 }

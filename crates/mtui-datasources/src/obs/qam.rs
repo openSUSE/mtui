@@ -28,8 +28,8 @@ use crate::obs::inference::assignments_for_user;
 use crate::obs::models;
 use crate::obs::models::{
     ObsComment, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, build_reject_reason_body,
-    is_qam_group, parse_group_directory, parse_reject_reason_values, parse_request,
-    parse_request_collection, parse_request_comments,
+    is_qam_automation_group, is_qam_group, parse_group_directory, parse_reject_reason_values,
+    parse_request, parse_request_collection, parse_request_comments,
 };
 
 use crate::teregen::document::TeregenV2;
@@ -566,6 +566,56 @@ pub async fn approve(
         fancy_url(fancy_reports_url, rrid)
     );
     changereviewstate(client, rrid, "accepted", user, &comment).await
+}
+
+/// A review still `new` on a request that keeps it from releasing: a QAM
+/// group's (a tester's or an automation's), or the acting user's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenReview {
+    /// An open review by this QAM group.
+    Group(String),
+    /// An open review by this QAM automation group (`qam-auto`, `qam-openqa`).
+    AutomatedGroup(String),
+    /// An open review by this user (only ever the acting user).
+    User(String),
+}
+
+impl std::fmt::Display for OpenReview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Group(name) => write!(f, "group {name}"),
+            Self::AutomatedGroup(name) => write!(f, "group {name} (automated)"),
+            Self::User(name) => write!(f, "user {name}"),
+        }
+    }
+}
+
+/// Read the request again and list its open QAM group reviews (automation
+/// groups included) and the acting user's own open review, in document order.
+///
+/// # Errors
+///
+/// Returns a transport/API or parse error from the read.
+pub async fn open_reviews(
+    client: &ObsClient,
+    rrid: &RequestReviewID,
+    user: &str,
+) -> Result<Vec<OpenReview>, ObsError> {
+    let request = get_request_bare(client, rrid).await?;
+    Ok(request
+        .reviews
+        .into_iter()
+        .filter(|r| r.state == "new")
+        .filter_map(|r| match (r.by_group, r.by_user) {
+            (Some(group), _) if is_qam_group(&group) => Some(OpenReview::Group(group)),
+            (Some(group), _) if is_qam_automation_group(&group) => {
+                Some(OpenReview::AutomatedGroup(group))
+            }
+            (Some(_), _) => None,
+            (None, Some(by)) => (by == user).then_some(OpenReview::User(by)),
+            (None, None) => None,
+        })
+        .collect())
 }
 
 // --------------------------------------------------------------------------- //

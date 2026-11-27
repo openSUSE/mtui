@@ -185,6 +185,19 @@ impl Osc {
         .await
     }
 
+    /// Re-read the request and list the QAM group reviews, and the acting
+    /// user's own review, still open on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObsError`] on any credential, transport or parse failure (the
+    /// failure is also logged).
+    pub async fn open_reviews(&self) -> Result<Vec<qam::OpenReview>, ObsError> {
+        let rrid = self.rrid.clone();
+        self.run(move |client, user| async move { qam::open_reviews(&client, &rrid, &user).await })
+            .await
+    }
+
     /// Assign the review to the acting user for the resolved group(s).
     ///
     /// `force` takes over a group another user holds. An approved group, and one
