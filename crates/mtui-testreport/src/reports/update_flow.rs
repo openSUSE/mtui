@@ -16001,7 +16001,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_or_unreadable_dry_run_fails_closed() {
-        let (t1, h1) = target_answering("h1", RM_PROBE, "", 104, "");
+        let (t1, h1) = target_answering("h1", RM_PROBE, "", 4, "");
         let (t2, h2) = target_answering("h2", RM_PROBE, "ok", 0, "");
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
@@ -16012,7 +16012,7 @@ mod tests {
 
         let text = err.to_string();
         assert!(
-            text.contains("exit 104") && text.contains("could not be read"),
+            text.contains("exit 4") && text.contains("could not be read"),
             "{text}"
         );
         assert!(err.completed().is_empty());
@@ -16564,6 +16564,105 @@ mod tests {
                 .any(|d| d.contains("configured on h1")),
             "{diagnostics:?}"
         );
+    }
+
+    /// zypper's `104` "not found" stream: complete, with no summary.
+    const NOT_FOUND_STREAM: &str = "<?xml version='1.0'?>\n<stream>\n\
+        <message type=\"error\">No provider of 'pkg-a' found.</message>\n</stream>\n";
+
+    /// A host whose dry run of installing `pkg-a` answers `104`, as does the
+    /// real install; `patch` exits 0.
+    fn not_found_target(hostname: &str) -> (Target, MockConnection) {
+        let install = "zypper -n in -y -l  pkg-a";
+        sles15_on(
+            hostname,
+            MockConnection::new(hostname)
+                .with_default(CommandLog::new("", "", "", 0, 0))
+                .with_response(
+                    PREPARE_PROBE,
+                    CommandLog::new(PREPARE_PROBE, NOT_FOUND_STREAM, "", 104, 0),
+                )
+                .with_response(install, CommandLog::new(install, "", "", 104, 0)),
+        )
+    }
+
+    /// An update that adds a package is in no enabled repository during the
+    /// first prepare, whose dry run then exits `104` and commits nothing: the
+    /// host is still patched, with the prepare's failure as a warning.
+    #[tokio::test]
+    async fn an_update_whose_prepare_finds_no_provider_still_patches_the_host() {
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, h) = not_found_target("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(res.is_ok(), "{res:?}");
+        assert!(ran(&h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
+        assert!(was_patched(&h), "{:?}", h.commands());
+        assert!(
+            degradations(&diagnostics)
+                .iter()
+                .any(|d| d.starts_with("prepare before update reported a host failure (h1: ")),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// The standalone commands take a `104` dry run to the real command, which
+    /// fails there as it would without the guard.
+    #[tokio::test]
+    async fn a_not_found_dry_run_runs_the_real_install_and_prepare() {
+        let packages = ["pkg-a".to_owned()];
+        let (t, h) = sles15_on(
+            "h1",
+            MockConnection::new("h1")
+                .with_default(CommandLog::new("", "", "", 0, 0))
+                .with_response(
+                    PREPARE_PROBE,
+                    CommandLog::new(PREPARE_PROBE, NOT_FOUND_STREAM, "", 104, 0),
+                )
+                .with_response(
+                    "zypper -n in -y -l pkg-a",
+                    CommandLog::new("zypper -n in -y -l pkg-a", "", "", 104, 0),
+                ),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let err = super::perform_install(&mut group, &packages, false, &mut Vec::new())
+            .await
+            .expect_err("the install itself finds no provider");
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(!err.reason.contains("dry run"), "{err:?}");
+        assert!(ran(&h, "zypper -n in -y -l pkg-a"), "{:?}", h.commands());
+
+        let (t, h) = not_found_target("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let err = super::perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &packages,
+            false,
+            false,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("the prepare itself finds no provider");
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(!err.reason.contains("dry run"), "{err:?}");
+        assert!(ran(&h, "zypper -n in -y -l  pkg-a"), "{:?}", h.commands());
     }
 
     #[tokio::test]

@@ -126,6 +126,10 @@ fn exit_accepted(exitcode: i32) -> bool {
     matches!(exitcode, 0 | 100..=103 | 106 | 107)
 }
 
+/// zypper's informational "capability not found" exit: the transaction is
+/// refused whole and nothing is committed.
+const EXIT_NOT_FOUND: i32 = 104;
+
 /// Whether a dry run exited as a successful one does and left a complete
 /// stream; a failed one's stream carries zypper's reason.
 #[must_use]
@@ -137,7 +141,10 @@ pub fn dry_run_succeeded(exitcode: i32, stdout: &str) -> bool {
 /// refused there.
 ///
 /// Accepts the exit codes the install check accepts as success: `0` and
-/// zypper's informational `100`-`103`, `106` and `107`.
+/// zypper's informational `100`-`103`, `106` and `107`. Also accepts `104`
+/// ("not found"), at which zypper commits nothing: its complete stream is
+/// judged like any other, so one without a summary removes nothing and the real
+/// command then fails on its own.
 ///
 /// # Errors
 ///
@@ -158,7 +165,7 @@ pub fn judge_dry_run(
                 .to_owned(),
         );
     }
-    if !exit_accepted(exitcode) {
+    if !exit_accepted(exitcode) && exitcode != EXIT_NOT_FOUND {
         return Err(format!(
             "the dry run failed (exit {exitcode}), so what the transaction would remove is unknown"
         ));
@@ -280,6 +287,9 @@ mod tests {
             }
             "leap156_rm_glibc_problem" => {
                 include_str!("../../tests/fixtures/zypper_dry_run/leap156_rm_glibc_problem.xml")
+            }
+            "leap156_in_less_nonexistent" => {
+                include_str!("../../tests/fixtures/zypper_dry_run/leap156_in_less_nonexistent.xml")
             }
             "tw_rm_libcurl4" => {
                 include_str!("../../tests/fixtures/zypper_dry_run/tw_rm_libcurl4.xml")
@@ -461,8 +471,6 @@ mod tests {
 
     #[test]
     fn a_failed_or_unreadable_dry_run_fails_closed() {
-        let reason = judge_dry_run(104, fixture("leap156_rm_missing"), &[], &[]).unwrap_err();
-        assert!(reason.contains("exit 104"), "{reason}");
         let reason = judge_dry_run(4, fixture("leap156_rm_glibc_problem"), &[], &[]).unwrap_err();
         assert!(reason.contains("exit 4"), "{reason}");
         let reason = judge_dry_run(-1, "", &[], &[]).unwrap_err();
@@ -473,5 +481,57 @@ mod tests {
         let reason = judge_dry_run(0, "ok", &[], &[]).unwrap_err();
         assert!(reason.contains("could not be read"), "{reason}");
         assert!(judge_dry_run(106, fixture("leap156_rm_curl"), &[], &[]).is_ok());
+    }
+
+    /// `104` is zypper's informational "not found": it commits nothing, so a
+    /// complete stream without a summary removes nothing.
+    #[test]
+    fn a_not_found_dry_run_removes_nothing() {
+        assert_eq!(
+            judge_dry_run(
+                104,
+                fixture("leap156_in_less_nonexistent"),
+                &strs(&["less", "nonexistent-pkg-xyz"]),
+                &[]
+            ),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            judge_dry_run(104, fixture("leap156_rm_missing"), &[], &[]),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_not_found_dry_run_with_a_summary_is_judged() {
+        let reason = judge_dry_run(
+            104,
+            fixture("leap156_rm_libcurl4"),
+            &strs(&["libcurl4"]),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            reason.contains("protected package(s) libzypp, zypper"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_cut_off_not_found_dry_run_fails_closed() {
+        let full = fixture("leap156_in_less_nonexistent");
+        let cut = &full[..full.find("</stream>").unwrap()];
+        let reason = judge_dry_run(104, cut, &[], &[]).unwrap_err();
+        assert!(reason.contains("could not be read"), "{reason}");
+    }
+
+    /// A not-found dry run carries zypper's "No provider" error, so `show_log`
+    /// keeps its XML.
+    #[test]
+    fn a_not_found_dry_run_is_not_a_success() {
+        assert!(!dry_run_succeeded(
+            104,
+            fixture("leap156_in_less_nonexistent")
+        ));
     }
 }

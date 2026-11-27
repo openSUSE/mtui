@@ -360,7 +360,8 @@ and nothing is written there.
 - `install`, `uninstall`, `prepare` and `downgrade` resolve each checked
   host's transaction with a dry run first and fail by name a host where it
   would remove a protected package the call did not name, or where the dry run
-  fails (see [Removal guard](concepts.md#removal-guard)); other removals come
+  fails (a `104` "not found" dry run is not a failure; see [Removal
+  guard](concepts.md#removal-guard)); other removals come
   back as `<host>: the transaction also removes …`. `update` does the same in
   both its prepares: a host its first prepare refuses is left out of the patch,
   its reason comes back once as `<host>: its prepare was refused: …` however
