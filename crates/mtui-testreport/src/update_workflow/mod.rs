@@ -48,6 +48,41 @@ pub(crate) fn family(release: &str, transactional: bool) -> Option<Family> {
     }
 }
 
+/// The options of an `update` run, each set by the command flag of the same
+/// name; the default runs the prepare, no newpackage step, and the guard.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateOptions {
+    /// Skip the initial prepare.
+    pub noprepare: bool,
+    /// Run a testing prepare after the patch.
+    pub newpackage: bool,
+    /// Skip the removal guard on the prepares; the rollback is never guarded.
+    pub allow_removal: bool,
+}
+
+impl UpdateOptions {
+    /// Sets [`noprepare`](Self::noprepare).
+    #[must_use]
+    pub fn noprepare(mut self) -> Self {
+        self.noprepare = true;
+        self
+    }
+
+    /// Sets [`newpackage`](Self::newpackage).
+    #[must_use]
+    pub fn newpackage(mut self) -> Self {
+        self.newpackage = true;
+        self
+    }
+
+    /// Sets [`allow_removal`](Self::allow_removal).
+    #[must_use]
+    pub fn allow_removal(mut self) -> Self {
+        self.allow_removal = true;
+        self
+    }
+}
+
 /// A failure recognised by a post-run [`checks`] function.
 ///
 /// `Display` renders `"{host}: {reason}"`, or just `"{reason}"` with no host.

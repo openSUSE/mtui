@@ -25,17 +25,22 @@ use tempfile::TempDir;
 const RRID: &str = "SUSE:Maintenance:42:7";
 const HOSTS: [&str; 2] = ["h1", "h2"];
 
+/// The removal guard's dry run of installing `pkg-a`.
+const INSTALL_PROBE: &str = "zypper -x -n in --dry-run -y -l pkg-a";
+
 /// An enabled SLES 15.5 host whose every command exits 0 printing the
 /// downgrade probe's answer, so all five flows resolve a doer and pass their
-/// checks — the clean-transaction case, which emits no diagnostics.
+/// checks — the clean-transaction case, which emits no diagnostics. Its
+/// install dry run removes nothing.
 fn sles_target(hostname: &str) -> Target {
-    let conn = MockConnection::new(hostname).with_default(CommandLog::new(
-        "",
-        "pkg-a = 1.0-1\n",
-        "",
-        0,
-        0,
-    ));
+    let clean =
+        "<?xml version='1.0'?>\n<stream>\n<install-summary>\n</install-summary>\n</stream>\n";
+    let conn = MockConnection::new(hostname)
+        .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+        .with_response(
+            INSTALL_PROBE,
+            CommandLog::new(INSTALL_PROBE, clean, "", 0, 0),
+        );
     let mut target = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
     target.set_system(
         System::new(
@@ -97,11 +102,13 @@ async fn await_terminal(session: &McpSession, job_id: &str) -> JobState {
 }
 
 /// The five workflow fan-outs and the argv that drives each to a clean success.
-/// The mock hosts answer no dry run, so the guarded ones skip the removal guard.
+/// The mock hosts answer only the install dry run, which `update`'s prepare
+/// runs; the other flows skip the removal guard.
 fn cases() -> Vec<(&'static str, Vec<String>)> {
     let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     vec![
         ("update", argv(&[])),
+        ("update", argv(&["--allow-removal"])),
         ("prepare", argv(&["-u", "--allow-removal"])),
         ("install", argv(&["--allow-removal", "pkg-a"])),
         ("uninstall", argv(&["--allow-removal", "pkg-a"])),

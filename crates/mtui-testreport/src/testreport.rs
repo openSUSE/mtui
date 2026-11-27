@@ -648,8 +648,8 @@ pub trait TestReport {
     /// The full bespoke update flow: optional prepare, package checks, repo add,
     /// the per-host update check, transactional reboot, and the two-phase repo
     /// cleanup — remove on success, **keep** on failure for retry/diagnosis.
-    /// `noprepare` skips the initial prepare; `newpackage` runs a testing
-    /// prepare afterwards.
+    /// `options` carries the command's `--noprepare`, `--newpackage` and
+    /// `--allow-removal`.
     ///
     /// Returns `Err` on a per-host `updater` check failure (after a best-effort
     /// downgrade rollback) or a hard missing-updater failure; non-fatal
@@ -657,21 +657,20 @@ pub trait TestReport {
     async fn perform_update(
         &self,
         targets: &mut HostsGroup,
-        noprepare: bool,
-        newpackage: bool,
+        options: crate::update_workflow::UpdateOptions,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let Some(report) = self.as_set_repo() else {
             return Ok(());
         };
+        targets.set_extra_protected_packages(self.base().config.target_protected_packages.clone());
         let packages = self.get_package_list();
         update_flow::perform_update_with_rollback(
             report,
             self.rrid(),
             &packages,
             targets,
-            noprepare,
-            newpackage,
+            options,
             diagnostics,
         )
         .await

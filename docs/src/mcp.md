@@ -361,10 +361,15 @@ and nothing is written there.
   host's transaction with a dry run first and fail by name a host where it
   would remove a protected package the call did not name, or where the dry run
   fails (see [Removal guard](concepts.md#removal-guard)); other removals come
-  back as `<host>: the transaction also removes …`. Transactional, SLE 11 and
-  `YUM` hosts are not checked, and each comes back as `<host>: no dry run
-  exists for this host, …`. `allow_removal: true` skips the check. `run` is
-  not checked.
+  back as `<host>: the transaction also removes …`. `update` does the same in
+  both its prepares: a host its first prepare refuses is left out of the patch,
+  its reason comes back once as `<host>: its prepare was refused: …` however
+  the update ends, and the failed result names the host; a host its
+  `--newpackage` prepare refuses comes back in a `newpackage prepare after
+  update failed (…)` warning while the update stands. Transactional, SLE 11
+  and `YUM` hosts are not checked, and each comes back once as `<host>: no dry
+  run exists for this host, …`. `allow_removal: true` skips the check. `run`
+  and the rollback of a failed `update` are not checked.
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command
   could be built for a connected host (#396), so automation keying on

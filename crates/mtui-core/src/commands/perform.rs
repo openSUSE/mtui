@@ -184,7 +184,7 @@ pub(super) async fn drive(
     super::support::require_update(session)?;
 
     let hosts = super::support::hosts_arg(args);
-    // Like `-t`, shared by the ops' commands; `update` has no such flag.
+    // Like `-t`, shared by the ops' commands.
     let allow_removal = matches!(args.try_get_one::<bool>(ALLOW_REMOVAL), Ok(Some(true)));
     let names = match &hosts {
         Some(names) if !names.is_empty() && !names.iter().any(|h| h == "all") => {
@@ -257,7 +257,15 @@ pub(super) async fn drive(
             // *before* returning or a failed update strands the unselected
             // hosts.
             let update_result = report
-                .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
+                .perform_update(
+                    &mut selected,
+                    mtui_testreport::UpdateOptions {
+                        noprepare: *noprepare,
+                        newpackage: *newpackage,
+                        allow_removal,
+                    },
+                    &mut diagnostics,
+                )
                 .await;
             session.restore_split_targets(selected, remainder);
             // Verdict before the unbounded diagnostics: `SharedBuf` keeps the
@@ -759,6 +767,7 @@ mod tests {
     async fn allow_removal_reaches_the_report_only_when_passed() {
         use crate::commands::downgrade::Downgrade;
         use crate::commands::prepare::Prepare;
+        use crate::commands::update::Update;
         use crate::commands::zypper::{Install, Uninstall};
 
         let pkg = || vec!["pkg".to_owned()];
@@ -792,6 +801,14 @@ mod tests {
                     "downgrade",
                     matches(&Downgrade, &with(&[])),
                     PerformOp::Downgrade(pkg()),
+                ),
+                (
+                    "update",
+                    matches(&Update, &with(&[])),
+                    PerformOp::Update {
+                        noprepare: false,
+                        newpackage: false,
+                    },
                 ),
             ] {
                 let (mut session, buf) = session_with_hosts(RRID, &["h1"], "ok");

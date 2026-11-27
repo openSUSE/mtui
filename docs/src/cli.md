@@ -34,6 +34,9 @@ Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
+      --allow-removal
+          commit the transaction even when its dry run would remove a protected package (kernel, systemd, glibc, rpm, zypper, openssh, grub2, ...) or cannot be read
+
       --newpackage
           Install new packages after update
 

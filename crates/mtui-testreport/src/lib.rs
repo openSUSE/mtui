@@ -41,7 +41,7 @@ pub use support::{SystemInfo, atomic_write_file, detect_system};
 pub use testreport::{
     HashCheck, HostPackages, ReportOpenQA, SlackReviewMarker, TestReport, TestReportBase,
 };
-pub use update_workflow::{Diagnostic, UpdateError};
+pub use update_workflow::{Diagnostic, UpdateError, UpdateOptions};
 
 /// Crate-private parsers the detached `fuzz/` crate drives. Not API: only
 /// built with the `fuzzing` feature, and hidden from the docs.

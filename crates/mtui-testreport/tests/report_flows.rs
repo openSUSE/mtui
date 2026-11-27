@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostsGroup, MockConnection, Target};
-use mtui_testreport::{NullReport, ObsReport, PiReport, SlReport, TestReport};
+use mtui_testreport::{NullReport, ObsReport, PiReport, SlReport, TestReport, UpdateOptions};
+use mtui_types::RequestReviewID;
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 use mtui_types::system::{System, SystemProduct};
@@ -93,7 +94,11 @@ async fn the_null_report_runs_nothing_on_any_host() {
         .await
         .unwrap();
     report
-        .perform_update(&mut group, false, false, &mut diag)
+        .perform_update(
+            &mut group,
+            UpdateOptions::default().allow_removal(),
+            &mut diag,
+        )
         .await
         .unwrap();
 
@@ -234,6 +239,50 @@ async fn every_concrete_report_refuses_a_package_its_config_protects() {
             assert!(
                 err.to_string().contains("protected package(s) netsvc ("),
                 "{name} {path}: {err}"
+            );
+        }
+    }
+}
+
+/// `update`'s two prepares consult the report's configured protected names
+/// too: the first one refuses the host, the `--newpackage` one warns.
+#[tokio::test]
+async fn every_concrete_report_guards_both_update_prepares_with_its_config() {
+    let mut config = Config::default();
+    config.target_protected_packages = vec!["netsvc".to_owned()];
+    for options in [
+        UpdateOptions::default(),
+        UpdateOptions::default().noprepare().newpackage(),
+    ] {
+        let reports: Vec<(&str, Box<dyn TestReport + Sync>)> = vec![
+            ("sl", Box::new(SlReport::new(config.clone()))),
+            ("pi", Box::new(PiReport::new(config.clone()))),
+            ("obs", Box::new(ObsReport::new(config.clone()))),
+        ];
+        for (name, mut report) in reports {
+            let base = report.base_mut();
+            base.rrid = Some(RequestReviewID::parse("SUSE:Maintenance:42:7").unwrap());
+            base.packages.insert(
+                "SLES:15".to_owned(),
+                [("pkg-a".to_owned(), "2.0-1".to_owned())]
+                    .into_iter()
+                    .collect(),
+            );
+            base.update_repos.insert(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                "https://example/repo".to_owned(),
+            );
+            let (mut group, _handle) =
+                group_removing("zypper -x -n in --dry-run -y -l pkg-a", "netsvc");
+            let mut diag = Vec::new();
+
+            let _ = report.perform_update(&mut group, options, &mut diag).await;
+
+            assert!(
+                diag.iter().any(|d| d.degradation
+                    && d.text.contains("h1: ")
+                    && d.text.contains("protected package(s) netsvc (")),
+                "{name} {options:?}: {diag:?}"
             );
         }
     }
