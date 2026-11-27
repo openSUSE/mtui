@@ -780,34 +780,47 @@ async fn make_testreport_slfo_hash_match_loads_document() {
 }
 
 /// A missing Gitea token abandons the load: the client refuses to build without
-/// one, so no network call is made.
+/// one, so no network call is made. The hint names the file in use, under `~`.
 #[tokio::test]
 async fn make_testreport_slfo_missing_token_yields_null_document() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut config, _gitea, _teregen, update) =
-        slfo_session(tmp.path().to_path_buf(), "deadbeef", "deadbeef").await;
-    config.gitea_token.clear();
+    for (explicit, named) in [
+        (None, "in ~/.config/mtui/mtui.toml"),
+        (Some("/home/tester/qa/mtui.toml"), "in ~/qa/mtui.toml"),
+        (Some("/srv/qa.toml"), "in /srv/qa.toml"),
+    ] {
+        let (mut config, _gitea, _teregen, update) =
+            slfo_session(tmp.path().to_path_buf(), "deadbeef", "deadbeef").await;
+        config.gitea_token.clear();
+        config.source.home = Some("/home/tester".into());
+        config.source.user_file = Some("/home/tester/.config/mtui/mtui.toml".into());
+        config.source.explicit = explicit.map(Into::into);
 
-    let report = make_testreport(
-        &update,
-        config,
-        UpdateKind::Auto,
-        true,
-        LoadContext::default(),
-    )
-    .await
-    .expect("not cancelled");
+        let report = make_testreport(
+            &update,
+            config,
+            UpdateKind::Auto,
+            true,
+            LoadContext::default(),
+        )
+        .await
+        .expect("not cancelled");
 
-    assert!(
-        !report.is_loaded(),
-        "a missing Gitea token must abandon the load"
-    );
-    assert_eq!(report.id(), "");
-    let reason = report.base().load_error.as_deref().expect("a load_error");
-    assert!(
-        reason.contains("token is not configured"),
-        "load_error should name the missing token: {reason}"
-    );
+        assert!(
+            !report.is_loaded(),
+            "a missing Gitea token must abandon the load"
+        );
+        assert_eq!(report.id(), "");
+        let reason = report.base().load_error.as_deref().expect("a load_error");
+        assert_eq!(
+            reason,
+            format!(
+                "Gitea API token is not configured. Pass -g/--gitea-token, or set \
+                 token under [gitea] {named}."
+            ),
+            "the hint names only what mtui reads"
+        );
+    }
 }
 
 /// A stale commit (differs from the Gitea PR head) abandons a non-interactive

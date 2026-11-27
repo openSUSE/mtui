@@ -220,11 +220,13 @@ pub async fn make_testreport(
     match report.check_hash().await {
         HashCheck::Ok => {}
         HashCheck::MissingToken => {
-            let msg = "Gitea API token is not configured. Pass -g/--gitea_token, \
-                 set GITEA_TOKEN in your environment, or add a [gitea] token \
-                 entry to ~/.mtuirc.";
+            let msg = format!(
+                "Gitea API token is not configured. Pass -g/--gitea-token, or set \
+                 token under [gitea] {}.",
+                checkout_config.source.edit_location()
+            );
             error!("{msg}");
-            return Ok(Box::new(null_with_error(checkout_config, msg.to_owned())));
+            return Ok(Box::new(null_with_error(checkout_config, msg)));
         }
         HashCheck::Failed(e) => {
             error!("Gitea API call failed");
