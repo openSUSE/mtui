@@ -168,7 +168,12 @@ pub struct Session {
 
 /// Maximum matching of slots to the hosts in `free` by augmenting paths,
 /// trying an unmatched host first so earlier slots and candidates win ties.
-fn match_slots<'a>(free: &[Vec<&'a String>]) -> Vec<Option<&'a String>> {
+/// The hosts `first(slot, host)` accepts are matched before the rest and stay
+/// matched, so as many of them serve as any maximum matching allows.
+fn match_slots<'a>(
+    free: &[Vec<&'a String>],
+    first: impl Fn(usize, &String) -> bool,
+) -> Vec<Option<&'a String>> {
     use std::collections::{HashMap, HashSet};
     fn augment<'a>(
         slot: usize,
@@ -188,8 +193,16 @@ fn match_slots<'a>(free: &[Vec<&'a String>]) -> Vec<Option<&'a String>> {
         }
         false
     }
+    let preferred: Vec<Vec<&'a String>> = free
+        .iter()
+        .enumerate()
+        .map(|(slot, hosts)| hosts.iter().copied().filter(|h| first(slot, h)).collect())
+        .collect();
     let mut taken = HashMap::new();
-    for slot in 0..free.len() {
+    let matched_first: Vec<bool> = (0..free.len())
+        .map(|slot| augment(slot, &preferred, &mut taken, &mut HashSet::new()))
+        .collect();
+    for slot in (0..free.len()).filter(|s| !matched_first[*s]) {
         augment(slot, free, &mut taken, &mut HashSet::new());
     }
     let mut matched = vec![None; free.len()];
@@ -202,6 +215,10 @@ fn match_slots<'a>(free: &[Vec<&'a String>]) -> Vec<Option<&'a String>> {
 /// A candidate-order shuffle seam: mutates the slot's candidate list in place
 /// before the arbiter picks one.
 pub type ShuffleFn = fn(&mut [String]);
+
+/// A claim seam over [`HostArbiter::try_acquire`], so a test can lose a
+/// matched host to another claim.
+type ClaimFn = fn(&HostArbiter, &str, &Owner) -> bool;
 
 /// The default [`ShuffleFn`]: a real random shuffle.
 fn random_shuffle(candidates: &mut [String]) {
@@ -1588,6 +1605,7 @@ impl Session {
                 pool_primaries,
                 &injected,
                 require_command_set,
+                HostArbiter::try_acquire,
             )
             .await;
         drift.extend(backup_drift);
@@ -1767,9 +1785,11 @@ impl Session {
     ///
     /// Only a slot whose pool-claimed primary failed to connect in *this* call
     /// (`attempted_initial` ∩ `pool_claims`) and that has no candidate attached
-    /// is retried: drop the dead claim(s), then sequentially `acquire_any` the
-    /// next free sibling and connect it until one succeeds or the candidates are
-    /// exhausted. A slot with any attached host is served, and a slot nobody
+    /// is retried: drop the dead claim(s), then match the retried slots jointly
+    /// to their free siblings ([`match_slots`]), connecting one matched sibling
+    /// at a time and re-matching after each, until every slot is served or out
+    /// of free siblings; a slot left without one waits (`acquire_any`) for a
+    /// busy sibling. A slot with any attached host is served, and a slot nobody
     /// claimed in this call is left alone. A candidate
     /// [`pool_slots`](mtui_testreport::TestReportBase::pool_slots) records for
     /// another slot counts for that slot only. Any host that connects joins the
@@ -1785,7 +1805,8 @@ impl Session {
     /// Every retried slot that ends without a host is returned as [`Unserved`],
     /// and every sibling attach refused ([`HostFailure::is_refusal`]) is returned
     /// with its reason. `injected` and `require_command_set` are as for
-    /// [`connect_one`](Self::connect_one).
+    /// [`connect_one`](Self::connect_one). Each matched free sibling is claimed
+    /// through `claim`.
     #[allow(clippy::too_many_arguments)]
     async fn connect_pool_backups(
         &mut self,
@@ -1797,12 +1818,13 @@ impl Session {
         pool_primaries: &std::collections::HashSet<String>,
         injected: &std::collections::HashMap<String, Box<dyn Connection>>,
         require_command_set: bool,
+        claim: ClaimFn,
     ) -> (
         Vec<(String, Option<Vec<String>>)>,
         Vec<Unserved>,
         Vec<(String, HostFailure)>,
     ) {
-        let (arbiter, owner, slot_candidates, mut slot_of, lock_comment, package_meta, named) = {
+        let (arbiter, owner, slot_candidates, slot_of, lock_comment, package_meta, named) = {
             let base = self.metadata().base();
             (
                 base.arbiter,
@@ -1825,7 +1847,7 @@ impl Session {
 
         let (wait, poll) = lock_wait_secs(config);
 
-        let mut attached: std::collections::HashSet<String> =
+        let attached: std::collections::HashSet<String> =
             self.targets().names().into_iter().collect();
         // Pool-claimed primaries this call tried and lost: only the pool
         // selection's, never a claim taken outside it (a named host claims too).
@@ -1862,6 +1884,7 @@ impl Session {
 
         let mut slots: Vec<_> = slot_candidates.into_iter().collect();
         slots.sort();
+        let mut retried = Vec::new();
         for (slot, candidates) in slots {
             // A candidate drawn for another slot neither serves nor fails this one.
             let own: Vec<&String> = candidates
@@ -1872,109 +1895,140 @@ impl Session {
             {
                 continue;
             }
-            let mut slot_failures: Vec<(String, HostFailure)> = candidates
+            let slot_failures: Vec<(String, HostFailure)> = candidates
                 .iter()
                 .filter_map(|c| primary_failures.get(c).map(|f| (c.clone(), f.clone())))
                 .collect();
+            retried.push((slot, candidates, slot_failures));
+        }
+        // `None` while a slot is still retried, then whether it was served.
+        let mut outcome: Vec<Option<bool>> = vec![None; retried.len()];
+        let mut lost: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut budget_spent = false;
+        while outcome.contains(&None) {
             if started.elapsed() >= budget {
-                warn!(
-                    slot = %slot,
-                    "backup-refhost retry budget exhausted; giving up on this slot"
-                );
-                unserved.push(Unserved::BudgetSpent {
-                    slot,
-                    tried: slot_failures.into_iter().map(|(h, _)| h).collect(),
-                });
-                continue;
+                budget_spent = true;
+                break;
             }
-            let mut remaining: Vec<String> = own
-                .into_iter()
-                .filter(|c| !attempted.contains(*c))
-                .cloned()
+            // Jointly, so no slot takes the only free sibling another slot has.
+            let free: Vec<Vec<&String>> = retried
+                .iter()
+                .zip(&outcome)
+                .map(|((slot, candidates, _), decided)| {
+                    candidates
+                        .iter()
+                        .filter(|c| {
+                            decided.is_none()
+                                && slot_of.get(*c).is_none_or(|s| s == slot)
+                                && !attempted.contains(*c)
+                                && !lost.contains(*c)
+                                && arbiter.owner_of(c).is_none_or(|o| o == owner)
+                        })
+                        .collect()
+                })
                 .collect();
-            let mut connected = false;
-            let mut budget_spent = false;
-            while !remaining.is_empty() {
-                if started.elapsed() >= budget {
-                    warn!(
-                        slot = %slot,
-                        "backup-refhost retry budget exhausted; giving up on this slot's remaining siblings"
-                    );
-                    budget_spent = true;
-                    break;
+            let matched = match_slots(&free, |_, _| false)
+                .into_iter()
+                .enumerate()
+                .find_map(|(i, host)| host.map(|h| (i, h.clone())));
+            let (i, chosen) = if let Some((i, host)) = matched {
+                if !claim(arbiter, &host, &owner) {
+                    lost.insert(host);
+                    continue;
                 }
-                let Some(chosen) = arbiter.acquire_any(&remaining, &owner, wait, poll).await else {
+                (i, host)
+            } else {
+                // No free sibling is left: wait for a busy one, a slot at a time.
+                let Some(i) = outcome.iter().position(Option::is_none) else {
+                    break;
+                };
+                let (slot, candidates, slot_failures) = &mut retried[i];
+                let remaining: Vec<String> = candidates
+                    .iter()
+                    .filter(|c| {
+                        slot_of.get(*c).is_none_or(|s| s == slot) && !attempted.contains(*c)
+                    })
+                    .cloned()
+                    .collect();
+                let Some(host) = arbiter.acquire_any(&remaining, &owner, wait, poll).await else {
                     for c in &remaining {
                         let by = arbiter.owner_of(c).map(|o| o.1);
                         slot_failures.push((c.clone(), HostFailure::ClaimedBy(by)));
                     }
-                    break;
+                    outcome[i] = Some(false);
+                    continue;
                 };
-                attempted.insert(chosen.clone());
-                remaining.retain(|c| c != &chosen);
-                self.metadata_mut()
-                    .base_mut()
-                    .pool_claims
-                    .insert(chosen.clone());
-                info!(host = %chosen, slot = %slot, "trying backup refhost for slot");
-                match Self::connect_one(
-                    config,
-                    chosen.clone(),
-                    rrid,
-                    &timeout_prompt,
-                    &lock_comment,
-                    &package_meta,
-                    store.as_ref(),
-                    true, // backup hosts are always pool claims
-                    !named.contains(&chosen),
-                    require_command_set,
-                    &holders,
-                    injected.get(&chosen).map(|c| c.clone_box()),
-                )
-                .await
-                {
-                    Ok((target, drift_entry)) => {
-                        attached.insert(chosen.clone());
-                        slot_of.insert(chosen.clone(), slot.clone());
-                        self.metadata_mut()
-                            .base_mut()
-                            .pool_slots
-                            .insert(chosen.clone(), slot.clone());
-                        self.targets_mut().add(target);
-                        new_drift.push(drift_entry);
-                        connected = true;
-                        break;
+                (i, host)
+            };
+            let slot = retried[i].0.clone();
+            attempted.insert(chosen.clone());
+            self.metadata_mut()
+                .base_mut()
+                .pool_claims
+                .insert(chosen.clone());
+            info!(host = %chosen, slot = %slot, "trying backup refhost for slot");
+            match Self::connect_one(
+                config,
+                chosen.clone(),
+                rrid,
+                &timeout_prompt,
+                &lock_comment,
+                &package_meta,
+                store.as_ref(),
+                true, // backup hosts are always pool claims
+                !named.contains(&chosen),
+                require_command_set,
+                &holders,
+                injected.get(&chosen).map(|c| c.clone_box()),
+            )
+            .await
+            {
+                Ok((target, drift_entry)) => {
+                    self.metadata_mut()
+                        .base_mut()
+                        .pool_slots
+                        .insert(chosen.clone(), slot);
+                    self.targets_mut().add(target);
+                    new_drift.push(drift_entry);
+                    outcome[i] = Some(true);
+                }
+                Err((host, failure)) => {
+                    // A served or budget-cut slot drops its failures; keep
+                    // a refusal apart so it is still named.
+                    if failure.is_refusal() {
+                        refused.push((host.clone(), failure.clone()));
                     }
-                    Err((host, failure)) => {
-                        // A served or budget-cut slot drops its failures; keep
-                        // a refusal apart so it is still named.
-                        if failure.is_refusal() {
-                            refused.push((host.clone(), failure.clone()));
-                        }
-                        slot_failures.push((host, failure));
-                        let base = self.metadata_mut().base_mut();
-                        base.pool_claims.remove(&chosen);
-                        arbiter.release(&chosen, &owner);
-                    }
+                    retried[i].2.push((host, failure));
+                    let base = self.metadata_mut().base_mut();
+                    base.pool_claims.remove(&chosen);
+                    arbiter.release(&chosen, &owner);
                 }
             }
-            if !connected {
-                warn!(
-                    slot = %slot,
-                    candidates = candidates.len(),
-                    "no connectable pool host for slot (all candidates tried)"
-                );
-                unserved.push(if budget_spent {
-                    Unserved::BudgetSpent {
+        }
+        for ((slot, candidates, slot_failures), decided) in retried.into_iter().zip(outcome) {
+            match decided {
+                Some(true) => {}
+                None if budget_spent => {
+                    warn!(
+                        slot = %slot,
+                        "backup-refhost retry budget exhausted; giving up on this slot"
+                    );
+                    unserved.push(Unserved::BudgetSpent {
                         slot,
                         tried: slot_failures.into_iter().map(|(h, _)| h).collect(),
-                    }
-                } else {
-                    Unserved::Unconnectable {
+                    });
+                }
+                _ => {
+                    warn!(
+                        slot = %slot,
+                        candidates = candidates.len(),
+                        "no connectable pool host for slot (all candidates tried)"
+                    );
+                    unserved.push(Unserved::Unconnectable {
                         slot,
                         failures: slot_failures,
-                    }
-                });
+                    });
+                }
             }
         }
         (new_drift, unserved, refused)
@@ -2256,7 +2310,7 @@ impl Session {
     /// also need. Each host serves at most one slot per call, and each slot key
     /// is drawn once. Slots are matched to free hosts and to hosts this owner
     /// already holds, not serving another slot, so that as many as possible are
-    /// served, earlier slots first and held hosts before free ones, and each
+    /// served, earlier slots first and as many by held hosts as that allows, and each
     /// free match is claimed (a host claimed elsewhere meanwhile is matched
     /// around). A slot no such assignment serves waits up to `[lock] wait`
     /// seconds for a busy candidate, else is reported as [`Unserved::Busy`], or
@@ -2282,6 +2336,38 @@ impl Session {
         wait: i64,
         poll: i64,
         shuffle: ShuffleFn,
+    ) -> (
+        Vec<String>,
+        std::collections::HashMap<String, Vec<String>>,
+        Vec<Unserved>,
+    ) {
+        Self::pool_select_claiming(
+            store,
+            testplatforms,
+            arbiter,
+            owner,
+            served,
+            wait,
+            poll,
+            shuffle,
+            HostArbiter::try_acquire,
+        )
+        .await
+    }
+
+    /// [`pool_select`](Self::pool_select) with the claim of each matched free
+    /// host made through `claim`, so a test can lose one to another owner.
+    #[allow(clippy::too_many_arguments)]
+    async fn pool_select_claiming(
+        store: &Refhosts,
+        testplatforms: &[String],
+        arbiter: &'static HostArbiter,
+        owner: &Owner,
+        served: &mut std::collections::HashMap<String, String>,
+        wait: i64,
+        poll: i64,
+        shuffle: ShuffleFn,
+        claim: ClaimFn,
     ) -> (
         Vec<String>,
         std::collections::HashMap<String, Vec<String>>,
@@ -2366,7 +2452,7 @@ impl Session {
                 .map(|((slot, candidates, _), &done)| {
                     // A host held for another slot is offered only to that slot.
                     let held = |c: &String| ours(c) && served.get(c).is_none_or(|s| s == slot);
-                    let mut free: Vec<&String> = candidates
+                    candidates
                         .iter()
                         .filter(|c| {
                             !done
@@ -2374,17 +2460,15 @@ impl Session {
                                 && !lost.contains(*c)
                                 && (held(c) || arbiter.owner_of(c).is_none())
                         })
-                        .collect();
-                    // Held first, so no extra host is claimed where one we hold serves.
-                    free.sort_by_key(|c| !held(c));
-                    free
+                        .collect()
                 })
                 .collect();
             let mut retry = false;
-            for (i, host) in match_slots(&free).into_iter().enumerate() {
+            // Held first, so no extra host is claimed where one we hold serves.
+            for (i, host) in match_slots(&free, |_, c| ours(c)).into_iter().enumerate() {
                 let Some(host) = host else { continue };
                 let held = ours(host);
-                if held || arbiter.try_acquire(host, owner) {
+                if held || claim(arbiter, host, owner) {
                     used.insert(host.clone());
                     served.insert(host.clone(), slots[i].0.clone());
                     if !held {
@@ -4421,6 +4505,81 @@ mod tests {
         assert_eq!(served.keys().collect::<Vec<_>>(), vec!["x86-b"]);
     }
 
+    /// Slots sharing held hosts are matched among those first: no free host is
+    /// claimed when the held ones can serve every slot.
+    #[tokio::test]
+    async fn pool_select_held_hosts_serve_every_slot_they_can_before_a_free_one() {
+        let store = hpc_ltss_store(&["p1", "p2"], &["s1", "s2"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        for held in ["p1", "s1", "s2"] {
+            assert!(arbiter.try_acquire(held, &owner));
+        }
+        let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned(), SLES_TP.to_owned()];
+        let mut served = std::collections::HashMap::new();
+
+        let (chosen, _, unserved) =
+            Session::pool_select(&store, &tps, arbiter, &owner, &mut served, 0, 0, no_shuffle)
+                .await;
+
+        assert_eq!(chosen, Vec::<String>::new());
+        assert_eq!(unserved, Vec::new());
+        assert_eq!(arbiter.owner_of("p2"), None);
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([
+                ("p1".to_owned(), HPC_SLOT.to_owned()),
+                ("s1".to_owned(), LTSS_SLOT.to_owned()),
+                ("s2".to_owned(), SLES_SLOT.to_owned()),
+            ])
+        );
+    }
+
+    /// A claim that another owner wins `p1` and `p2` just before ours.
+    fn claim_after_rival_takes_p1_p2(arbiter: &HostArbiter, host: &str, owner: &Owner) -> bool {
+        if matches!(host, "p1" | "p2") {
+            let rival: Owner = ("rival".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+            assert!(arbiter.try_acquire(host, &rival));
+        }
+        arbiter.try_acquire(host, owner)
+    }
+
+    /// Slots whose matched hosts are claimed elsewhere before ours are matched
+    /// again around those hosts, jointly, so every slot is still served.
+    #[tokio::test]
+    async fn pool_select_matches_around_a_host_lost_to_another_claim() {
+        let store = hpc_ltss_store(&["p1", "p2", "p3"], &["s1", "s2"]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec![LTSS_TP.to_owned(), HPC_TP.to_owned(), SLES_TP.to_owned()];
+        let mut served = std::collections::HashMap::new();
+
+        let (_, _, unserved) = Session::pool_select_claiming(
+            &store,
+            &tps,
+            arbiter,
+            &owner,
+            &mut served,
+            0,
+            0,
+            no_shuffle,
+            claim_after_rival_takes_p1_p2,
+        )
+        .await;
+
+        assert_eq!(unserved, Vec::new());
+        assert_eq!(
+            served,
+            std::collections::HashMap::from([
+                ("s2".to_owned(), LTSS_SLOT.to_owned()),
+                ("p3".to_owned(), HPC_SLOT.to_owned()),
+                ("s1".to_owned(), SLES_SLOT.to_owned()),
+            ])
+        );
+        assert_ne!(arbiter.owner_of("p1"), Some(owner.clone()));
+        assert_ne!(arbiter.owner_of("p2"), Some(owner));
+    }
+
     /// A slot whose only candidates serve other slots is named, not dropped.
     #[tokio::test]
     async fn pool_select_names_slot_whose_candidates_serve_other_slots() {
@@ -4781,6 +4940,7 @@ mod tests {
                 &primaries.iter().cloned().collect(),
                 &std::collections::HashMap::new(),
                 true,
+                HostArbiter::try_acquire,
             ),
         )
         .await
@@ -5245,6 +5405,102 @@ mod tests {
         );
     }
 
+    /// Slots backed up together are matched to their siblings jointly: the
+    /// earlier slot leaves the shared backup to the slot that has no other.
+    #[tokio::test]
+    async fn backup_slots_are_matched_to_siblings_jointly() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (shared, spare) = ("h3.example.com", "h4.example.com");
+        let (dead_a, dead_b) = (closed_addr(), closed_addr());
+        s.inject_mock_connection(shared, product_host(shared, "SLES", "15", "6", false));
+        s.inject_mock_connection(spare, product_host(spare, "SLES", "15", "6", false));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[
+                ("a", &[dead_a.clone(), shared.to_owned(), spare.to_owned()]),
+                ("b", &[dead_b.clone(), shared.to_owned()]),
+            ],
+            &[&dead_a, &dead_b],
+        );
+        let base = s.metadata_mut().base_mut();
+        base.pool_slots.insert(dead_a.clone(), "a".to_owned());
+        base.pool_slots.insert(dead_b.clone(), "b".to_owned());
+
+        let (unserved, _) = s
+            .connect_and_add_hosts(
+                vec![dead_a.clone(), dead_b.clone()],
+                rrid,
+                &std::collections::HashSet::from([dead_a, dead_b]),
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(
+            s.metadata().base().pool_slots,
+            std::collections::HashMap::from([
+                (spare.to_owned(), "a".to_owned()),
+                (shared.to_owned(), "b".to_owned()),
+            ])
+        );
+    }
+
+    /// A claim that never wins `h3.example.com`, though nobody holds it.
+    fn claim_refusing_h3(arbiter: &HostArbiter, host: &str, owner: &Owner) -> bool {
+        host != "h3.example.com" && arbiter.try_acquire(host, owner)
+    }
+
+    /// A backup sibling whose claim is lost after the match is matched around:
+    /// the slot is served by its next sibling within the budget.
+    #[tokio::test]
+    async fn backup_matches_around_a_sibling_lost_to_another_claim() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let (lost, spare) = ("h3.example.com", "h4.example.com");
+        let dead = closed_addr();
+        s.inject_mock_connection(lost, product_host(lost, "SLES", "15", "6", false));
+        s.inject_mock_connection(spare, product_host(spare, "SLES", "15", "6", false));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[("a", &[dead.clone(), lost.to_owned(), spare.to_owned()])],
+            &[&dead],
+        );
+        s.metadata_mut()
+            .base_mut()
+            .pool_slots
+            .insert(dead.clone(), "a".to_owned());
+        let config = s.config.clone();
+        let injected = s.injected_connections();
+
+        let (_, unserved, _) = s
+            .connect_pool_backups(
+                &config,
+                rrid,
+                std::slice::from_ref(&dead),
+                std::collections::HashMap::from([(dead.clone(), HostFailure::Unreachable)]),
+                None,
+                &std::collections::HashSet::from([dead.clone()]),
+                &injected,
+                true,
+                claim_refusing_h3,
+            )
+            .await;
+
+        assert!(unserved.is_empty(), "{unserved:?}");
+        assert_eq!(s.targets().names(), vec![spare.to_owned()]);
+        assert_eq!(
+            s.metadata().base().pool_slots,
+            std::collections::HashMap::from([(spare.to_owned(), "a".to_owned())])
+        );
+        assert_eq!(arbiter.owner_of(lost), None);
+    }
+
     /// A backed-up slot tries its own sibling, not a host attached for another
     /// slot, and that host stays recorded for the slot it serves.
     #[tokio::test]
@@ -5297,6 +5553,54 @@ mod tests {
         );
         assert!(s.metadata().base().pool_claims.contains(attached));
         assert_eq!(arbiter.owner_of(attached), Some(owner));
+    }
+
+    /// A backed-up slot with no free sibling left does not wait for, and take,
+    /// a host attached for another slot: it is named unserved.
+    #[tokio::test]
+    async fn backup_without_a_free_sibling_does_not_take_a_host_attached_for_another_slot() {
+        use crate::commands::testkit::product_host;
+
+        let (_refhosts_dir, mut s, arbiter, owner, rrid) = pool_session(1, 0);
+        let attached = "h1.example.com";
+        let dead = closed_addr();
+        s.inject_mock_connection(attached, product_host(attached, "SLES", "15", "6", false));
+        wire_pool(
+            &mut s,
+            arbiter,
+            &owner,
+            &[
+                ("a", &[attached.to_owned()]),
+                ("b", &[dead.clone(), attached.to_owned()]),
+            ],
+            &[attached, &dead],
+        );
+        let base = s.metadata_mut().base_mut();
+        base.pool_slots.insert(attached.to_owned(), "a".to_owned());
+        base.pool_slots.insert(dead.clone(), "b".to_owned());
+        let conn = MockConnection::new(attached).with_default(CommandLog::new("", "ok", "", 0, 0));
+        s.targets_mut().add(Target::with_connection(
+            attached,
+            TargetState::Enabled,
+            Box::new(conn),
+        ));
+
+        let (unserved, _) = s
+            .connect_and_add_hosts(
+                vec![dead.clone()],
+                rrid,
+                &std::collections::HashSet::from([dead]),
+            )
+            .await;
+
+        assert!(
+            matches!(&unserved[..], [Unserved::Unconnectable { slot, .. }] if slot == "b"),
+            "{unserved:?}"
+        );
+        assert_eq!(
+            s.metadata().base().pool_slots,
+            std::collections::HashMap::from([(attached.to_owned(), "a".to_owned())])
+        );
     }
 
     /// With no sibling that has a command set, the slot is unserved and the
