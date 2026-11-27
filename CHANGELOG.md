@@ -52,6 +52,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- mtui now names what it ignores in its config: each key or table of an
+  `mtui.toml` that no option reads (by file, table and key, never its value;
+  at most 20 per file, the rest counted), and an existing `~/.mtuirc` when no
+  TOML file was loaded. They are logged at `WARN` once at start-up and printed
+  as `note:` lines at the top of `config show` (REPL) and `config_show` (MCP,
+  with paths under the home directory shown as `~/…`). Files with such keys
+  still load as before (#899).
 - After an OBS approval (maintenance and PI), `approve` reads the request again
   and names each QA group review still open on it as
   `still open: review by group <group>`, an automation group's (`qam-auto`,

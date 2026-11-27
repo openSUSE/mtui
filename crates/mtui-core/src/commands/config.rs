@@ -6,6 +6,7 @@ use mtui_config::{Config, SslVerify};
 use mtui_datasources::sanitize_url;
 
 use crate::command::{Command, Scope};
+use crate::display::sanitize_external;
 use crate::engine::command_parser;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -174,10 +175,28 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
             mcp_shown_value(attr, &value)
         ));
     }
+    print_notices(session);
     for row in rows {
         session.display.println(&row);
     }
     Ok(())
+}
+
+/// Characters of one notice `config show` prints.
+const NOTICE_LIMIT: usize = 500;
+
+/// What loading the config files ignored, ahead of the values it explains.
+/// Headless output shows paths under the home directory as `~/…`.
+fn print_notices(session: &mut Session) {
+    let home = if session.is_repl {
+        None
+    } else {
+        session.config.source.home.as_deref()
+    };
+    for notice in &session.config.notices {
+        let line = sanitize_external(&notice.render(home), Some(NOTICE_LIMIT));
+        session.display.println(&format!("note: {line}"));
+    }
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
@@ -430,6 +449,7 @@ impl Command for ConfigCmd {
                         }
                     }
                 }
+                print_notices(session);
                 for row in rows {
                     session.display.println(&row);
                 }
@@ -463,6 +483,7 @@ impl Command for ConfigCmd {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches};
+    use mtui_config::ConfigNotice;
 
     #[test]
     fn name_and_single_scope() {
@@ -498,6 +519,59 @@ mod tests {
         assert!(out.contains("openqa_instance"));
         assert!(out.contains("openqa_instance_baremetal"));
         assert!(out.contains("gitea_token"));
+    }
+
+    #[tokio::test]
+    async fn show_prints_the_load_notices_at_its_top_on_both_surfaces() {
+        let notices = vec![
+            ConfigNotice::LegacyRc {
+                path: "/home/tester/.mtuirc".into(),
+                user_file: Some("/home/tester/.config/mtui/mtui.toml".into()),
+            },
+            ConfigNotice::UnknownKey {
+                file: "/etc/mtui.toml".into(),
+                table: Some("mtui".into()),
+                key: "temp\u{1b}[2Jdir".into(),
+            },
+        ];
+        let rc_note = |dir: &str| {
+            format!(
+                "note: {dir}/.mtuirc is not read: mtui reads only TOML config files; put \
+                 its settings in {dir}/.config/mtui/mtui.toml; see \
+                 https://opensuse.github.io/mtui/configuration.html"
+            )
+        };
+        for (is_repl, argv, home_shown) in [
+            (true, &["show"][..], "/home/tester"),
+            (true, &["show", "max_parallel"][..], "/home/tester"),
+            (false, &["show", "max_parallel"][..], "~"),
+        ] {
+            let (mut session, buf) = empty_session();
+            session.is_repl = is_repl;
+            session.config.max_parallel = 7;
+            session.config.source.home = Some("/home/tester".into());
+            session.config.notices = notices.clone();
+            ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, argv))
+                .await
+                .unwrap();
+            let out = buf.contents();
+            let mut lines = out.lines();
+            assert_eq!(
+                lines.next(),
+                Some(rc_note(home_shown).as_str()),
+                "{argv:?}: {out}"
+            );
+            assert_eq!(
+                lines.next(),
+                Some("note: unknown key [mtui] tempdir in /etc/mtui.toml; ignored"),
+                "{argv:?}: {out}"
+            );
+            assert!(out.contains("max_parallel"), "{argv:?}: {out}");
+            if !is_repl {
+                assert!(!out.contains("/home/tester"), "home leaked to MCP: {out}");
+            }
+        }
     }
 
     #[tokio::test]

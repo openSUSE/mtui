@@ -35,7 +35,21 @@ Loading is **lenient** and never hard-fails:
 - A value check — a zero where a positive number is required, an invalid
   `install_logs` — rejects only that key, logs it at `ERROR`, and keeps the rest
   of the file. A relative `put_dirs` entry is dropped on its own, with an error.
-- Unknown keys are ignored without a warning.
+- A key or table that no option reads (a typo, a key under the wrong table, a
+  key a release removed) is ignored, and named — file, table and key, never its
+  value — in a `WARN` line at start-up and in a `note:` line at the top of
+  `config show`, for example `unknown key [mtui] tempdir in
+  ~/.config/mtui/mtui.toml; ignored`. An unknown table is named once, as
+  `unknown table [svn] in …`. At most 20 keys are named per file; the rest are
+  counted. The rest of the file still loads.
+
+mtui does not read the INI `~/.mtuirc` of the releases before 26.0. When that
+file exists, neither `--config` nor `$MTUI_CONF` is given and no TOML file was
+loaded, mtui says once, at `WARN` and at the top of `config show`, that it is
+not read and names the per-user TOML path to move its settings to. It never
+reads, renames or changes the file.
+
+Over MCP, `config_show` shows a path under your home directory as `~/…`.
 
 `~` is expanded to your home directory in path-valued options, except in the
 CA-bundle path of `ssl_verify`.
