@@ -37,6 +37,7 @@ pub mod document;
 pub mod tokens;
 
 use document::cap_detail;
+use mtui_types::sanitize::sanitize_log;
 
 pub use auth::{AuthHint, AuthStage, DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use document::{
@@ -595,7 +596,12 @@ fn failure_text(body: &Value) -> Option<String> {
 fn json_keys(v: &Value) -> String {
     v.as_object().map_or_else(
         || "<not an object>".to_string(),
-        |o| o.keys().map(String::as_str).collect::<Vec<_>>().join(", "),
+        |o| {
+            sanitize_log(
+                &o.keys().map(String::as_str).collect::<Vec<_>>().join(", "),
+                None,
+            )
+        },
     )
 }
 
@@ -893,6 +899,25 @@ mod tests {
             !line.contains("customer visible finding"),
             "warning leaked check output: {line}"
         );
+    }
+
+    /// The keys are TeReGen's text too.
+    #[tokio::test]
+    async fn checkers_key_set_warning_is_sanitized_and_one_line() {
+        let server = checkers_server(json!([
+            {"checker_type": "checker-alpha", "pass_count": "twelve",
+             "bad\u{9b}2J\u{202e}\nFORGED record": 1},
+        ]))
+        .await;
+        let logs = capture_logs(|| async {
+            client(&server).checkers(RRID).await.unwrap();
+        })
+        .await;
+
+        let line = failure_line(&logs, "skipping a run");
+        assert!(line.contains("bad\\nFORGED record"), "{logs:?}");
+        assert!(!logs.contains(['\u{9b}', '\u{202e}']), "{logs:?}");
+        assert!(!logs.lines().any(|l| l.starts_with("FORGED")), "{logs:?}");
     }
 
     /// Regression (#522): `null` and unknown keys are what an in-progress run

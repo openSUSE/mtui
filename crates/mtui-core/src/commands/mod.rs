@@ -232,6 +232,8 @@ pub(crate) mod testkit {
             pub rrid: Option<String>,
             /// The `error` field, if present.
             pub error: Option<String>,
+            /// Every field as ` name=value`, in order.
+            pub fields: String,
         }
 
         thread_local! {
@@ -247,10 +249,13 @@ pub(crate) mod testkit {
             message: Option<String>,
             rrid: Option<String>,
             error: Option<String>,
+            fields: String,
         }
 
         impl Visit for CaptureVisitor {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.fields
+                    .push_str(&format!(" {}={value:?}", field.name()));
                 // `succeeded = %…` and bare format-string messages both arrive
                 // as `Display` values, already rendered for `record_debug`.
                 match field.name() {
@@ -275,6 +280,7 @@ pub(crate) mod testkit {
                                 message: v.message,
                                 rrid: v.rrid,
                                 error: v.error,
+                                fields: v.fields,
                             });
                         }
                     }
