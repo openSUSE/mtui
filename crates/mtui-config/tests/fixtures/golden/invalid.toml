@@ -28,7 +28,7 @@ openqa = "nope"
 baremetal = "http://"
 
 [target]
-protected_packages = ["", 7, "a b", "kernel-*", " kept "]
+protected_packages = ["", 7, "a b", "kernel-*", "kernel-rt>=6.4", "perl(DBI)", "kernel-rt,kernel-64kb", " kept "]
 
 [gitea]
 url = "gitea.example.com"

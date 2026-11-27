@@ -191,7 +191,11 @@ where
                 );
                 return None;
             }
-            if name.contains(|c: char| c.is_whitespace() || matches!(c, '*' | '?' | '[' | ']')) {
+            // rpm's ALLOWED_CHARS_NAME: a version constraint, capability or glob never matches.
+            if !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_+%{}".contains(c))
+            {
                 tracing::error!(
                     option = "protected_packages",
                     entry = name,
@@ -1411,7 +1415,8 @@ mod tests {
     #[test]
     fn a_malformed_protected_package_entry_drops_alone() {
         let raw: RawConfig = toml::from_str(
-            "[target]\nprotected_packages = [\"ok-pkg\", 3, \"two words\", \"kernel-*\", \"x[1]\"]\n\
+            "[target]\nprotected_packages = [\"ok-pkg\", 3, \"two words\", \"kernel-*\", \"x[1]\", \
+             \"kernel-rt>=6.4\", \"perl(DBI)\", \"kernel-rt,kernel-64kb\"]\n\
              [connection]\nconnection_timeout = 42\n",
         )
         .unwrap();
