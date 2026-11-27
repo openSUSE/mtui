@@ -56,6 +56,11 @@ fn sles_target(hostname: &str) -> Target {
 /// A session with one loaded, active report carrying [`HOSTS`] and a package,
 /// over a throwaway `template_dir` the caller keeps alive.
 async fn session_with_hosts() -> (Arc<McpSession>, TempDir) {
+    session_with_targets(HOSTS.iter().map(|h| sles_target(h)).collect()).await
+}
+
+/// [`session_with_hosts`] over `targets`.
+async fn session_with_targets(targets: Vec<Target>) -> (Arc<McpSession>, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.template_dir = tmp.path().to_path_buf();
@@ -77,7 +82,6 @@ async fn session_with_hosts() -> (Arc<McpSession>, TempDir) {
             SystemProduct::new("SLES", "15.5", "x86_64"),
             "https://example/repo".to_owned(),
         );
-        let targets: Vec<Target> = HOSTS.iter().map(|h| sles_target(h)).collect();
         report.base_mut().targets = HostsGroup::new(targets, false);
         guard.templates.add(Box::new(report));
         guard.templates.set_active(RRID);
@@ -169,4 +173,49 @@ async fn backgrounded_success_returns_the_hosts_it_ran_over() {
             assert!(out.contains(host), "{name} did not name {host}: {out:?}");
         }
     }
+}
+
+/// A host whose tracked `pkg-a` stays at `1.0-1` through a patch that ships
+/// `2.0-1` reaches the tool result as a qualified confirmation and the finding.
+#[tokio::test]
+async fn an_update_finding_reaches_the_tool_result() {
+    const QUERY: &str = "rpm -q --queryformat \"%{Name} %{Version}-%{Release}\n\" pkg-a";
+    let conn = MockConnection::new("h1")
+        .with_default(CommandLog::new("", "", "", 0, 0))
+        .with_response(QUERY, CommandLog::new(QUERY, "pkg-a 1.0-1\n", "", 0, 0));
+    let mut target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+    target.set_system(
+        System::new(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::new(),
+            false,
+        ),
+        false,
+    );
+    let mut pkg = mtui_types::package::Package::new("pkg-a");
+    pkg.set_required(Some("2.0-1")).unwrap();
+    target.set_packages(vec![pkg]);
+    let (sess, _tmp) = session_with_targets(vec![target]).await;
+
+    let out = sess
+        .run_command(&register_all(), "update", &["--noprepare".to_owned()])
+        .await
+        .expect("the patch passed its checks");
+
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines.first().copied(),
+        Some(
+            "update completed on h1: the patch passed its checks, with 1 degradation reported \
+             below"
+        ),
+        "{out}"
+    );
+    assert!(
+        lines.contains(
+            &"h1: pkg-a was not updated by the patch (before the patch: 1.0-1; after it: 1.0-1; \
+              the update's version: 2.0-1)"
+        ),
+        "{out}"
+    );
 }

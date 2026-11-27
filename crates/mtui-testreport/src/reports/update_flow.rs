@@ -12,6 +12,7 @@
 //! command templates come from the [`WorkflowRegistry`] (`ActionCommands` +
 //! `CheckFn`), keyed on `(system.get_release(), transactional)`.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -20,8 +21,10 @@ use mtui_hosts::{
     CleanupReport, Command, HostError, HostsGroup, LockOutcome, Operation, OperationGroup,
     RebootFailure, RebootFailureCause, RepoFailure, RepoOp, RepoOutcome, SetRepo, TestRepos,
 };
-use mtui_types::RequestReviewID;
+use mtui_types::package::VersionCheck;
 use mtui_types::shellquote::quote_args;
+use mtui_types::system::SystemProduct;
+use mtui_types::{RPMVersion, RequestReviewID, TargetState};
 use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::UpdateOptions;
@@ -3134,8 +3137,183 @@ async fn finish_update(
     }
 
     targets.package_check(true, Some(hosts)).await;
+    diagnostics.extend(
+        version_findings(targets, hosts, report.composition())
+            .into_iter()
+            .map(Diagnostic::degradation),
+    );
 
     remove_test_repos(targets, hosts, report, diagnostics).await;
+}
+
+/// How many packages one host's [`version_findings`] names before summarising.
+const VERSION_FINDINGS_PER_HOST: usize = 10;
+
+/// How a tracked package's checks around the patch show it did not end at the
+/// update's version. The after-state decides the class; the before-state is
+/// context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VersionFinding {
+    /// The query before the patch did not answer; the one after it did.
+    BeforeUnanswered,
+    /// The query after the patch did not answer.
+    AfterUnanswered,
+    /// Installed before the patch, not after it.
+    Removed,
+    /// At the same version before and after the patch.
+    Unchanged,
+    /// At a lower version after the patch than before it.
+    WentDown,
+    /// Raised by the patch, still below the update's version.
+    BelowUpdate,
+    /// Raised by the patch above the update's version.
+    AboveUpdate,
+}
+
+impl VersionFinding {
+    /// The finding for one package, or `None` when it ended at the update's
+    /// version, was not installed before the patch, or rose while the update's
+    /// version is unknown.
+    fn classify(
+        before: &VersionCheck,
+        after: &VersionCheck,
+        required: Option<&RPMVersion>,
+    ) -> Option<Self> {
+        match (before, after) {
+            (_, VersionCheck::NotChecked) => Some(Self::AfterUnanswered),
+            (VersionCheck::NotChecked, _) => Some(Self::BeforeUnanswered),
+            (VersionCheck::NotInstalled, _) => None,
+            (VersionCheck::Installed(_), VersionCheck::NotInstalled) => Some(Self::Removed),
+            (VersionCheck::Installed(b), VersionCheck::Installed(a)) => match a.cmp(b) {
+                Ordering::Equal => Some(Self::Unchanged),
+                Ordering::Less => Some(Self::WentDown),
+                Ordering::Greater => match required.map(|r| a.cmp(r)) {
+                    Some(Ordering::Less) => Some(Self::BelowUpdate),
+                    Some(Ordering::Greater) => Some(Self::AboveUpdate),
+                    Some(Ordering::Equal) | None => None,
+                },
+            },
+        }
+    }
+}
+
+/// One package's [`VersionFinding`] on one host, with the versions it was
+/// judged from, rendered as a degradation line.
+#[derive(Debug)]
+struct PackageFinding<'a> {
+    host: &'a str,
+    package: &'a str,
+    finding: VersionFinding,
+    before: &'a VersionCheck,
+    after: &'a VersionCheck,
+    required: Option<&'a RPMVersion>,
+}
+
+impl std::fmt::Display for PackageFinding<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.finding {
+            VersionFinding::BeforeUnanswered => {
+                "could not be judged: the version query before the patch did not answer"
+            }
+            VersionFinding::AfterUnanswered => {
+                "could not be judged: the version query after the patch did not answer"
+            }
+            VersionFinding::Removed => "is no longer installed after the patch",
+            VersionFinding::Unchanged => match (self.before.version(), self.required) {
+                (Some(b), Some(r)) if b == r => {
+                    "was already at the update's version before the patch, which did not change it"
+                }
+                (Some(b), Some(r)) if b > r => {
+                    "was already above the update's version before the patch, which did not \
+                     change it"
+                }
+                (_, Some(_)) => "was not updated by the patch",
+                (_, None) => "was not changed by the patch",
+            },
+            VersionFinding::WentDown => "went down with the patch",
+            VersionFinding::BelowUpdate => "rose with the patch, but not to the update's version",
+            VersionFinding::AboveUpdate => {
+                "rose with the patch above the update's version; the update's own build is not \
+                 what is installed"
+            }
+        };
+        let shown = |check: &VersionCheck| match check {
+            VersionCheck::Installed(v) => v.to_string(),
+            VersionCheck::NotInstalled => "not installed".to_owned(),
+            VersionCheck::NotChecked => "unknown".to_owned(),
+        };
+        let required = self
+            .required
+            .map_or_else(|| "could not be read".to_owned(), ToString::to_string);
+        write!(
+            f,
+            "{}: {} {what} (before the patch: {}; after it: {}; the update's version: {required})",
+            self.host,
+            self.package,
+            shown(self.before),
+            shown(self.after),
+        )
+    }
+}
+
+/// The degradation lines for the tracked packages of each enabled host in
+/// `hosts` that did not end at the update's version, at most
+/// [`VERSION_FINDINGS_PER_HOST`] per host and then one line for the rest.
+///
+/// A package the update's `composition` does not compose for the host's
+/// products is not judged; a composition that names none of them composes
+/// everything, as for the prepare.
+fn version_findings(
+    targets: &HostsGroup,
+    hosts: &BTreeSet<String>,
+    composition: Option<&HashMap<SystemProduct, BTreeSet<String>>>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    for target in targets
+        .targets()
+        .filter(|t| hosts.contains(t.hostname()) && t.state() == TargetState::Enabled)
+    {
+        let products = target.system().flatten();
+        let composed: Option<BTreeSet<&String>> = composition.and_then(|c| {
+            let sets: Vec<&BTreeSet<String>> = products.iter().filter_map(|p| c.get(p)).collect();
+            (!sets.is_empty()).then(|| sets.into_iter().flatten().collect())
+        });
+        let mut lines: Vec<String> = target
+            .packages()
+            .iter()
+            .filter(|pkg| composed.as_ref().is_none_or(|c| c.contains(&pkg.name)))
+            .filter_map(|pkg| {
+                let finding = VersionFinding::classify(
+                    pkg.before_check(),
+                    pkg.after_check(),
+                    pkg.required(),
+                )?;
+                Some(
+                    PackageFinding {
+                        host: target.hostname(),
+                        package: &pkg.name,
+                        finding,
+                        before: pkg.before_check(),
+                        after: pkg.after_check(),
+                        required: pkg.required(),
+                    }
+                    .to_string(),
+                )
+            })
+            .collect();
+        let more = lines.len().saturating_sub(VERSION_FINDINGS_PER_HOST);
+        lines.truncate(VERSION_FINDINGS_PER_HOST);
+        findings.extend(lines);
+        if more > 0 {
+            let plural = if more == 1 { "" } else { "s" };
+            findings.push(format!(
+                "{}: {more} more tracked package{plural} with a version finding, not listed here \
+                 (see `list_packages`)",
+                target.hostname()
+            ));
+        }
+    }
+    findings
 }
 
 /// Removes the test update repositories from the hosts an update completed on.
@@ -6094,14 +6272,20 @@ mod tests {
     }
 
     /// A target carrying `pkg-a` whose every command passes and whose version
-    /// query answers `2.0-1`, so a post-update check records that version. A
-    /// transactional one is SL Micro, and its reboot takes.
+    /// query answers `1.0-1` before the patch and `2.0-1` after it, so a
+    /// post-update check records that version. A transactional one is SL
+    /// Micro, and its reboot takes.
     fn checked_target(hostname: &str, transactional: bool) -> (Target, MockConnection) {
         let query = pkg_a_query();
         let conn = MockConnection::new(hostname)
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_response(
                 query.clone(),
+                CommandLog::new(&query, "pkg-a 1.0-1\n", "", 0, 0),
+            )
+            .with_response_from(
+                query.clone(),
+                2,
                 CommandLog::new(&query, "pkg-a 2.0-1\n", "", 0, 0),
             )
             .with_changing_boot_id();
@@ -17040,5 +17224,511 @@ mod tests {
             );
             assert_eq!(diagnostics, vec![unchecked_note("h1")], "{verb}");
         }
+    }
+
+    // --- post-update package versions ---------------------------------------
+
+    /// The `rpm -q` version query `package_check` sends for `names`.
+    fn version_query(names: &[&str]) -> String {
+        let names: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
+        format!(
+            "rpm -q --queryformat \"%{{Name}} %{{Version}}-%{{Release}}\n\" {}",
+            quote_args(&names)
+        )
+    }
+
+    /// An answer to `query` printing `out`; an empty one exits 1, as a query
+    /// that did not answer.
+    fn query_answer(query: &str, out: &str) -> CommandLog {
+        CommandLog::new(query, out, "", i16::from(out.is_empty()), 0)
+    }
+
+    /// `pkg-a` queried as `before` up to the patch and `after` from the
+    /// post-update check on, at `required` in the update's metadata (`None`:
+    /// unreadable). A transactional host is SL Micro and answers `after` only
+    /// once its reboot was dispatched, so a check made before the reboot reads
+    /// `before`.
+    fn versioned_target(
+        hostname: &str,
+        transactional: bool,
+        before: &str,
+        after: &str,
+        required: Option<&str>,
+    ) -> (Target, MockConnection) {
+        let query = version_query(&["pkg-a"]);
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(query.clone(), query_answer(&query, before))
+            .with_changing_boot_id();
+        let conn = if transactional {
+            conn.with_response_after_reboot(query.clone(), query_answer(&query, after))
+        } else {
+            conn.with_response_from(query.clone(), 2, query_answer(&query, after))
+        };
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        let product = if transactional {
+            SystemProduct::new("SL-Micro", "6.0", "x86_64")
+        } else {
+            SystemProduct::new("SLES", "15.5", "x86_64")
+        };
+        t.set_system(
+            System::new(product, BTreeSet::new(), transactional),
+            transactional,
+        );
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(required).unwrap();
+        t.set_packages(vec![pkg]);
+        (t, handle)
+    }
+
+    /// Runs a `--noprepare` update of `report` over `targets` and returns its
+    /// result and its degradations' texts.
+    async fn update_with(
+        report: &SlReport,
+        targets: Vec<Target>,
+    ) -> (Result<(), UpdateFailure>, Vec<String>) {
+        let packages = report.get_package_list();
+        let mut group = HostsGroup::new(targets, false);
+        let mut diagnostics = Vec::new();
+        let res = perform_update(
+            &mut group,
+            report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default().noprepare().allow_removal(),
+            &mut diagnostics,
+        )
+        .await;
+        let texts = degradations(&diagnostics)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        (res, texts)
+    }
+
+    async fn update_over(targets: Vec<Target>) -> (Result<(), UpdateFailure>, Vec<String>) {
+        update_with(&report_with_rrid(), targets).await
+    }
+
+    /// A version check as `rpm -q` output renders it: `-` unanswered, `none`
+    /// not installed, anything else a version.
+    fn check(spec: &str) -> VersionCheck {
+        match spec {
+            "-" => VersionCheck::NotChecked,
+            "none" => VersionCheck::NotInstalled,
+            v => VersionCheck::Installed(RPMVersion::parse(v).unwrap()),
+        }
+    }
+
+    /// The `rpm -q` answer for `pkg-a` in the state `spec` names (see [`check`]).
+    fn answer_for(spec: &str) -> String {
+        match spec {
+            "-" => String::new(),
+            "none" => "package pkg-a is not installed\n".to_owned(),
+            v => format!("pkg-a {v}\n"),
+        }
+    }
+
+    /// The degradation line for `pkg-a` on `host`.
+    fn finding_line(
+        host: &str,
+        finding: VersionFinding,
+        before: &str,
+        after: &str,
+        required: Option<&str>,
+    ) -> String {
+        let required = required.map(|r| RPMVersion::parse(r).unwrap());
+        PackageFinding {
+            host,
+            package: "pkg-a",
+            finding,
+            before: &check(before),
+            after: &check(after),
+            required: required.as_ref(),
+        }
+        .to_string()
+    }
+
+    /// Whether any of `texts` is a version finding about `host`.
+    fn names_a_finding(texts: &[String], host: &str) -> bool {
+        texts.iter().any(|t| {
+            t.starts_with(&format!("{host}: "))
+                && (t.contains("(before the patch: ") || t.contains("with a version finding"))
+        })
+    }
+
+    use VersionFinding::{
+        AboveUpdate, AfterUnanswered, BeforeUnanswered, BelowUpdate, Removed, Unchanged, WentDown,
+    };
+
+    /// `(before, after, required, finding)`: the after-state decides, the
+    /// before-state is context.
+    const CLASSES: &[(&str, &str, Option<&str>, Option<VersionFinding>)] = &[
+        ("1.0-1", "2.0-1", Some("2.0-1"), None),
+        ("1.0-1", "1.5-1", Some("2.0-1"), Some(BelowUpdate)),
+        ("1.0-1", "2.1-1", Some("2.0-1"), Some(AboveUpdate)),
+        ("2.0-1", "2.1-1", Some("2.0-1"), Some(AboveUpdate)),
+        ("2.1-1", "2.2-1", Some("2.0-1"), Some(AboveUpdate)),
+        ("1.0-1", "1.0-1", Some("2.0-1"), Some(Unchanged)),
+        ("2.0-1", "2.0-1", Some("2.0-1"), Some(Unchanged)),
+        ("2.1-1", "2.1-1", Some("2.0-1"), Some(Unchanged)),
+        ("1.5-1", "1.0-1", Some("2.0-1"), Some(WentDown)),
+        ("2.1-1", "2.0-1", Some("2.0-1"), Some(WentDown)),
+        ("1.0-1", "none", Some("2.0-1"), Some(Removed)),
+        ("2.1-1", "none", Some("2.0-1"), Some(Removed)),
+        ("1.0-1", "-", Some("2.0-1"), Some(AfterUnanswered)),
+        ("none", "-", Some("2.0-1"), Some(AfterUnanswered)),
+        ("-", "-", Some("2.0-1"), Some(AfterUnanswered)),
+        ("-", "2.0-1", Some("2.0-1"), Some(BeforeUnanswered)),
+        ("-", "none", Some("2.0-1"), Some(BeforeUnanswered)),
+        ("none", "none", Some("2.0-1"), None),
+        ("none", "1.0-1", Some("2.0-1"), None),
+        ("none", "2.1-1", Some("2.0-1"), None),
+        ("1.0-1", "1.0-1", None, Some(Unchanged)),
+        ("1.0-1", "0.9-1", None, Some(WentDown)),
+        ("1.0-1", "none", None, Some(Removed)),
+        ("1.0-1", "-", None, Some(AfterUnanswered)),
+        ("-", "1.0-1", None, Some(BeforeUnanswered)),
+        ("1.0-1", "2.0-1", None, None),
+        ("none", "1.0-1", None, None),
+    ];
+
+    #[test]
+    fn a_package_is_classified_by_its_state_after_the_patch() {
+        for &(before, after, required, want) in CLASSES {
+            let required = required.map(|r| RPMVersion::parse(r).unwrap());
+            assert_eq!(
+                VersionFinding::classify(&check(before), &check(after), required.as_ref()),
+                want,
+                "{before} -> {after} (update: {required:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn each_finding_names_what_was_observed_with_all_three_versions() {
+        let r = Some("2.0-1");
+        let cases = [
+            (
+                finding_line("h1", BeforeUnanswered, "-", "2.0-1", r),
+                "h1: pkg-a could not be judged: the version query before the patch did not \
+                 answer (before the patch: unknown; after it: 2.0-1; the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", AfterUnanswered, "1.0-1", "-", r),
+                "h1: pkg-a could not be judged: the version query after the patch did not answer \
+                 (before the patch: 1.0-1; after it: unknown; the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", Removed, "1.0-1", "none", r),
+                "h1: pkg-a is no longer installed after the patch (before the patch: 1.0-1; \
+                 after it: not installed; the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", Unchanged, "1.0-1", "1.0-1", r),
+                "h1: pkg-a was not updated by the patch (before the patch: 1.0-1; after it: \
+                 1.0-1; the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", Unchanged, "2.0-1", "2.0-1", r),
+                "h1: pkg-a was already at the update's version before the patch, which did not \
+                 change it (before the patch: 2.0-1; after it: 2.0-1; the update's version: \
+                 2.0-1)",
+            ),
+            (
+                finding_line("h1", Unchanged, "2.1-1", "2.1-1", r),
+                "h1: pkg-a was already above the update's version before the patch, which did \
+                 not change it (before the patch: 2.1-1; after it: 2.1-1; the update's version: \
+                 2.0-1)",
+            ),
+            (
+                finding_line("h1", Unchanged, "1.0-1", "1.0-1", None),
+                "h1: pkg-a was not changed by the patch (before the patch: 1.0-1; after it: \
+                 1.0-1; the update's version: could not be read)",
+            ),
+            (
+                finding_line("h1", WentDown, "2.1-1", "2.0-1", r),
+                "h1: pkg-a went down with the patch (before the patch: 2.1-1; after it: 2.0-1; \
+                 the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", BelowUpdate, "1.0-1", "1.5-1", r),
+                "h1: pkg-a rose with the patch, but not to the update's version (before the \
+                 patch: 1.0-1; after it: 1.5-1; the update's version: 2.0-1)",
+            ),
+            (
+                finding_line("h1", AboveUpdate, "1.0-1", "2.1-1", r),
+                "h1: pkg-a rose with the patch above the update's version; the update's own \
+                 build is not what is installed (before the patch: 1.0-1; after it: 2.1-1; the \
+                 update's version: 2.0-1)",
+            ),
+        ];
+        for (got, want) in cases {
+            assert_eq!(got, want);
+        }
+    }
+
+    /// No host whose package versions `export` records FAILED or undecided
+    /// gets a bare confirmation: every such triple draws a finding.
+    #[test]
+    fn every_triple_export_does_not_pass_draws_a_finding() {
+        use crate::authoring::manual::install_from_hosts;
+        use crate::export::ManualHost;
+        use mtui_types::hostlog::HostLog;
+        use mtui_types::report_document::{Install, Verdict};
+
+        let states = ["-", "none", "1.0-1", "2.0-1", "3.0-1"];
+        let install = Install {
+            repository: String::new(),
+            targets: Vec::new(),
+            test_platforms: Vec::new(),
+        };
+        let mut judged = 0;
+        for before in states {
+            for after in states {
+                for required in [None, Some("2.0-1")] {
+                    let mut pkg = mtui_types::package::Package::new("pkg-a");
+                    pkg.set_before_check(check(before));
+                    pkg.set_after_check(check(after));
+                    pkg.set_required(required).unwrap();
+                    let host = ManualHost {
+                        hostname: "h1".into(),
+                        system: "sles".into(),
+                        product: SystemProduct::new("SLES", "15.5", "x86_64"),
+                        packages: vec![pkg.clone()],
+                        hostlog: HostLog::new(),
+                    };
+                    let verdict = install_from_hosts(&[host], &install).checks[0].verdict.0;
+                    if verdict == Some(Verdict::Passed) {
+                        continue;
+                    }
+                    judged += 1;
+                    assert!(
+                        VersionFinding::classify(
+                            pkg.before_check(),
+                            pkg.after_check(),
+                            pkg.required()
+                        )
+                        .is_some(),
+                        "export says {verdict:?} for {before} -> {after} (update: {required:?})"
+                    );
+                }
+            }
+        }
+        assert!(judged > 0, "the export rule must reach a failing triple");
+    }
+
+    #[tokio::test]
+    async fn each_version_state_reaches_the_result_as_its_finding() {
+        for &(before, after, required, want) in CLASSES {
+            let (t, _) = versioned_target(
+                "h1",
+                false,
+                &answer_for(before),
+                &answer_for(after),
+                required,
+            );
+            let (res, texts) = update_over(vec![t]).await;
+            assert_eq!(res, Ok(()), "{texts:?}");
+            let want: Vec<String> = want
+                .map(|f| finding_line("h1", f, before, after, required))
+                .into_iter()
+                .collect();
+            assert_eq!(texts, want, "{before} -> {after} (update: {required:?})");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_host_tracking_no_package_is_no_degradation() {
+        let (mut t, handle) = versioned_target("h1", false, "", "", Some("2.0-1"));
+        t.set_packages(Vec::new());
+        let (res, texts) = update_over(vec![t]).await;
+        assert_eq!(res, Ok(()));
+        assert_eq!(texts, Vec::<String>::new());
+        assert_eq!(version_queries(&handle), 0, "{:?}", handle.commands());
+    }
+
+    #[tokio::test]
+    async fn a_transactional_host_is_judged_on_the_version_it_booted_into() {
+        let (t, handle) =
+            versioned_target("h1", true, "pkg-a 1.0-1\n", "pkg-a 2.0-1\n", Some("2.0-1"));
+        let (res, texts) = update_over(vec![t]).await;
+        assert_eq!(res, Ok(()), "{texts:?}");
+        assert!(rebooted(&handle), "{:?}", handle.fired_commands());
+        assert_eq!(texts, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn only_the_host_that_did_not_reach_the_version_is_named() {
+        let r = Some("2.0-1");
+        let (t1, _) = versioned_target("h1", false, "pkg-a 1.0-1\n", "pkg-a 2.0-1\n", r);
+        let (t2, _) = versioned_target("h2", false, "pkg-a 1.0-1\n", "pkg-a 1.0-1\n", r);
+        // A disabled host runs nothing, so its empty answers must not read as
+        // a query that did not answer.
+        let (mut t3, _) = versioned_target("h3", false, "pkg-a 1.0-1\n", "pkg-a 1.0-1\n", r);
+        t3.set_state(TargetState::Disabled);
+        let (res, texts) = update_over(vec![t1, t2, t3]).await;
+        assert_eq!(res, Ok(()), "{texts:?}");
+        assert_eq!(texts, [finding_line("h2", Unchanged, "1.0-1", "1.0-1", r)]);
+    }
+
+    #[tokio::test]
+    async fn a_partial_update_names_the_completed_host_that_did_not_reach_the_version() {
+        let r = Some("2.0-1");
+        let (t1, _) = lost_update_target("h1");
+        let (t2, _) = versioned_target("h2", false, "pkg-a 1.0-1\n", "pkg-a 1.5-1\n", r);
+        let (res, texts) = update_over(vec![t1, t2]).await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("h1's lost patch is NotRun: {res:?}");
+        };
+        assert_eq!(e.completed(), ["h2"], "{e:?}");
+        assert!(
+            texts.contains(&finding_line("h2", BelowUpdate, "1.0-1", "1.5-1", r)),
+            "{texts:?}"
+        );
+        assert!(!names_a_finding(&texts, "h1"), "{texts:?}");
+    }
+
+    #[tokio::test]
+    async fn a_host_whose_prepare_was_refused_draws_no_version_finding() {
+        // h1 answers no version query, so judging it would name both queries.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (mut t1, _) =
+            target_answering("h1", PREPARE_PROBE, &dry_run_removing(&["glibc"]), 0, "");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(Some("2.0-1")).unwrap();
+        t1.set_packages(vec![pkg]);
+        let (t2, _) = target_answering("h2", PREPARE_PROBE, &dry_run_removing(&[]), 0, "");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            UpdateOptions::default(),
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::Excluded(err)) = res else {
+            panic!("h1's prepare was refused: {res:?}");
+        };
+        assert_eq!(err.completed(), ["h2".to_owned()]);
+        let texts: Vec<String> = degradations(&diagnostics)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert!(!names_a_finding(&texts, "h1"), "{texts:?}");
+    }
+
+    /// A SLES host tracking `pkg-a` and `pkg-b`, both at `1.0-1` before and
+    /// after the patch, which ships them at `2.0-1`.
+    fn two_package_target() -> Target {
+        let query = version_query(&["pkg-a", "pkg-b"]);
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                query.clone(),
+                query_answer(&query, "pkg-a 1.0-1\npkg-b 1.0-1\n"),
+            );
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        t.set_packages(
+            ["pkg-a", "pkg-b"]
+                .iter()
+                .map(|n| {
+                    let mut pkg = mtui_types::package::Package::new(*n);
+                    pkg.set_required(Some("2.0-1")).unwrap();
+                    pkg
+                })
+                .collect(),
+        );
+        t
+    }
+
+    #[tokio::test]
+    async fn a_package_the_update_does_not_compose_for_the_host_is_not_judged() {
+        // A product change can leave a checked package tracked although the
+        // host's products no longer compose it.
+        let mut report = report_with_rrid();
+        report.base_mut().composed = HashMap::from([(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::from(["pkg-b".to_owned()]),
+        )]);
+        let (res, texts) = update_with(&report, vec![two_package_target()]).await;
+        assert_eq!(res, Ok(()), "{texts:?}");
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert!(
+            texts[0].starts_with("h1: pkg-b was not updated"),
+            "{texts:?}"
+        );
+
+        // A composition that names none of the host's products composes all.
+        report.base_mut().composed = HashMap::from([(
+            SystemProduct::new("SLES", "12.5", "x86_64"),
+            BTreeSet::from(["pkg-b".to_owned()]),
+        )]);
+        let (_, texts) = update_with(&report, vec![two_package_target()]).await;
+        assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    #[tokio::test]
+    async fn a_host_with_many_findings_lists_a_bounded_few_and_counts_the_rest() {
+        let names: Vec<String> = (0..12).map(|i| format!("pkg-{i:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let query = version_query(&refs);
+        let out: String = names.iter().map(|n| format!("{n} 1.0-1\n")).collect();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(query.clone(), query_answer(&query, &out));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        t.set_packages(
+            names
+                .iter()
+                .map(|n| {
+                    let mut pkg = mtui_types::package::Package::new(n);
+                    pkg.set_required(Some("2.0-1")).unwrap();
+                    pkg
+                })
+                .collect(),
+        );
+        let (res, texts) = update_over(vec![t]).await;
+        assert_eq!(res, Ok(()), "{texts:?}");
+        assert_eq!(texts.len(), 11, "{texts:?}");
+        assert!(
+            texts[..10]
+                .iter()
+                .zip(&names)
+                .all(|(t, n)| t.starts_with(&format!("h1: {n} was not updated"))),
+            "{texts:?}"
+        );
+        assert_eq!(
+            texts[10],
+            "h1: 2 more tracked packages with a version finding, not listed here (see \
+             `list_packages`)"
+        );
     }
 }

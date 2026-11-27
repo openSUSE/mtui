@@ -436,6 +436,28 @@ and nothing is written there.
   both the success and the failure path. The server's tracing goes to its own
   stderr, not the tool result, so a `tracing::warn!` alone would never reach an
   MCP client.
+- On each host `update` completed on, it also names every tracked package that
+  did not end at the update's version, one degradation each, from the version
+  queries made before the patch and after it (on a transactional host, after
+  its reboot). The state after the patch decides the finding: unchanged
+  (including a package already at or above the update's version before the
+  patch), lower than before, raised but still below the update's version,
+  raised above it, no longer installed, or a version query before or after the
+  patch that did not answer. Each line names what was observed and all three
+  versions: `<host>: pkg was already above the update's version before the
+  patch, which did not change it (before the patch: 2.1-1; after it: 2.1-1;
+  the update's version: 2.0-1)`. When the update's version of a package could
+  not be read from its metadata, the package is still judged unchanged, lower
+  or removed (`the update's version: could not be read`), but not as below or
+  above it. A package with several installed copies (a kernel) is judged on
+  its newest copy. Not judged: a package not installed before the patch (one
+  new to the host) unless the query after the patch did not answer, one the
+  host does not track, one the update does not compose for the host's
+  products, and disabled, excluded or refused hosts. At most ten packages are
+  listed per host, then ``<host>: N more tracked packages with a version
+  finding, not listed here (see `list_packages`)``, which counts as one
+  degradation. These qualify the confirmation like any other degradation; the
+  update still counts as completed on the host.
 - Every workflow fan-out (`install`, `uninstall`, `prepare`, `downgrade`,
   `update`) confirms success as `<verb> completed on <hosts>`, so a clean run is
   never an empty tool result. `update`'s confirmation is printed *above* its

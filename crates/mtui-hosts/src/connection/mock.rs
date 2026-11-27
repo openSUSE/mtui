@@ -114,6 +114,8 @@ pub struct MockConnection {
     responses: HashMap<String, Outcome>,
     /// See [`with_response_from`](Self::with_response_from).
     responses_from: HashMap<String, (usize, Outcome)>,
+    /// See [`with_response_after_reboot`](Self::with_response_after_reboot).
+    responses_after_reboot: HashMap<String, Outcome>,
     /// Fallback outcome when a command has no scripted response.
     default: Outcome,
     /// See [`with_run_delay`](Self::with_run_delay).
@@ -232,6 +234,7 @@ impl MockConnection {
             hostname: hostname.into(),
             responses: HashMap::new(),
             responses_from: HashMap::new(),
+            responses_after_reboot: HashMap::new(),
             default: Outcome::Ok(CommandLog::new("", "", "", 0, 0)),
             run_delay: std::time::Duration::ZERO,
             active: true,
@@ -396,6 +399,20 @@ impl MockConnection {
     ) -> Self {
         self.responses_from
             .insert(command.into(), (nth, Outcome::Ok(log)));
+        self
+    }
+
+    /// Scripts `log` for every run of `command` once a reboot was dispatched
+    /// through [`fire_and_forget`](Connection::fire_and_forget); earlier runs
+    /// keep their other response.
+    #[must_use]
+    pub fn with_response_after_reboot(
+        mut self,
+        command: impl Into<String>,
+        log: CommandLog,
+    ) -> Self {
+        self.responses_after_reboot
+            .insert(command.into(), Outcome::Ok(log));
         self
     }
 
@@ -956,8 +973,13 @@ impl Connection for MockConnection {
             return Ok(CommandLog::new(command, format!("boot-{n}\n"), "", 0, 0));
         }
 
-        let outcome = match self.responses_from.get(command) {
-            Some((nth, later)) if runs >= *nth => later,
+        let rebooted = !self.fired.lock().expect("mock fired lock").is_empty();
+        let outcome = match (
+            self.responses_after_reboot.get(command),
+            self.responses_from.get(command),
+        ) {
+            (Some(after), _) if rebooted => after,
+            (_, Some((nth, later))) if runs >= *nth => later,
             _ => self.responses.get(command).unwrap_or(&self.default),
         };
         match outcome {
@@ -1408,6 +1430,17 @@ mod tests {
         let err = conn.reconnect(0, false).await.expect_err("should fail");
         assert!(matches!(err, HostError::ReconnectFailed { host } if host == "h1"));
         assert_eq!(conn.reconnect_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_response_after_reboot_answers_only_once_a_reboot_was_fired() {
+        let mut conn = MockConnection::new("h1")
+            .with_response("q", CommandLog::new("q", "old", "", 0, 0))
+            .with_response_after_reboot("q", CommandLog::new("q", "new", "", 0, 0));
+        assert_eq!(conn.run("q").await.unwrap().stdout, "old");
+        assert_eq!(conn.run("q").await.unwrap().stdout, "old");
+        conn.fire_and_forget("reboot").await.unwrap();
+        assert_eq!(conn.run("q").await.unwrap().stdout, "new");
     }
 
     #[tokio::test]

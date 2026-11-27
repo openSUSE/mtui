@@ -76,7 +76,11 @@ prints `<verb> completed on <hosts>` — naming the hosts it completed on — be
 it reports the failure. After a failed `update`, only a check failure or a
 reboot that did not take effect triggers an automatic rollback; if a peer's
 patch never ran, nothing is rolled back and the hosts that completed get the
-same finishing steps as a successful `update`.
+same finishing steps as a successful `update`. Those steps compare each
+tracked package's version before and after the patch with the update's own; a
+host where one did not end at the update's version is still counted as
+completed, and the package is named as a degradation (see
+[MCP server](mcp.md)).
 
 [`export`](cli.md#export) is the exception: it runs on a host-less template
 too, since every workflow has openQA data to write. A Manual template with no

@@ -93,6 +93,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `update` no longer confirms a bare success on a host where a tracked
+  package did not end at the update's version, or whose version query did not
+  answer: the REPL output and the MCP tool result name each such package with
+  the host and its versions before and after the patch and in the update, and
+  the confirmation is qualified with the degradation count (#903).
 - TeReGen's text no longer reaches mtui's log unfiltered. Escape sequences,
   control characters and bidirectional overrides are stripped, as the display
   already did, and each text is cut to 500 characters, in: the schema-drift
