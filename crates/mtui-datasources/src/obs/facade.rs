@@ -33,6 +33,7 @@ use crate::http::HttpClient;
 use crate::obs::auth::ObsSignatureAuth;
 use crate::obs::client::ObsClient;
 use crate::obs::errors::ObsError;
+use crate::obs::gate;
 use crate::obs::oscrc::read_credentials;
 use crate::obs::qam;
 use crate::teregen::document::TeregenV2;
@@ -131,6 +132,18 @@ impl Osc {
             tracing::error!("OBS operation on {} failed: {e}", self.rrid);
         }
         result
+    }
+
+    /// Read the request's QA review gate (one GET, nothing posted).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObsError`] on any credential, transport or parse failure (the
+    /// failure is also logged).
+    pub async fn request_gate(&self) -> Result<gate::RequestGate, ObsError> {
+        let rrid = self.rrid.clone();
+        self.run(move |client, _user| async move { gate::read_request_gate(&client, &rrid).await })
+            .await
     }
 
     /// Fetch the request's source diff (`POST /request/<id>?cmd=diff`).

@@ -1236,6 +1236,38 @@ expression: pretty
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "json": {
+          "default": false,
+          "description": "print {\"rows\": [...], \"failed\": [...], \"notes\": [...]} instead of the table; still fails when a lookup failed",
+          "type": "boolean"
+        },
+        "mine": {
+          "default": false,
+          "description": "add a mine column: whether the owner is your oscrc login for [obs] api_url or, with a [gitea] token, its Gitea login",
+          "type": "boolean"
+        },
+        "update": {
+          "description": "an RRID (long or short form) or a Gitea pull request URL; repeatable. An SLFO RRID's pull request is the one its published document names; a pull request URL names no RRID, so its template column is n/a",
+          "items": {
+            "description": "an RRID (long or short form) or a Gitea pull request URL; repeatable. An SLFO RRID's pull request is the one its published document names; a pull request URL names no RRID, so its template column is n/a",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "update"
+      ],
+      "type": "object"
+    },
+    "name": "review_state",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
         "all_templates": {
           "description": "Act on every loaded template; omitted, this command never implicitly fans out; refused headlessly with several",
           "type": "boolean"

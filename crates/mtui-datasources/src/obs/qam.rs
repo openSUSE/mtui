@@ -75,8 +75,9 @@ fn fancy_url(fancy_reports_url: &str, rrid: &RequestReviewID) -> String {
     format!("{}/{rrid}/log", fancy_reports_url.trim_end_matches('/'))
 }
 
-/// GET `request/{id}?withfullhistory=1` and parse it.
-async fn get_request(
+/// GET `request/{id}?withfullhistory=1` and parse it: the one read the gate
+/// and the open-review views share.
+pub(crate) async fn get_request(
     client: &ObsClient,
     rrid: &RequestReviewID,
 ) -> Result<models::Request, ObsError> {
@@ -590,8 +591,28 @@ impl std::fmt::Display for OpenReview {
     }
 }
 
-/// Read the request again and list its open QAM group reviews (automation
-/// groups included) and the acting user's own open review, in document order.
+/// The open QAM group reviews (automation groups included) and `user`'s own
+/// open review of an already-fetched request, in document order.
+#[must_use]
+pub fn open_reviews_in(request: &models::Request, user: &str) -> Vec<OpenReview> {
+    request
+        .reviews
+        .iter()
+        .filter(|r| r.state == "new")
+        .filter_map(|r| match (&r.by_group, &r.by_user) {
+            (Some(group), _) if is_qam_group(group) => Some(OpenReview::Group(group.clone())),
+            (Some(group), _) if is_qam_automation_group(group) => {
+                Some(OpenReview::AutomatedGroup(group.clone()))
+            }
+            (Some(_), _) => None,
+            (None, Some(by)) => (by == user).then(|| OpenReview::User(by.clone())),
+            (None, None) => None,
+        })
+        .collect()
+}
+
+/// Read the request again (without history, which this view does not need)
+/// and list [`open_reviews_in`] it.
 ///
 /// # Errors
 ///
@@ -601,21 +622,10 @@ pub async fn open_reviews(
     rrid: &RequestReviewID,
     user: &str,
 ) -> Result<Vec<OpenReview>, ObsError> {
-    let request = get_request_bare(client, rrid).await?;
-    Ok(request
-        .reviews
-        .into_iter()
-        .filter(|r| r.state == "new")
-        .filter_map(|r| match (r.by_group, r.by_user) {
-            (Some(group), _) if is_qam_group(&group) => Some(OpenReview::Group(group)),
-            (Some(group), _) if is_qam_automation_group(&group) => {
-                Some(OpenReview::AutomatedGroup(group))
-            }
-            (Some(_), _) => None,
-            (None, Some(by)) => (by == user).then_some(OpenReview::User(by)),
-            (None, None) => None,
-        })
-        .collect())
+    Ok(open_reviews_in(
+        &get_request_bare(client, rrid).await?,
+        user,
+    ))
 }
 
 // --------------------------------------------------------------------------- //

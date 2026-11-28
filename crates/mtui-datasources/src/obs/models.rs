@@ -100,6 +100,10 @@ pub struct Request {
     pub(crate) reqid: String,
     /// The overall request `state/@name`.
     pub(crate) state: String,
+    /// `state/@when`, when the request entered that state; empty when absent.
+    pub(crate) state_when: String,
+    /// `state/@created`, when the request was created; empty when absent.
+    pub(crate) created: String,
     /// The `action/source/@project`, when present.
     pub(crate) src_project: Option<String>,
     /// The distinct `action/source/@package` values in document order: the
@@ -259,6 +263,8 @@ fn parse_request_element(
     let mut request = Request {
         reqid: attr(start, "id").unwrap_or_default(),
         state: String::new(),
+        state_when: String::new(),
+        created: String::new(),
         src_project: None,
         src_packages: Vec::new(),
         issues: Vec::new(),
@@ -274,6 +280,8 @@ fn parse_request_element(
         {
             Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "state" => {
                 request.state = attr(&e, "name").unwrap_or_default();
+                request.state_when = attr(&e, "when").unwrap_or_default();
+                request.created = attr(&e, "created").unwrap_or_default();
             }
             Event::Start(e) if e.local_name().as_ref() == "action" => in_action = true,
             Event::End(e) if e.local_name().as_ref() == "action" => in_action = false,
@@ -342,6 +350,8 @@ pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
                 return Ok(Request {
                     reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
+                    state_when: String::new(),
+                    created: String::new(),
                     src_project: None,
                     src_packages: Vec::new(),
                     issues: Vec::new(),
@@ -376,6 +386,8 @@ pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
                 requests.push(Request {
                     reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
+                    state_when: String::new(),
+                    created: String::new(),
                     src_project: None,
                     src_packages: Vec::new(),
                     issues: Vec::new(),

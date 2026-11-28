@@ -25,6 +25,7 @@ pub mod error;
 pub(crate) mod fold;
 pub mod log_filter;
 pub mod registry;
+pub mod review;
 pub mod session;
 pub mod template_registry;
 pub mod template_scope;

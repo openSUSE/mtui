@@ -197,6 +197,30 @@ where
         .collect()
 }
 
+/// A report's template status (`GET /reports/{id}/status`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateStatus {
+    /// Whether a template exists.
+    pub template: bool,
+    /// The latest generation job's state (`finished`, `failed`, or one still
+    /// in progress).
+    pub minion_state: Option<String>,
+    /// The latest generation job's error, as TeReGen wrote it (external text,
+    /// capped but not sanitized).
+    pub minion_error: Option<String>,
+}
+
+impl TemplateStatus {
+    /// Whether the latest generation job is still in progress: any state but
+    /// `finished` and `failed`, as [`TeReGen::regenerate_and_wait`] waits.
+    #[must_use]
+    pub fn generating(&self) -> bool {
+        self.minion_state
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "finished" | "failed"))
+    }
+}
+
 /// Best-effort read-only (plus one write) TeReGen Report API client.
 #[derive(Clone)]
 pub struct TeReGen {
@@ -314,6 +338,34 @@ impl TeReGen {
     async fn status(&self, rrid: &str) -> Option<Value> {
         let d = self.get(&format!("reports/{rrid}/status"), &[]).await?;
         d.is_object().then_some(d)
+    }
+
+    /// The template status (`GET /reports/{id}/status`), surfacing
+    /// failures instead of folding them to `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`TeReGenError::Status`] for a non-2xx answer, and
+    /// [`TeReGenError::Fetch`] for a transport failure, a body that is not
+    /// JSON, or one without a boolean `template` flag.
+    pub async fn template_status(&self, rrid: &str) -> Result<TemplateStatus, TeReGenError> {
+        let body = self.try_get(&format!("reports/{rrid}/status"), &[]).await?;
+        let Some(template) = body.get("template").and_then(Value::as_bool) else {
+            return Err(TeReGenError::Fetch(
+                "the template status carries no template flag".to_owned(),
+            ));
+        };
+        let text = |key: &str| {
+            body.get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(cap_detail)
+        };
+        Ok(TemplateStatus {
+            template,
+            minion_state: text("minion_state"),
+            minion_error: text("minion_error"),
+        })
     }
 
     /// Live checker (build-check) result runs for a report.
@@ -806,6 +858,72 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(client(&server).info(RRID).await, None);
+    }
+
+    async fn status_server(response: ResponseTemplate) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID}/status")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn template_status_reads_the_flag_and_the_job() {
+        let server = status_server(ResponseTemplate::new(200).set_body_json(json!({
+            "template": false, "minion_state": "failed", "minion_error": "no build\nmore"
+        })))
+        .await;
+        let status = client(&server).template_status(RRID).await.unwrap();
+        assert_eq!(
+            status,
+            TemplateStatus {
+                template: false,
+                minion_state: Some("failed".to_owned()),
+                minion_error: Some("no build\nmore".to_owned()),
+            }
+        );
+        assert!(!status.generating());
+        let running = TemplateStatus {
+            minion_state: Some("active".to_owned()),
+            ..status.clone()
+        };
+        assert!(running.generating());
+        let finished = TemplateStatus {
+            minion_state: Some("finished".to_owned()),
+            ..status.clone()
+        };
+        assert!(!finished.generating());
+        let no_job = TemplateStatus {
+            minion_state: None,
+            ..status
+        };
+        assert!(!no_job.generating());
+    }
+
+    #[tokio::test]
+    async fn template_status_without_a_flag_is_a_failure() {
+        let server = status_server(
+            ResponseTemplate::new(200).set_body_json(json!({"minion_state": "finished"})),
+        )
+        .await;
+        let err = client(&server).template_status(RRID).await.unwrap_err();
+        assert!(
+            matches!(&err, TeReGenError::Fetch(m) if m.contains("no template flag")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn template_status_surfaces_a_server_error() {
+        let server = status_server(ResponseTemplate::new(502)).await;
+        let err = client(&server).template_status(RRID).await.unwrap_err();
+        assert!(
+            matches!(err, TeReGenError::Status { status: 502, .. }),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

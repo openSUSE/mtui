@@ -879,3 +879,65 @@ async fn job_status_wait_seconds_round_trips_over_the_wire() {
     drop(client);
     let _ = server_task.await;
 }
+
+/// A `review_state` call where one source fails is a tool error that still
+/// carries the table it could read, so a partial table is never a success.
+#[tokio::test]
+async fn a_partial_review_state_is_a_tool_error_carrying_the_table() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/reports/SUSE:SLFO:1.2:7/status"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"template": false, "minion_state": "failed"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/reports/SUSE:SLFO:1.2:7"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let mut config = Config::default();
+    config.teregen_api = server.uri();
+    config.teregen_api_v2 = format!("{}/v2", server.uri());
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let server_task = tokio::spawn(async move {
+        let server = build_server_with_config(config).await;
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+    let client = ().serve(client_io).await.expect("client serve/initialize");
+    let out = client
+        .call_tool(
+            CallToolRequestParams::new("review_state").with_arguments(
+                serde_json::json!({"update": ["SUSE:SLFO:1.2:7"]})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ),
+        )
+        .await
+        .expect("the call answers");
+    drop(client);
+    let _ = server_task.await;
+    assert_eq!(out.is_error, Some(true));
+    let text = out
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    assert!(text.starts_with("UPDATE "), "{text}");
+    assert!(text.contains("\nSUSE:SLFO:1.2:7 "), "{text}");
+    assert!(text.contains("missing"), "{text}");
+    assert!(
+        text.contains("could not read:\n  SUSE:SLFO:1.2:7: document: "),
+        "{text}"
+    );
+    assert!(text.contains("1 lookup(s) failed"), "{text}");
+}

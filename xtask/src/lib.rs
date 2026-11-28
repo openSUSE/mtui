@@ -100,7 +100,8 @@ pub fn render_cli_reference() -> String {
          tools. Commands that act on a loaded template additionally accept the \
          shared template flags `-T/--template <RRID>` and `--all-templates` \
          (session-level commands — `load_template`, `unload`, `switch`, \
-         `list_templates`, `list_refhosts`, `updates`, `config`, `whoami`, \
+         `list_templates`, `list_refhosts`, `updates`, `review_state`, `config`, \
+         `whoami`, \
          `teregen_login`, \
          `set_log_level`, `help`, `quit` (`exit`/`EOF`) — take neither, \
          `regenerate` only `-T`); \

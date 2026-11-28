@@ -1055,3 +1055,320 @@ fn empty_or_bad_trusted_url_refuses_to_build() {
         assert!(r.is_err(), "should refuse to build with gitea_url={bad:?}");
     }
 }
+
+// --- pull_state: the read-only gate/holder read ---
+
+const REVIEWS_PATH: &str = "/api/v1/repos/owner/repo/pulls/1/reviews";
+
+fn review(id: i64, login: &str, state: &str, commit: &str) -> serde_json::Value {
+    json!({
+        "id": id, "state": state, "dismissed": false, "stale": false,
+        "commit_id": commit, "submitted_at": ts(id as u32), "user": { "login": login }
+    })
+}
+
+fn pr_json(head: &str, state: &str) -> serde_json::Value {
+    json!({
+        "state": state, "created_at": ts(1), "head": { "sha": head },
+        "base": { "ref": "main" }, "requested_reviewers": []
+    })
+}
+
+/// Mount the PR, one page of `reviews` and the empty page that ends them.
+async fn mount_pull_json(server: &MockServer, pr: serde_json::Value, reviews: serde_json::Value) {
+    use wiremock::matchers::query_param;
+    Mock::given(method("GET"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(REVIEWS_PATH))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(reviews))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(REVIEWS_PATH))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(server)
+        .await;
+}
+
+async fn mount_pull(server: &MockServer, head: &str, state: &str, reviews: serde_json::Value) {
+    mount_pull_json(server, pr_json(head, state), reviews).await;
+}
+
+/// The gate of a PR at head `abc` (open) with `reviews` and no comments.
+async fn gate_for(reviews: serde_json::Value) -> PullReviewGate {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pull(&server, "abc", "open", reviews).await;
+    gitea_for(&server).pull_state().await.unwrap().gate
+}
+
+fn known(verdict: PullVerdict, stale: bool, closed: bool) -> impl Fn(&PullReviewGate) -> bool {
+    move |g| matches!(g, PullReviewGate::Known(k) if k.verdict == verdict && k.stale == stale && k.closed == closed)
+}
+
+fn unknown_because(gate: &PullReviewGate, why: &str) -> bool {
+    matches!(gate, PullReviewGate::Unknown(r) if r == why)
+}
+
+use mtui_datasources::{PullReviewGate, PullVerdict};
+
+#[tokio::test]
+async fn pull_state_reads_the_holder_head_base_and_an_owed_review() {
+    let server = MockServer::start().await;
+    mount_comments(
+        &server,
+        json!([comment_json(1, &assign_marker("alice", GROUP), 2)]),
+    )
+    .await;
+    mount_pull(
+        &server,
+        "abc",
+        "open",
+        json!([review(3, "qam-sle-review", "REQUEST_REVIEW", "")]),
+    )
+    .await;
+    let state = gitea_for(&server).pull_state().await.unwrap();
+    assert_eq!(state.owner.as_deref(), Some("alice"));
+    assert_eq!(state.head, "abc");
+    assert_eq!(state.base.as_deref(), Some("main"));
+    assert_eq!(state.created.as_deref(), Some(ts(1).as_str()));
+    let PullReviewGate::Known(gate) = &state.gate else {
+        panic!("{:?}", state.gate);
+    };
+    assert_eq!(
+        (gate.verdict, gate.stale, gate.closed),
+        (PullVerdict::Owed, false, false)
+    );
+    assert_eq!(gate.since.as_deref(), Some(ts(3).as_str()));
+    let methods: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.method)
+        .collect();
+    assert!(
+        methods.iter().all(|m| *m == wiremock::http::Method::GET),
+        "{methods:?}"
+    );
+}
+
+/// The latest verdict wins; a dismissed one and another account's are
+/// skipped, and an approval on an older commit is stale.
+#[tokio::test]
+async fn pull_state_takes_the_latest_live_group_verdict() {
+    let mut dismissed = review(9, "qam-sle-review", "REQUEST_CHANGES", "abc");
+    dismissed["dismissed"] = json!(true);
+    let gate = gate_for(json!([
+        review(3, "qam-sle-review", "REQUEST_REVIEW", ""),
+        review(5, "qam-sle-review", "APPROVED", "old"),
+        dismissed,
+        review(11, "someone", "REQUEST_CHANGES", "abc"),
+    ]))
+    .await;
+    assert!(known(PullVerdict::Approved, true, false)(&gate), "{gate:?}");
+}
+
+#[tokio::test]
+async fn a_stale_flag_marks_an_approval_on_the_head_stale() {
+    let mut approved = review(5, "qam-sle-review", "APPROVED", "abc");
+    approved["stale"] = json!(true);
+    let gate = gate_for(json!([approved])).await;
+    assert!(known(PullVerdict::Approved, true, false)(&gate), "{gate:?}");
+    let fresh = gate_for(json!([review(5, "qam-sle-review", "APPROVED", "abc")])).await;
+    assert!(
+        known(PullVerdict::Approved, false, false)(&fresh),
+        "{fresh:?}"
+    );
+}
+
+/// A later comment or draft by the group does not mask its verdict.
+#[tokio::test]
+async fn comments_and_drafts_do_not_decide() {
+    let gate = gate_for(json!([
+        review(3, "qam-sle-review", "REQUEST_REVIEW", ""),
+        review(4, "qam-sle-review", "COMMENT", "abc"),
+        review(5, "qam-sle-review", "PENDING", "abc"),
+    ]))
+    .await;
+    assert!(known(PullVerdict::Owed, false, false)(&gate), "{gate:?}");
+    let only_comment = gate_for(json!([review(4, "qam-sle-review", "COMMENT", "abc")])).await;
+    assert_eq!(only_comment, PullReviewGate::None);
+}
+
+#[tokio::test]
+async fn pull_state_covers_changes_requested_closed_and_no_review() {
+    let changes = gate_for(json!([review(
+        4,
+        "qam-sle-review",
+        "REQUEST_CHANGES",
+        "abc"
+    )]))
+    .await;
+    assert!(
+        known(PullVerdict::ChangesRequested, false, false)(&changes),
+        "{changes:?}"
+    );
+
+    let closed = MockServer::start().await;
+    mount_comments(&closed, json!([])).await;
+    mount_pull(
+        &closed,
+        "abc",
+        "closed",
+        json!([review(4, "qam-sle-review", "REQUEST_REVIEW", "")]),
+    )
+    .await;
+    let gate = gitea_for(&closed).pull_state().await.unwrap().gate;
+    assert!(known(PullVerdict::Owed, false, true)(&gate), "{gate:?}");
+
+    assert_eq!(gate_for(json!([])).await, PullReviewGate::None);
+}
+
+#[tokio::test]
+async fn an_unknown_review_state_is_unknown_not_a_verdict() {
+    let gate = gate_for(json!([
+        review(3, "qam-sle-review", "APPROVED", "abc"),
+        review(4, "qam-sle-review", "SOMETHING_NEW", "abc"),
+    ]))
+    .await;
+    assert!(
+        unknown_because(&gate, "review 4 has the unknown state \"SOMETHING_NEW\""),
+        "{gate:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_absent_dismissed_or_stale_field_is_unknown() {
+    let mut no_dismissed = review(5, "qam-sle-review", "APPROVED", "abc");
+    no_dismissed.as_object_mut().unwrap().remove("dismissed");
+    let gate = gate_for(json!([no_dismissed])).await;
+    assert!(
+        unknown_because(&gate, "review 5 has no `dismissed` field"),
+        "{gate:?}"
+    );
+    let mut no_stale = review(5, "qam-sle-review", "APPROVED", "abc");
+    no_stale.as_object_mut().unwrap().remove("stale");
+    let gate = gate_for(json!([no_stale])).await;
+    assert!(
+        unknown_because(&gate, "review 5 has no `stale` field"),
+        "{gate:?}"
+    );
+}
+
+/// A review whose reviewer cannot be read may be the group's, so the gate is
+/// unknown, never "no review".
+#[tokio::test]
+async fn a_review_without_a_readable_reviewer_is_unknown() {
+    let mut anonymous = review(4, "x", "APPROVED", "abc");
+    anonymous.as_object_mut().unwrap().remove("user");
+    let gate = gate_for(json!([anonymous])).await;
+    assert!(
+        unknown_because(&gate, "review 4 carries no readable reviewer"),
+        "{gate:?}"
+    );
+    let mut renamed = review(4, "x", "APPROVED", "abc");
+    renamed["user"] = json!({"name": "qam-sle-review"});
+    let gate = gate_for(json!([renamed])).await;
+    assert!(
+        unknown_because(&gate, "review 4 carries no readable reviewer"),
+        "{gate:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_owed_review_on_a_pr_without_state_is_unknown() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pull_json(
+        &server,
+        json!({"head": {"sha": "abc"}}),
+        json!([review(4, "qam-sle-review", "REQUEST_REVIEW", "")]),
+    )
+    .await;
+    let state = gitea_for(&server).pull_state().await.unwrap();
+    assert!(
+        unknown_because(&state.gate, "the pull request has no open or closed state"),
+        "{:?}",
+        state.gate
+    );
+    assert_eq!((state.created, state.base), (None, None));
+}
+
+/// A state other than open/closed is not read as open.
+#[tokio::test]
+async fn an_owed_review_on_a_pr_in_an_unknown_state_is_unknown() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pull(
+        &server,
+        "abc",
+        "merged",
+        json!([review(4, "qam-sle-review", "REQUEST_REVIEW", "")]),
+    )
+    .await;
+    let gate = gitea_for(&server).pull_state().await.unwrap().gate;
+    assert!(
+        unknown_because(&gate, "the pull request has no open or closed state"),
+        "{gate:?}"
+    );
+}
+
+#[tokio::test]
+async fn reviews_past_the_page_bound_are_a_failure() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_json("abc", "open")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(REVIEWS_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!([review(1, "someone", "COMMENT", "abc")])),
+        )
+        .mount(&server)
+        .await;
+    let err = gitea_for(&server).pull_state().await.unwrap_err();
+    assert!(
+        matches!(&err, GiteaError::FailedCall(m) if m.starts_with("more than 20 pages of reviews")),
+        "{err:?}"
+    );
+    let pages = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == REVIEWS_PATH)
+        .count();
+    assert_eq!(pages, 20);
+}
+
+#[tokio::test]
+async fn pull_state_fails_when_a_read_fails() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(PR_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"head": {"sha": "abc"}})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(REVIEWS_PATH))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    let err = gitea_for(&server).pull_state().await.unwrap_err();
+    assert!(
+        matches!(&err, GiteaError::FailedCall(m) if m.contains("/reviews") && m.contains("503")),
+        "{err:?}"
+    );
+}

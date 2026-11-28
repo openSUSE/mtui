@@ -250,25 +250,7 @@ impl Command for Updates {
         }
 
         let (assignees, note) = if args.get_flag("mine") {
-            // oscrc errors name local files, so headlessly only the fault.
-            let principal = oscrc::read_user(&session.config.obs_api_url).map_err(|e| {
-                if session.is_repl {
-                    e.to_string()
-                } else {
-                    e.fault().to_owned()
-                }
-            });
-            let gitea = if session.config.gitea_token.is_empty() {
-                None
-            } else {
-                let token = session.config.gitea_token.clone();
-                let gitea_url = session.config.gitea_url.clone();
-                Some(match session.http_client() {
-                    Ok(http) => token_login(http, &token, &gitea_url).await,
-                    Err(e) => Err(e.into()),
-                })
-            };
-            let mine = mine_logins(&session.config.obs_api_url, principal, gitea)?;
+            let mine = resolve_mine(session, &UPDATES_MINE).await?;
             if as_json && let Some(note) = &mine.note {
                 return Err(CommandError::Other(format!(
                     "{note}; --json cannot carry that note, so pass --assignee <login> instead"
@@ -462,19 +444,61 @@ impl Command for Updates {
 
 /// The logins `--mine` asks about, and a note naming the login source that
 /// failed, if any.
-struct MineLogins {
-    logins: Vec<String>,
-    note: Option<String>,
+pub(crate) struct MineLogins {
+    pub(crate) logins: Vec<String>,
+    pub(crate) note: Option<String>,
+}
+
+/// How a command's `--mine` messages end: what it does with the one login it
+/// has, and what to do with none (`{login}` is replaced).
+pub(crate) struct MineWording {
+    pub(crate) only: &'static str,
+    pub(crate) remedy: &'static str,
+    pub(crate) no_token: &'static str,
+}
+
+const UPDATES_MINE: MineWording = MineWording {
+    only: "listing only updates assigned to {login}",
+    remedy: "pass --assignee <login>",
+    no_token: "fix the oscrc or pass --assignee <login>",
+};
+
+/// Read the oscrc login and resolve the Gitea token's owner, then combine them
+/// as [`mine_logins`] does.
+pub(crate) async fn resolve_mine(
+    session: &mut Session,
+    wording: &MineWording,
+) -> Result<MineLogins, CommandError> {
+    // oscrc errors name local files, so headlessly only the fault.
+    let principal = oscrc::read_user(&session.config.obs_api_url).map_err(|e| {
+        if session.is_repl {
+            e.to_string()
+        } else {
+            e.fault().to_owned()
+        }
+    });
+    let gitea = if session.config.gitea_token.is_empty() {
+        None
+    } else {
+        let token = session.config.gitea_token.clone();
+        let gitea_url = session.config.gitea_url.clone();
+        Some(match session.http_client() {
+            Ok(http) => token_login(http, &token, &gitea_url).await,
+            Err(e) => Err(e.into()),
+        })
+    };
+    mine_logins(&session.config.obs_api_url, principal, gitea, wording)
 }
 
 /// `--mine` asks about the logins assignments are recorded under: the oscrc
 /// `user` for `obs_api_url` (`principal`) and the Gitea token owner's login
 /// (`gitea`, `None` without a token). Either alone still answers, so a failed
 /// one becomes a note; with neither there is nobody to ask about.
-fn mine_logins(
+pub(crate) fn mine_logins(
     obs_api_url: &str,
     principal: Result<String, String>,
     gitea: Option<Result<String, GiteaError>>,
+    wording: &MineWording,
 ) -> Result<MineLogins, CommandError> {
     let no_principal = |reason: String| {
         format!(
@@ -486,7 +510,10 @@ fn mine_logins(
         format!("the Gitea login (the [gitea] token's owner) could not be resolved: {e}")
     };
     let only = |login: String, why: String| MineLogins {
-        note: Some(format!("{why}; listing only updates assigned to {login}")),
+        note: Some(format!(
+            "{why}; {}",
+            wording.only.replace("{login}", &login)
+        )),
         logins: vec![login],
     };
     match (principal, gitea) {
@@ -505,13 +532,15 @@ fn mine_logins(
         (Err(reason), Some(Ok(login))) => Ok(only(login, no_principal(reason))),
         (Err(reason), None) => Err(CommandError::Other(format!(
             "--mine has no login to ask about: {}, and no [gitea] token is set; \
-             fix the oscrc or pass --assignee <login>",
-            no_principal(reason)
+             {}",
+            no_principal(reason),
+            wording.no_token
         ))),
         (Err(reason), Some(Err(e))) => Err(CommandError::Other(format!(
-            "--mine has no login to ask about: {}, and {}; pass --assignee <login>",
+            "--mine has no login to ask about: {}, and {}; {}",
             no_principal(reason),
-            no_gitea(e)
+            no_gitea(e),
+            wording.remedy
         ))),
     }
 }

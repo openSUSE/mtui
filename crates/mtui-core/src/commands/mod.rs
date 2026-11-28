@@ -44,6 +44,7 @@ mod openqa_summary;
 mod regenerate;
 mod reload_openqa;
 mod request_review;
+mod review_state;
 pub(crate) mod row_budget;
 mod simpleset;
 mod updates;
@@ -109,6 +110,7 @@ pub use openqa_summary::OpenQASummary;
 pub use regenerate::Regenerate;
 pub use reload_openqa::ReloadOpenQA;
 pub use request_review::RequestReview;
+pub use review_state::ReviewState;
 pub use simpleset::{SetLogLevel, SetWorkflow};
 pub use updates::Updates;
 
@@ -1393,6 +1395,7 @@ mod mcp_nonempty_success_guard {
         // tests stand up per case.
         "checkers",
         "updates",
+        "review_state",
         "openqa_overview",
         "openqa_jobs",
         "openqa_summary",
