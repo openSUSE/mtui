@@ -12,6 +12,7 @@ mod sftp_session;
 #[cfg(feature = "shell")]
 mod shell;
 mod ssh;
+pub(crate) use ssh::NO_EXIT_CODE;
 mod timeout;
 
 use std::path::Path;

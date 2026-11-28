@@ -14,12 +14,16 @@ use tracing::warn;
 
 use super::Target;
 
+/// The `rpm -q` whose `name version-release` lines [`PackageQuerier`] reads,
+/// with [`not_installed_name`] for an absent package.
+pub(crate) const RPM_QUERY: &str = "rpm -q --queryformat \"%{Name} %{Version}-%{Release}\n\"";
+
 /// Extracts the package name from the rpm-style `package X is not installed`
 /// line, or `None` when the line is not that shape.
 ///
 /// Matches the rpm `package (.*) is not installed` line exactly: the name
 /// is everything between the fixed prefix and suffix.
-fn not_installed_name(line: &str) -> Option<&str> {
+pub(crate) fn not_installed_name(line: &str) -> Option<&str> {
     line.strip_prefix("package ")
         .and_then(|rest| rest.strip_suffix(" is not installed"))
 }
@@ -60,7 +64,7 @@ impl<'a> PackageQuerier<'a> {
         let cmd = if is_ubuntu {
             format!("dpkg-query -W -f='${{package}} ${{version}}\n' {joined}")
         } else {
-            format!("rpm -q --queryformat \"%{{Name}} %{{Version}}-%{{Release}}\n\" {joined}")
+            format!("{RPM_QUERY} {joined}")
         };
         self.target.run(&cmd).await;
 

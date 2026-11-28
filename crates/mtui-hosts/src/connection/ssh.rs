@@ -67,7 +67,7 @@ const FOLDER_DOWNLOAD_CONCURRENCY: usize = 4;
 
 /// The exit-code sentinel used when a command produced no exit status
 /// (killed / channel lost). Kept in sync with [`CommandLog`]'s `-1` convention.
-const NO_EXIT_CODE: i16 = -1;
+pub(crate) const NO_EXIT_CODE: i16 = -1;
 
 /// Maximum bytes captured **per stream** (stdout, stderr) for one command.
 ///

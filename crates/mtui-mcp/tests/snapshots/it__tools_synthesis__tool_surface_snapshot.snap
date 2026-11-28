@@ -7,6 +7,7 @@ add_host read_only=false
 analyze_diff read_only=false
 approve read_only=false
 assign read_only=false
+check_hosts read_only=false
 checkers read_only=false
 checkout read_only=false
 comment read_only=false

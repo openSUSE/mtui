@@ -1,0 +1,26 @@
+---
+source: crates/mtui-core/src/commands/check_hosts.rs
+expression: buf.contents()
+---
+check_hosts: fail — 1 ok, 1 warn, 1 fail, 3 unknown of 6 hosts; dependencies and pending patches are not checked
+broken: fail
+  packages          fail    missing glibc
+  root_space        ok      31180 MiB free on /
+  failed_units      ok      no failed units
+  reboot            ok      no reboot pending
+  test_repositories ok      no test repository (1 listed)
+gone: unknown — not checked: the host is not connected
+good: ok
+  packages          ok      6 packages installed, kernel kernel-default
+  root_space        ok      31180 MiB free on /
+  failed_units      ok      no failed units
+  reboot            ok      no reboot pending
+  test_repositories ok      no test repository (1 listed)
+off: unknown — not checked: the host is disabled
+rh: unknown — not checked: a YUM-family host, and the checks are zypper's
+warned: warn
+  packages          ok      6 packages installed, kernel kernel-default
+  root_space        ok      31180 MiB free on /
+  failed_units      warn    failed: kdump.service
+  reboot            ok      no reboot pending
+  test_repositories ok      no test repository (1 listed)

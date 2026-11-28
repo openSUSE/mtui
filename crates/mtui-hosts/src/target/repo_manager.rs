@@ -492,6 +492,11 @@ fn issue_alias(product: &SystemProduct, rrid: &RequestReviewID) -> String {
     )
 }
 
+/// Whether `alias` has the shape [`issue_alias`] builds.
+pub(crate) fn is_issue_alias(alias: &str) -> bool {
+    alias.starts_with("issue-") && alias.contains(":p=")
+}
+
 /// Formats the last exit code for a log line: the numeric code, or `?` when the
 /// log is empty.
 fn exit_display(code: Option<i16>) -> String {
@@ -597,6 +602,26 @@ mod tests {
             "expected a `zypper ar ... issue-SLES ...` command, got {cmds:?}"
         );
         assert_eq!(cmds.last().map(String::as_str), Some("zypper -n ref"));
+    }
+
+    #[test]
+    fn is_issue_alias_recognises_what_issue_alias_builds_and_nothing_else() {
+        assert!(is_issue_alias(&issue_alias(
+            &product("SLES", "15-SP5"),
+            &rrid()
+        )));
+        assert!(is_issue_alias(&issue_alias(
+            &product("SL-Micro", "6.1"),
+            &rrid()
+        )));
+        for other in [
+            "repo-oss",
+            "issue-tracker",
+            "my-issue-SLES:15-SP5:p=1:2",
+            "",
+        ] {
+            assert!(!is_issue_alias(other), "{other}");
+        }
     }
 
     #[tokio::test]

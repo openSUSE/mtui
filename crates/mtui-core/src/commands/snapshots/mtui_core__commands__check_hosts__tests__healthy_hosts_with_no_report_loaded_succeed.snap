@@ -1,0 +1,11 @@
+---
+source: crates/mtui-core/src/commands/check_hosts.rs
+expression: buf.contents()
+---
+check_hosts: ok — 1 ok, 0 warn, 0 fail, 0 unknown of 1 hosts; dependencies and pending patches are not checked
+h1: ok
+  packages          ok      6 packages installed, kernel kernel-default
+  root_space        ok      31180 MiB free on /
+  failed_units      ok      no failed units
+  reboot            ok      no reboot pending
+  test_repositories ok      no test repository (1 listed)

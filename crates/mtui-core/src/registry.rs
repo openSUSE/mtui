@@ -152,6 +152,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::ListBugs));
     registry.register(Arc::new(commands::ListMetadata));
     registry.register(Arc::new(commands::ListHosts));
+    registry.register(Arc::new(commands::CheckHosts));
     registry.register(Arc::new(commands::ListTimeout));
     registry.register(Arc::new(commands::ListUpdateCommands));
     registry.register(Arc::new(commands::ListSessions));
@@ -326,8 +327,9 @@ mod tests {
     fn register_all_command_count() {
         // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
         // (export, list_refhosts, load_template, list_locks) + reload_openqa +
-        // set_workflow + openqa_summary + 3 REPL-only (help, edit, teregen_login) = 62.
-        assert_eq!(register_all().names().count(), 62);
+        // set_workflow + openqa_summary + check_hosts + 3 REPL-only (help, edit,
+        // teregen_login) = 63.
+        assert_eq!(register_all().names().count(), 63);
     }
 
     #[test]

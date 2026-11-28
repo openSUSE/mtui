@@ -410,6 +410,25 @@ and nothing is written there.
   and `YUM` hosts are not checked, and each comes back once as `<host>: no dry
   run exists for this host, …`. `allow_removal: true` skips the check. `run`
   and the rollback of a failed `update` are not checked.
+- `check_hosts` runs five root commands per host (`rpm -q`, `df -Pk /`,
+  `systemctl --failed`, `zypper -n needs-rebooting`, `zypper -n lr`), so it is
+  **not** advertised `readOnlyHint` and writes an audit `intent` record. It
+  takes neither the operation lock nor a pool claim, writes no history row,
+  keeps its probes out of the host log (`show_log` and `export` never see
+  them) and changes no package or repository; `zypper lr` and `zypper
+  needs-rebooting` hold zypper's own lock while they run, so a concurrent
+  transaction may see it busy for that moment. It fails when any host's
+  verdict is `fail` or `unknown`, after printing every host. In text output
+  the first line is the overall verdict, so it survives truncation; `--json`
+  is one document (`summary`, the `checks` it ran, the ones it leaves
+  `unchecked`: `dependencies`, `patches`), and a truncated JSON reply is not
+  valid JSON — raise `mcp_max_output_bytes` or narrow with `hosts`. A check
+  that does not apply to a host (`failed_units` and `reboot` on SLE 11,
+  `reboot` on a read-only root) is listed in that host's `not_checked` with a
+  reason and does not make it `unknown`; a YUM-family, disabled or
+  unconnected host is `unknown` with a `reason`. Each probe is bounded to
+  60 s per host. The `ok` readings of `failed_units` (exit 0, nothing printed)
+  and `reboot` (exit 0) are not yet verified against a real host.
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command
   could be built for a connected host (#396), so automation keying on
@@ -821,9 +840,9 @@ as clipped (invalid) JSON.
 ## Background jobs
 
 Long-running commands run as background jobs so a tool call returns promptly with
-a job id you can poll. The slow host commands — `run`, `update`, `downgrade`,
-`prepare`, `install`, `uninstall`, `set_repo`, `reboot`, `regenerate`, `add_host`,
-`load_template` and `request_review` — accept a **`background=true`** parameter. Instead of
+a job id you can poll. The slow host commands — `run`, `check_hosts`, `update`,
+`downgrade`, `prepare`, `install`, `uninstall`, `set_repo`, `reboot`, `regenerate`,
+`add_host`, `load_template` and `request_review` — accept a **`background=true`** parameter. Instead of
 holding the request open for the minutes the operation takes, the call returns
 immediately with the job id(s); when the command fans out across several
 templates it mints **one job per template**, each independently pollable and

@@ -66,6 +66,8 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "slack_watch_timeout" => config.slack_watch_timeout.to_string(),
         "target_tempdir" => config.target_tempdir.display().to_string(),
         "target_protected_packages" => config.target_protected_packages.join(", "),
+        "target_required_packages" => config.target_required_packages.join(", "),
+        "target_min_root_free" => config.target_min_root_free.to_string(),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
         "pool_reap_stale" => config.pool_reap_stale.to_string(),
@@ -201,7 +203,7 @@ fn print_notices(session: &mut Session) {
 
 /// The attribute names `show` lists when given none, in a stable order.
 /// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
-const ATTRS: [&str; 39] = [
+const ATTRS: [&str; 41] = [
     "template_dir",
     "session_user",
     "install_logs",
@@ -234,6 +236,8 @@ const ATTRS: [&str; 39] = [
     "slack_watch_timeout",
     "target_tempdir",
     "target_protected_packages",
+    "target_required_packages",
+    "target_min_root_free",
     "lock_reap_stale",
     "lock_stale_age",
     "pool_reap_stale",
@@ -608,6 +612,37 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("read-only"), "{err}");
         assert_eq!(session.config.target_protected_packages, ["netsvc"]);
+    }
+
+    #[tokio::test]
+    async fn show_check_hosts_options_and_refuse_setting_them() {
+        for is_repl in [true, false] {
+            let (mut session, buf) = empty_session();
+            session.is_repl = is_repl;
+            session.config.target_required_packages = vec!["ca-certificates".into(), "x".into()];
+            session.config.target_min_root_free = 2048;
+            for attr in ["target_required_packages", "target_min_root_free"] {
+                ConfigCmd
+                    .call(&mut session, &matches(&ConfigCmd, &["show", attr]))
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                buf.contents().trim_end(),
+                "target_required_packages = \"ca-certificates, x\"\n\
+                 target_min_root_free = \"2048\"",
+                "is_repl={is_repl}"
+            );
+        }
+        let (mut session, _buf) = empty_session();
+        for attr in ["target_required_packages", "target_min_root_free"] {
+            let err = ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["set", attr, "1"]))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("read-only"), "{attr}: {err}");
+        }
+        assert_eq!(session.config.target_min_root_free, 1024);
     }
 
     #[tokio::test]

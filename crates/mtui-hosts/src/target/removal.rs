@@ -59,6 +59,14 @@ const PROTECTED: &[&str] = &[
     "zypper",
 ];
 
+/// The kernel flavours in [`PROTECTED`]; a bootable host has at least one.
+pub(crate) fn kernel_flavours() -> impl Iterator<Item = &'static str> {
+    PROTECTED
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with("kernel-"))
+}
+
 /// Matched as `grub2` or `grub2-<anything>`: the boot loader ships one package
 /// per firmware and architecture (`grub2-x86_64-efi`, `grub2-arm64-efi`,
 /// `grub2-i386-pc`, `grub2-powerpc-ieee1275`, …), any of which can be the one

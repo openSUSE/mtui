@@ -604,7 +604,7 @@ impl HostsGroup {
     /// [`collect_fanout_into`](Self::collect_fanout_into) into a map owned by
     /// this call, keyed by hostname so the result is deterministic regardless
     /// of completion order.
-    async fn collect_fanout<'t, T, S, F>(
+    pub(super) async fn collect_fanout<'t, T, S, F>(
         &'t mut self,
         desc: &str,
         select: S,

@@ -16,6 +16,7 @@
 
 pub mod actions;
 pub mod arbiter;
+pub mod health;
 pub mod hostgroup;
 pub mod locks;
 pub mod operation;
@@ -1142,42 +1143,73 @@ impl Target {
     /// host never aborts a group fan-out. [`Disabled`](TargetState::Disabled) records an
     /// empty entry and does nothing else.
     async fn run(&mut self, command: &str) {
-        match self.state {
-            TargetState::Enabled => {
-                // The command may embed repository credentials: it runs as
-                // given, but only this masked copy is logged or stored.
-                let shown = sanitize_urls_in_text(command);
-                tracing::debug!(host = %self.hostname, command = %shown, "running");
-                let log = match self.connection.as_mut() {
-                    Some(conn) => match conn.run(command).await {
-                        Ok(log) => log.with_urls_masked(),
-                        Err(HostError::Timeout { .. }) => {
-                            tracing::error!(
-                                host = %self.hostname, command = %shown, "command timed out"
-                            );
-                            CommandLog::new(shown, "", "", -1, 0).with_flags(false, true)
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                host = %self.hostname, command = %shown,
-                                error = %sanitize_urls_in_text(&e.to_string()),
-                                "failed to run command"
-                            );
-                            CommandLog::new(shown, "", "", -1, 0)
-                        }
-                    },
-                    None => {
-                        tracing::error!(
-                            host = %self.hostname, command = %shown,
-                            "run on unconnected target"
-                        );
-                        CommandLog::new(shown, "", "", -1, 0)
-                    }
-                };
-                self.out.push(log);
-            }
-            TargetState::Disabled => {
-                self.out.push(CommandLog::new("", "", "", 0, 0));
+        let log = match self.state {
+            TargetState::Enabled => self.execute(command).await,
+            TargetState::Disabled => CommandLog::new("", "", "", 0, 0),
+        };
+        self.out.push(log);
+    }
+
+    /// Runs `command` like [`run`](Self::run) on an enabled host but records
+    /// nothing in the host log, so neither `show_log` nor `export` sees it.
+    ///
+    /// Bounded by `limit` of wall-clock time; `None` when no answer came in
+    /// time, and the remote command may then still be running. The no-output
+    /// timeout is raised above `limit` for the run, so the interactive
+    /// timeout prompt never interrupts it.
+    pub(crate) async fn run_unlogged(
+        &mut self,
+        command: &str,
+        limit: std::time::Duration,
+    ) -> Option<CommandLog> {
+        let configured = self.timeout;
+        let raised = configured.max(CommandTimeout::new(
+            limit + std::time::Duration::from_secs(5),
+        ));
+        if let Some(conn) = self.connection.as_mut() {
+            conn.set_command_timeout(raised);
+        }
+        let log = tokio::time::timeout(limit, self.execute(command))
+            .await
+            .ok();
+        if let Some(conn) = self.connection.as_mut() {
+            conn.set_command_timeout(configured);
+        }
+        log
+    }
+
+    /// Runs `command` over the connection; a [`HostError::Timeout`] and
+    /// **any** other connection error is logged and returned with the `-1`
+    /// exit-code sentinel, never propagated.
+    async fn execute(&mut self, command: &str) -> CommandLog {
+        // The command may embed repository credentials: it runs as
+        // given, but only this masked copy is logged or stored.
+        let shown = sanitize_urls_in_text(command);
+        tracing::debug!(host = %self.hostname, command = %shown, "running");
+        match self.connection.as_mut() {
+            Some(conn) => match conn.run(command).await {
+                Ok(log) => log.with_urls_masked(),
+                Err(HostError::Timeout { .. }) => {
+                    tracing::error!(
+                        host = %self.hostname, command = %shown, "command timed out"
+                    );
+                    CommandLog::new(shown, "", "", -1, 0).with_flags(false, true)
+                }
+                Err(e) => {
+                    tracing::error!(
+                        host = %self.hostname, command = %shown,
+                        error = %sanitize_urls_in_text(&e.to_string()),
+                        "failed to run command"
+                    );
+                    CommandLog::new(shown, "", "", -1, 0)
+                }
+            },
+            None => {
+                tracing::error!(
+                    host = %self.hostname, command = %shown,
+                    "run on unconnected target"
+                );
+                CommandLog::new(shown, "", "", -1, 0)
             }
         }
     }

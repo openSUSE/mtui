@@ -1,0 +1,136 @@
+---
+source: crates/mtui-core/src/commands/check_hosts.rs
+expression: "serde_json::to_string_pretty(&doc).unwrap()"
+---
+{
+  "cancelled": false,
+  "checks": [
+    "packages",
+    "root_space",
+    "failed_units",
+    "reboot",
+    "test_repositories"
+  ],
+  "command": "check_hosts",
+  "hosts": [
+    {
+      "checks": [
+        {
+          "detail": "missing glibc",
+          "name": "packages",
+          "status": "fail"
+        },
+        {
+          "detail": "31180 MiB free on /",
+          "name": "root_space",
+          "status": "ok"
+        },
+        {
+          "detail": "no failed units",
+          "name": "failed_units",
+          "status": "ok"
+        },
+        {
+          "detail": "no reboot pending",
+          "name": "reboot",
+          "status": "ok"
+        },
+        {
+          "detail": "no test repository (1 listed)",
+          "name": "test_repositories",
+          "status": "ok"
+        }
+      ],
+      "host": "broken",
+      "not_checked": [],
+      "reason": null,
+      "verdict": "fail"
+    },
+    {
+      "checks": [
+        {
+          "detail": "6 packages installed, kernel kernel-default",
+          "name": "packages",
+          "status": "ok"
+        },
+        {
+          "detail": "31180 MiB free on /",
+          "name": "root_space",
+          "status": "ok"
+        },
+        {
+          "detail": "no failed units",
+          "name": "failed_units",
+          "status": "ok"
+        },
+        {
+          "detail": "no reboot pending",
+          "name": "reboot",
+          "status": "ok"
+        },
+        {
+          "detail": "no test repository (1 listed)",
+          "name": "test_repositories",
+          "status": "ok"
+        }
+      ],
+      "host": "good",
+      "not_checked": [],
+      "reason": null,
+      "verdict": "ok"
+    },
+    {
+      "checks": [],
+      "host": "off",
+      "not_checked": [],
+      "reason": "not checked: the host is disabled",
+      "verdict": "unknown"
+    },
+    {
+      "checks": [
+        {
+          "detail": "5 packages installed, kernel kernel-default",
+          "name": "packages",
+          "status": "ok"
+        },
+        {
+          "detail": "31180 MiB free on /",
+          "name": "root_space",
+          "status": "ok"
+        },
+        {
+          "detail": "no test repository (1 listed)",
+          "name": "test_repositories",
+          "status": "ok"
+        }
+      ],
+      "host": "old",
+      "not_checked": [
+        {
+          "name": "failed_units",
+          "reason": "SLE 11 has no systemd"
+        },
+        {
+          "name": "reboot",
+          "reason": "SLE 11's zypper is not known to offer needs-rebooting"
+        }
+      ],
+      "reason": null,
+      "verdict": "ok"
+    }
+  ],
+  "summary": {
+    "fail": 1,
+    "hosts": 4,
+    "ok": 2,
+    "partly_checked": 1,
+    "unknown": 1,
+    "warn": 0
+  },
+  "template": "SUSE:Maintenance:1:1",
+  "unchecked": [
+    "dependencies",
+    "patches"
+  ],
+  "verdict": "fail"
+}

@@ -34,6 +34,11 @@ Config {
     target_protected_packages: [
         "netsvc-b",
     ],
+    target_required_packages: [
+        "monitor-b",
+        "tools-b",
+    ],
+    target_min_root_free: 512,
     lock_reap_stale: true,
     lock_stale_age: 28,
     pool_reap_stale: true,

@@ -29,6 +29,8 @@ baremetal = "http://"
 
 [target]
 protected_packages = ["", 7, "a b", "kernel-*", "kernel-rt>=6.4", "perl(DBI)", "kernel-rt,kernel-64kb", " kept "]
+required_packages = ["", 3, "x*"]
+min_root_free = 0
 
 [gitea]
 url = "gitea.example.com"
