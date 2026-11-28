@@ -2316,7 +2316,7 @@ impl Session {
     /// Picks one distinct free host per test-target slot via the arbiter, per
     /// testplatform.
     ///
-    /// [`search_pool_by_query`](Refhosts::search_pool_by_query) groups candidates
+    /// [`pool_slots_by_query`](Refhosts::pool_slots_by_query) groups candidates
     /// by their *requested* slot, so interchangeable hosts collapse to one slot.
     /// Each slot's candidates are shuffled (the [`ShuffleFn`] seam) and recorded
     /// for sibling fallback, a host fewer other slots match ahead of one they

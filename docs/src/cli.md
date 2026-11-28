@@ -1137,7 +1137,7 @@ Options:
           one row per slot instead of per host: its host count, and with --free the free/locked/pool/unreachable counts, the free hosts and a verdict (free/busy/unknown/none); with --testplatform every requested arch gets a row, `none` when no host serves it
 
       --json
-          emit a JSON array of kept rows; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON (--free windowing adds a "probe" object)
+          emit a JSON array of kept rows; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON (--free windowing adds a "probe" object); with --summary, a --limit/--offset cut also gives the envelope, with a "window": {"kept", "total"} object
 
       --limit <N>
           cap the number of rows after --offset (0 = all)
