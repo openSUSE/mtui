@@ -30,6 +30,7 @@ regex.workspace = true
 # a `reqwest::Client` for injection into `ruoqa::ClientBuilder::http_client`,
 # mirroring `Session::http_client`'s pool-reuse pattern.
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
 thiserror.workspace = true

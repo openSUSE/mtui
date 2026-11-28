@@ -1,0 +1,10 @@
+---
+source: crates/mtui-core/src/commands/review_state.rs
+expression: buf.contents()
+---
+UPDATE                 OWNER                       GATE                                   SINCE                CREATED              HEAD  BASE  TEMPLATE
+S:M:10:1               qam-sle:alice, qam-cloud:-  qam-sle:new (assigned), qam-cloud:new  2026-09-02T07:25:47  2026-09-01T00:33:57  n/a   n/a   current
+SUSE:Maintenance:20:2  -                           accepted                               2026-09-02T07:25:47  2026-09-01T00:33:57  n/a   n/a   current
+SUSE:Maintenance:30:3  ?                           ?                                      ?                    ?                    n/a   n/a   current
+could not read:
+  SUSE:Maintenance:30:3: obs: request 3's source project is SUSE:Maintenance:99, not SUSE:Maintenance:30

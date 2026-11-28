@@ -1,0 +1,11 @@
+---
+source: crates/mtui-core/src/commands/review_state.rs
+expression: "buf.contents().replace(&server.uri(), \"<server>\")"
+---
+UPDATE           OWNER  GATE  SINCE  CREATED  HEAD  BASE  TEMPLATE
+SUSE:SLFO:1.2:7  ?      ?     ?      ?        ?     ?     ?
+S:S:1.2:8        ?      ?     ?      ?        ?     ?     ?
+could not read:
+  SUSE:SLFO:1.2:7: gitea: Gitea API call failed: GET - <server>/api/v1/repos/products/SLFO/pulls/7/reviews?page=1 returned status 503
+  S:S:1.2:8: document: TeReGen has no published document for it; without the published document there is no pull request to read: pass its URL
+  S:S:1.2:8: teregen: TeReGen fetch failed: the template status carries no template flag

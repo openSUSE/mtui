@@ -1,0 +1,6 @@
+---
+source: crates/mtui-core/src/commands/review_state.rs
+expression: buf.contents()
+---
+UPDATE           OWNER  GATE  SINCE                      CREATED                    HEAD          BASE  TEMPLATE
+SUSE:SLFO:1.2:7  alice  owed  2026-01-03T00:00:00+00:00  2026-01-01T00:00:00+00:00  0123456789ab  main  current

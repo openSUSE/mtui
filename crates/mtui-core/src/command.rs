@@ -710,6 +710,7 @@ mod tests {
                 "list_templates",
                 "load_template",
                 "quit",
+                "review_state",
                 "set_log_level",
                 "switch",
                 "teregen_login",

@@ -191,7 +191,7 @@ set, and each template keeps its own test report and SSH host group.
 Every command that acts on a loaded template carries the shared `-T/--template`
 and `--all-templates` flags, so its synthesised tool exposes two optional
 parameters. The session-level tools — `load_template`, `unload`,
-`list_templates`, `list_refhosts`, `updates`, `config_show`,
+`list_templates`, `list_refhosts`, `updates`, `review_state`, `config_show`,
 `whoami`, `set_log_level` — expose neither, and `regenerate` exposes only
 `template`:
 
@@ -370,6 +370,42 @@ and nothing is written there.
 
 - Every tool schema sets `additionalProperties: false`, so an argument the tool
   does not declare is refused with `unknown argument(s): …`.
+- `review_state` (read-only) takes one or more RRIDs or Gitea pull request
+  URLs in `update` and needs no loaded template. It only reads: no assign, no
+  lock, no regeneration, no load. Each row names the holder of each QA
+  group's review (`owner`), the state of that review (`gate`), when it got
+  there (`since`), when the update was created, the pull request head and
+  base branch, and the template (`current`, `stale`, `generating`,
+  `missing: <first error line>`, or `n/a` for a bare pull request URL, which
+  names no RRID).
+  - SLFO: the gate comes from the group's latest review on the pull request
+    that carries a verdict and is not dismissed — a later comment or draft
+    does not count: `owed` (review requested), `approved`,
+    `changes-requested`, `…, stale` after a push, `closed` when the pull
+    request was closed with the review owed, `-` when the group has no
+    review. A review whose state, reviewer, `dismissed` or `stale` cannot be
+    read makes the gate `?` with the reason. `approve` and `assign` decide
+    "already decided" from decision comments and the requested reviewers
+    instead, so the two can disagree on one pull request.
+  - OBS: per qam group `new`, `new (assigned)` (an assign accepted the group
+    review and its user review is open) or `accepted`, or the request's own
+    state once it left review. Automation groups (`qam-auto`, `qam-openqa`)
+    are in `--json` with `"automated": true` and left out of the table.
+  - An SLFO RRID's pull request is the one its published document names
+    (its number must be the RRID's); without that document the row fails and
+    asks for the URL. The base branch is shown as Gitea names it: mtui has
+    no mapping from a codestream to a branch, so it does not judge it.
+  - A value that cannot be read is `?`, `-` means nothing (nobody, no
+    review), `n/a` does not apply. A source that fails is named under the
+    table (`gitea`, `obs`, `teregen`, `document`) and the call is then a tool
+    error carrying the partial table; a cancel prints the rows already read
+    and fails `read N of M updates`. An owner the open reviews and the
+    review history disagree on is `?` with a `note:`, and `--mine` is then
+    `?` too.
+  - `--json` prints `{"rows", "failed", "notes"}`; each row's values are
+    typed objects (`{"status": "known", "value": …}`, `{"status":
+    "unknown"}`, …), so a client never parses `?` or `approved, stale`.
+
 - The `openqa_overview` and `openqa_jobs` tools hide their operator override
   flags (`--url-openqa`, `--url-dashboard-qam`, `--url-qam`, `--test-pattern`,
   `--no-fetch`, #410): a headless client uses the operator's configured

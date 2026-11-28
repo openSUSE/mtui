@@ -2450,6 +2450,7 @@ dependencies = [
  "rand",
  "regex",
  "reqwest",
+ "serde",
  "serde_json",
  "serial_test",
  "shlex",

@@ -10,6 +10,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New read-only `review_state <RRID|PR-URL>...` command and MCP tool: for each
+  update, without loading it, who holds its QA review, the state of the
+  group's review and when it got there, when the update was created, the pull
+  request head and base branch, and whether the template is `current`,
+  `stale`, `generating` or `missing` (with the generation job's first error
+  line). An SLFO RRID's pull request is the one its published document names.
+  A value that cannot be read is `?` (never `-`, which means nothing), a
+  source that cannot be read is named under the table, and the command then
+  fails; a cancel prints the rows already read. `--json` prints typed rows
+  (`{"status": ...}` objects, no in-band `?`/`-`), `--mine` adds whether you
+  hold each one (#889). **MCP schema note:** new tool `review_state`.
 - `update` gains `--allow-removal`, and both prepares it runs now go through
   the removal guard like the standalone `prepare`. A host the first prepare
   refuses (its dry run would remove a protected package, or cannot be read) is

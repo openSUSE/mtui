@@ -1,0 +1,61 @@
+---
+source: crates/mtui-core/src/commands/review_state.rs
+expression: buf.contents()
+---
+{
+  "failed": [],
+  "notes": [],
+  "rows": [
+    {
+      "base": {
+        "status": "known",
+        "value": "main"
+      },
+      "created": {
+        "status": "known",
+        "value": "2026-01-01T00:00:00+00:00"
+      },
+      "head": {
+        "status": "known",
+        "value": "0123456789abcdef0123"
+      },
+      "reviews": {
+        "status": "known",
+        "value": [
+          {
+            "automated": false,
+            "gate": {
+              "closed": false,
+              "stale": false,
+              "state": "owed",
+              "status": "known"
+            },
+            "group": "qam-sle",
+            "owner": {
+              "login": "alice",
+              "status": "known"
+            },
+            "since": {
+              "status": "known",
+              "value": "2026-01-03T00:00:00+00:00"
+            }
+          }
+        ]
+      },
+      "state": {
+        "status": "not_applicable"
+      },
+      "state_since": {
+        "status": "not_applicable"
+      },
+      "template": {
+        "status": "current"
+      },
+      "update": "SUSE:SLFO:1.2:7",
+      "workflow": {
+        "status": "known",
+        "value": "gitea"
+      }
+    }
+  ]
+}
