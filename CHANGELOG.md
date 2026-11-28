@@ -74,6 +74,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `list_refhosts --pool` labels the slot of a host with no product version
+  `sles x86_64` instead of `sles- x86_64`: the trailing hyphen is gone.
 - `list_refhosts --testplatform` refuses a query that requests no slot — no
   `arch=[…]` segment, one that does not parse, or an empty arch in it
   (`arch=[]`, `arch=[x86_64,]`, which matched every arch) — with the reason,

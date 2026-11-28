@@ -1172,6 +1172,23 @@ mod tests {
     }
 
     #[test]
+    fn pool_label_of_a_host_without_a_version_has_no_trailing_hyphen() {
+        let mut bare = host("whale-09", "x86_64", None, vec![]);
+        bare.product.version = None;
+        assert_eq!(record(&bare, true).slot.as_deref(), Some("sles x86_64"));
+        let versioned = host(
+            "whale-10",
+            "x86_64",
+            Some(VersionField::Num(6)),
+            vec!["sdk"],
+        );
+        assert_eq!(
+            record(&versioned, true).slot.as_deref(),
+            Some("sles-15-6 x86_64")
+        );
+    }
+
+    #[test]
     fn render_table_plain_lists_and_counts() {
         let recs = gather(&store(), &Filters::default());
         let total = recs.len();
