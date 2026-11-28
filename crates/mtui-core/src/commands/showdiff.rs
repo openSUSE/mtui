@@ -6,7 +6,8 @@
 //! `show_diff` pages the raw file; `analyze_diff` cross-checks patch definitions
 //! against application and surfaces review-relevant references. On a
 //! Gitea-workflow update the only diff is the product pull request's, which
-//! carries no package source: `show_diff` warns, `analyze_diff` refuses.
+//! carries no package source: `show_diff` shows it under a warning and fails,
+//! `analyze_diff` refuses without fetching it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -328,18 +329,15 @@ impl Command for ShowDiff {
         let (path, may_fetch, fetcher) = diff_source(session)?;
         let product = product_pr(session);
         let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
-        let warning = product.map(|pr| format!("warning: {}", pr.summary()));
-        // First so it survives the MCP output cap and a pager quit; last so it
-        // follows a long diff.
-        if let Some(w) = &warning {
-            session.display.println(w);
+        // First, so the MCP output cap cannot drop it; the error follows the diff.
+        if let Some(pr) = &product {
+            session
+                .display
+                .println(&format!("warning: {}", pr.summary()));
         }
         let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
         page_output(session, &lines).await;
-        if let Some(w) = &warning {
-            session.display.println(w);
-        }
-        Ok(())
+        product.map_or(Ok(()), |pr| Err(CommandError::Other(pr.summary())))
     }
 }
 
@@ -364,12 +362,11 @@ impl Command for AnalyzeDiff {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        let (path, may_fetch, fetcher) = diff_source(session)?;
-        let product = product_pr(session);
-        let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
-        if let Some(pr) = product {
+        if let Some(pr) = product_pr(session) {
             return Err(CommandError::Other(pr.summary()));
         }
+        let (path, may_fetch, fetcher) = diff_source(session)?;
+        let text = source_diff(&path, may_fetch, fetcher.as_ref()).await?;
         let sections = split_sections(&text);
 
         let spec_lines = flatten(&sections, "spec files");
@@ -871,8 +868,8 @@ spec files:
             let (mut session, _dir) = document_session("SUSE:SLFO:1.2:7787");
             session.metadata_mut().base_mut().update_source = UpdateSource::Git;
 
-            let err = AnalyzeDiff
-                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+            let err = ShowDiff
+                .call(&mut session, &matches(&ShowDiff, &[]))
                 .await
                 .unwrap_err();
 
@@ -965,29 +962,26 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
         }
 
         #[tokio::test]
-        async fn show_diff_shows_the_product_diff_between_two_warnings() {
+        async fn show_diff_shows_the_product_diff_after_a_warning_and_fails() {
             let server = serve_product_diff(PRODUCT_DIFF).await;
             let (mut session, buf, _dir) = gitea_session(&server);
 
-            ShowDiff
+            let err = ShowDiff
                 .call(&mut session, &matches(&ShowDiff, &[]))
                 .await
-                .unwrap();
+                .unwrap_err();
 
             let out = buf.contents();
-            insta::assert_snapshot!("show_diff_product_only", out);
+            insta::assert_snapshot!("show_diff_product_only", format!("{out}--\n{err}"));
             let lines = lines(&out);
             assert_eq!(lines.first(), Some(&WARNING), "{out}");
-            assert_eq!(lines.last(), Some(&WARNING), "{out}");
-            assert_eq!(
-                &lines[1..lines.len() - 1],
-                &PRODUCT_DIFF.lines().collect::<Vec<_>>()[..]
-            );
+            assert_eq!(&lines[1..], &PRODUCT_DIFF.lines().collect::<Vec<_>>()[..]);
+            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
         }
 
         #[tokio::test]
         async fn analyze_diff_on_a_product_diff_fails_instead_of_finding_nothing() {
-            let server = serve_product_diff(PRODUCT_DIFF).await;
+            let server = MockServer::start().await;
             let (mut session, buf, _dir) = gitea_session(&server);
 
             let err = AnalyzeDiff
@@ -998,6 +992,7 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
             let out = buf.contents();
             assert!(!out.contains("No spec mentioned"), "{out}");
             insta::assert_snapshot!("analyze_diff_product_only", format!("{out}--\n{err}"));
+            assert!(server.received_requests().await.unwrap().is_empty());
         }
 
         /// An empty product diff is no review either.
@@ -1006,18 +1001,20 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
             let server = serve_product_diff("").await;
             let (mut session, buf, _dir) = gitea_session(&server);
 
-            ShowDiff
+            let show = ShowDiff
                 .call(&mut session, &matches(&ShowDiff, &[]))
                 .await
-                .unwrap();
-            let err = AnalyzeDiff
+                .unwrap_err();
+            let analyze = AnalyzeDiff
                 .call(&mut session, &matches(&AnalyzeDiff, &[]))
                 .await
                 .unwrap_err();
 
             let out = buf.contents();
-            assert_eq!(lines(&out), vec![WARNING, WARNING], "{out}");
-            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
+            assert_eq!(lines(&out), vec![WARNING], "{out}");
+            let summary = WARNING.trim_start_matches("warning: ");
+            assert_eq!(show.to_string(), summary);
+            assert_eq!(analyze.to_string(), summary);
         }
 
         /// The cache holds the product diff too; reading it is no review.
@@ -1026,6 +1023,23 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
             let server = MockServer::start().await;
             let (mut session, _buf, dir) = gitea_session(&server);
             std::fs::write(dir.path().join("source.diff"), PRODUCT_DIFF).unwrap();
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+
+        /// The refusal needs no diff: no token is asked for and nothing is
+        /// fetched.
+        #[tokio::test]
+        async fn analyze_diff_refuses_before_fetching() {
+            let server = MockServer::start().await;
+            let (mut session, _buf, _dir) = gitea_session(&server);
+            session.config.gitea_token = String::new();
 
             let err = AnalyzeDiff
                 .call(&mut session, &matches(&AnalyzeDiff, &[]))

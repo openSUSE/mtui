@@ -159,14 +159,15 @@ When a host action completes on some hosts and fails on others, the command prin
 `<verb> completed on <hosts>` for the hosts it completed on before it reports the
 failure.
 
-## Why does `analyze_diff` fail on an SLFO update?
+## Why do `show_diff` and `analyze_diff` fail on an SLFO update?
 
 On a Gitea-workflow update the only diff mtui fetches is the product pull
 request's (cached as `source.diff` in the report directory). It names no
 package's spec, changelog or patches, and mtui does not follow it to the
-package pull requests, so it is no source review: `analyze_diff` fails naming
-the source packages whose source was not reviewed, and `show_diff` shows the
-product diff between two `warning:` lines saying the same. Review each
+package pull requests, so it is no source review: `analyze_diff` fails at once
+naming the source packages whose source was not reviewed, and `show_diff`
+shows the product diff under a `warning:` line saying the same, then fails
+with that message. Review each
 package's own pull request in Gitea. This applies to Gitea-workflow updates
 only: on an OBS update, `analyze_diff` on a `source.diff` without a spec
 section still prints `No spec mentioned in source.diff` and succeeds.

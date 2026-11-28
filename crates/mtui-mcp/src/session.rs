@@ -4039,9 +4039,9 @@ mod tests {
         assert_eq!(contended, free);
     }
 
-    /// A product-pull-request-only diff on a Gitea-workflow report: the
-    /// `show_diff` warning is the head of the capped result, so a cap that
-    /// drops the diff and its closing warning still delivers it.
+    /// A product-pull-request-only diff on a Gitea-workflow report: `show_diff`
+    /// fails, and its warning is the head of the capped output the error
+    /// result carries, so a cap that drops the diff still delivers it.
     #[tokio::test]
     async fn show_diff_warning_survives_the_output_cap() {
         let mut config = Config::default();
@@ -4073,17 +4073,19 @@ mod tests {
             base.update_source = mtui_types::UpdateSource::Git;
         }
 
-        let out = sess
+        let err = sess
             .run_command(&Arc::new(register_all()), "show_diff", &[])
             .await
-            .expect("show_diff succeeds");
+            .expect_err("show_diff fails on a product-only diff");
 
+        let out = &err.stdout;
         assert!(
             out.starts_with("warning: the source of ansible-trento, "),
             "{out}"
         );
         assert!(out.contains("was not reviewed"), "{out}");
         assert_eq!(out.matches("truncated").count(), 1, "{out}");
+        assert!(err.stderr.contains("was not reviewed"), "{err}");
     }
 
     /// #524, generalising the `list_hosts` symptom above to a *path*-taking

@@ -57,9 +57,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   follow it to the package pull requests. `analyze_diff` now fails there, where
   it printed `No spec mentioned in source.diff` and exited 0, with `the source
   of <packages> was not reviewed: only the product pull request <url> was read,
-  not the package pull requests`; over MCP that is an error result, which still
-  carries any output printed before it. `show_diff` still shows the product
-  diff and succeeds, with that line as a `warning:` before and after it. OBS
+  not the package pull requests`, without fetching the diff (so without asking
+  for a Gitea token). `show_diff` still shows the product diff, under that line
+  as a `warning:`, and then fails with the same message. Over MCP both are
+  error results, which still carry the output printed before the error. OBS
   updates are unchanged: `analyze_diff` on an OBS `source.diff` without a spec
   section still prints `No spec mentioned in source.diff` and succeeds. The two
   commands' descriptions (help and MCP tool descriptions) now name both
