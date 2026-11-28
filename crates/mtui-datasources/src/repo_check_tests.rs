@@ -125,6 +125,59 @@ fn a_zstd_primary_of_several_frames_is_read_whole() {
     assert_eq!(primary(&body, BIG, BIG).map(|s| s.count), Ok(3));
 }
 
+/// One raw, last-block zstd frame holding `content`, its window set by the
+/// frame-header window descriptor byte.
+fn zstd_raw_frame(window_descriptor: u8, content: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, window_descriptor];
+    let block = (u32::try_from(content.len()).unwrap() << 3) | 1;
+    frame.extend(&block.to_le_bytes()[..3]);
+    frame.extend(content);
+    frame
+}
+
+#[test]
+fn markup_inside_a_package_field_is_unreadable() {
+    let xml = br#"<metadata packages="1"><package><name>foo<b></b>bar</name><arch>noarch</arch><version ver="1" rel="1"/></package></metadata>"#;
+    let want = listed(&[("foobar", "1-1.noarch")]);
+    assert_eq!(
+        parse_primary(xml, &want, BIG, BIG),
+        Err(PrimaryError::Unreadable)
+    );
+}
+
+#[test]
+fn a_zstd_frame_declaring_a_window_over_the_cap_is_unreadable() {
+    let content = br#"<metadata packages="0"/>"#;
+    // 0x40: a 256 KiB window, inside the cap; the same frame is read.
+    assert_eq!(
+        primary(&zstd_raw_frame(0x40, content), BIG, BIG).map(|s| s.count),
+        Ok(0)
+    );
+    // 0x80: a 64 MiB window, over the 32 MiB cap.
+    assert_eq!(
+        primary(&zstd_raw_frame(0x80, content), BIG, BIG),
+        Err(PrimaryError::Unreadable)
+    );
+}
+
+#[test]
+fn a_zstd_frame_whose_checksum_does_not_match_is_unreadable() {
+    let good = ruzstd::encoding::compress_to_vec(
+        PRIMARY.as_bytes(),
+        ruzstd::encoding::CompressionLevel::Uncompressed,
+    );
+    assert_eq!(primary(&good, BIG, BIG).map(|s| s.count), Ok(3));
+    // Stored raw, so the flipped byte still decodes and parses: only the
+    // frame checksum can tell.
+    let at = good
+        .windows(b"placeholder".len())
+        .position(|w| w == b"placeholder")
+        .unwrap();
+    let mut bad = good;
+    bad[at] = b'P';
+    assert_eq!(primary(&bad, BIG, BIG), Err(PrimaryError::Unreadable));
+}
+
 #[test]
 fn primary_self_closed_root_is_empty() {
     let scan = primary(br#"<metadata packages="0"/>"#, BIG, BIG).unwrap();
@@ -224,6 +277,8 @@ fn within_refuses_paths_and_origins_outside_the_base() {
         "https://h/r/x/p.xml",
         "http://h:81/r/x/p.xml",
         "http://v:q@h/r/x/p.xml",
+        "http://h/r/xevil/p.xml",
+        "../xevil/p.xml",
         "repodata/..%2fp.xml",
         "",
     ] {

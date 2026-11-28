@@ -515,9 +515,16 @@ async fn credentials_in_a_redirect_never_reach_the_reason() {
 
 #[tokio::test]
 async fn credentials_in_the_url_never_reach_a_transport_reason() {
-    // Nothing listens on port 9 here; the transport error carries the cause.
-    let url = "http://alice:s3cret@127.0.0.1:9/repo";
-    let got = check_repository(&client(), url, &Listed::new()).await;
+    // A listener that hangs up on every connection: a transport error.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            drop(socket);
+        }
+    });
+    let url = format!("http://alice:s3cret@{addr}/repo");
+    let got = check_repository(&client(), &url, &Listed::new()).await;
     let reason = got.to_string();
     assert!(
         reason.starts_with("fetching repodata/repomd.xml failed: "),

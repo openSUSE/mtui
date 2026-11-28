@@ -273,8 +273,9 @@ ruoqa = "0.3"
 russh = "0.65.4"
 russh-sftp = "3"
 # zstd-compressed rpm-md primary metadata (`show_update_repos --check`): pure
-# Rust, so the static binaries gain no C library.
-ruzstd = "0.9"
+# Rust, so the static binaries gain no C library. `hash` computes the frame
+# checksum `repo_check` compares.
+ruzstd = { version = "0.9", features = ["hash"] }
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.

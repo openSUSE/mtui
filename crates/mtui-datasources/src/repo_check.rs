@@ -591,8 +591,9 @@ fn decoder<'a>(body: &'a [u8]) -> Result<Box<dyn Read + 'a>, PrimaryError> {
     }
 }
 
-/// Decodes every zstd frame in `rest` in turn, as the reference decoder does;
-/// a frame that does not decode is an I/O error, never an early end.
+/// Decodes every zstd frame in `rest` in turn. A frame that does not decode,
+/// a skippable frame (which the reference decoder would skip) and a frame
+/// whose content checksum does not match are I/O errors, never an early end.
 struct ZstdFrames<'a> {
     rest: &'a [u8],
     frame: Option<ruzstd::decoding::StreamingDecoder<&'a [u8], ruzstd::decoding::FrameDecoder>>,
@@ -605,6 +606,12 @@ impl Read for ZstdFrames<'_> {
                 let n = frame.read(out)?;
                 if n > 0 || out.is_empty() {
                     return Ok(n);
+                }
+                let decoder = &frame.decoder;
+                if let Some(stored) = decoder.get_checksum_from_data()
+                    && decoder.get_calculated_checksum() != Some(stored)
+                {
+                    return Err(std::io::Error::other("zstd frame checksum mismatch"));
                 }
                 self.rest = self.frame.take().map_or(self.rest, |f| f.into_inner());
             }
@@ -750,6 +757,10 @@ fn scan_primary<R: std::io::BufRead>(
         event_done();
         match event {
             Event::DocType(_) => return Err(PrimaryError::Unreadable),
+            // A tracked field is plain text: markup inside it would cut it short.
+            Event::Start(_) | Event::Empty(_) if field != Field::None => {
+                return Err(PrimaryError::Unreadable);
+            }
             Event::Start(e) => {
                 if closed {
                     return Err(PrimaryError::Unreadable);
