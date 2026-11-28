@@ -633,6 +633,20 @@ mod tests {
         assert!(format!("{SLFO_GITEA} \n").parse::<ReportDocument>().is_ok());
     }
 
+    /// The error quotes the server's value, so it displays as one clean line.
+    #[test]
+    fn a_parse_error_displays_the_bad_value_on_one_clean_line() {
+        let mut doc: Value = serde_json::from_str(SLFO_GITEA).unwrap();
+        doc["kind"] = Value::from("bad\u{1b}[2J\u{202e}\nkind");
+        let err = doc.to_string().parse::<ReportDocument>().unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.starts_with("/kind: unknown variant `bad kind`, expected one of"),
+            "{shown:?}"
+        );
+        assert!(!shown.contains(['\u{1b}', '\u{202e}', '\n']), "{shown:?}");
+    }
+
     /// The typed parse skips an unknown key's value unchecked; a `Value` parse
     /// rejects some of those values, and used to panic the second parse.
     #[test]

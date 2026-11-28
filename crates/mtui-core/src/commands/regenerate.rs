@@ -853,7 +853,7 @@ mod tests {
             .respond_with(SignalOnFirstHit {
                 hit: std::sync::Mutex::new(Some(hit_tx)),
                 body: serde_json::json!({
-                    "minion_state": format!("run\u{9b}2Jning\u{202e}{}", "x".repeat(600)),
+                    "minion_state": format!("run\u{9b}2Jning\u{202e}\n{}", "x".repeat(600)),
                     "minion_error": format!("boom\u{1b}[31m!\n{}", "x".repeat(600)),
                 }),
             })
@@ -882,8 +882,8 @@ mod tests {
         let mark = crate::display::TRUNCATION_MARK;
         assert!(
             out.contains(&format!(
-                "did not finish (state: running{}{mark}): boom! {}{mark}",
-                "x".repeat(493),
+                "did not finish (state: running {}{mark}): boom! {}{mark}",
+                "x".repeat(492),
                 "x".repeat(494)
             )),
             "{out:?}"
