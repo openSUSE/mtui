@@ -134,7 +134,8 @@ impl LoadError {
 fn null_with_error(config: Config, reason: String) -> NullReport {
     let mut report = NullReport::new(config);
     // The reason can quote the document, such as a value that failed to parse.
-    report.base_mut().load_error = Some(sanitize_external(&reason, None));
+    report.base_mut().load_error =
+        Some(sanitize_external(&reason, None).replace(['\n', '\t'], " "));
     report
 }
 
@@ -1195,6 +1196,14 @@ mod ingest_tests {
         assert!(!cancelled_job_wait(&ended("failed"), true));
         assert!(cancelled_job_wait(&ended("active"), true));
         assert!(!cancelled_job_wait(&ended("active"), false));
+    }
+
+    /// `load_template` shows the load error as one line of the REPL output
+    /// and the MCP result.
+    #[test]
+    fn a_load_error_is_one_clean_line() {
+        let report = null_with_error(Config::default(), "a\u{9b}2J\nb\tc".to_owned());
+        assert_eq!(report.base().load_error.as_deref(), Some("a b c"));
     }
 
     /// Both fields are TeReGen's text: a job that never finishes leaves the

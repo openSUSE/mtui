@@ -12,7 +12,9 @@ use tracing::info;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
-use crate::commands::support::{document_edits_guard, require_update, template_completion};
+use crate::commands::support::{
+    document_edits_guard, one_line, require_update, template_completion,
+};
 use crate::display::sanitize_external;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -201,10 +203,10 @@ impl Command for Regenerate {
             return Ok(());
         }
         if !outcome.ok {
-            let state = sanitize_external(outcome.state.as_deref().unwrap_or("unknown"), Some(500));
+            let state = one_line(outcome.state.as_deref().unwrap_or("unknown"), Some(500));
             let mut msg = format!("Regeneration of {rrid_str} did not finish (state: {state})");
             if let Some(err) = &outcome.minion_error {
-                msg.push_str(&format!(": {}", sanitize_external(err, Some(500))));
+                msg.push_str(&format!(": {}", one_line(err, Some(500))));
             }
             session.display.println(&msg);
             return Ok(());
@@ -852,7 +854,7 @@ mod tests {
                 hit: std::sync::Mutex::new(Some(hit_tx)),
                 body: serde_json::json!({
                     "minion_state": format!("run\u{9b}2Jning\u{202e}{}", "x".repeat(600)),
-                    "minion_error": format!("boom\u{1b}[31m!{}", "x".repeat(600)),
+                    "minion_error": format!("boom\u{1b}[31m!\n{}", "x".repeat(600)),
                 }),
             })
             .mount(&server)
@@ -880,9 +882,9 @@ mod tests {
         let mark = crate::display::TRUNCATION_MARK;
         assert!(
             out.contains(&format!(
-                "did not finish (state: running{}{mark}): boom!{}{mark}",
+                "did not finish (state: running{}{mark}): boom! {}{mark}",
                 "x".repeat(493),
-                "x".repeat(495)
+                "x".repeat(494)
             )),
             "{out:?}"
         );

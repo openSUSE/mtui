@@ -116,7 +116,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   it. A document value that fails to parse is quoted on one clean line
   wherever the parse error is shown: a failed load, `checkout`, `regenerate`'s
   check for tester-authored content, `commit`'s upload and the OBS
-  `approve`/`assign` refusal.
+  `approve`/`assign` refusal. A newline or tab in any of this text is shown
+  as a space, so a message stays on one line.
 - A newline in TeReGen's text no longer starts a new line in mtui's log, where
   it could pass for a record of its own: it is written as `\n` in the log
   lines that carry TeReGen's text and in the error logged for each template a
