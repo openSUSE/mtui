@@ -852,10 +852,18 @@ mod tests {
                 std::future::pending::<&str>().await
             }
         };
+        // The second read waits for the third, so only the sort restores order.
+        let (sent, received) = tokio::sync::oneshot::channel::<()>();
         let reads: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = &str> + Send>>> = vec![
             Box::pin(slow),
-            Box::pin(async { "fast" }),
-            Box::pin(async { "also" }),
+            Box::pin(async move {
+                received.await.unwrap();
+                "fast"
+            }),
+            Box::pin(async move {
+                sent.send(()).unwrap();
+                "also"
+            }),
         ];
         let (done, cancelled) = until_cancelled(reads, &token).await;
         assert!(cancelled);
@@ -868,10 +876,15 @@ mod tests {
     async fn a_failure_before_a_cancel_outranks_it() {
         let trusted = MockServer::start().await;
         let foreign = MockServer::start().await;
-        let (mut session, _buf) = session_for(&trusted);
+        let (mut session, buf) = session_for(&trusted);
         mount_cancelling_status(&trusted, &mut session).await;
         let url = format!("{}/products/SLFO/pulls/7", foreign.uri());
         let err = run(&mut session, &[SLFO, &url]).await.unwrap_err();
+        let table = buf.contents();
+        assert!(
+            table.contains("\ncould not read:\n  http") && table.contains(": gitea: "),
+            "the finished, failed row is printed: {table}"
+        );
         assert!(
             matches!(&err, CommandError::Other(m) if m == "1 lookup(s) failed, so the rows \
                 above are incomplete; cancelled after reading 1 of 2 updates"),

@@ -1208,6 +1208,16 @@ async fn comments_and_drafts_do_not_decide() {
         known(PullVerdict::Approved, false, false)(&after_verdict),
         "{after_verdict:?}"
     );
+    let re_requested = gate_for(json!([
+        review(3, "qam-sle-review", "COMMENT", "abc"),
+        review(4, "qam-sle-review", "REQUEST_REVIEW", ""),
+    ]))
+    .await;
+    let PullReviewGate::Known(gate) = &re_requested else {
+        panic!("{re_requested:?}");
+    };
+    assert_eq!(gate.verdict, PullVerdict::Owed);
+    assert_eq!(gate.since.as_deref(), Some(ts(4).as_str()));
     let only_comment = gate_for(json!([review(4, "qam-sle-review", "COMMENT", "abc")])).await;
     let PullReviewGate::Known(gate) = &only_comment else {
         panic!("{only_comment:?}");
