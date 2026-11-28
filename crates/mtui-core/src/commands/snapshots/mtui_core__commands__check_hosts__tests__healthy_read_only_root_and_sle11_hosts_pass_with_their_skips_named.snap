@@ -1,0 +1,17 @@
+---
+source: crates/mtui-core/src/commands/check_hosts.rs
+expression: buf.contents()
+---
+check_hosts: ok — 2 ok, 0 warn, 0 fail, 0 unknown of 2 hosts; 2 with checks that do not apply to them; dependencies and pending patches are not checked
+micro: ok
+  packages          ok      6 packages installed, kernel kernel-default
+  root_space        ok      31180 MiB free on /
+  failed_units      ok      no failed units
+  test_repositories ok      no test repository (1 listed)
+  reboot            -       not checked: on a read-only root a pending snapshot is not checked, and zypper's reboot flag is not shown to cover one
+old: ok
+  packages          ok      5 packages installed, kernel kernel-default
+  root_space        ok      31180 MiB free on /
+  test_repositories ok      no test repository (1 listed)
+  failed_units      -       not checked: SLE 11 has no systemd
+  reboot            -       not checked: SLE 11's zypper is not known to offer needs-rebooting

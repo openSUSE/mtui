@@ -140,6 +140,42 @@ expression: pretty
           "description": "Act on every loaded template (the default for this command); =false narrows to the active or sole one",
           "type": "boolean"
         },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
+          "items": {
+            "description": "Host to act on (repeatable; default: all hosts)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "json": {
+          "default": false,
+          "description": "print one JSON document instead of the text blocks",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "check_hosts",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "description": "Act on every loaded template (the default for this command); =false narrows to the active or sole one",
+          "type": "boolean"
+        },
         "full_output": {
           "default": false,
           "description": "print every line of a non-passing check's output, untruncated, instead of a bounded first-line summary (some checks emit long diffs)",

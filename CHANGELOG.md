@@ -10,6 +10,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `check_hosts` command and MCP tool: a read-only health check of the
+  connected hosts (or those named with `-t`), with or without a loaded report.
+  Per host it reports `packages` (the core set, `[target] required_packages`
+  and at least one kernel flavour installed), `root_space` (free space on `/`
+  against `[target] min_root_free`), `failed_units`, `reboot` (`zypper
+  needs-rebooting`) and `test_repositories` (an `issue-…` repository still
+  configured), each `ok`, `warn`, `fail` or `unknown`, and a verdict that is
+  the worst of them; the first line of the text output is the overall
+  verdict. A probe that failed, timed out (60 s per probe and host) or gave
+  output it cannot read is `unknown`, never `ok`; a disabled, unconnected or
+  YUM-family host is `unknown` and named. A check that does not apply
+  (`failed_units` and `reboot` on SLE 11, `reboot` on a read-only root) is
+  listed as not checked and does not fail the host. The command takes neither
+  the operation lock nor a pool claim, writes no history row, keeps its probes
+  out of `show_log` and `export`, and changes no package or repository; `zypper
+  lr` and `zypper needs-rebooting` hold zypper's own lock while they run. It
+  fails when any host is `fail` or `unknown`. `zypper verify` and `zypper
+  list-patches` are not run, and the `ok` readings of `failed_units` and
+  `reboot` are not yet verified on a real host. `--json` prints one document.
+  **MCP schema note:** new tool `check_hosts` (`hosts`, `json`, `background`),
+  not advertised read-only (#900).
 - New `[target] required_packages` (a list of package names, read like
   `protected_packages`) and `[target] min_root_free` (MiB, default `1024`)
   config keys, used by `check_hosts`. `config show` prints them as

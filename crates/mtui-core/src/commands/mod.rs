@@ -49,6 +49,7 @@ mod simpleset;
 mod updates;
 
 // Testreport lifecycle, metadata & host-info commands.
+mod check_hosts;
 mod checkout;
 mod commit;
 mod listbugs;
@@ -112,6 +113,7 @@ pub use request_review::RequestReview;
 pub use simpleset::{SetLogLevel, SetWorkflow};
 pub use updates::Updates;
 
+pub use check_hosts::CheckHosts;
 pub use checkout::Checkout;
 pub use commit::Commit;
 pub use edit::Edit;
@@ -1414,6 +1416,9 @@ mod mcp_nonempty_success_guard {
         // why: renders a source.diff / spec diff from a checkout fixture.
         "show_diff",
         "analyze_diff",
+        // why: succeeds only when every probe is answered healthily, which its
+        // own tests script per probe command.
+        "check_hosts",
     ];
 
     /// Build the loaded session + argv that drives `name` to a successful
@@ -1804,6 +1809,7 @@ mod explicit_and_fanout_scope_guard {
     /// mutates shared remote state, and their per-host reach is a read a
     /// caller can repeat safely.
     const FANOUT: &[&str] = &[
+        "check_hosts",
         "comment",
         "checkers",
         "checkout",

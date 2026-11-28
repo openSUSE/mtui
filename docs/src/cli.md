@@ -508,6 +508,24 @@ Options:
           Print help
 ```
 
+## `check_hosts`
+
+Checks the connected hosts read-only (packages, root space, failed units, pending reboot, leftover test repositories) and gives each a verdict: ok, warn, fail or unknown. Fails when any host is fail or unknown. Takes no operation lock or pool claim and changes no package; its zypper probes hold zypper's own lock briefly.
+
+```text
+Usage: check_hosts [OPTIONS]
+
+Options:
+  -t, --target <HOST>
+          Host to act on. Can be used multiple times. If omitted all hosts are used
+
+      --json
+          print one JSON document instead of the text blocks
+
+  -h, --help
+          Print help
+```
+
 ## `list_timeout`
 
 Prints the current command timeout per host, in seconds.

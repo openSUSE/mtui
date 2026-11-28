@@ -45,6 +45,8 @@ use crate::tool_args::{reject_unknown_for, reject_unknown_kwargs};
 /// `background` boolean parameter (see [`dispatch_tool`]). An explicit list.
 const SLOW_COMMANDS: &[&str] = &[
     "run",
+    // Up to five probe bounds per host.
+    "check_hosts",
     "update",
     "downgrade",
     "prepare",
