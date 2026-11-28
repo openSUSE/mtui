@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use mtui_config::options::Config;
 use mtui_datasources::{DashboardAutoOpenQA, QemDashboardClient, QemIncident, VerifyPolicy};
-use mtui_testreport::export::{AutoExport, BytesFetcher, ErrorMode, ExportContext, download_logs};
+use mtui_testreport::export::{
+    AutoExport, BytesFetcher, DownloadError, ErrorMode, ExportContext, download_logs,
+};
 use mtui_types::{RequestReviewID, Test, URLs};
 
 use crate::log_capture::capture_events_async;
@@ -92,5 +94,61 @@ async fn kernel_log_downloads_log_no_credentials() {
     ] {
         assert!(events.contains(expected), "{expected}: {events:?}");
     }
+    assert!(!events.contains("hunter2"), "{events:?}");
+}
+
+struct OkFetcher;
+
+#[async_trait]
+impl BytesFetcher for OkFetcher {
+    async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, String> {
+        Ok(b"log".to_vec())
+    }
+}
+
+/// The local file is named after the openQA host, never its credentials, so
+/// neither the name, the failed write's log line nor its error carries them.
+#[tokio::test]
+async fn a_failed_kernel_log_write_names_the_host_without_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    // A regular file as the parent makes the write fail on any OS.
+    let file = dir.path().join("not-a-dir");
+    std::fs::write(&file, b"x").unwrap();
+    let install = file.join("install");
+    let connectors = vec![(
+        "https://user:hunter2@oqa.invalid/".to_owned(),
+        vec![Test::new(
+            "install_kernel",
+            "passed",
+            42,
+            "x86_64",
+            Default::default(),
+        )],
+    )];
+
+    let mut err = None;
+    let events = capture_events_async(async {
+        err = download_logs(
+            &OkFetcher,
+            &connectors,
+            &file.join("results"),
+            &install,
+            ErrorMode::Full,
+        )
+        .await
+        .err();
+    })
+    .await;
+
+    let err = err.expect("the write fails");
+    let DownloadError::Write { path, .. } = &err else {
+        panic!("expected Write, got {err:?}");
+    };
+    assert_eq!(path, &install.join("oqa.invalid-zypper-x86_64.log"));
+    assert!(!err.to_string().contains("hunter2"), "{err}");
+    assert!(
+        events.contains(&format!("Failed to write {}: ", path.display())),
+        "{events:?}"
+    );
     assert!(!events.contains("hunter2"), "{events:?}");
 }
