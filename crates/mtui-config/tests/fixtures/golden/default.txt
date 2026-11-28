@@ -32,6 +32,8 @@ Config {
     slack_watch_timeout: 3600,
     target_tempdir: "/tmp",
     target_protected_packages: [],
+    target_required_packages: [],
+    target_min_root_free: 1024,
     lock_reap_stale: true,
     lock_stale_age: 86400,
     pool_reap_stale: true,

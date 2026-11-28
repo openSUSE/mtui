@@ -38,6 +38,8 @@ baremetal = "http://bm.a.example.com"
 [target]
 tempdir = "/var/tmp/a"
 protected_packages = ["kernel-foo", "netsvc-a"]
+required_packages = ["ca-certificates-a"]
+min_root_free = 2048
 
 [gitea]
 token = "tok-a"

@@ -37,6 +37,10 @@ Config {
         "kernel-foo",
         "netsvc-a",
     ],
+    target_required_packages: [
+        "ca-certificates-a",
+    ],
+    target_min_root_free: 2048,
     lock_reap_stale: false,
     lock_stale_age: 18,
     pool_reap_stale: false,

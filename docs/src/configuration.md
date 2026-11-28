@@ -71,10 +71,11 @@ config set max_parallel 8
 
 `config` addresses options by flattened attribute names — `session_user`,
 `refhosts_*`, `openqa_instance*`, `target_tempdir`, `lock_*`, `slack_*`, and so
-on — rather than by `[section]` key. `config show` lists 39 attributes and
+on — rather than by `[section]` key. `config show` lists 41 attributes and
 omits `max_oqa_parallel`, the `[mcp]` table and the `[obs]` table.
-`template_dir`, `install_logs`, `refhosts_path`, `target_tempdir` and
-`target_protected_packages` can be shown but not `set`.
+`template_dir`, `install_logs`, `refhosts_path`, `target_tempdir`,
+`target_protected_packages`, `target_required_packages` and
+`target_min_root_free` can be shown but not `set`.
 
 Secret options are never echoed: `config show`/`config set` print `<set>` for a
 configured secret (`gitea_token` and `slack_token`) instead of its value. Over MCP,
@@ -136,6 +137,8 @@ Defaults below are the built-in values.
 |-----|------|---------|---------|
 | `tempdir` | path | `/tmp` | Remote scratch directory on target hosts, and where `put` publishes uploads (see [Remote uploads](#remote-uploads)). |
 | `protected_packages` | array of strings | `[]` | Package names the [removal guard](concepts.md#removal-guard) protects on top of its built-in list. Matched by exact name, with no glob or `grub2-*`-style family matching: list each kernel flavour or service package by its full name. Each entry is trimmed; an empty or non-string entry, or one with a character rpm does not allow in a package name, is dropped with an error and the rest are kept. A value that is not an array, or an array with no valid name, is ignored with an error and the list from a lower-precedence file stays; an explicit `[]` clears it. It only adds names: the built-in list always applies. Like every list option, a later file's list replaces an earlier file's rather than adding to it. `config show` prints it as `target_protected_packages`. |
+| `required_packages` | array of strings | `[]` | Package names `check_hosts` requires on every host on top of its core set (`rpm`, `zypper`, `glibc`, `systemd` except on SLE 11, `bash`) and one kernel flavour; a missing one makes `packages` fail. For the site's own provisioning: a monitoring agent, a CA bundle, a test-tools package. Matched by exact name and read like `protected_packages`: a bad entry is dropped with an error, a value that is not an array or holds no valid name is ignored, `[]` clears it. `config show` prints it as `target_required_packages`. |
+| `min_root_free` | integer (MiB) | `1024` | Free space on `/`, in MiB, below which `check_hosts` fails a host's `root_space` check; `0` never fails it. `config show` prints it as `target_min_root_free`. |
 
 ### `[qem_dashboard]`
 

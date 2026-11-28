@@ -10,6 +10,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `[target] required_packages` (a list of package names, read like
+  `protected_packages`) and `[target] min_root_free` (MiB, default `1024`)
+  config keys, used by `check_hosts`. `config show` prints them as
+  `target_required_packages` and `target_min_root_free`; neither can be `set`
+  (#900).
 - `list_refhosts --summary` (MCP: `summary: true`) prints one row per slot
   instead of one per host: the slot and its host count, and with `--free` the
   free, locked, pool-claimed and unreachable counts, the free hosts' names and

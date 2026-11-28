@@ -159,16 +159,35 @@ fn is_relative_dir_name(raw: &str) -> bool {
         && token != ".."
 }
 
-/// Reads `[target] protected_packages` leniently, at parse time so the file
+/// Reads `[target] protected_packages` leniently; see [`lenient_package_list`].
+fn lenient_protected_packages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    lenient_package_list(deserializer, "protected_packages")
+}
+
+/// Reads `[target] required_packages` leniently; see [`lenient_package_list`].
+fn lenient_required_packages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    lenient_package_list(deserializer, "required_packages")
+}
+
+/// Reads a `[target]` package-name list leniently, at parse time so the file
 /// merge only ever sees a usable list: `None` (keep the earlier file's list)
 /// for a non-array value or an array with no valid name, while `[]` clears it.
-fn lenient_protected_packages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+fn lenient_package_list<'de, D>(
+    deserializer: D,
+    option: &'static str,
+) -> Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let toml::Value::Array(entries) = toml::Value::deserialize(deserializer)? else {
         tracing::error!(
-            option = "protected_packages",
+            option,
             "expected an array of package names; ignoring the option"
         );
         return Ok(None);
@@ -179,17 +198,14 @@ where
         .filter_map(|entry| {
             let Some(name) = entry.as_str().map(str::trim) else {
                 tracing::error!(
-                    option = "protected_packages",
+                    option,
                     entry = %entry,
                     "expected a package name string; dropping the entry"
                 );
                 return None;
             };
             if name.is_empty() {
-                tracing::error!(
-                    option = "protected_packages",
-                    "empty package name; dropping the entry"
-                );
+                tracing::error!(option, "empty package name; dropping the entry");
                 return None;
             }
             // rpm's ALLOWED_CHARS_NAME: a version constraint, capability or glob never matches.
@@ -198,7 +214,7 @@ where
                 .all(|c| c.is_ascii_alphanumeric() || ".-_+%{}".contains(c))
             {
                 tracing::error!(
-                    option = "protected_packages",
+                    option,
                     entry = name,
                     "expected one exact package name; dropping the entry"
                 );
@@ -208,10 +224,7 @@ where
         })
         .collect();
     if had_entries && names.is_empty() {
-        tracing::error!(
-            option = "protected_packages",
-            "no valid package name; keeping the earlier list"
-        );
+        tracing::error!(option, "no valid package name; keeping the earlier list");
         return Ok(None);
     }
     Ok(Some(names))
@@ -297,6 +310,9 @@ pub(crate) struct TargetSection {
     pub tempdir: Option<PathBuf>,
     #[serde(deserialize_with = "lenient_protected_packages")]
     pub protected_packages: Option<Vec<String>>,
+    #[serde(deserialize_with = "lenient_required_packages")]
+    pub required_packages: Option<Vec<String>>,
+    pub min_root_free: Option<u64>,
 }
 
 /// `[gitea]` table — credentials for the Gitea PR review workflow.
@@ -432,6 +448,8 @@ impl RawConfig {
         take!(openqa, baremetal);
         take!(target, tempdir);
         take!(target, protected_packages);
+        take!(target, required_packages);
+        take!(target, min_root_free);
         take!(gitea, token);
         take!(gitea, url);
         take!(slack, enabled);
@@ -580,6 +598,12 @@ pub struct Config {
     /// Package names the removal guard protects on top of its built-in list,
     /// matched exactly.
     pub target_protected_packages: Vec<String>,
+    /// Package names `check_hosts` requires on every host on top of its core
+    /// set, matched exactly.
+    pub target_required_packages: Vec<String>,
+    /// Free space (MiB) on `/` below which `check_hosts` fails the host;
+    /// `0` never fails it.
+    pub target_min_root_free: u64,
 
     // [lock]
     /// On connect, force-remove a pre-existing remote lock older than
@@ -730,6 +754,8 @@ impl Default for Config {
             slack_watch_timeout: 3600,
             target_tempdir: PathBuf::from("/tmp"),
             target_protected_packages: Vec::new(),
+            target_required_packages: Vec::new(),
+            target_min_root_free: 1024,
             lock_reap_stale: true,
             lock_stale_age: 86400,
             pool_reap_stale: true,
@@ -913,6 +939,11 @@ impl Config {
                 .target
                 .protected_packages
                 .unwrap_or(d.target_protected_packages),
+            target_required_packages: raw
+                .target
+                .required_packages
+                .unwrap_or(d.target_required_packages),
+            target_min_root_free: raw.target.min_root_free.unwrap_or(d.target_min_root_free),
             lock_reap_stale: raw.lock.reap_stale.unwrap_or(d.lock_reap_stale),
             lock_stale_age: raw.lock.stale_age.unwrap_or(d.lock_stale_age),
             pool_reap_stale: raw.lock.pool_reap_stale.unwrap_or(d.pool_reap_stale),
@@ -1468,6 +1499,39 @@ pub(crate) mod tests {
                 .target_protected_packages
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn required_packages_are_read_like_protected_packages_and_logged_under_their_own_name() {
+        assert!(Config::default().target_required_packages.is_empty());
+        let logs = capture_fields(|| {
+            let c = Config::from_raw(parse(
+                "[target]\nrequired_packages = [\" ca-certificates \", 3, \"x*\"]\n",
+            ));
+            assert_eq!(
+                c.target_required_packages,
+                vec!["ca-certificates".to_owned()]
+            );
+            assert!(c.target_protected_packages.is_empty());
+        });
+        assert!(logs.contains("option=\"required_packages\""), "{logs}");
+        assert!(!logs.contains("option=\"protected_packages\""), "{logs}");
+
+        let mut merged = parse("[target]\nrequired_packages = [\"netsvc\"]\n");
+        merged.merge(parse("[target]\nrequired_packages = \"netsvc\"\n"));
+        assert_eq!(
+            Config::from_raw(merged).target_required_packages,
+            vec!["netsvc".to_owned()]
+        );
+    }
+
+    #[test]
+    fn min_root_free_defaults_to_one_gib_and_accepts_zero() {
+        assert_eq!(Config::default().target_min_root_free, 1024);
+        let c = Config::from_raw(parse("[target]\nmin_root_free = 4096\n"));
+        assert_eq!(c.target_min_root_free, 4096);
+        let c = Config::from_raw(parse("[target]\nmin_root_free = 0\n"));
+        assert_eq!(c.target_min_root_free, 0);
     }
 
     #[test]
