@@ -2036,6 +2036,32 @@ mod tests {
             assert!(!msg.contains(['\u{1b}', '\u{7}', '\n', '\t']), "{msg:?}");
             assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
         }
+
+        /// The longest detail TeReGen's cap lets through (2048 bytes) reaches
+        /// the Gitea refusal whole, as on OBS.
+        #[tokio::test]
+        async fn a_long_clean_document_error_reaches_the_refusal_whole() {
+            let gitea = gitea_approving("abc").await;
+            let detail = format!("bad id {}", "x".repeat(2041));
+            let rejected =
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({ "error": detail }));
+            let teregen = teregen_answering(ID, "slfo", 0, rejected).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+
+            let msg = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                msg.contains(&format!(
+                    "(the server rejects this id: {detail}); refusing to approve"
+                )),
+                "{msg}"
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
     }
 
     mod document_path {

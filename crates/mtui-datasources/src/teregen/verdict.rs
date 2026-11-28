@@ -8,7 +8,12 @@ use mtui_types::report_document::Verdict;
 use mtui_types::sanitize::sanitize_external;
 use thiserror::Error;
 
-use super::document::{DocumentFetch, TeregenV2};
+use super::document::{DocumentFetch, MAX_DETAIL_LEN, TeregenV2};
+
+/// The longest cause a refusal carries: a server detail, already capped at
+/// [`MAX_DETAIL_LEN`] bytes, arrives whole with room for the error's own
+/// words; a parse error repeating a huge value does not.
+const MAX_CAUSE: usize = 2 * MAX_DETAIL_LEN;
 
 /// The review decision a [`verdict_gate`] is asked to allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,9 +135,8 @@ pub async fn verdict_gate(
             .map_err(|cause| VerdictRefusal::Unreadable {
                 rrid: rrid.to_string(),
                 decision,
-                // It can carry TeReGen's own words, already capped at 2048
-                // characters; keep it one printable line.
-                cause: sanitize_external(&cause, None).replace(['\n', '\t'], " "),
+                // It can carry TeReGen's own words; keep it one printable line.
+                cause: sanitize_external(&cause, Some(MAX_CAUSE)).replace(['\n', '\t'], " "),
             })?;
     if verdict != Some(decision.required()) {
         return Err(VerdictRefusal::WrongVerdict {

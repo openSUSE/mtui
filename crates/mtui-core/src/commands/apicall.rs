@@ -62,7 +62,7 @@ pub(crate) async fn require_gitea_verdict(
     verdict_gate(&v2, rrid, decision).await.map_err(|refusal| {
         CommandError::Other(format!(
             "gitea {decision} failed: {}",
-            one_line(&refusal.to_string(), Some(1000))
+            one_line(&refusal.to_string(), None)
         ))
     })?;
     // A cancel during the read stops the post; a refusal it found outranks it.
