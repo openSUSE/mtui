@@ -568,6 +568,33 @@ and nothing is written there.
   a 502 or 504 means SMELT failed or timed out, so the results are unknown.
   TeReGen's text is stripped of terminal control sequences and cut to 500
   characters.
+- `show_update_repos` with `check: true` fetches the repository of each of
+  the report's install targets (`repodata/repomd.xml`, then its primary
+  metadata, gzip or zstd) from the server mtui runs on — no refhost is needed
+  — and gives each a status: `ok`, `missing`, `empty`, `not published` (a 404
+  on `repomd.xml`) or `no answer` (anything else that stopped the metadata
+  being fetched or fully read, with the reason). A repository that could not
+  be read is never reported as `empty` or `missing`, and only redirects that
+  stay inside the repository are followed. The tool fails when any repository
+  is not `ok`, after listing all of them, and when there is nothing to check.
+  With `json: true` as well the reply's first content block starts with one
+  JSON object on one line:
+
+  ```json
+  {"source": "install.targets", "total": 2, "checked": 2, "not_ok": 1, "ok": false,
+   "repositories": [{"product": "SLES", "version": "15.5", "arch": "x86_64",
+     "repository": "https://***@host/path/", "status": "missing", "packages": 12,
+     "missing": ["foo"], "reason": "12 packages; not published at …: foo"}]}
+  ```
+
+  `source` is `update_repos` when the report has no install targets (each is
+  then checked for being published and non-empty only); `checked` is below
+  `total` after a cancel; `packages` is `null` when the metadata was not read.
+  On failure the error summary follows the object on the next line. `json`
+  never fans out: with several templates loaded, pass `template`; with
+  `all_templates: true` the call is refused. Repository URLs are masked like
+  every other URL mtui prints, and reasons and names are reduced to one
+  printable line.
 
 ## Report document tools
 

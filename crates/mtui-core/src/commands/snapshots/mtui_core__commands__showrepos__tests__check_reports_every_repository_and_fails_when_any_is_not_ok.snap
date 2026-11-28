@@ -1,0 +1,19 @@
+---
+source: crates/mtui-core/src/commands/showrepos.rs
+expression: "stable(&out, &server)"
+---
+Product: SL-Micro - version: 6.0 - arch: x86_64
+    http://repo.invalid/empty
+    empty: published with 0 packages
+Product: SL-Micro - version: 6.1 - arch: x86_64
+    http://repo.invalid/broken
+    no answer: repodata/repomd.xml answered HTTP 503
+Product: SLES - version: 15.5 - arch: x86_64
+    http://***@repo.invalid/ok/
+    ok: 2 packages, all 2 listed binaries present
+Product: SLES - version: 16.0 - arch: x86_64
+    http://repo.invalid/missing
+    missing: 1 packages; not published at the listed version-release.arch: evilname, foo
+Product: SLES - version: 16.1 - arch: x86_64
+    http://repo.invalid/gone
+    not published: repodata/repomd.xml answered 404

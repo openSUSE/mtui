@@ -177,9 +177,15 @@ Options:
 Shows the update repositories that are valid for the current update.
 
 ```text
-Usage: show_update_repos
+Usage: show_update_repos [OPTIONS]
 
 Options:
+      --check
+          fetch each install target's repository (repodata/repomd.xml and its primary metadata) and report it as ok, missing (listed binaries not at their version-release.arch), empty, not published (repomd.xml 404) or no answer (any other failure); fails when any is not ok or none could be checked, after listing all
+
+      --json
+          with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]}; never fans out across templates
+
   -h, --help
           Print help
 ```

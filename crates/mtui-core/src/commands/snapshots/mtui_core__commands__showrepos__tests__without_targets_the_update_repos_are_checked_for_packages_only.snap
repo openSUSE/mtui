@@ -1,0 +1,8 @@
+---
+source: crates/mtui-core/src/commands/showrepos.rs
+expression: "stable(&buf.contents(), &server)"
+---
+The report lists no install targets: each update repository is checked for being published and non-empty only.
+Product: SLES - version: 15 - arch: x86_64
+    http://repo.invalid/a
+    ok: 1 packages; no install target lists binaries for this repository, so only checked that it is published and non-empty
