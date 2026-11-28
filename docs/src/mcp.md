@@ -577,6 +577,9 @@ and nothing is written there.
   be read is never reported as `empty` or `missing`, and only redirects that
   stay inside the repository are followed. The tool fails when any repository
   is not `ok`, after listing all of them, and when there is nothing to check.
+  A cancel lists only the repositories already checked: the tool then fails
+  with an ordinary error ending "; stopped after K of M" when one of them was
+  not `ok`, and as cancelled otherwise.
   With `json: true` as well the reply's first content block starts with one
   JSON object on one line:
 

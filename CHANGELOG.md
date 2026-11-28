@@ -25,7 +25,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   URLs are printed with their credentials masked, and redirects are followed
   only within the repository. The command fails when any repository is not
   `ok`, after listing all of them, and when there is nothing to check; it
-  needs no connected host. `--json` (with `--check`) prints one JSON object
+  needs no connected host. A cancel lists only the repositories already
+  checked and fails with "…; stopped after K of M" when one of them was not
+  `ok`, otherwise as cancelled. `--json` (with `--check`) prints one JSON object
   `{source, total, checked, not_ok, ok, repositories: [{product, version,
   arch, repository, status, packages, missing, reason}]}` for one template
   and never fans out: with several loaded, the REPL uses the active one and an
