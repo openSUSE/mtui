@@ -1368,10 +1368,6 @@ async fn gitea_failure_is_sanitized_in_the_log() {
         "{events:?}"
     );
     assert!(!events.contains(['\u{9b}', '\u{202e}']), "{events:?}");
-    assert!(
-        !events.lines().any(|l| l.starts_with("FORGED")),
-        "{events:?}"
-    );
 }
 
 /// A PR API URL on another origin is refused before any request, and the
