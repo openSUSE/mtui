@@ -960,8 +960,6 @@ mod tests {
         }
     }
 
-    /// `--mine` names a held update `yes`, another's `no` and a disputed one
-    /// `?`, never `no`.
     /// An accepted event without a `when`: SINCE is `?` in the table and
     /// unknown in `--json`, never a known empty value.
     #[tokio::test]
@@ -1008,6 +1006,8 @@ mod tests {
         );
     }
 
+    /// `--mine` names a held update `yes`, another's `no` and a disputed one
+    /// `?`, never `no`.
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]
     async fn mine_reads_each_owner_against_the_logins() {

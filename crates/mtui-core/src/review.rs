@@ -625,6 +625,7 @@ fn fill_obs(out: &mut UpdateReview, rrid: &RequestReviewID, gate: Result<Request
         let owner = match &g.owner {
             GroupOwner::Nobody => Owner::None,
             GroupOwner::User(user) => Owner::Known { login: text(user) },
+            GroupOwner::Unnamed => Owner::Unknown,
             GroupOwner::Disputed { hold, history } => {
                 let named = if history.is_empty() {
                     "nobody".to_owned()
@@ -896,7 +897,6 @@ mod tests {
         }
     }
 
-    /// A request without a state name is unknown, and its groups still show.
     /// A blank assignee from the marker replay is unknown, never a login.
     #[test]
     fn a_blank_gitea_owner_is_unknown() {
@@ -923,6 +923,26 @@ mod tests {
         );
     }
 
+    /// A blank OBS holder is unknown, with no dispute note.
+    #[test]
+    fn an_unnamed_obs_holder_is_unknown_without_a_note() {
+        let mut gate = request_gate(Some("C"), Some("W"));
+        gate.groups = vec![mtui_datasources::obs::gate::GroupGate {
+            group: "qam-sle".to_owned(),
+            automated: false,
+            owner: GroupOwner::Unnamed,
+            verdict: GroupVerdict::Assigned,
+            since: None,
+        }];
+        let out = obs_review(gate);
+        let Field::Known(reviews) = &out.reviews else {
+            panic!("{:?}", out.reviews);
+        };
+        assert_eq!(reviews[0].owner, Owner::Unknown);
+        assert!(out.notes.is_empty(), "{:?}", out.notes);
+    }
+
+    /// A request without a state name is unknown, and its groups still show.
     #[test]
     fn a_blank_obs_state_is_unknown() {
         let mut gate = request_gate(Some("C"), Some("W"));

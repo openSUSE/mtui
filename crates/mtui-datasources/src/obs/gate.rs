@@ -23,6 +23,8 @@ pub enum GroupOwner {
     Nobody,
     /// This user holds it.
     User(String),
+    /// An open user review holds it, but its `by_user` is blank.
+    Unnamed,
     /// The open reviews and the group review's history disagree: `hold` is
     /// the open-review answer, `history` the users its history assigns.
     Disputed {
@@ -78,15 +80,6 @@ pub struct RequestGate {
     pub groups: Vec<GroupGate>,
 }
 
-impl RequestGate {
-    /// Whether the request is still in review, so the group verdicts are the
-    /// gate rather than the request's own state.
-    #[must_use]
-    pub fn in_review(&self) -> bool {
-        matches!(self.state.as_str(), "new" | "review")
-    }
-}
-
 fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
 }
@@ -128,6 +121,7 @@ fn group_gate(request: &Request, group: &str, live: &[&Review]) -> GroupGate {
     let history = inferred_holders(request, group);
     let owner = match (held_by, history.as_slice()) {
         (None, []) => GroupOwner::Nobody,
+        (Some(""), []) => GroupOwner::Unnamed,
         (Some(h), [only]) if !h.is_empty() && h == only => GroupOwner::User(h.to_owned()),
         _ => GroupOwner::Disputed {
             hold: held_by.and_then(non_empty),
@@ -238,10 +232,8 @@ mod tests {
     fn reads_the_request_state_and_its_times() {
         let g = gate("review", "");
         assert_eq!(g.state, "review");
-        assert!(g.in_review());
         assert_eq!(g.state_since.as_deref(), Some(T2));
         assert_eq!(g.created.as_deref(), Some(T1));
-        assert!(!gate("accepted", "").in_review());
     }
 
     #[test]
@@ -361,8 +353,6 @@ mod tests {
   <state name="review" who="anon" when="2014-12-01T14:46:23"/>
 </request>"#;
 
-    /// The fuzz seed request: an accepted qam-sle whose history assigns
-    /// alice, an open qam-cloud, and a state without `created`.
     /// An accepted event without a `when` leaves the time unknown, never a
     /// known empty one.
     #[test]
@@ -374,23 +364,20 @@ mod tests {
         assert_eq!(g.groups[0].since, None);
     }
 
-    /// An open user review with a blank reviewer holds the group, but names
-    /// nobody: the owner is unknown, never a known empty login.
+    /// An open user review with a blank reviewer holds the group but names
+    /// nobody: unnamed, never a known empty login nor a dispute.
     #[test]
-    fn a_blank_holder_is_disputed_not_a_login() {
+    fn a_blank_holder_is_unnamed_not_a_login() {
         let reviews = "<review state='accepted' by_group='qam-sle'><history who=''>\
                        <description>Review got accepted</description></history></review>\
                        <review state='new' by_user=''/>";
         let g = gate("review", reviews);
-        assert_eq!(
-            g.groups[0].owner,
-            GroupOwner::Disputed {
-                hold: None,
-                history: vec![]
-            }
-        );
+        assert_eq!(g.groups[0].owner, GroupOwner::Unnamed);
+        assert_eq!(g.groups[0].verdict, GroupVerdict::Assigned);
     }
 
+    /// The fuzz seed request: an accepted qam-sle whose history assigns
+    /// alice, an open qam-cloud, and a state without `created`.
     #[test]
     fn the_seed_request_reads_its_groups_and_no_creation_time() {
         let g = request_gate(&parse_request(SEED_REQUEST).unwrap());
