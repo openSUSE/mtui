@@ -61,7 +61,7 @@ impl fmt::Display for Label {
 pub enum VerdictRefusal {
     /// The server's copy could not be read: no document, a stale one, or a
     /// transport/status failure. [`verdict_gate`] makes `cause` one
-    /// printable line.
+    /// printable line of at most 4096 characters.
     #[error("cannot read the report document for {rrid} ({cause}); refusing to {decision}")]
     Unreadable {
         /// The report the document belongs to.

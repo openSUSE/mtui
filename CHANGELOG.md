@@ -164,9 +164,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unreachable) refuses and names the cause. A refusal, or a cancel during the
   read, posts nothing to the pull request. On both backends TeReGen's error
   text in that refusal is now one line with control characters, escape
-  sequences and bidirectional overrides removed; OBS output differs only where
-  that text carried them. Before, a Gitea approval went through with a `null`
-  or `FAILED` verdict (#896).
+  sequences and bidirectional overrides removed, and cut at 4096 characters
+  (TeReGen's own detail, capped at 2048 bytes, still arrives whole). OBS
+  output differs only where that text carried such characters, or was longer,
+  as when a document that fails to parse repeats a huge value. Before, a Gitea
+  approval went through with a `null` or `FAILED` verdict (#896).
 - The hint after "Gitea API token is not configured" names what mtui reads:
   `-g/--gitea-token`, or `token` under `[gitea]` in the config file in use
   (the `--config`/`$MTUI_CONF` file, else the per-user one). It used to name a `GITEA_TOKEN` variable and a `~/.mtuirc`
