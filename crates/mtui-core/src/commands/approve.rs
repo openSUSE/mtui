@@ -5,13 +5,14 @@ use std::sync::LazyLock;
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::obs::qam::OpenReview;
+use mtui_datasources::teregen::Decision;
 use mtui_datasources::{Gitea, GiteaError, Osc, Slack, is_ack_reaction};
 use mtui_testreport::HashCheck;
 use mtui_types::sanitize::sanitize_log;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{
-    gitea_client, is_gitea_workflow, osc_client, require_committed_report,
+    gitea_client, is_gitea_workflow, osc_client, require_committed_report, require_gitea_verdict,
 };
 use crate::commands::commit::{ReviewAction, prepare_reviewer};
 use crate::commands::support::{
@@ -39,11 +40,11 @@ enum Backend {
 /// the Slack gate, the backend client and the backend's own pre-checks (on
 /// Gitea the hash gate and the assignment, on OBS the `-g` and assignment
 /// checks) run before that upload, so an approval they refuse publishes
-/// nothing; the OBS verdict check cannot, as it reads the uploaded document,
-/// and on Gitea the LGTM is refused if the PR head moves during the upload.
-/// Without `-r` nothing is uploaded: on Maintenance/OBS a report with
-/// uncommitted edits is refused with a `commit` hint, because the verdict gate
-/// reads the server's copy. On the Gitea path a checkout-hash mismatch prompts
+/// nothing; the verdict check cannot, as it reads the uploaded document, and
+/// on Gitea the LGTM is refused if the PR head moves during the upload.
+/// Without `-r` nothing is uploaded: on OBS and Gitea alike (not on a PI) a
+/// report with uncommitted edits is refused with a `commit` hint, because the
+/// verdict gate reads the server's copy. On the Gitea path a checkout-hash mismatch prompts
 /// for confirmation in the REPL (default no) and refuses non-interactively
 /// unless `--accept-head SHA` names the PR head as it is now; a missing token
 /// or a failed call always refuses.
@@ -126,8 +127,8 @@ impl Command for Approve {
             .cloned();
 
         // Everything that can refuse runs before the first upload, so a
-        // refused approval leaves nothing published. Only the OBS verdict
-        // check follows it: it reads the document the upload is about to store.
+        // refused approval leaves nothing published. Only the verdict check
+        // follows it: it reads the document the upload is about to store.
         let reviewer = args
             .get_one::<String>("reviewer")
             .map(|name| prepare_reviewer(session, name, ReviewAction::Approve))
@@ -166,6 +167,7 @@ impl Command for Approve {
 
         let lines = match backend {
             Backend::Gitea(gitea, head) => {
+                require_gitea_verdict(session, &rrid, Decision::Approve).await?;
                 let approved = match head.as_deref() {
                     Some(head) => gitea.approve_if_head(user.as_deref(), head).await,
                     None => gitea.approve(user.as_deref()).await,
@@ -821,6 +823,7 @@ mod tests {
         // check_hash matches, and the comments GET has the acting user assigned
         // with no decision yet, so the LGTM posts and the Gitea path succeeds.
         let server = MockServer::start().await;
+        mount_passed_document(&server).await;
         Mock::given(method("GET"))
             .and(path_regex(r"/comments$"))
             .respond_with(
@@ -849,6 +852,7 @@ mod tests {
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.session_user = "tester".to_owned();
+        session.config.teregen_api_v2 = server.uri();
         let args = matches(&Approve, &[]);
         Approve.call(&mut session, &args).await.unwrap();
         assert!(
@@ -882,6 +886,21 @@ mod tests {
         let args = matches(&Approve, &[]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("gitea approve failed")));
+    }
+
+    /// Serves a `PASSED` report document for `SUSE:SLFO:1.2:5`, so a Gitea
+    /// approval gets past the verdict check.
+    async fn mount_passed_document(server: &wiremock::MockServer) {
+        use crate::commands::testkit::teregen::{decided_document_json, mount_document};
+
+        let id = "SUSE:SLFO:1.2:5";
+        let doc = decided_document_json(
+            id,
+            "slfo",
+            Some(mtui_types::report_document::Verdict::Passed),
+            None,
+        );
+        mount_document(server, id, &doc).await;
     }
 
     // Drives the hash-gate branches without a real Gitea PR head.
@@ -1087,6 +1106,7 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
+        mount_passed_document(&server).await;
         Mock::given(method("GET"))
             .and(path_regex(r"/comments$"))
             .respond_with(
@@ -1117,6 +1137,7 @@ mod tests {
             &server.uri(),
         );
         session.config.gitea_url = server.uri();
+        session.config.teregen_api_v2 = server.uri();
         session.is_repl = true;
         session.set_prompter(fixed_prompter("y"));
 
@@ -1191,14 +1212,16 @@ mod tests {
     mod gates_first {
         use std::str::FromStr;
 
-        use mtui_types::report_document::ReportDocument;
-        use wiremock::matchers::{method, path as wpath};
+        use mtui_types::report_document::{ReportDocument, Verdict};
+        use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         use super::*;
         use crate::commands::testkit::NoOscrc;
         use crate::commands::testkit::teregen::{
-            document_json, mount_auth_success, set_bare_report_wd, write_oscrc,
+            CancelWhileReading, decided_document_json, document_json, document_reads,
+            mount_auth_success, mount_report, set_bare_report_wd, stored, teregen_answering,
+            unknown_verdict_document_json, write_oscrc, writes,
         };
 
         const ID: &str = "SUSE:SLFO:1.2:5";
@@ -1210,23 +1233,15 @@ mod tests {
             }
         }
 
-        /// A teregen mock that accepts the auth handshake and the document PUT
-        /// with a 2xx, and expects exactly `puts` of the latter. A 404 would
-        /// fail the record step by itself and hide an upload.
+        /// A teregen mock that expects exactly `puts` document uploads and
+        /// stores a `PASSED` document.
         async fn teregen_expecting(puts: u64) -> MockServer {
-            let server = MockServer::start().await;
-            mount_auth_success(&server).await;
-            Mock::given(method("PUT"))
-                .and(wpath(format!("/reports/{ID}")))
-                .respond_with(
-                    ResponseTemplate::new(202)
-                        .set_body_string(document_json(ID, "slfo"))
-                        .insert_header("etag", "\"fresh\""),
-                )
-                .expect(puts)
-                .mount(&server)
-                .await;
-            server
+            teregen_answering(ID, "slfo", puts, with_verdict(Some(Verdict::Passed))).await
+        }
+
+        /// TeReGen's copy of the document, with top `verdict` `verdict`.
+        fn with_verdict(verdict: Option<Verdict>) -> ResponseTemplate {
+            stored(&decided_document_json(ID, "slfo", verdict, Some("ok")))
         }
 
         /// A Gitea-workflow session holding a report document, whose teregen
@@ -1714,6 +1729,338 @@ mod tests {
             );
             assert_eq!(session.metadata().base().reviewer, "");
             teregen.verify().await;
+        }
+
+        /// Only the server's copy decides: the loaded one says `PASSED` in each
+        /// row. Mutations caught: skipping the check, or running it after the
+        /// LGTM, posts; accepting anything but `PASSED` posts on `null` or
+        /// `FAILED`; folding an unreadable verdict into a pass posts on the
+        /// lowercase openQA spelling, which the top `verdict` does not allow.
+        #[tokio::test]
+        async fn gitea_approve_refuses_a_server_verdict_that_is_not_passed() {
+            use mtui_types::report_document::Req;
+
+            for (verdict, body, wants) in [
+                (
+                    "null",
+                    decided_document_json(ID, "slfo", None, Some("ok")),
+                    "has verdict null, not PASSED",
+                ),
+                (
+                    "FAILED",
+                    decided_document_json(ID, "slfo", Some(Verdict::Failed), Some("ok")),
+                    "has verdict FAILED, not PASSED",
+                ),
+                (
+                    "passed",
+                    unknown_verdict_document_json(ID, "slfo", "passed"),
+                    "cannot read the report document for SUSE:SLFO:1.2:5",
+                ),
+            ] {
+                let gitea = gitea_approving("abc").await;
+                let teregen = teregen_answering(ID, "slfo", 0, stored(&body)).await;
+                let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+                if let Some(doc) = session.metadata_mut().base_mut().document.as_mut() {
+                    doc.verdict = Req(Some(Verdict::Passed));
+                }
+
+                let err = Approve
+                    .call(&mut session, &matches(&Approve, &[]))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m)
+                        if m.starts_with("gitea approve failed: ")
+                            && m.contains(wants)
+                            && m.contains("refusing to approve")),
+                    "{verdict}: {err:?}"
+                );
+                assert_eq!(
+                    writes(&gitea.received_requests().await.unwrap()),
+                    0,
+                    "{verdict}"
+                );
+                assert_eq!(
+                    document_reads(&teregen.received_requests().await.unwrap(), ID),
+                    1,
+                    "{verdict}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn gitea_approve_posts_the_lgtm_on_a_passed_server_verdict() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = teregen_expecting(0).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+
+            Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap();
+
+            let posted: Vec<String> = gitea
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method == wiremock::http::Method::POST)
+                .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+                .collect();
+            assert_eq!(posted.len(), 1, "{posted:?}");
+            assert!(posted[0].contains("@qam-sle-review: LGTM"), "{posted:?}");
+            assert_eq!(
+                document_reads(&teregen.received_requests().await.unwrap(), ID),
+                1
+            );
+        }
+
+        /// A 404, a 5xx and an unreachable teregen each refuse and name the
+        /// cause. Mutation caught: taking a failed read for a pass.
+        #[tokio::test]
+        async fn a_failed_teregen_read_refuses_the_approval_and_posts_nothing() {
+            for (status, wants) in [
+                (Some(404), "no document yet"),
+                (Some(500), "teregen v2 request failed"),
+                (None, "teregen v2 request failed"),
+            ] {
+                let gitea = gitea_approving("abc").await;
+                let get = ResponseTemplate::new(status.unwrap_or(200));
+                let teregen = teregen_answering(ID, "slfo", 0, get).await;
+                let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+                if status.is_none() {
+                    session.config.teregen_api_v2 = "http://127.0.0.1:1".to_owned();
+                }
+
+                let err = Approve
+                    .call(&mut session, &matches(&Approve, &[]))
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(&err, CommandError::Other(m)
+                        if m.contains("cannot read the report document")
+                            && m.contains(wants)
+                            && m.contains("refusing to approve")),
+                    "{status:?}: {err:?}"
+                );
+                assert_eq!(
+                    writes(&gitea.received_requests().await.unwrap()),
+                    0,
+                    "{status:?}"
+                );
+            }
+        }
+
+        /// `approve -r` on Gitea: the upload, then the verdict read, then the
+        /// head pin, then the LGTM. One server plays teregen and Gitea, so its
+        /// request log is one ordered record. Mutations caught: reading the
+        /// verdict before the upload, or after the head pin.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn approve_r_uploads_then_reads_the_verdict_then_pins_the_head_then_posts() {
+            use mtui_datasources::assign_marker;
+            use wiremock::matchers::path_regex;
+
+            let server = MockServer::start().await;
+            mount_auth_success(&server).await;
+            mount_report(&server, ID, "slfo", 1, with_verdict(Some(Verdict::Passed))).await;
+            Mock::given(method("GET"))
+                .and(path_regex(r"/comments$"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                        "id": 1,
+                        "body": assign_marker("tester", "qam-sle"),
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }])),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "requested_reviewers": [], "state": "open", "head": {"sha": "new"}
+                })))
+                .with_priority(10)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+                .with_priority(10)
+                .mount(&server)
+                .await;
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = gitea_session(mismatch(), &server.uri(), &server);
+
+            let args = matches(&Approve, &["-r", "alice", "--accept-head", "new"]);
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &server));
+            Approve.call(&mut session, &args).await.unwrap();
+
+            let requests = server.received_requests().await.unwrap();
+            let report = format!("/reports/{ID}");
+            let at = |pred: &dyn Fn(&wiremock::Request) -> bool| {
+                requests
+                    .iter()
+                    .position(pred)
+                    .unwrap_or_else(|| panic!("missing request in {requests:?}"))
+            };
+            let put = at(&|r| r.method == wiremock::http::Method::PUT && r.url.path() == report);
+            let read = at(&|r| r.method == wiremock::http::Method::GET && r.url.path() == report);
+            // The PR itself (`giteaprapi` is the server root): only the pin
+            // fetches it here, as no decision comment exists.
+            let pin = at(&|r| r.method == wiremock::http::Method::GET && r.url.path() == "/");
+            let lgtm = at(&|r| String::from_utf8_lossy(&r.body).contains("LGTM"));
+            assert!(put < read && read < pin && pin < lgtm, "{requests:?}");
+            server.verify().await;
+        }
+
+        /// The verdict is read after the upload, so `-r` stores the reviewer
+        /// and still refuses on what the server holds, posting nothing.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn approve_r_refuses_a_stored_verdict_that_is_not_passed() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = teregen_answering(ID, "slfo", 1, with_verdict(None)).await;
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+
+            let args = matches(&Approve, &["-r", "alice"]);
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            let err = Approve.call(&mut session, &args).await.unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("has verdict null, not PASSED")),
+                "{err:?}"
+            );
+            assert_eq!(session.metadata().base().reviewer, "alice");
+            teregen.verify().await;
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// A head that moves during `-r`'s upload is still refused at the LGTM.
+        #[tokio::test]
+        #[serial_test::serial(osc_config_env)]
+        async fn approve_r_still_refuses_a_head_that_moved() {
+            let gitea = gitea_approving("moved").await;
+            let teregen = teregen_expecting(1).await;
+            let dir = tempfile::tempdir().unwrap();
+            let (mut session, _tmp) = gitea_session(mismatch(), &gitea.uri(), &teregen);
+
+            let args = matches(&Approve, &["-r", "alice", "--accept-head", "new"]);
+            let _oscrc = NoOscrc::set_to(&write_oscrc(dir.path(), &teregen));
+            let err = Approve.call(&mut session, &args).await.unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("PR head moved from new to moved")),
+                "{err:?}"
+            );
+            teregen.verify().await;
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// A cancel that lands while the verdict is read stops the approval
+        /// before the LGTM, though the verdict allows it. Mutation caught:
+        /// dropping the cancel check after the gate.
+        #[tokio::test]
+        async fn a_cancel_during_the_verdict_read_posts_nothing() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = MockServer::start().await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+            let read =
+                CancelWhileReading(session.cancel_token(), with_verdict(Some(Verdict::Passed)));
+            mount_report(&teregen, ID, "slfo", 0, read).await;
+
+            let err = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, CommandError::Cancelled(m) if m.contains("nothing was posted")),
+                "{err:?}"
+            );
+            assert_eq!(
+                document_reads(&teregen.received_requests().await.unwrap(), ID),
+                1
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// A refusal found by the read outranks a cancel that landed during it.
+        /// Mutation caught: checking the cancel before mapping the refusal.
+        #[tokio::test]
+        async fn a_refusal_outranks_a_cancel_during_the_verdict_read() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = MockServer::start().await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+            let read = CancelWhileReading(session.cancel_token(), with_verdict(None));
+            mount_report(&teregen, ID, "slfo", 0, read).await;
+
+            let err = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(session.cancel_requested(), "premise: the read cancelled");
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.starts_with("gitea approve failed: ")
+                        && m.contains("has verdict null, not PASSED")),
+                "{err:?}"
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// TeReGen's own words reach the Gitea refusal as one printable line:
+        /// an OSC 52 clipboard write, a forged line and a tab are gone, the
+        /// words stay.
+        #[tokio::test]
+        async fn a_hostile_document_error_reaches_the_refusal_as_one_clean_line() {
+            let gitea = gitea_approving("abc").await;
+            let hostile = ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "bad id\u{1b}]52;c;aGk=\u{7}\nforged: line\twith tab"
+            }));
+            let teregen = teregen_answering(ID, "slfo", 0, hostile).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+
+            let err = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err();
+
+            let msg = err.to_string();
+            assert!(
+                msg.contains("the server rejects this id: bad id forged: line with tab"),
+                "{msg:?}"
+            );
+            assert!(!msg.contains(['\u{1b}', '\u{7}', '\n', '\t']), "{msg:?}");
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// The longest detail TeReGen's cap lets through (2048 bytes) reaches
+        /// the Gitea refusal whole, as on OBS.
+        #[tokio::test]
+        async fn a_long_clean_document_error_reaches_the_refusal_whole() {
+            let gitea = gitea_approving("abc").await;
+            let detail = format!("bad id {}", "x".repeat(2041));
+            let rejected =
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({ "error": detail }));
+            let teregen = teregen_answering(ID, "slfo", 0, rejected).await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+
+            let msg = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                msg.contains(&format!(
+                    "(the server rejects this id: {detail}); refusing to approve"
+                )),
+                "{msg}"
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
         }
     }
 

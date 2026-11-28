@@ -314,7 +314,7 @@ pub(crate) mod testkit {
 
         use mtui_datasources::teregen::{TeregenAuth, TeregenV2, TokenStore};
         use mtui_datasources::{HttpClient, VerifyPolicy};
-        use mtui_types::report_document::ReportDocument;
+        use mtui_types::report_document::{ReportDocument, Verdict};
         use wiremock::matchers::{method, path as wpath};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -353,6 +353,115 @@ pub(crate) mod testkit {
                     "issues": {{}}, "testing": {{}}
                 }}"#
             )
+        }
+
+        /// [`document_json`] with its top `verdict` and `comment` set.
+        pub(crate) fn decided_document_json(
+            id: &str,
+            kind: &str,
+            verdict: Option<Verdict>,
+            comment: Option<&str>,
+        ) -> String {
+            let verdict = serde_json::to_value(verdict).expect("a verdict serialises");
+            with_top_fields(id, kind, verdict, serde_json::json!(comment))
+        }
+
+        /// [`document_json`] whose top `verdict` is `text`, a value outside the
+        /// schema's `PASSED`/`FAILED` vocabulary, with a comment.
+        pub(crate) fn unknown_verdict_document_json(id: &str, kind: &str, text: &str) -> String {
+            with_top_fields(id, kind, serde_json::json!(text), serde_json::json!("ok"))
+        }
+
+        fn with_top_fields(
+            id: &str,
+            kind: &str,
+            verdict: serde_json::Value,
+            comment: serde_json::Value,
+        ) -> String {
+            let mut doc: serde_json::Value =
+                serde_json::from_str(&document_json(id, kind)).expect("fixture is JSON");
+            doc["verdict"] = verdict;
+            doc["comment"] = comment;
+            doc.to_string()
+        }
+
+        /// A `200` serving `body` as TeReGen's stored copy of the document.
+        pub(crate) fn stored(body: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .set_body_string(body)
+                .insert_header("etag", "\"stored\"")
+        }
+
+        /// The document PUT for `id`, expected `puts` times (a 2xx, so a refused
+        /// upload cannot hide one), and its GET answered with `get`.
+        pub(crate) async fn mount_report(
+            server: &MockServer,
+            id: &str,
+            kind: &str,
+            puts: u64,
+            get: impl wiremock::Respond + 'static,
+        ) {
+            Mock::given(method("PUT"))
+                .and(wpath(format!("/reports/{id}")))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_string(document_json(id, kind))
+                        .insert_header("etag", "\"fresh\""),
+                )
+                .expect(puts)
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(wpath(format!("/reports/{id}")))
+                .respond_with(get)
+                .mount(server)
+                .await;
+        }
+
+        /// A teregen mock with the auth handshake and [`mount_report`].
+        pub(crate) async fn teregen_answering(
+            id: &str,
+            kind: &str,
+            puts: u64,
+            get: impl wiremock::Respond + 'static,
+        ) -> MockServer {
+            let server = MockServer::start().await;
+            mount_auth_success(&server).await;
+            mount_report(&server, id, kind, puts, get).await;
+            server
+        }
+
+        /// Answers with its template after cancelling the token, as a cancel
+        /// arriving while the request is in flight would.
+        pub(crate) struct CancelWhileReading(
+            pub(crate) tokio_util::sync::CancellationToken,
+            pub(crate) ResponseTemplate,
+        );
+
+        impl wiremock::Respond for CancelWhileReading {
+            fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+                self.0.cancel();
+                self.1.clone()
+            }
+        }
+
+        /// Requests that change something: anything but a `GET`.
+        pub(crate) fn writes(requests: &[wiremock::Request]) -> usize {
+            requests
+                .iter()
+                .filter(|r| r.method != wiremock::http::Method::GET)
+                .count()
+        }
+
+        /// `GET /reports/{id}`: reads of TeReGen's copy of the document.
+        pub(crate) fn document_reads(requests: &[wiremock::Request], id: &str) -> usize {
+            requests
+                .iter()
+                .filter(|r| {
+                    r.method == wiremock::http::Method::GET
+                        && r.url.path() == format!("/reports/{id}")
+                })
+                .count()
         }
 
         /// Serves `doc_json` as `GET /reports/{id}`.
