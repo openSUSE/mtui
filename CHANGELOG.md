@@ -52,6 +52,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- On a Gitea-workflow (SLFO) update the only diff mtui fetches is the product
+  pull request's, which carries no package's spec or changelog; mtui does not
+  follow it to the package pull requests. `analyze_diff` now fails there, where
+  it printed `No spec mentioned in source.diff` and exited 0, with `the source
+  of <packages> was not reviewed: only the product pull request <url> was read,
+  not the package pull requests`, without fetching the diff (so without asking
+  for a Gitea token). `show_diff` still shows the product diff, under that line
+  as a `warning:`, and then fails with the same message. Over MCP both are
+  error results, which still carry the output printed before the error. OBS
+  updates are unchanged: `analyze_diff` on an OBS `source.diff` without a spec
+  section still prints `No spec mentioned in source.diff` and succeeds. The two
+  commands' descriptions (help and MCP tool descriptions) now name both
+  workflows (#893).
 - mtui now names what it ignores in its config: each key or table of an
   `mtui.toml` that no option reads (by file, table and key, never its value;
   at most 20 per file, the rest counted), and an existing `~/.mtuirc` when no

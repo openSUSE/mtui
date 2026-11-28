@@ -1,0 +1,14 @@
+---
+source: crates/mtui-core/src/commands/showdiff.rs
+expression: "format!(\"{out}--\\n{err}\")"
+---
+warning: the source of ansible-trento, mcp-server-trento, trento-agent, trento-checks, trento-wanda, trento-web was not reviewed: only the product pull request https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requests
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old line
++new line
+
+--
+the source of ansible-trento, mcp-server-trento, trento-agent, trento-checks, trento-wanda, trento-web was not reviewed: only the product pull request https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requests
