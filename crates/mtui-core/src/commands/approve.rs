@@ -360,6 +360,7 @@ async fn hash_gate(
                 %actual,
                 "GiteaPR hash differs from testreport"
             );
+            let expected = one_line(&expected, Some(120));
             if let Some(given) = accept_head {
                 if given == actual {
                     session.display.println(&format!(
@@ -974,7 +975,7 @@ mod tests {
 
         let args = matches(&Approve, &[]);
         crate::commands::testkit::log_capture::start();
-        Approve.call(&mut session, &args).await.unwrap_err();
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
         let logged = crate::commands::testkit::log_capture::take();
 
         let line = logged
@@ -984,6 +985,77 @@ mod tests {
             .expect("the mismatch is logged");
         assert!(line.contains(" expected=old\\nFORGED record "), "{line:?}");
         assert!(!line.contains(['\u{9b}', '\u{202e}']), "{line:?}");
+        // MCP returns the error as the tool result and the REPL logs it.
+        assert_eq!(
+            err.to_string(),
+            "GiteaPR hash differs from testreport (old FORGED record -> new); \
+             refusing to approve non-interactively"
+        );
+    }
+
+    /// The recorded hash reaches the prompt and the decline error as one
+    /// clean line.
+    #[tokio::test]
+    async fn gitea_hash_mismatch_prompt_and_decline_show_the_hash_on_one_line() {
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old\u{9b}2J\u{202e}\nFORGED record".to_owned(),
+                actual: "new".to_owned(),
+            },
+            "http://gitea.invalid/api",
+        );
+        session.is_repl = true;
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = asked.clone();
+        session.set_prompter(mtui_hosts::Prompter::new(std::sync::Arc::new(
+            move |t: String| {
+                seen.lock().unwrap().push(t);
+                Box::pin(async move { Ok("n".to_owned()) })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                    >
+            },
+        )));
+
+        let args = matches(&Approve, &[]);
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [
+                "GiteaPR hash differs from testreport (old FORGED record -> new); \
+                 approve anyway? [y/N]: "
+            ]
+        );
+        assert_eq!(
+            err.to_string(),
+            "GiteaPR hash differs from testreport (old FORGED record -> new); not approving"
+        );
+    }
+
+    /// `--accept-head` prints the recorded hash before it approves.
+    #[tokio::test]
+    async fn accept_head_shows_the_recorded_hash_on_one_line() {
+        let server = wiremock::MockServer::start().await;
+        let (mut session, buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old\u{9b}2J\u{202e}\nFORGED record".to_owned(),
+                actual: "new".to_owned(),
+            },
+            &server.uri(),
+        );
+        session.config.gitea_url = server.uri();
+
+        let args = matches(&Approve, &["--accept-head", "new"]);
+        // The unmounted mock fails the approval itself; the line comes first.
+        let _ = Approve.call(&mut session, &args).await;
+
+        assert!(
+            buf.contents()
+                .contains("PR head new accepted (testreport has old FORGED record)\n"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
