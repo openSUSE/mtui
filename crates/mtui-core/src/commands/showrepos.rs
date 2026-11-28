@@ -204,9 +204,11 @@ impl ShowUpdateRepos {
 
         // A repository found not ok before a cancel outranks the cancel.
         let failing = not_ok(&rows);
-        let stopped = (rows.len() < total)
-            .then(|| format!("; stopped after {} of {total}", rows.len()))
-            .unwrap_or_default();
+        let stopped = if rows.len() < total {
+            format!("; stopped after {} of {total}", rows.len())
+        } else {
+            String::new()
+        };
         if failing > 0 {
             return Err(CommandError::Other(format!(
                 "{failing} of {total} update repositories are not ok{stopped}"
@@ -746,7 +748,7 @@ mod tests {
             .await;
         let uri = server.uri();
         let foo: &[(&str, &str)] = &[("foo", "1.2-3.1.x86_64")];
-        let (mut session, buf) = session_with(
+        let (session, buf) = session_with(
             Some(vec![
                 target("SL-Micro", "6.0", &format!("{uri}/r1"), foo),
                 target("SL-Micro", "6.1", &format!("{uri}/r2"), foo),

@@ -148,14 +148,14 @@ fn markup_inside_a_package_field_is_unreadable() {
 #[test]
 fn a_zstd_frame_declaring_a_window_over_the_cap_is_unreadable() {
     let content = br#"<metadata packages="0"/>"#;
-    // 0x40: a 256 KiB window, inside the cap; the same frame is read.
+    // 0x78: exactly the 32 MiB cap; the same frame is read.
     assert_eq!(
-        primary(&zstd_raw_frame(0x40, content), BIG, BIG).map(|s| s.count),
+        primary(&zstd_raw_frame(0x78, content), BIG, BIG).map(|s| s.count),
         Ok(0)
     );
-    // 0x80: a 64 MiB window, over the 32 MiB cap.
+    // 0x79: a 36 MiB window, just over the cap.
     assert_eq!(
-        primary(&zstd_raw_frame(0x80, content), BIG, BIG),
+        primary(&zstd_raw_frame(0x79, content), BIG, BIG),
         Err(PrimaryError::Unreadable)
     );
 }
