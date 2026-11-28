@@ -1503,7 +1503,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]}; never fans out across templates",
+          "description": "with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]} for one template: with --json the command never fans out, so --all-templates is refused and, with several templates loaded, -T picks one",
           "type": "boolean"
         },
         "template": {

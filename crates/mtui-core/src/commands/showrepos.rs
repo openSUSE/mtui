@@ -113,7 +113,9 @@ impl Command for ShowUpdateRepos {
                 .help(
                     "with --check, print one JSON object {source, total, checked, not_ok, \
                      ok, repositories: [{product, version, arch, repository, status, \
-                     packages, missing, reason}]}; never fans out across templates",
+                     packages, missing, reason}]} for one template: with --json the command \
+                     never fans out, so --all-templates is refused and, with several templates \
+                     loaded, -T picks one",
                 ),
         )
     }
@@ -200,16 +202,20 @@ impl ShowUpdateRepos {
             session.display.list_update_repo_checks(&rows);
         }
 
+        // A repository found not ok before a cancel outranks the cancel.
+        let failing = not_ok(&rows);
+        let stopped = (rows.len() < total)
+            .then(|| format!("; stopped after {} of {total}", rows.len()))
+            .unwrap_or_default();
+        if failing > 0 {
+            return Err(CommandError::Other(format!(
+                "{failing} of {total} update repositories are not ok{stopped}"
+            )));
+        }
         if rows.len() < total {
             return Err(CommandError::Cancelled(format!(
                 "checked {} of {total} update repositories",
                 rows.len()
-            )));
-        }
-        let failing = not_ok(&rows);
-        if failing > 0 {
-            return Err(CommandError::Other(format!(
-                "{failing} of {total} update repositories are not ok"
             )));
         }
         Ok(())
@@ -241,9 +247,12 @@ fn repositories(
             .extend(target.binaries.clone());
     }
     let (source, mut repos): (Source, Vec<Repo>) = if by_url.is_empty() {
+        // Ordered, so a repository two products name keeps the same one every run.
+        let mut entries: Vec<(&SystemProduct, &String)> = update_repos.iter().collect();
+        entries.sort();
         let mut seen = std::collections::BTreeSet::new();
-        let repos = update_repos
-            .iter()
+        let repos = entries
+            .into_iter()
             .filter(|(_, url)| seen.insert(repo_key(url).to_owned()))
             .map(|(product, url)| Repo {
                 product: product.clone(),
@@ -525,6 +534,32 @@ mod tests {
         insta::assert_snapshot!(stable(&buf.contents(), &server));
     }
 
+    #[test]
+    fn two_products_naming_one_update_repository_always_give_the_same_row() {
+        let url = "http://repo.invalid/a".to_owned();
+        // Each map gets its own random hasher seed, so iteration order varies.
+        let rows: std::collections::BTreeSet<String> = (0..64)
+            .map(|_| {
+                let map: std::collections::HashMap<SystemProduct, String> = [
+                    (SystemProduct::new("SLES", "15.5", "x86_64"), url.clone()),
+                    (
+                        SystemProduct::new("Basesystem", "15.5", "x86_64"),
+                        url.clone(),
+                    ),
+                ]
+                .into_iter()
+                .collect();
+                let (source, repos) = repositories(None, &map);
+                assert_eq!((source, repos.len()), (Source::UpdateRepos, 1));
+                repos[0].product.name.clone()
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            std::collections::BTreeSet::from(["Basesystem".to_owned()])
+        );
+    }
+
     #[tokio::test]
     async fn check_with_nothing_to_check_fails() {
         let (mut session, buf) = empty_session();
@@ -673,53 +708,101 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_cancel_reports_the_repositories_that_finished() {
+    /// Answers after `delay`, telling the test the moment it is asked.
+    struct SignalOnHit {
+        hit: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        delay: Duration,
+    }
+
+    impl wiremock::Respond for SignalOnHit {
+        fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
+            if let Some(tx) = self.hit.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            ResponseTemplate::new(404).set_delay(self.delay)
+        }
+    }
+
+    /// Four fast repositories (the first holding `first`) and a fifth that
+    /// answers only after a long delay. With four checks at once the fifth
+    /// starts only once the first has finished, so its request is the causal
+    /// moment to cancel: the first row is done, the fifth is not.
+    async fn session_cancelled_at_the_fifth(
+        first: &[(&str, &str)],
+    ) -> (Session, Buffer, MockServer) {
         let server = MockServer::start().await;
-        serve_repo(&server, "fast", &[("foo", "1.2-3.1.x86_64")]).await;
-        serve_repo_after(
-            &server,
-            "slow",
-            &[("foo", "1.2-3.1.x86_64")],
-            Duration::from_secs(10),
-        )
-        .await;
+        serve_repo(&server, "r1", first).await;
+        for dir in ["r2", "r3", "r4"] {
+            serve_repo(&server, dir, &[("foo", "1.2-3.1.x86_64")]).await;
+        }
+        let (hit_tx, hit_rx) = tokio::sync::oneshot::channel();
+        Mock::given(method("GET"))
+            .and(path("/r5/repodata/repomd.xml"))
+            .respond_with(SignalOnHit {
+                hit: std::sync::Mutex::new(Some(hit_tx)),
+                delay: Duration::from_secs(30),
+            })
+            .mount(&server)
+            .await;
         let uri = server.uri();
+        let foo: &[(&str, &str)] = &[("foo", "1.2-3.1.x86_64")];
         let (mut session, buf) = session_with(
             Some(vec![
-                target(
-                    "SLES",
-                    "15.5",
-                    &format!("{uri}/fast"),
-                    &[("foo", "1.2-3.1.x86_64")],
-                ),
-                target(
-                    "SLES",
-                    "16.0",
-                    &format!("{uri}/slow"),
-                    &[("foo", "1.2-3.1.x86_64")],
-                ),
+                target("SL-Micro", "6.0", &format!("{uri}/r1"), foo),
+                target("SL-Micro", "6.1", &format!("{uri}/r2"), foo),
+                target("SLES", "15.5", &format!("{uri}/r3"), foo),
+                target("SLES", "16.0", &format!("{uri}/r4"), foo),
+                target("SLES", "16.1", &format!("{uri}/r5"), foo),
             ]),
             &[],
         );
-        let token = CancellationToken::new();
-        session.set_cancel_token(token.clone());
-        // The fast repository answers at once; the slow one is still waiting.
-        let canceller = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(1500)).await;
-            token.cancel();
+        let cancel = session.cancel_token();
+        tokio::spawn(async move {
+            hit_rx.await.expect("the fifth repository must be asked");
+            cancel.cancel();
         });
+        (session, buf, server)
+    }
+
+    #[tokio::test]
+    async fn a_cancel_reports_the_repositories_that_finished() {
+        let (mut session, buf, server) =
+            session_cancelled_at_the_fifth(&[("foo", "1.2-3.1.x86_64")]).await;
 
         let args = matches(&ShowUpdateRepos, &["--check"]);
         let err = ShowUpdateRepos.call(&mut session, &args).await.unwrap_err();
-        canceller.await.unwrap();
+        let CommandError::Cancelled(detail) = &err else {
+            panic!("expected a cancel, got {err:?}");
+        };
         assert!(
-            matches!(&err, CommandError::Cancelled(d) if d == "checked 1 of 2 update repositories"),
-            "{err:?}"
+            detail.starts_with("checked ") && detail.ends_with(" of 5 update repositories"),
+            "{detail}"
         );
         let out = stable(&buf.contents(), &server);
-        assert!(out.contains("http://repo.invalid/fast\n    ok: "), "{out}");
-        assert!(!out.contains("/slow"), "{out}");
+        assert!(out.contains("http://repo.invalid/r1\n    ok: "), "{out}");
+        assert!(!out.contains("/r5"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_failure_found_before_a_cancel_outranks_it() {
+        let (mut session, buf, server) =
+            session_cancelled_at_the_fifth(&[("foo", "1.2-2.1.x86_64")]).await;
+
+        let args = matches(&ShowUpdateRepos, &["--check"]);
+        let err = ShowUpdateRepos.call(&mut session, &args).await.unwrap_err();
+        let CommandError::Other(message) = &err else {
+            panic!("the missing repository must outrank the cancel, got {err:?}");
+        };
+        assert!(
+            message.starts_with("1 of 5 update repositories are not ok; stopped after ")
+                && message.ends_with(" of 5"),
+            "{message}"
+        );
+        let out = stable(&buf.contents(), &server);
+        assert!(
+            out.contains("http://repo.invalid/r1\n    missing: "),
+            "{out}"
+        );
     }
 
     #[tokio::test]

@@ -184,7 +184,7 @@ Options:
           fetch each install target's repository (repodata/repomd.xml and its primary metadata) and report it as ok, missing (listed binaries not at their version-release.arch), empty, not published (repomd.xml 404) or no answer (any other failure); fails when any is not ok or none could be checked, after listing all
 
       --json
-          with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]}; never fans out across templates
+          with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]} for one template: with --json the command never fans out, so --all-templates is refused and, with several templates loaded, -T picks one
 
   -h, --help
           Print help
