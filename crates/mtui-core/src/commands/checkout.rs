@@ -250,6 +250,28 @@ mod tests {
         );
     }
 
+    /// A value that fails to parse is quoted in the error, which is the REPL
+    /// output and the MCP tool result.
+    #[tokio::test]
+    async fn refresh_step_sanitizes_an_unparseable_documents_value() {
+        let server = MockServer::start().await;
+        let mut body = serde_json::to_value(document(Some("server"))).unwrap();
+        body["kind"] = serde_json::json!("bad\u{9b}2J\u{202e}\nkind");
+        mount_document(&server, ResponseTemplate::new(200).set_body_json(body)).await;
+        let (mut session, _buf) = document_session(&server, false);
+
+        let err = refresh_step(&mut session, &client(&server), false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.starts_with("the document failed to parse: /kind: unknown variant `bad kind`")
+                    && !m.contains(['\u{9b}', '\u{202e}', '\n'])),
+            "{err:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_dirty_document_is_refused_before_any_request() {
         let server = MockServer::start().await;

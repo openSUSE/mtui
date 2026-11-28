@@ -343,7 +343,6 @@ pub enum Verdict {
 /// distinct path segment there, since deserialization never descended into
 /// it. `source`'s message names the missing field in that case.
 #[derive(Debug, Error)]
-#[error("{pointer}: {source}")]
 pub struct DocumentError {
     /// RFC 6901 pointer to the offending location, e.g.
     /// `/install/targets/0/arch`. `/` (root) when the error occurred before
@@ -351,6 +350,15 @@ pub struct DocumentError {
     pub pointer: String,
     #[source]
     source: serde_json::Error,
+}
+
+/// One sanitised line: the pointer's keys and the value serde quotes come from
+/// the server's document.
+impl fmt::Display for DocumentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let raw = format!("{}: {}", self.pointer, self.source);
+        f.write_str(&crate::sanitize::sanitize_external(&raw, None).replace(['\n', '\t'], " "))
+    }
 }
 
 impl From<serde_path_to_error::Error<serde_json::Error>> for DocumentError {

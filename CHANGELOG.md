@@ -140,10 +140,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   through TeReGen's reason for rejecting an id or an upload; nor `regenerate`'s
   message for a job that did not finish (its state and error, each now cut to
   500 characters like the refusal), `commit`'s refusal over a drifted report
-  schema, a failed load's reason, which can quote a document value that
-  failed to parse or the document's `id`, or the hash the report records,
-  which `approve` shows on one line, cut to 120 characters, in its line,
-  prompt and refusal for a PR head that differs from it.
+  schema, a failed load's reason, which can quote the document's `id`, or the
+  hash the report records, which `approve` shows on one line, cut to 120
+  characters, in its line, prompt and refusal for a PR head that differs from
+  it. A document value that fails to parse is quoted on one clean line
+  wherever the parse error is shown: a failed load, `checkout`, `regenerate`'s
+  check for tester-authored content, `commit`'s upload and the OBS
+  `approve`/`assign` refusal.
 - A newline in TeReGen's text no longer starts a new line in mtui's log, where
   it could pass for a record of its own: it is written as `\n` in the log
   lines that carry TeReGen's text and in the error logged for each template a
