@@ -26,7 +26,7 @@ pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, QemDashboardError, RefhostError, Result,
     SlackError, TeReGenError,
 };
-pub use gitea::{Gitea, assign_marker};
+pub use gitea::{Gitea, PullGate, PullReviewGate, PullState, PullVerdict, assign_marker};
 pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, sanitize_url};
 pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc};
 pub use openqa::{IncidentName, Job, KernelOpenQA, OpenQABase, build_openqa_client_with_transport};
@@ -42,6 +42,6 @@ pub use slack::{
 };
 pub use teregen::{
     AuthHint, AuthStage, CachedToken, CheckerResult, CheckerRun, DocumentFetch, Precondition,
-    RegenOutcome, RegenRequest, TeReGen, TeregenAuth, TeregenAuthError, TeregenV2, TeregenV2Error,
-    TeregenV2WriteError, TokenStore, UpdatesQuery, UploadOutcome, describe_age,
+    RegenOutcome, RegenRequest, TeReGen, TemplateStatus, TeregenAuth, TeregenAuthError, TeregenV2,
+    TeregenV2Error, TeregenV2WriteError, TokenStore, UpdatesQuery, UploadOutcome, describe_age,
 };

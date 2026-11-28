@@ -13,6 +13,8 @@
 //!   stale decision, so [`Gitea`] only treats the PR as decided when a decision
 //!   comment exists **and** the group is not currently a requested reviewer.
 //!
+//! [`Gitea::pull_state`] reads `/pulls/<n>/reviews`, a shape not backed by a recorded response.
+//!
 //! Comments are ordered by their `updated_at` timestamp (RFC3339 with offset).
 //! [`Gitea::new`] resolves the verify policy via [`HttpClient::from_config`]
 //! before any request, as reqwest fixes TLS per client.
@@ -749,6 +751,248 @@ impl Gitea {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| GiteaError::FailedCall(format!("{} - missing head.sha", self.pr)))
+    }
+}
+
+/// The group's verdict by Gitea's `ReviewStateType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullVerdict {
+    /// `REQUEST_REVIEW`: the group's verdict is owed.
+    Owed,
+    /// `APPROVED`.
+    Approved,
+    /// `REQUEST_CHANGES`.
+    ChangesRequested,
+}
+
+/// The group's review gate on a pull request, when it could be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullGate {
+    /// The verdict of the group's latest review that carries one.
+    pub verdict: PullVerdict,
+    /// A push followed a submitted verdict (never set on [`PullVerdict::Owed`]).
+    pub stale: bool,
+    /// The pull request was closed with the verdict still owed.
+    pub closed: bool,
+    /// When the review got that state, as Gitea wrote it.
+    pub since: Option<String>,
+}
+
+/// The group's review gate, or why it is not known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullReviewGate {
+    /// The group has no review on the pull request.
+    None,
+    /// The gate, read.
+    Known(PullGate),
+    /// The reviews could be fetched but not read as a gate: the reason.
+    Unknown(String),
+}
+
+/// A pull request's review state for the client's group, read without
+/// changing anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullState {
+    /// The review group read for (`qam-sle` unless the client names another).
+    pub group: String,
+    /// The holder by the assign markers, replayed as `assign` replays them.
+    pub owner: Option<String>,
+    /// The group's review gate.
+    pub gate: PullReviewGate,
+    /// When the pull request was created; `None` when Gitea sent no time.
+    pub created: Option<String>,
+    /// The pull request's base branch (`base.ref`); `None` when absent.
+    pub base: Option<String>,
+    /// The pull request head.
+    pub head: String,
+}
+
+/// One entry of `GET .../pulls/<n>/reviews` (the fields read here). Every
+/// field is optional so that one Gitea did not send reads as unknown.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct RawReview {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    dismissed: Option<bool>,
+    #[serde(default)]
+    stale: Option<bool>,
+    #[serde(default)]
+    commit_id: Option<String>,
+    #[serde(default)]
+    submitted_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    user: Option<RawUser>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct RawUser {
+    #[serde(default)]
+    login: Option<String>,
+}
+
+impl RawReview {
+    fn login(&self) -> Option<&str> {
+        self.user
+            .as_ref()
+            .and_then(|u| u.login.as_deref())
+            .filter(|l| !l.is_empty())
+    }
+}
+
+/// Review pages read before giving up, so a runaway listing stays bounded.
+const MAX_REVIEW_PAGES: u32 = 20;
+
+/// The gate from the group's reviews, the pull request's head and whether it
+/// is closed (`None`: Gitea sent no state, or one other than open/closed).
+/// Pure.
+///
+/// The latest review that carries a verdict decides: a later `COMMENT` or a
+/// `PENDING` draft does not. A review whose reviewer, state, `dismissed` or
+/// `stale` the verdict depends on cannot be read makes the gate unknown
+/// rather than a guess.
+fn pull_gate(
+    reviews: &[RawReview],
+    login: &str,
+    head: &str,
+    closed: Option<bool>,
+) -> PullReviewGate {
+    let mut ordered: Vec<(i64, &RawReview)> = Vec::with_capacity(reviews.len());
+    for r in reviews {
+        let Some(id) = r.id else {
+            return PullReviewGate::Unknown("a review has no id to order it by".to_owned());
+        };
+        ordered.push((id, r));
+    }
+    ordered.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+    for (id, review) in ordered {
+        let Some(reviewer) = review.login() else {
+            return PullReviewGate::Unknown(format!("review {id} carries no readable reviewer"));
+        };
+        if reviewer != login {
+            continue;
+        }
+        let verdict = match review.state.as_deref() {
+            Some("COMMENT" | "PENDING") => continue,
+            Some("REQUEST_REVIEW") => PullVerdict::Owed,
+            Some("APPROVED") => PullVerdict::Approved,
+            Some("REQUEST_CHANGES") => PullVerdict::ChangesRequested,
+            Some(other) => {
+                return PullReviewGate::Unknown(format!(
+                    "review {id} has the unknown state {other:?}"
+                ));
+            }
+            None => return PullReviewGate::Unknown(format!("review {id} has no state")),
+        };
+        match review.dismissed {
+            Some(true) => continue,
+            Some(false) => {}
+            None => {
+                return PullReviewGate::Unknown(format!("review {id} has no `dismissed` field"));
+            }
+        }
+        let owed = verdict == PullVerdict::Owed;
+        let stale = if owed {
+            false
+        } else {
+            let Some(flag) = review.stale else {
+                return PullReviewGate::Unknown(format!("review {id} has no `stale` field"));
+            };
+            flag || review
+                .commit_id
+                .as_deref()
+                .is_some_and(|c| !c.is_empty() && c != head)
+        };
+        let closed = if owed {
+            let Some(closed) = closed else {
+                return PullReviewGate::Unknown(
+                    "the pull request has no open or closed state".to_owned(),
+                );
+            };
+            closed
+        } else {
+            false
+        };
+        return PullReviewGate::Known(PullGate {
+            verdict,
+            stale,
+            closed,
+            since: review
+                .submitted_at
+                .clone()
+                .or_else(|| review.updated_at.clone())
+                .filter(|s| !s.is_empty()),
+        });
+    }
+    PullReviewGate::None
+}
+
+fn json_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    path.iter()
+        .try_fold(value, |v, key| v.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+impl Gitea {
+    /// Every review on the pull request, page by page until an empty page.
+    async fn all_reviews(&self) -> Result<Vec<RawReview>, GiteaError> {
+        let mut out = Vec::new();
+        for page in 1..=MAX_REVIEW_PAGES {
+            let url = format!("{}/reviews?page={page}", self.pr);
+            let value = self.request(Method::GET, &url, None).await?;
+            let batch: Vec<RawReview> = serde_json::from_value(value)
+                .map_err(|e| GiteaError::FailedCall(format!("decoding reviews: {e}")))?;
+            if batch.is_empty() {
+                return Ok(out);
+            }
+            out.extend(batch);
+        }
+        Err(GiteaError::FailedCall(format!(
+            "more than {MAX_REVIEW_PAGES} pages of reviews on {}",
+            sanitize_url(&self.pr)
+        )))
+    }
+
+    /// Read the pull request, its reviews and its comments, and derive the
+    /// group's holder and review gate. Only GETs; nothing is posted.
+    ///
+    /// # Errors
+    ///
+    /// [`GiteaError::FailedCall`] when a read fails or the pull request names
+    /// no `head.sha`; [`GiteaError::UntrustedOrigin`] for a pull request off
+    /// the trusted origin.
+    pub async fn pull_state(&self) -> Result<PullState, GiteaError> {
+        let (pr, reviews, comments) = tokio::try_join!(
+            self.request(Method::GET, &self.pr, None),
+            self.all_reviews(),
+            self.load_sorted_comments(),
+        )?;
+        let head = json_str(&pr, &["head", "sha"]).ok_or_else(|| {
+            GiteaError::FailedCall(format!("{} - missing head.sha", sanitize_url(&self.pr)))
+        })?;
+        let closed = pr
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| match s {
+                "open" => Some(false),
+                "closed" => Some(true),
+                _ => None,
+            });
+        let login = format!("{}-review", self.group);
+        Ok(PullState {
+            group: self.group.clone(),
+            owner: self.assignee_from_comments(&comments, &self.group),
+            gate: pull_gate(&reviews, &login, &head, closed),
+            created: json_str(&pr, &["created_at"]),
+            base: json_str(&pr, &["base", "ref"]),
+            head,
+        })
     }
 }
 
