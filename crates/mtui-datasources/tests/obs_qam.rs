@@ -1527,6 +1527,34 @@ async fn a_hostile_document_error_reaches_the_refusal_as_one_clean_line() {
     }
 }
 
+/// Cleaning the cause drops only what a terminal would act on: a long clean
+/// detail (TeReGen's is already capped at 2048 characters) arrives whole.
+#[tokio::test]
+async fn a_long_clean_document_error_reaches_the_refusal_whole() {
+    let detail = format!("bad id {}", "x".repeat(1500));
+    let api = MockServer::start().await;
+    let teregen = MockServer::start().await;
+    mount_assigned_request(&api).await;
+    Mock::given(method("GET"))
+        .and(path(DOCUMENT_PATH))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": detail
+        })))
+        .mount(&teregen)
+        .await;
+    mount_post_request(&api, "56789").await;
+
+    let msg = approve_with(&api, &teregen).await.unwrap_err().to_string();
+
+    assert!(
+        msg.contains(&format!(
+            "(the server rejects this id: {detail}); refusing to approve"
+        )),
+        "{msg}"
+    );
+    assert_eq!(post_count(&api).await, 0);
+}
+
 #[tokio::test]
 async fn reject_pi_skips_attribute_and_document() {
     let api = MockServer::start().await;

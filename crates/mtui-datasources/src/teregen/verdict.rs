@@ -130,8 +130,9 @@ pub async fn verdict_gate(
             .map_err(|cause| VerdictRefusal::Unreadable {
                 rrid: rrid.to_string(),
                 decision,
-                // It can carry TeReGen's own words; keep it one printable line.
-                cause: sanitize_external(&cause, Some(500)).replace(['\n', '\t'], " "),
+                // It can carry TeReGen's own words, already capped at 2048
+                // characters; keep it one printable line.
+                cause: sanitize_external(&cause, None).replace(['\n', '\t'], " "),
             })?;
     if verdict != Some(decision.required()) {
         return Err(VerdictRefusal::WrongVerdict {
