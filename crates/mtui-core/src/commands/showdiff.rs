@@ -302,7 +302,8 @@ impl ProductPr {
 }
 
 /// Shows the update's source diff: the OBS source diff, or on a Gitea-workflow
-/// update the product pull request's diff.
+/// update the product pull request's diff, then fails because no package
+/// source was reviewed.
 pub struct ShowDiff;
 
 #[async_trait]
@@ -313,7 +314,7 @@ impl Command for ShowDiff {
 
     fn about(&self) -> Option<&'static str> {
         Some(
-            "Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff.",
+            "Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff, then fails because no package source was reviewed.",
         )
     }
 
@@ -982,6 +983,12 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
         #[tokio::test]
         async fn analyze_diff_on_a_product_diff_fails_instead_of_finding_nothing() {
             let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("{PR_PATH}.diff")))
+                .respond_with(ResponseTemplate::new(200).set_body_string(PRODUCT_DIFF))
+                .expect(0)
+                .mount(&server)
+                .await;
             let (mut session, buf, _dir) = gitea_session(&server);
 
             let err = AnalyzeDiff
@@ -1048,6 +1055,21 @@ https://src.suse.de/products/SLFO/pulls/7819 was read, not the package pull requ
 
             assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
             assert!(server.received_requests().await.unwrap().is_empty());
+        }
+
+        /// Nor does it need the report's working directory.
+        #[tokio::test]
+        async fn analyze_diff_refuses_without_a_working_directory() {
+            let server = MockServer::start().await;
+            let (mut session, _buf, _dir) = gitea_session(&server);
+            session.metadata_mut().base_mut().path = None;
+
+            let err = AnalyzeDiff
+                .call(&mut session, &matches(&AnalyzeDiff, &[]))
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.to_string(), WARNING.trim_start_matches("warning: "));
         }
 
         /// A package name from the document cannot start a line of its own.

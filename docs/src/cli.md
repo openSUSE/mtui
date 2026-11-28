@@ -450,7 +450,7 @@ Options:
 
 ## `show_diff`
 
-Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff.
+Shows the update's source diff: the OBS source diff, or on a Gitea-workflow update the product pull request's diff, then fails because no package source was reviewed.
 
 ```text
 Usage: show_diff
