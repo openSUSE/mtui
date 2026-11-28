@@ -780,7 +780,9 @@ impl Command for ListRefhosts {
                     .help(
                         "emit a JSON array of kept rows; over-cap stdout is a JSON envelope \
                      {\"rows\": [...], \"truncation\": {...}} so stdout stays valid JSON \
-                     (--free windowing adds a \"probe\" object)",
+                     (--free windowing adds a \"probe\" object); with --summary, a \
+                     --limit/--offset cut also gives the envelope, with a \
+                     \"window\": {\"kept\", \"total\"} object",
                     ),
             );
         add_window_args(cmd)
