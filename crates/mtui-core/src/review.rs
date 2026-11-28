@@ -75,6 +75,8 @@ pub enum Owner {
         /// The holder's login.
         login: String,
     },
+    /// Someone holds it, but the source names them with a blank login.
+    Unknown,
     /// The open reviews and the review history disagree.
     Disputed {
         /// The holder by the open user review, if any.
@@ -89,7 +91,7 @@ impl fmt::Display for Owner {
         match self {
             Self::None => f.write_str("-"),
             Self::Known { login } => f.write_str(login),
-            Self::Disputed { .. } => f.write_str("?"),
+            Self::Unknown | Self::Disputed { .. } => f.write_str("?"),
         }
     }
 }
@@ -578,10 +580,11 @@ fn fill_pull(out: &mut UpdateReview, pull: Result<PullState, String>) {
     out.reviews = Field::Known(vec![GroupReview {
         group: text(&pull.group),
         automated: false,
-        owner: pull
-            .owner
-            .as_deref()
-            .map_or(Owner::None, |login| Owner::Known { login: text(login) }),
+        owner: match pull.owner.as_deref() {
+            None => Owner::None,
+            Some("") => Owner::Unknown,
+            Some(login) => Owner::Known { login: text(login) },
+        },
         gate,
         since,
     }]);
@@ -894,6 +897,32 @@ mod tests {
     }
 
     /// A request without a state name is unknown, and its groups still show.
+    /// A blank assignee from the marker replay is unknown, never a login.
+    #[test]
+    fn a_blank_gitea_owner_is_unknown() {
+        let mut out = UpdateReview::new("U".to_owned());
+        fill_pull(
+            &mut out,
+            Ok(PullState {
+                group: "qam-sle".to_owned(),
+                owner: Some(String::new()),
+                gate: PullReviewGate::None,
+                created: None,
+                base: None,
+                head: "abc".to_owned(),
+            }),
+        );
+        let Field::Known(reviews) = &out.reviews else {
+            panic!("{:?}", out.reviews);
+        };
+        assert_eq!(reviews[0].owner, Owner::Unknown);
+        assert_eq!(reviews[0].owner.to_string(), "?");
+        assert_eq!(
+            serde_json::to_value(&reviews[0].owner).unwrap(),
+            serde_json::json!({"status": "unknown"})
+        );
+    }
+
     #[test]
     fn a_blank_obs_state_is_unknown() {
         let mut gate = request_gate(Some("C"), Some("W"));

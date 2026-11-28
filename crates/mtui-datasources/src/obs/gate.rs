@@ -117,33 +117,37 @@ fn inferred_holders(request: &Request, group: &str) -> Vec<String> {
 }
 
 fn group_gate(request: &Request, group: &str, live: &[&Review]) -> GroupGate {
-    // No user is "me" here: an empty login never matches a `by_user`.
+    // No caller login: `HeldByMe` then means an open review with a blank
+    // `by_user`, held by someone the document does not name.
     let hold = group_hold(request, group, "");
-    let holder = match &hold {
-        GroupHold::HeldBy { user } => Some(user.clone()),
+    let held_by = match &hold {
+        GroupHold::HeldBy { user } => Some(user.as_str()),
+        GroupHold::HeldByMe => Some(""),
         _ => None,
     };
     let history = inferred_holders(request, group);
-    let owner = match (&holder, history.as_slice()) {
+    let owner = match (held_by, history.as_slice()) {
         (None, []) => GroupOwner::Nobody,
-        (Some(h), [only]) if h == only => GroupOwner::User(h.clone()),
+        (Some(h), [only]) if !h.is_empty() && h == only => GroupOwner::User(h.to_owned()),
         _ => GroupOwner::Disputed {
-            hold: holder.clone(),
+            hold: held_by.and_then(non_empty),
             history,
         },
     };
-    let (verdict, since) = match hold {
-        GroupHold::HeldBy { user } => {
+    let (verdict, since) = match (&hold, held_by) {
+        (_, Some(user)) => {
             let since = request
                 .reviews
                 .iter()
-                .filter(|r| r.state == "new" && r.by_user.as_deref() == Some(user.as_str()))
+                .filter(|r| r.state == "new" && r.by_user.as_deref() == Some(user))
                 .find_map(|r| non_empty(&r.when));
             (GroupVerdict::Assigned, since)
         }
-        GroupHold::Approved { by } => (GroupVerdict::Accepted, by.map(|(_, when)| when)),
-        // `HeldByMe` is unreachable with no caller login.
-        GroupHold::Free | GroupHold::HeldByMe => {
+        (GroupHold::Approved { by }, None) => (
+            GroupVerdict::Accepted,
+            by.as_ref().and_then(|(_, when)| non_empty(when)),
+        ),
+        _ => {
             let open = live.iter().rev().find(|r| r.state == "new");
             (GroupVerdict::Open, open.and_then(|r| non_empty(&r.when)))
         }
@@ -359,6 +363,34 @@ mod tests {
 
     /// The fuzz seed request: an accepted qam-sle whose history assigns
     /// alice, an open qam-cloud, and a state without `created`.
+    /// An accepted event without a `when` leaves the time unknown, never a
+    /// known empty one.
+    #[test]
+    fn an_accepted_event_without_a_time_has_no_since() {
+        let reviews = "<review state='accepted' by_group='qam-sle'><history who='alice'>\
+                       <description>Review got accepted</description></history></review>";
+        let g = gate("review", reviews);
+        assert_eq!(g.groups[0].verdict, GroupVerdict::Accepted);
+        assert_eq!(g.groups[0].since, None);
+    }
+
+    /// An open user review with a blank reviewer holds the group, but names
+    /// nobody: the owner is unknown, never a known empty login.
+    #[test]
+    fn a_blank_holder_is_disputed_not_a_login() {
+        let reviews = "<review state='accepted' by_group='qam-sle'><history who=''>\
+                       <description>Review got accepted</description></history></review>\
+                       <review state='new' by_user=''/>";
+        let g = gate("review", reviews);
+        assert_eq!(
+            g.groups[0].owner,
+            GroupOwner::Disputed {
+                hold: None,
+                history: vec![]
+            }
+        );
+    }
+
     #[test]
     fn the_seed_request_reads_its_groups_and_no_creation_time() {
         let g = request_gate(&parse_request(SEED_REQUEST).unwrap());

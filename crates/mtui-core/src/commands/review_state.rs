@@ -146,7 +146,7 @@ fn mine_of(review: &UpdateReview, logins: &[String]) -> Mine {
         Mine::Yes
     } else if groups
         .iter()
-        .any(|g| matches!(g.owner, Owner::Disputed { .. }))
+        .any(|g| matches!(g.owner, Owner::Unknown | Owner::Disputed { .. }))
     {
         Mine::Unknown
     } else {
@@ -962,6 +962,52 @@ mod tests {
 
     /// `--mine` names a held update `yes`, another's `no` and a disputed one
     /// `?`, never `no`.
+    /// An accepted event without a `when`: SINCE is `?` in the table and
+    /// unknown in `--json`, never a known empty value.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    async fn an_accepted_event_without_a_time_is_an_unknown_since() {
+        let server = MockServer::start().await;
+        let reviews = "<review state='accepted' by_group='qam-sle'><history who='alice'>\
+                       <description>Review got accepted</description></history></review>";
+        mount_obs(
+            &server,
+            1,
+            ResponseTemplate::new(200).set_body_string(obs_request(
+                1,
+                "SUSE:Maintenance:10",
+                "review",
+                reviews,
+            )),
+        )
+        .await;
+        mount_template(&server, "SUSE:Maintenance:10:1").await;
+        let (mut session, buf) = session_for(&server);
+        run_with_oscrc(
+            &mut session,
+            &server.uri(),
+            "qamuser",
+            &["S:M:10:1", "--json"],
+        )
+        .await
+        .unwrap();
+        let out = json_out(&buf);
+        assert_eq!(first_review(&out)["since"], json!({"status": "unknown"}));
+        let (mut session, buf) = session_for(&server);
+        run_with_oscrc(&mut session, &server.uri(), "qamuser", &["S:M:10:1"])
+            .await
+            .unwrap();
+        let table = buf.contents();
+        let row = table.lines().nth(1).expect("one row");
+        let header = table.lines().next().unwrap();
+        let since_at = header.find("SINCE").unwrap();
+        assert_eq!(
+            row[since_at..].split_whitespace().next(),
+            Some("?"),
+            "{table}"
+        );
+    }
+
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]
     async fn mine_reads_each_owner_against_the_logins() {
