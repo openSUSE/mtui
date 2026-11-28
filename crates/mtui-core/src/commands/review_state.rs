@@ -13,7 +13,8 @@ use crate::command::{Command, Scope};
 use crate::commands::support::one_line;
 use crate::error::{CommandError, CommandResult};
 use crate::review::{
-    Failure, Field, GroupReview, Owner, ReadContext, UpdateReview, parse_target, read_update,
+    Failure, Field, GroupReview, Owner, ReadContext, TEXT_LIMIT, UpdateReview, parse_target,
+    read_update,
 };
 use crate::session::Session;
 
@@ -202,36 +203,14 @@ impl ReviewState {
         // Eager, with owned inputs: a lazy `map` trips a higher-ranked-lifetime limit.
         let reads: Vec<_> = raw
             .iter()
-            .map(|raw| one_line(&sanitize_url(raw), Some(300)))
+            .map(|raw| one_line(&sanitize_url(raw), Some(TEXT_LIMIT)))
             .zip(targets)
-            .enumerate()
-            .map(|(i, (shown, target))| {
+            .map(|(shown, target)| {
                 let ctx = ctx.clone();
-                async move { (i, read_update(&ctx, shown, target).await) }
+                async move { read_update(&ctx, shown, target).await }
             })
             .collect();
-        // Unordered, so a cancel keeps every finished row, not only those
-        // ahead of the slowest; the order is restored below.
-        let mut pending = stream::iter(reads).buffer_unordered(CONCURRENCY);
-        let cancel = session.cancel_token();
-        let mut done = Vec::with_capacity(total);
-        let mut cancelled = false;
-        loop {
-            tokio::select! {
-                biased;
-                next = pending.next() => match next {
-                    Some(review) => done.push(review),
-                    None => break,
-                },
-                () = cancel.cancelled() => {
-                    cancelled = true;
-                    break;
-                }
-            }
-        }
-
-        done.sort_by_key(|(i, _)| *i);
-        let done: Vec<UpdateReview> = done.into_iter().map(|(_, r)| r).collect();
+        let (done, cancelled) = until_cancelled(reads, &session.cancel_token()).await;
         let mut failed: Vec<Failure> = Vec::new();
         for review in &done {
             failed.extend(review.failures.iter().cloned());
@@ -260,9 +239,15 @@ impl ReviewState {
             }
         }
         if cancelled {
-            return Err(CommandError::Cancelled(format!(
-                "read {} of {total} updates",
-                done.len()
+            let read = format!("{} of {total} updates", done.len());
+            if failed.is_empty() {
+                return Err(CommandError::Cancelled(format!("read {read}")));
+            }
+            // A failure collected before the cancel outranks it.
+            return Err(CommandError::Other(format!(
+                "{} lookup(s) failed, so the rows above are incomplete; cancelled after \
+                 reading {read}",
+                failed.len()
             )));
         }
         if failed.is_empty() {
@@ -274,6 +259,40 @@ impl ReviewState {
             )))
         }
     }
+}
+
+/// Run `reads` at most [`CONCURRENCY`] at a time until all finish or `cancel`
+/// fires; returns the finished ones in input order and whether it was cancelled.
+/// Unordered, so a cancel keeps every finished read, not only those ahead of
+/// the slowest.
+async fn until_cancelled<T, F: std::future::Future<Output = T>>(
+    reads: Vec<F>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> (Vec<T>, bool) {
+    let mut pending = stream::iter(
+        reads
+            .into_iter()
+            .enumerate()
+            .map(|(i, read)| async move { (i, read.await) }),
+    )
+    .buffer_unordered(CONCURRENCY);
+    let mut done = Vec::new();
+    let mut cancelled = false;
+    loop {
+        tokio::select! {
+            biased;
+            next = pending.next() => match next {
+                Some(read) => done.push(read),
+                None => break,
+            },
+            () = cancel.cancelled() => {
+                cancelled = true;
+                break;
+            }
+        }
+    }
+    done.sort_by_key(|(i, _)| *i);
+    (done.into_iter().map(|(_, r)| r).collect(), cancelled)
 }
 
 /// One cell over the tester groups: `?` when the reviews could not be read,
@@ -777,42 +796,139 @@ mod tests {
         assert_eq!(first_review(&out)["gate"]["state"], "owed");
     }
 
-    /// A cancel keeps the rows that finished and says how many.
-    #[tokio::test]
-    async fn a_cancel_prints_the_finished_rows_and_counts_them() {
-        let server = MockServer::start().await;
-        mount_pull(&server, owed_review(), assigned_to("alice")).await;
-        get(
-            &server,
-            &format!("/reports/{SLFO}/status"),
-            ok(json!({"template": true})).set_delay(Duration::from_secs(30)),
-        )
-        .await;
-        let (mut session, buf) = session_for(&server);
+    /// Answers after `delay`, cancelling `token` as the request arrives: a
+    /// cancel caused by the read, not by a timer.
+    struct CancelOnRequest {
+        token: tokio_util::sync::CancellationToken,
+        response: ResponseTemplate,
+    }
+
+    impl wiremock::Respond for CancelOnRequest {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            self.token.cancel();
+            self.response.clone()
+        }
+    }
+
+    /// Mounts an SLFO status read that cancels the session when it arrives
+    /// and never answers in time.
+    async fn mount_cancelling_status(server: &MockServer, session: &mut Session) {
         let token = tokio_util::sync::CancellationToken::new();
         session.set_cancel_token(token.clone());
-        let canceller = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            token.cancel();
-        });
-        let url = format!("{}/products/SLFO/pulls/7", server.uri());
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{SLFO}/status")))
+            .respond_with(CancelOnRequest {
+                token,
+                response: ok(json!({"template": true})).set_delay(Duration::from_secs(30)),
+            })
+            .mount(server)
+            .await;
+    }
+
+    /// A cancel during a read fails `Cancelled`, counting what was read.
+    #[tokio::test]
+    async fn a_cancel_stops_the_reads_and_counts_them() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = session_for(&server);
+        mount_cancelling_status(&server, &mut session).await;
         let started = std::time::Instant::now();
-        // The slow update first: a finished row behind it is still kept.
-        let err = run(&mut session, &[SLFO, &url, "--json"])
-            .await
-            .unwrap_err();
-        canceller.await.unwrap();
+        let err = run(&mut session, &[SLFO]).await.unwrap_err();
         assert!(
-            matches!(&err, CommandError::Cancelled(m) if m == "read 1 of 2 updates"),
+            matches!(&err, CommandError::Cancelled(m) if m == "read 0 of 1 updates"),
             "{err:?}"
         );
         assert!(started.elapsed() < Duration::from_secs(5));
-        let out = json_out(&buf);
-        assert_eq!(out["rows"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            first_review(&out)["owner"],
-            json!({"status": "known", "login": "alice"})
+    }
+
+    /// A read that finished behind a slower one is kept on a cancel, in its
+    /// place: the slow read cancels as it starts, the fast one is ready.
+    #[tokio::test]
+    async fn a_cancel_keeps_every_finished_read_in_order() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let slow = {
+            let token = token.clone();
+            async move {
+                token.cancel();
+                std::future::pending::<&str>().await
+            }
+        };
+        let reads: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = &str> + Send>>> = vec![
+            Box::pin(slow),
+            Box::pin(async { "fast" }),
+            Box::pin(async { "also" }),
+        ];
+        let (done, cancelled) = until_cancelled(reads, &token).await;
+        assert!(cancelled);
+        assert_eq!(done, ["fast", "also"]);
+    }
+
+    /// A lookup failure collected before a cancel outranks it: the error
+    /// names both, so a client reading the error kind sees the failure.
+    #[tokio::test]
+    async fn a_failure_before_a_cancel_outranks_it() {
+        let trusted = MockServer::start().await;
+        let foreign = MockServer::start().await;
+        let (mut session, _buf) = session_for(&trusted);
+        mount_cancelling_status(&trusted, &mut session).await;
+        let url = format!("{}/products/SLFO/pulls/7", foreign.uri());
+        let err = run(&mut session, &[SLFO, &url]).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m == "1 lookup(s) failed, so the rows \
+                above are incomplete; cancelled after reading 1 of 2 updates"),
+            "{err:?}"
         );
+    }
+
+    /// TeReGen flagging its document stale is a `document` failure naming no
+    /// pull request, with the template `stale`, and the call fails.
+    #[tokio::test]
+    async fn a_stale_document_fails_the_row_and_reads_stale() {
+        let server = MockServer::start().await;
+        mount_template(&server, SLFO).await;
+        get(
+            &server,
+            &format!("/v2/reports/{SLFO}"),
+            ResponseTemplate::new(409),
+        )
+        .await;
+        let (mut session, buf) = session_for(&server);
+        let err = run(&mut session, &[SLFO, "--json"]).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)), "{err:?}");
+        let out = json_out(&buf);
+        assert_eq!(out["failed"][0]["source"], "document");
+        assert_eq!(out["rows"][0]["template"], json!({"status": "stale"}));
+    }
+
+    fn group_at(group: &str, since: &str) -> GroupReview {
+        GroupReview {
+            group: group.to_owned(),
+            automated: false,
+            owner: Owner::None,
+            gate: crate::review::Gate::None,
+            since: Field::Known(since.to_owned()),
+        }
+    }
+
+    /// Several groups: SINCE is the latest of their known times.
+    #[test]
+    fn since_is_the_latest_group_time() {
+        let review = UpdateReview {
+            update: "U".to_owned(),
+            workflow: Field::Unknown,
+            state: Field::Known("review".to_owned()),
+            state_since: Field::Unknown,
+            reviews: Field::Known(vec![
+                group_at("qam-a", "2026-09-02T07:25:47"),
+                group_at("qam-b", "2026-09-01T00:33:57"),
+            ]),
+            created: Field::Unknown,
+            head: Field::NotApplicable,
+            base: Field::NotApplicable,
+            template: crate::review::Template::Unknown,
+            failures: Vec::new(),
+            notes: Vec::new(),
+        };
+        assert_eq!(since_cell(&review), "2026-09-02T07:25:47");
     }
 
     #[tokio::test]

@@ -380,11 +380,13 @@ and nothing is written there.
   names no RRID).
   - SLFO: the gate comes from the group's latest review on the pull request
     that carries a verdict and is not dismissed — a later comment or draft
-    does not count: `owed` (review requested), `approved`,
+    does not count: `owed` (review requested, or the group only commented,
+    which carries no verdict but clears Gitea's request), `approved`,
     `changes-requested`, `…, stale` after a push, `closed` when the pull
     request was closed with the review owed, `-` when the group has no
     review. A review whose state, reviewer, `dismissed` or `stale` cannot be
-    read makes the gate `?` with the reason. `approve` and `assign` decide
+    read makes the gate `?` with the reason; a team review request is not the
+    group's and is skipped. `approve` and `assign` decide
     "already decided" from decision comments and the requested reviewers
     instead, so the two can disagree on one pull request.
   - OBS: per qam group `new`, `new (assigned)` (an assign accepted the group
@@ -399,7 +401,8 @@ and nothing is written there.
     review), `n/a` does not apply. A source that fails is named under the
     table (`gitea`, `obs`, `teregen`, `document`) and the call is then a tool
     error carrying the partial table; a cancel prints the rows already read
-    and fails `read N of M updates`. An owner the open reviews and the
+    and fails `read N of M updates` — unless a lookup had already failed,
+    which the error then names first. An owner the open reviews and the
     review history disagree on is `?` with a `note:`, and `--mine` is then
     `?` too.
   - `--json` prints `{"rows", "failed", "notes"}`; each row's values are

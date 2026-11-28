@@ -1395,12 +1395,13 @@ mod mcp_nonempty_success_guard {
         // tests stand up per case.
         "checkers",
         "updates",
-        "review_state",
         "openqa_overview",
         "openqa_jobs",
         "openqa_summary",
         "reload_openqa",
         "regenerate",
+        // why: reads Gitea, OBS and TeReGen; its own tests mock each per case.
+        "review_state",
         // why: rebuilds the QEM incident + openQA "auto" result on every mode
         // change, so success needs both backends.
         "set_workflow",

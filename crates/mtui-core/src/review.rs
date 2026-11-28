@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::commands::support::one_line;
 
 /// Cap on a reason or value taken from a server.
-const TEXT_LIMIT: usize = 300;
+pub(crate) const TEXT_LIMIT: usize = 300;
 
 /// A value that is known, unknown (it could not be read), absent (nothing to
 /// show) or does not apply to this kind of update.
