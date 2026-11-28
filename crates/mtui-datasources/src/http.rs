@@ -187,6 +187,7 @@ pub struct HttpClient {
     verify: VerifyPolicy,
     patient_read_timeout: Duration,
     patient: Arc<OnceLock<reqwest::Client>>,
+    unredirected: Arc<OnceLock<reqwest::Client>>,
 }
 
 impl HttpClient {
@@ -221,6 +222,7 @@ impl HttpClient {
             verify,
             patient_read_timeout,
             patient: Arc::new(OnceLock::new()),
+            unredirected: Arc::new(OnceLock::new()),
         })
     }
 
@@ -239,6 +241,22 @@ impl HttpClient {
         }
         let built = base_builder(self.verify.clone(), self.patient_read_timeout)?.build()?;
         Ok(self.patient.get_or_init(|| built))
+    }
+
+    /// The same posture with automatic redirects off, for a caller that must
+    /// vet every hop itself. Built on first use and shared by every clone.
+    ///
+    /// # Errors
+    ///
+    /// As [`patient`](Self::patient).
+    pub(crate) fn unredirected(&self) -> Result<&reqwest::Client> {
+        if let Some(client) = self.unredirected.get() {
+            return Ok(client);
+        }
+        let built = base_builder(self.verify.clone(), READ_TIMEOUT)?
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(self.unredirected.get_or_init(|| built))
     }
 
     /// Builds a dedicated `reqwest::Client` for injection into

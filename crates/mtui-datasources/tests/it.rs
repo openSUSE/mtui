@@ -41,6 +41,8 @@ mod qem_dashboard;
 mod refhost;
 #[path = "refhosts_benchmark.rs"]
 mod refhosts_benchmark;
+#[path = "repo_check.rs"]
+mod repo_check;
 #[path = "slack.rs"]
 mod slack;
 #[path = "teregen_artifacts.rs"]

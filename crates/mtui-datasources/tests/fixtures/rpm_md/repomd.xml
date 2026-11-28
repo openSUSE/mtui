@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <revision>1700000000</revision>
+  <data type="primary">
+    <checksum type="sha256">0000000000000000000000000000000000000000000000000000000000000000</checksum>
+    <open-checksum type="sha256">0000000000000000000000000000000000000000000000000000000000000000</open-checksum>
+    <location href="repodata/00-primary.xml.gz"/>
+    <timestamp>1700000000</timestamp>
+    <size>0</size>
+    <open-size>0</open-size>
+  </data>
+  <data type="filelists">
+    <checksum type="sha256">0000000000000000000000000000000000000000000000000000000000000000</checksum>
+    <location href="repodata/00-filelists.xml.gz"/>
+    <timestamp>1700000000</timestamp>
+  </data>
+</repomd>
