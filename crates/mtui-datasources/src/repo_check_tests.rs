@@ -137,12 +137,17 @@ fn zstd_raw_frame(window_descriptor: u8, content: &[u8]) -> Vec<u8> {
 
 #[test]
 fn markup_inside_a_package_field_is_unreadable() {
-    let xml = br#"<metadata packages="1"><package><name>foo<b></b>bar</name><arch>noarch</arch><version ver="1" rel="1"/></package></metadata>"#;
     let want = listed(&[("foobar", "1-1.noarch")]);
-    assert_eq!(
-        parse_primary(xml, &want, BIG, BIG),
-        Err(PrimaryError::Unreadable)
-    );
+    for name in ["foo<b></b>bar", "foo<b/>bar"] {
+        let xml = format!(
+            r#"<metadata packages="1"><package><name>{name}</name><arch>noarch</arch><version ver="1" rel="1"/></package></metadata>"#
+        );
+        assert_eq!(
+            parse_primary(xml.as_bytes(), &want, BIG, BIG),
+            Err(PrimaryError::Unreadable),
+            "{name}"
+        );
+    }
 }
 
 #[test]
