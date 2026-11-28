@@ -1986,6 +1986,31 @@ mod tests {
             assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
         }
 
+        /// A refusal found by the read outranks a cancel that landed during it.
+        /// Mutation caught: checking the cancel before mapping the refusal.
+        #[tokio::test]
+        async fn a_refusal_outranks_a_cancel_during_the_verdict_read() {
+            let gitea = gitea_approving("abc").await;
+            let teregen = MockServer::start().await;
+            let (mut session, _tmp) = gitea_session(HashCheck::Ok, &gitea.uri(), &teregen);
+            let read = CancelWhileReading(session.cancel_token(), with_verdict(None));
+            mount_report(&teregen, ID, "slfo", 0, read).await;
+
+            let err = Approve
+                .call(&mut session, &matches(&Approve, &[]))
+                .await
+                .unwrap_err();
+
+            assert!(session.cancel_requested(), "premise: the read cancelled");
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.starts_with("gitea approve failed: ")
+                        && m.contains("has verdict null, not PASSED")),
+                "{err:?}"
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
         /// TeReGen's own words reach the Gitea refusal as one printable line:
         /// an OSC 52 clipboard write, a forged line and a tab are gone, the
         /// words stay.

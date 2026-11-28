@@ -65,7 +65,7 @@ pub(crate) async fn require_gitea_verdict(
             one_line(&refusal.to_string(), Some(1000))
         ))
     })?;
-    // The read sits between the decision and the post; a cancel during it wins.
+    // A cancel during the read stops the post; a refusal it found outranks it.
     if session.cancel_requested() {
         return Err(CommandError::Cancelled(format!(
             "{decision} stopped after reading the report document; nothing was posted"
@@ -1678,6 +1678,30 @@ mod tests {
             assert_eq!(
                 document_reads(&teregen.received_requests().await.unwrap(), ID),
                 1
+            );
+            assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
+        }
+
+        /// A refusal found by the read outranks a cancel that landed during it.
+        /// Mutation caught: checking the cancel before mapping the refusal.
+        #[tokio::test]
+        async fn a_refusal_outranks_a_cancel_during_the_verdict_read() {
+            let (gitea, teregen) = (MockServer::start().await, MockServer::start().await);
+            let (mut session, _tmp) = stale_session(&gitea, &teregen).await;
+            let read =
+                CancelWhileReading(session.cancel_token(), with(Some(Verdict::Failed), None));
+            mount_report(&teregen, ID, "slfo", 0, read).await;
+
+            let err = Reject
+                .call(&mut session, &matches(&Reject, &["-r", "regression"]))
+                .await
+                .unwrap_err();
+
+            assert!(session.cancel_requested(), "premise: the read cancelled");
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.starts_with("gitea reject failed: ") && m.contains("has no comment")),
+                "{err:?}"
             );
             assert_eq!(writes(&gitea.received_requests().await.unwrap()), 0);
         }
