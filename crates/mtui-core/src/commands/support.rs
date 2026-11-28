@@ -370,8 +370,9 @@ pub(crate) fn document_edits_guard(
 }
 
 /// Refuses `verb` (`approve`/`reject`), before any request, while `rrid`'s
-/// document has edits no `commit` has uploaded: the OBS gate reads the server's
-/// copy, so it would act on a verdict nobody else can see.
+/// document has edits no `commit` has uploaded: the verdict gate, on OBS and
+/// Gitea alike, reads the server's copy, so it would act on a verdict nobody
+/// else can see.
 ///
 /// A report that cannot be read refuses too, as in [`document_edits_guard`].
 pub(crate) fn uncommitted_report_guard(
