@@ -757,7 +757,7 @@ impl Gitea {
 /// The group's verdict by Gitea's `ReviewStateType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PullVerdict {
-    /// `REQUEST_REVIEW`: the group's verdict is owed.
+    /// `REQUEST_REVIEW`, or only a `COMMENT`: the group's verdict is owed.
     Owed,
     /// `APPROVED`.
     Approved,
@@ -827,6 +827,8 @@ pub(crate) struct RawReview {
     updated_at: Option<String>,
     #[serde(default)]
     user: Option<RawUser>,
+    #[serde(default)]
+    team: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -852,7 +854,8 @@ const MAX_REVIEW_PAGES: u32 = 20;
 /// Pure.
 ///
 /// The latest review that carries a verdict decides: a later `COMMENT` or a
-/// `PENDING` draft does not. A review whose reviewer, state, `dismissed` or
+/// `PENDING` draft does not. A `COMMENT` with no verdict anywhere leaves the
+/// verdict owed, since Gitea clears the request when any review is submitted. A review whose reviewer, state, `dismissed` or
 /// `stale` the verdict depends on cannot be read makes the gate unknown
 /// rather than a guess.
 fn pull_gate(
@@ -869,15 +872,25 @@ fn pull_gate(
         ordered.push((id, r));
     }
     ordered.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+    // A comment carries no verdict, yet submitting it cleared the request.
+    let mut comment: Option<&RawReview> = None;
     for (id, review) in ordered {
         let Some(reviewer) = review.login() else {
+            // A team request has no user and is never the group's (a user).
+            if review.team.is_some() {
+                continue;
+            }
             return PullReviewGate::Unknown(format!("review {id} carries no readable reviewer"));
         };
         if reviewer != login {
             continue;
         }
         let verdict = match review.state.as_deref() {
-            Some("COMMENT" | "PENDING") => continue,
+            Some("PENDING") => continue,
+            Some("COMMENT") => {
+                comment = comment.or(Some(review));
+                continue;
+            }
             Some("REQUEST_REVIEW") => PullVerdict::Owed,
             Some("APPROVED") => PullVerdict::Approved,
             Some("REQUEST_CHANGES") => PullVerdict::ChangesRequested,
@@ -895,8 +908,7 @@ fn pull_gate(
                 return PullReviewGate::Unknown(format!("review {id} has no `dismissed` field"));
             }
         }
-        let owed = verdict == PullVerdict::Owed;
-        let stale = if owed {
+        let stale = if verdict == PullVerdict::Owed {
             false
         } else {
             let Some(flag) = review.stale else {
@@ -907,28 +919,41 @@ fn pull_gate(
                 .as_deref()
                 .is_some_and(|c| !c.is_empty() && c != head)
         };
-        let closed = if owed {
-            let Some(closed) = closed else {
-                return PullReviewGate::Unknown(
-                    "the pull request has no open or closed state".to_owned(),
-                );
-            };
-            closed
-        } else {
-            false
-        };
-        return PullReviewGate::Known(PullGate {
-            verdict,
-            stale,
-            closed,
-            since: review
-                .submitted_at
-                .clone()
-                .or_else(|| review.updated_at.clone())
-                .filter(|s| !s.is_empty()),
-        });
+        return gate_of(verdict, stale, closed, review);
     }
-    PullReviewGate::None
+    match comment {
+        Some(review) => gate_of(PullVerdict::Owed, false, closed, review),
+        None => PullReviewGate::None,
+    }
+}
+
+/// The gate for `verdict` read from `review`; closed applies to an owed one.
+fn gate_of(
+    verdict: PullVerdict,
+    stale: bool,
+    closed: Option<bool>,
+    review: &RawReview,
+) -> PullReviewGate {
+    let closed = if verdict == PullVerdict::Owed {
+        let Some(closed) = closed else {
+            return PullReviewGate::Unknown(
+                "the pull request has no open or closed state".to_owned(),
+            );
+        };
+        closed
+    } else {
+        false
+    };
+    PullReviewGate::Known(PullGate {
+        verdict,
+        stale,
+        closed,
+        since: review
+            .submitted_at
+            .clone()
+            .or_else(|| review.updated_at.clone())
+            .filter(|s| !s.is_empty()),
+    })
 }
 
 fn json_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {

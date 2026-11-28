@@ -353,6 +353,21 @@ mod tests {
   <state name="review" who="anon" when="2014-12-01T14:46:23"/>
 </request>"#;
 
+    /// A re-requested group has two live reviews, an old accepted cycle and
+    /// the new open one: it is one group, read from the current cycle.
+    #[test]
+    fn a_re_requested_group_is_one_entry() {
+        let reviews =
+            accepted_by("qam-sle", "alice", T1) + "<review state='new' by_group='qam-sle'/>";
+        let g = gate("review", &reviews);
+        let groups: Vec<(&str, GroupVerdict)> = g
+            .groups
+            .iter()
+            .map(|x| (x.group.as_str(), x.verdict))
+            .collect();
+        assert_eq!(groups, vec![("qam-sle", GroupVerdict::Open)]);
+    }
+
     /// An accepted event without a `when` leaves the time unknown, never a
     /// known empty one.
     #[test]

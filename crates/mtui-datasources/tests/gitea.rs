@@ -1188,18 +1188,73 @@ async fn a_stale_flag_marks_an_approval_on_the_head_stale() {
     );
 }
 
-/// A later comment or draft by the group does not mask its verdict.
+/// A draft beside the request, or a comment after a verdict, does not
+/// decide; a comment alone (Gitea clears the request when any review is
+/// submitted) leaves the group's verdict owed.
 #[tokio::test]
 async fn comments_and_drafts_do_not_decide() {
     let gate = gate_for(json!([
         review(3, "qam-sle-review", "REQUEST_REVIEW", ""),
-        review(4, "qam-sle-review", "COMMENT", "abc"),
         review(5, "qam-sle-review", "PENDING", "abc"),
     ]))
     .await;
     assert!(known(PullVerdict::Owed, false, false)(&gate), "{gate:?}");
+    let after_verdict = gate_for(json!([
+        review(3, "qam-sle-review", "APPROVED", "abc"),
+        review(4, "qam-sle-review", "COMMENT", "abc"),
+    ]))
+    .await;
+    assert!(
+        known(PullVerdict::Approved, false, false)(&after_verdict),
+        "{after_verdict:?}"
+    );
     let only_comment = gate_for(json!([review(4, "qam-sle-review", "COMMENT", "abc")])).await;
-    assert_eq!(only_comment, PullReviewGate::None);
+    let PullReviewGate::Known(gate) = &only_comment else {
+        panic!("{only_comment:?}");
+    };
+    assert_eq!(
+        (gate.verdict, gate.stale, gate.closed),
+        (PullVerdict::Owed, false, false)
+    );
+    assert_eq!(gate.since.as_deref(), Some(ts(4).as_str()));
+}
+
+/// Closed only marks an owed review: a verdict on a closed pull request
+/// stands as it is.
+#[tokio::test]
+async fn a_verdict_on_a_closed_pull_request_is_not_closed() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pull(
+        &server,
+        "abc",
+        "closed",
+        json!([review(4, "qam-sle-review", "APPROVED", "abc")]),
+    )
+    .await;
+    let gate = gitea_for(&server).pull_state().await.unwrap().gate;
+    assert!(
+        known(PullVerdict::Approved, false, false)(&gate),
+        "{gate:?}"
+    );
+}
+
+/// A team review request carries no user: it cannot be the group's (a user
+/// account), so it neither decides nor hides the group's verdict.
+#[tokio::test]
+async fn a_team_review_request_does_not_hide_the_group_verdict() {
+    let mut team = review(12, "x", "REQUEST_REVIEW", "");
+    team["user"] = json!(null);
+    team["team"] = json!({"id": 5, "name": "maintainers"});
+    let gate = gate_for(json!([
+        team,
+        review(3, "qam-sle-review", "APPROVED", "abc"),
+    ]))
+    .await;
+    assert!(
+        known(PullVerdict::Approved, false, false)(&gate),
+        "{gate:?}"
+    );
 }
 
 #[tokio::test]
@@ -1262,20 +1317,14 @@ async fn an_absent_dismissed_or_stale_field_is_unknown() {
     );
 }
 
-/// A review whose reviewer cannot be read may be the group's, so the gate is
-/// unknown, never "no review".
+/// A review with neither a user nor a team may be the group's, so the gate
+/// is unknown, never "no review".
 #[tokio::test]
 async fn a_review_without_a_readable_reviewer_is_unknown() {
     let mut anonymous = review(4, "x", "APPROVED", "abc");
-    anonymous.as_object_mut().unwrap().remove("user");
+    anonymous["user"] = json!(null);
+    anonymous["team"] = json!(null);
     let gate = gate_for(json!([anonymous])).await;
-    assert!(
-        unknown_because(&gate, "review 4 carries no readable reviewer"),
-        "{gate:?}"
-    );
-    let mut renamed = review(4, "x", "APPROVED", "abc");
-    renamed["user"] = json!({"name": "qam-sle-review"});
-    let gate = gate_for(json!([renamed])).await;
     assert!(
         unknown_because(&gate, "review 4 carries no readable reviewer"),
         "{gate:?}"
