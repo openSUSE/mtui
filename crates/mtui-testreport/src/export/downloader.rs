@@ -118,10 +118,15 @@ fn join_url(base: &str, parts: &[&str]) -> String {
     s
 }
 
-/// The last non-empty `/`-segment of `host` (a parsed base URL ends in `/`).
+/// The last non-empty `/`-segment of `host` (a parsed base URL ends in `/`),
+/// without the userinfo when that segment is the authority.
 fn host_tail(host: &str) -> &str {
     let host = host.trim_end_matches('/');
-    host.rsplit('/').next().unwrap_or(host)
+    let tail = host.rsplit('/').next().unwrap_or(host);
+    match host.split_once("://") {
+        Some((_, authority)) if !authority.contains('/') => tail.rsplit('@').next().unwrap_or(tail),
+        _ => tail,
+    }
 }
 
 /// Whether `s` is a single, ordinary path component safe to embed in a local
@@ -509,6 +514,16 @@ mod tests {
         assert_eq!(local, Path::new("/res/h-x86_64-ltp.json"));
 
         assert!(plan("http://h", &test("other"), Path::new("/r"), Path::new("/i")).is_none());
+    }
+
+    #[test]
+    fn host_tail_drops_the_userinfo_of_the_authority_only() {
+        assert_eq!(
+            host_tail("https://user:hunter2@oqa.invalid/"),
+            "oqa.invalid"
+        );
+        assert_eq!(host_tail("https://u:p@w@oqa.invalid"), "oqa.invalid");
+        assert_eq!(host_tail("https://oqa.invalid/a@b/"), "a@b");
     }
 
     #[tokio::test]
