@@ -6,17 +6,17 @@ Documented commands (type help <topic>):
 ========================================
 add_host              analyze_diff          approve               assign
 checkers              checkout              comment               commit
-config                downgrade             edit                  export
-get                   help                  install               list_bugs
-list_history          list_hosts            list_locks            list_metadata
-list_packages         list_products         list_refhosts         list_sessions
-list_templates        list_timeout          list_update_commands  list_versions
-load_template         lock                  openqa_jobs           openqa_overview
-openqa_summary        prepare               put                   quit
-reboot                regenerate            reject                reload_openqa
-reload_products       remove_host           request_review        run
-set_host_state        set_log_level         set_repo              set_timeout
-set_workflow          shell                 show_diff             show_log
-show_update_repos     switch                teregen_login         unassign
-uninstall             unload                unlock                update
-updates               whoami
+config                coverage              downgrade             edit
+export                get                   help                  install
+list_bugs             list_history          list_hosts            list_locks
+list_metadata         list_packages         list_products         list_refhosts
+list_sessions         list_templates        list_timeout          list_update_commands
+list_versions         load_template         lock                  openqa_jobs
+openqa_overview       openqa_summary        prepare               put
+quit                  reboot                regenerate            reject
+reload_openqa         reload_products       remove_host           request_review
+run                   set_host_state        set_log_level         set_repo
+set_timeout           set_workflow          shell                 show_diff
+show_log              show_update_repos     switch                teregen_login
+unassign              uninstall             unload                unlock
+update                updates               whoami

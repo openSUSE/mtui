@@ -77,7 +77,13 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// Exact names that escape the prefix rule but are still side-effect-free.
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
 /// Same double duty as [`READ_ONLY_PREFIXES`].
-const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs", "openqa_summary"];
+const READ_ONLY_EXACT: &[&str] = &[
+    "whoami",
+    "openqa_overview",
+    "openqa_jobs",
+    "openqa_summary",
+    "coverage",
+];
 
 /// A synthesised MCP tool as plain data; [`crate::server`] converts it into an
 /// `rmcp::model::Tool` with its `ToolAnnotations { read_only_hint }`.
@@ -1077,6 +1083,7 @@ mod tests {
             "openqa_overview",
             "openqa_jobs",
             "openqa_summary",
+            "coverage",
             "list_hosts",
         ] {
             assert!(descriptor(&tools, ro).read_only, "{ro} should be read-only");

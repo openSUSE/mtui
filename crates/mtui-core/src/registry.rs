@@ -149,6 +149,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Commit));
     registry.register(Arc::new(commands::ShowDiff));
     registry.register(Arc::new(commands::AnalyzeDiff));
+    registry.register(Arc::new(commands::Coverage));
     registry.register(Arc::new(commands::ListBugs));
     registry.register(Arc::new(commands::ListMetadata));
     registry.register(Arc::new(commands::ListHosts));
@@ -279,6 +280,7 @@ mod tests {
         for name in [
             "checkout",
             "commit",
+            "coverage",
             "show_diff",
             "analyze_diff",
             "list_bugs",
@@ -324,10 +326,10 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
+        // 9 Wave 1 + 14 Wave 2 + 18 Wave 3 + 12 Wave 4 + 4 follow-ups
         // (export, list_refhosts, load_template, list_locks) + reload_openqa +
-        // set_workflow + openqa_summary + 3 REPL-only (help, edit, teregen_login) = 62.
-        assert_eq!(register_all().names().count(), 62);
+        // set_workflow + openqa_summary + 3 REPL-only (help, edit, teregen_login) = 63.
+        assert_eq!(register_all().names().count(), 63);
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub use export::{
     ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs,
 };
 pub use export_authoring::author_export;
-pub use ingest::apply_document;
+pub use ingest::{apply_document, testplatform_lines};
 pub use lifecycle::{LoadCancelled, LoadContext, UpdateKind, make_testreport};
 pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{ProductParseError, gitrepoparse, parse_product, reporepoparse};

@@ -10,6 +10,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New read-only `coverage` command (MCP tool `coverage`): one row per declared
+  test-platform slot of the loaded report (each `install.test_platforms[]`
+  entry and arch) as `checked` (an install check's `refhost` is a host the
+  refhosts inventory resolves for that slot, named in the row), `no-refhost`
+  (the inventory resolves no host for it), `owed`, `not expected` (uncovered
+  in the kernel workflow) or `unreadable` (the platform could not be read back
+  from the document), then the recorded checks that count for no slot and
+  why. Hosts are matched with the testplatform query `add_host` builds, and a
+  check counts for one slot at most. A report declaring no test platforms is
+  an error; an unreadable inventory is named first and leaves no slot
+  `checked` or `no-refhost`. In the auto workflow openQA install jobs are not counted. **MCP
+  schema note:** new tool `coverage` with no arguments beyond the shared
+  template ones.
 - `list_refhosts --summary` (MCP: `summary: true`) prints one row per slot
   instead of one per host: the slot and its host count, and with `--free` the
   free, locked, pool-claimed and unreachable counts, the free hosts' names and

@@ -64,7 +64,7 @@ Fine-tune with `[mcp] tools_allow` (add specific tools on top of the profile) an
 in [Configuration](configuration.md) for these and the resource caps
 (`max_output_bytes`, `max_active_jobs`, session budget, …).
 
-Agent clients should prefer **`core`**: the full surface (71 tools) is sent on
+Agent clients should prefer **`core`**: the full surface (72 tools) is sent on
 every request, while `core` (43 tools) covers the everyday flow — load →
 inspect → run/install → fill the report → approve/reject — without the host
 bookkeeping and server-tuning tail. If a workflow never lists the queue or
@@ -391,6 +391,23 @@ and nothing is written there.
 
 - Every tool schema sets `additionalProperties: false`, so an argument the tool
   does not declare is refused with `unknown argument(s): …`.
+- `coverage` (read-only) answers, per declared test-platform slot of each
+  loaded report (a platform in `install.test_platforms` and one of its archs),
+  whether `testing.install.checks` holds a check from a host the refhosts
+  inventory resolves for that slot with the testplatform query `add_host`
+  builds: `checked` (with the host), `no-refhost`, `owed`, `not expected` (an
+  uncovered slot in the kernel workflow, which records no install check) or
+  `unreadable` (the platform's base, addon or archs could not be read back,
+  so nothing is matched against it; a warning line comes first). Unlike
+  `add_host`, which draws one host for identical queries, every declared
+  platform and arch gets its own row. A check counts for one slot at most;
+  the checks that count for none are listed with the reason: the inventory
+  is unavailable, the host is not in it, the host serves no declared slot, or
+  every slot it serves is counted for another check. It contacts no host and
+  does not judge what a check shows. A report with no declared platforms is
+  an error, never "nothing owed"; when the inventory cannot be read, the
+  first line says so and no slot is `checked` or `no-refhost`. In the auto workflow openQA
+  install jobs are not counted against the slots.
 - The `openqa_overview` and `openqa_jobs` tools hide their operator override
   flags (`--url-openqa`, `--url-dashboard-qam`, `--url-qam`, `--test-pattern`,
   `--no-fetch`, #410): a headless client uses the operator's configured
