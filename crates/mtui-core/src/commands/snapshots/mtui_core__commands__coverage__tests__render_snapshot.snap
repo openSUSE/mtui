@@ -1,0 +1,16 @@
+---
+source: crates/mtui-core/src/commands/coverage.rs
+expression: "render(&report, Workflow::Auto, None).join(\"\\n\")"
+---
+WARNING: 1 test platforms could not be read from the document; nothing is matched against them
+install coverage: 6 slots: 2 checked, 2 owed, 1 no-refhost, 0 not expected, 1 unreadable; 2 unmatched checks
+  owed          sles 15 5 aarch64
+  owed          sles 15 5 ppc64le
+  no-refhost    sles 15 5 s390x
+  checked       sles 15 5 x86_64: host-nbg-x86
+  checked       sles 12 sp4 x86_64: host-default-noaddon
+  unreadable    sles;x 15 5 x86_64
+checks counting for no slot:
+  host-default-x86 (SLE-Product-SLES 15-SP5 x86_64): every slot its host serves is counted for another check
+  stray.example.com (SLE-Product-SLES 15-SP5 x86_64): host not in the refhosts inventory
+auto workflow: openQA install jobs (testing.openqa.install) are not counted against the slots

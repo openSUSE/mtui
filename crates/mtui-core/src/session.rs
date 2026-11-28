@@ -172,7 +172,7 @@ pub struct Session {
 /// trying an unmatched host first so earlier slots and candidates win ties.
 /// The hosts `first(slot, host)` accepts are matched before the rest and stay
 /// matched, so as many of them serve as any maximum matching allows.
-fn match_slots<'a>(
+pub(crate) fn match_slots<'a>(
     free: &[Vec<&'a String>],
     first: impl Fn(usize, &String) -> bool,
 ) -> Vec<Option<&'a String>> {

@@ -146,6 +146,18 @@ impl Attributes {
     pub fn arch(&self) -> &str {
         &self.arch
     }
+
+    /// The queried base product; `None` means "any".
+    #[must_use]
+    pub fn product(&self) -> Option<&Product> {
+        self.product.as_ref()
+    }
+
+    /// The queried addons.
+    #[must_use]
+    pub fn addons(&self) -> &[Addon] {
+        &self.addons
+    }
 }
 
 impl std::fmt::Display for Attributes {

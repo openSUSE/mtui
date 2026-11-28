@@ -118,7 +118,8 @@ fn product_lines(products: &[mtui_types::report_document::Product]) -> Vec<Strin
 /// The arch list is `tp.archs` verbatim (sorted): that it holds the *addon's*
 /// archs when an addon is present, else the base's, is baked into the document
 /// by the generator (`95_ExportMetadata.pm:72-75`).
-fn testplatform_lines(platforms: &[TestPlatform]) -> Vec<String> {
+#[must_use]
+pub fn testplatform_lines(platforms: &[TestPlatform]) -> Vec<String> {
     platforms
         .iter()
         .map(|tp| {

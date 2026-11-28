@@ -472,6 +472,18 @@ Options:
           Print help
 ```
 
+## `coverage`
+
+Lists which declared test platforms of the report have an install check.
+
+```text
+Usage: coverage
+
+Options:
+  -h, --help
+          Print help
+```
+
 ## `list_bugs`
 
 Lists related bugs and their Bugzilla/Jira URLs.

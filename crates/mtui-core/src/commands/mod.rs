@@ -51,6 +51,7 @@ mod updates;
 // Testreport lifecycle, metadata & host-info commands.
 mod checkout;
 mod commit;
+mod coverage;
 mod listbugs;
 mod listhistory;
 mod listhosts;
@@ -114,6 +115,7 @@ pub use updates::Updates;
 
 pub use checkout::Checkout;
 pub use commit::Commit;
+pub use coverage::Coverage;
 pub use edit::Edit;
 pub use export::Export;
 pub use help::Help;
@@ -1533,6 +1535,21 @@ mod mcp_nonempty_success_guard {
                 let (s, b) = hosts();
                 (s, b, argv(&[]))
             }
+            "coverage" => {
+                // An unreadable inventory still answers: every slot owed.
+                let (mut s, b) = hosts();
+                s.metadata_mut().base_mut().document = Some(
+                    mtui_types::fixtures::MAINTENANCE_OBS
+                        .parse()
+                        .expect("fixture parses"),
+                );
+                let dir = tempfile::tempdir().expect("tempdir");
+                s.config.refhosts_resolvers = "path".to_owned();
+                s.config.refhosts_path = dir.path().join("absent-refhosts.yml");
+                // Leak the guard: the read is synchronous within dispatch.
+                std::mem::forget(dir);
+                (s, b, argv(&[]))
+            }
             "list_packages" => {
                 let (s, b) = session_with_hosts(RRID, &["h1"], "bash 5.1-1\n");
                 (s, b, argv(&["-p", "bash", "-t", "h1"]))
@@ -1807,6 +1824,7 @@ mod explicit_and_fanout_scope_guard {
         "comment",
         "checkers",
         "checkout",
+        "coverage",
         "export",
         "list_bugs",
         "list_history",
