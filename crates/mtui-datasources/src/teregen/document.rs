@@ -822,7 +822,7 @@ fn error_detail(bytes: &[u8]) -> String {
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
-    cap_detail(&sanitize_external(&detail, None))
+    cap_detail(&sanitize_external(&detail, None).replace(['\n', '\t'], " "))
 }
 
 /// `text` cut to [`MAX_DETAIL_LEN`] on a char boundary.
@@ -854,12 +854,12 @@ mod tests {
     #[test]
     fn error_detail_is_sanitized_in_both_shapes() {
         assert_eq!(
-            error_detail(br#"{"error": "bad \u009b2J\u202eid"}"#),
-            "bad id"
+            error_detail(br#"{"error": "bad \u009b2J\u202e\nid"}"#),
+            "bad  id"
         );
         assert_eq!(
-            error_detail("plain \u{1b}[31mbody".as_bytes()),
-            "plain body"
+            error_detail("plain \u{1b}[31mbo\tdy".as_bytes()),
+            "plain bo dy"
         );
     }
 

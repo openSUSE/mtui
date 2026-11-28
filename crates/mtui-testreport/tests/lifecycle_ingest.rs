@@ -1274,7 +1274,8 @@ async fn reload_after_regeneration_failure_is_sanitized_in_the_log() {
     .await;
     assert_sanitized(
         &events,
-        &format!("Reload after regeneration failed: the server rejects this id: {READABLE}"),
+        // The rejection reason is made one line where it is read.
+        "Reload after regeneration failed: the server rejects this id: bad reason FORGED record",
     );
 }
 

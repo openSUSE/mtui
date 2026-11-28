@@ -35,7 +35,7 @@ pub(crate) fn check_document(doc: &ReportDocument) -> Result<(), String> {
     if doc.kind == DocumentKind::Slfo && doc.workflow == DocWorkflow::Obs {
         return Err(format!(
             "{} is served through the OBS workflow, but SLFO updates are Gitea pull requests only",
-            sanitize_external(&doc.id, None)
+            sanitize_external(&doc.id, None).replace(['\n', '\t'], " ")
         ));
     }
     Ok(())
@@ -748,10 +748,10 @@ mod tests {
     fn check_document_refusal_sanitizes_the_id() {
         let mut d = doc(SLFO_GITEA);
         d.workflow = DocWorkflow::Obs;
-        d.id = "bad \u{9b}2J\u{202e}id".to_owned();
+        d.id = "bad \u{9b}2J\u{202e}\nid".to_owned();
         assert_eq!(
             check_document(&d),
-            Err("bad id is served through the OBS workflow, but SLFO updates are Gitea pull requests only".to_owned())
+            Err("bad  id is served through the OBS workflow, but SLFO updates are Gitea pull requests only".to_owned())
         );
     }
 }

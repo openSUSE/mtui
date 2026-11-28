@@ -6,10 +6,9 @@ use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::teregen::{ArtifactStored, TeregenV2};
 use mtui_testreport::{collect_artifacts, upload_current};
 use mtui_types::report_document::{ReportDocument, Req};
-use mtui_types::sanitize::sanitize_external;
 
 use super::apicall::teregen_v2_writer;
-use super::support::{complete_with_templates, require_document, stale_hash_gate};
+use super::support::{complete_with_templates, one_line, require_document, stale_hash_gate};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -107,7 +106,7 @@ pub(crate) async fn upload_and_report(
     if let Some(drift) = &session.metadata().base().schema_drift {
         return Err(CommandError::Other(format!(
             "teregen's report schema differs from this mtui's ({}); upgrade mtui before writing",
-            sanitize_external(drift, None)
+            one_line(drift, Some(500))
         )));
     }
     let report_wd = session
@@ -471,14 +470,14 @@ mod tests {
         let _tmp = set_bare_report_wd(&mut session);
         let base = session.metadata_mut().base_mut();
         base.document = Some(minimal_document(doc_id));
-        base.schema_drift = Some("/k\u{9b}2Jey\u{202e}: added to live".to_owned());
+        base.schema_drift = Some("/k\u{9b}2Jey\u{202e}\nFORGED: added to live".to_owned());
 
         let client = teregen_v2_client(&server, store_file);
         let err = commit_document(&mut session, &client).await.unwrap_err();
 
         assert!(
             matches!(&err, CommandError::Other(m)
-                if m == "teregen's report schema differs from this mtui's (/key: added to live); upgrade mtui before writing"),
+                if m == "teregen's report schema differs from this mtui's (/key FORGED: added to live); upgrade mtui before writing"),
             "{err:?}"
         );
     }
