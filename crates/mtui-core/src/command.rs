@@ -84,6 +84,17 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
+    /// The scope this invocation resolves under: [`scope`](Self::scope)
+    /// unless an argument changes it, or why the arguments cannot run at all.
+    ///
+    /// # Errors
+    ///
+    /// A [`CommandError`] for an argument combination the command refuses
+    /// before resolving any template.
+    fn invocation_scope(&self, _args: &ArgMatches) -> Result<Scope, CommandError> {
+        Ok(self.scope())
+    }
+
     /// Whether the body reads the report [`run`](Self::run) resolved for it.
     ///
     /// `true` by default: a body that reads it is refused when the entry cannot
@@ -194,7 +205,7 @@ pub trait Command: Send + Sync {
     /// with the stop in that aggregate's `stop` note.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         session.check_cancelled()?;
-        let resolved = resolve_templates(self.name(), self.scope(), session, args)?;
+        let resolved = resolve_templates(self.name(), self.invocation_scope(args)?, session, args)?;
 
         if resolved.len() <= 1 {
             let restore = (!self.repoints_active())
@@ -492,7 +503,10 @@ pub fn resolve_command_templates(
     let Ok(matches) = parser.try_get_matches_from(argv) else {
         return ResolvedTemplates::Unresolved;
     };
-    match resolve_templates(command.name(), command.scope(), session, &matches) {
+    let Ok(scope) = command.invocation_scope(&matches) else {
+        return ResolvedTemplates::Unresolved;
+    };
+    match resolve_templates(command.name(), scope, session, &matches) {
         Ok(resolved) if resolved == [""] => ResolvedTemplates::NullReport,
         Ok(resolved) => ResolvedTemplates::Loaded(resolved),
         Err(_) => ResolvedTemplates::Unresolved,

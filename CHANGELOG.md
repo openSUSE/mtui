@@ -10,6 +10,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `show_update_repos --check` fetches the repository of each of the report's
+  install targets (`repodata/repomd.xml`, then the primary metadata it names)
+  and reports each as `ok` (packages, and every binary the targets list for
+  it at that `version-release.arch`), `missing` (the listed binaries that are
+  not, by name), `empty` (published with 0 packages), `not published`
+  (`repomd.xml` answered 404) or `no answer` (a timeout, a TLS or transport
+  failure, any other HTTP status, a redirect or primary location outside the
+  repository, metadata that is truncated, oversized or not rpm-md, a
+  `repomd.xml` without a primary entry, or primary metadata compressed with
+  anything other than gzip or zstd). Rows carry the product as the document
+  names it. A report without install targets has its update repositories
+  checked for being published and non-empty only, and says so. Repository
+  URLs are printed with their credentials masked, and redirects are followed
+  only within the repository. The command fails when any repository is not
+  `ok`, after listing all of them, and when there is nothing to check; it
+  needs no connected host. `--json` (with `--check`) prints one JSON object
+  `{source, total, checked, not_ok, ok, repositories: [{product, version,
+  arch, repository, status, packages, missing, reason}]}` for one template
+  and never fans out: with several loaded, the REPL uses the active one and an
+  MCP call needs `template`. **MCP schema note:** the
+  `show_update_repos` tool gains optional booleans `check` and `json`.
 - `update` gains `--allow-removal`, and both prepares it runs now go through
   the removal guard like the standalone `prepare`. A host the first prepare
   refuses (its dry run would remove a protected package, or cannot be read) is

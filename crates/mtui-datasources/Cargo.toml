@@ -26,11 +26,16 @@ harness = false
 name = "datasources"
 path = "benches/datasources.rs"
 
+[features]
+# `repo_check::fuzzing`, for the detached `fuzz/` crate only.
+fuzzing = []
+
 [dependencies]
 async-trait.workspace = true
 base64ct = { version = "1", features = ["alloc"] }
 chrono.workspace = true
 directories.workspace = true
+flate2.workspace = true
 futures.workspace = true
 ini.workspace = true
 mtui-config.workspace = true
@@ -43,6 +48,7 @@ ruoqa.workspace = true
 # `.pub` blob / passphrase-protected counterpart). russh is already a workspace
 # dep and shares `ssh_key` types with the file-key path — no second crypto stack.
 russh.workspace = true
+ruzstd.workspace = true
 scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true

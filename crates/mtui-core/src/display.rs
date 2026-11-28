@@ -19,6 +19,9 @@ use chrono::DateTime;
 use mtui_types::{RPMVersion, System, SystemProduct, TargetState};
 use owo_colors::OwoColorize;
 
+/// The longest `show_update_repos --check` reason printed, in characters.
+const REPO_REASON_LIMIT: usize = 2000;
+
 /// One host and its resolved [`System`], as passed to
 /// [`list_versions`](CommandPromptDisplay::list_versions).
 pub(crate) type HostSystem = (String, System);
@@ -395,6 +398,26 @@ impl CommandPromptDisplay {
                 "{product}: {pname} - {ver_l}: {pver} - {arch_l}: {parch}"
             ));
             self.println(&format!("    {r}"));
+        }
+    }
+
+    /// Renders `show_update_repos --check` rows: the product line, the masked
+    /// repository URL, then `status: reason` on one line.
+    pub(crate) fn list_update_repo_checks(
+        &mut self,
+        rows: &[crate::commands::showrepos::CheckedRow],
+    ) {
+        for row in rows {
+            self.list_update_repos(&[(row.product.clone(), row.repository.clone())]);
+            let status = row.check.status();
+            let word = if status == mtui_datasources::repo_check::RepoStatus::Ok {
+                Self::green(self, status.as_str())
+            } else {
+                Self::red(self, status.as_str())
+            };
+            let reason =
+                crate::commands::support::one_line(&row.check.to_string(), Some(REPO_REASON_LIMIT));
+            self.println(&format!("    {word}: {reason}"));
         }
     }
 

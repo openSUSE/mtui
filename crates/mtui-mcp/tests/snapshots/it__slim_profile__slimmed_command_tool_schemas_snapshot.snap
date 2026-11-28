@@ -1496,6 +1496,16 @@ expression: pretty
           "description": "Act on every loaded template (the default for this command); =false narrows to the active or sole one",
           "type": "boolean"
         },
+        "check": {
+          "default": false,
+          "description": "fetch each install target's repository (repodata/repomd.xml and its primary metadata) and report it as ok, missing (listed binaries not at their version-release.arch), empty, not published (repomd.xml 404) or no answer (any other failure); fails when any is not ok or none could be checked, after listing all",
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "description": "with --check, print one JSON object {source, total, checked, not_ok, ok, repositories: [{product, version, arch, repository, status, packages, missing, reason}]} for one template: with --json the command never fans out, so --all-templates is refused and, with several templates loaded, -T picks one",
+          "type": "boolean"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"

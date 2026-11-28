@@ -14,7 +14,7 @@ mod prepare;
 mod reboot;
 mod run;
 mod setrepo;
-mod showrepos;
+pub(crate) mod showrepos;
 mod update;
 mod zypper;
 

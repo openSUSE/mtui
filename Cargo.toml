@@ -186,6 +186,9 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6"
+# gzip-compressed rpm-md primary metadata (`show_update_repos --check`); already
+# in the tree through russh, so this adds an edge, not a crate.
+flate2 = "1"
 futures = "0.3"
 # HMAC-SHA1, for the OpenSSH hashed known_hosts test helper (mtui-hosts dev-dep);
 # not used for openQA auth any more (ruoqa owns that).
@@ -269,6 +272,10 @@ ruoqa = "0.3"
 # ssh
 russh = "0.65.4"
 russh-sftp = "3"
+# zstd-compressed rpm-md primary metadata (`show_update_repos --check`): pure
+# Rust, so the static binaries gain no C library. `hash` computes the frame
+# checksum `repo_check` compares.
+ruzstd = { version = "0.9", features = ["hash"] }
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.

@@ -47,6 +47,12 @@ test = false
 
 [[bin]]
 doc = false
+name = "repo_metadata"
+path = "fuzz_targets/repo_metadata.rs"
+test = false
+
+[[bin]]
+doc = false
 name = "report_doc"
 path = "fuzz_targets/report_doc.rs"
 test = false
@@ -60,7 +66,7 @@ test = false
 [dependencies]
 libfuzzer-sys = "0.4"
 mtui-config = { path = "../crates/mtui-config" }
-mtui-datasources = { path = "../crates/mtui-datasources" }
+mtui-datasources = { path = "../crates/mtui-datasources", features = ["fuzzing"] }
 mtui-hosts = { path = "../crates/mtui-hosts" }
 mtui-testreport = { path = "../crates/mtui-testreport", features = ["fuzzing"] }
 mtui-types = { path = "../crates/mtui-types" }

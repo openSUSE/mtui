@@ -1,0 +1,33 @@
+---
+source: crates/mtui-core/src/commands/showrepos.rs
+expression: "serde_json::to_string_pretty(&parsed).unwrap()"
+---
+{
+  "checked": 2,
+  "not_ok": 0,
+  "ok": true,
+  "repositories": [
+    {
+      "arch": "x86_64",
+      "missing": [],
+      "packages": 1,
+      "product": "SLES",
+      "reason": "1 packages, all 1 listed binaries present",
+      "repository": "http://repo.invalid/a",
+      "status": "ok",
+      "version": "15.5"
+    },
+    {
+      "arch": "x86_64",
+      "missing": [],
+      "packages": 2,
+      "product": "SLES",
+      "reason": "2 packages, all 1 listed binaries present",
+      "repository": "http://repo.invalid/b",
+      "status": "ok",
+      "version": "16.0"
+    }
+  ],
+  "source": "install.targets",
+  "total": 2
+}

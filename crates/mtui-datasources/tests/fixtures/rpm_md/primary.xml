@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="3">
+<package type="rpm">
+  <name>foo</name>
+  <arch>x86_64</arch>
+  <version epoch="0" ver="1.2" rel="3.1"/>
+  <checksum type="sha256" pkgid="YES">0000000000000000000000000000000000000000000000000000000000000000</checksum>
+  <summary>placeholder</summary>
+  <location href="x86_64/foo-1.2-3.1.x86_64.rpm"/>
+  <format>
+    <rpm:provides>
+      <rpm:entry name="foo" flags="EQ" epoch="0" ver="1.2" rel="3.1"/>
+    </rpm:provides>
+  </format>
+</package>
+<package type="rpm">
+  <name>foo-devel</name>
+  <arch>x86_64</arch>
+  <version epoch="0" ver="1.2" rel="3.1"/>
+  <checksum type="sha256" pkgid="YES">0000000000000000000000000000000000000000000000000000000000000000</checksum>
+  <summary>placeholder</summary>
+  <location href="x86_64/foo-devel-1.2-3.1.x86_64.rpm"/>
+  <format>
+    <rpm:provides>
+      <rpm:entry name="foo-devel" flags="EQ" epoch="0" ver="1.2" rel="3.1"/>
+    </rpm:provides>
+  </format>
+</package>
+<package type="rpm">
+  <name>foo-doc</name>
+  <arch>noarch</arch>
+  <version epoch="0" ver="1.2" rel="3.1"/>
+  <checksum type="sha256" pkgid="YES">0000000000000000000000000000000000000000000000000000000000000000</checksum>
+  <summary>placeholder</summary>
+  <location href="noarch/foo-doc-1.2-3.1.noarch.rpm"/>
+  <format>
+    <rpm:provides>
+      <rpm:entry name="foo-doc" flags="EQ" epoch="0" ver="1.2" rel="3.1"/>
+    </rpm:provides>
+  </format>
+</package>
+</metadata>
